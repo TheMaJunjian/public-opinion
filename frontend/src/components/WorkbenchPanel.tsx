@@ -39,7 +39,7 @@ interface WorkbenchPanelProps {
   // Mode
   isPreviewMode: boolean;
   previewNotice?: string;
-  singleSideReview?: { title: string; kind?:'container'|'correction'; onExit: () => void };
+  singleSideReview?: { title: string; kind?:'container'|'correction'|'relation'; onExit: () => void };
   isViewerMode?: boolean;
   viewerUsers?: User[];
   viewerUsername?: string;
@@ -63,7 +63,12 @@ interface WorkbenchPanelProps {
 
   // Trace
   traceDistance: number;
-  setTraceDistance: (fn: (distance: number) => number) => void;
+  traceDirection?: import('../utils/traceRange').TraceDirection;
+  onTraceDirectionChange?: (direction:import('../utils/traceRange').TraceDirection)=>void;
+  traceDepths?: import('../utils/traceRange').TraceDepths;
+  onTraceDepthChange?: (side:'up'|'down',value:number)=>void;
+  traceReadingControls?: React.ReactNode;
+  setTraceDistance?: (fn: (distance: number) => number) => void;
   canSetTrace: boolean;
   canExitTrace: boolean;
   isRelatedView?: boolean;
@@ -100,6 +105,7 @@ interface WorkbenchPanelProps {
   isClassifyType: boolean;
   isSummaryType: boolean;
   isMergeType: boolean;
+  joinOnlyAction?: boolean;
   isGovernanceOrOpsType: boolean;
   isTagWithQuickAnnotate: boolean;
   hasTargetsAvailable: boolean;
@@ -302,9 +308,10 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
     <WorkbenchScrollViewport ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="workbench-right-panel" role="region" aria-label="发言与关系操作" tabIndex={-1} onTouchStart={handlePanelTouchStart} onTouchMove={handlePanelTouchMove} onTouchEnd={handlePanelTouchEnd} onTouchCancel={handlePanelTouchEnd} data-guide-right-panel="true" data-workbench-scroll-panel="true" data-workbench-panel-surface="true" style={viewportStyle}>
     <div data-workbench-panel-content="true" style={panelStyle}>
       {p.singleSideReview && <div role="region" aria-label="单侧对比" style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
-        <div style={{ fontWeight: 600 }}>{p.singleSideReview.kind==='correction'?'更正查看':'容器查看'}</div>
+        <div style={{ fontWeight: 600 }}>{p.singleSideReview.kind==='correction'?'更正查看':p.singleSideReview.kind==='relation'?'消息效果查看':'容器查看'}</div>
         <div style={{ fontSize: 12, opacity: 0.8 }}>当前目标：{p.singleSideReview.title}</div>
       </div>}
+      {p.traceReadingControls}
       {(p.singleSideReview || p.canExitTrace) && <button onClick={p.canExitTrace ? p.exitAllTrace : p.singleSideReview?.onExit}
         style={{ padding: '5px 8px', borderRadius: 4, border: '1px solid #666', background: '#333', color: '#eee', cursor: 'pointer' }}
         title={p.canExitTrace ? '退出全部追溯并恢复进入第一次追溯前的现场' : '退出当前查看'}>{p.singleSideReview || p.isRelatedView ? '退出查看' : '退出追溯'}</button>}
@@ -350,13 +357,16 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           </div>
         </div>
 
-        {p.canExitTrace && <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <div style={{ fontSize: 12, opacity: 0.8 }}>追溯距离：{p.traceDistance}</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={() => p.setTraceDistance(distance => Math.max(1, distance - 1))} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#fff", cursor: "pointer" }}>-</button>
-            <button onClick={() => p.setTraceDistance(distance => Math.min(8, distance + 1))} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#fff", cursor: "pointer" }}>+</button>
-            <div style={{ fontSize: 12, opacity: 0.7 }}>（数值越大，显示的关联消息越多；最小 1，最大 8）</div>
-          </div>
+        {p.canExitTrace && <div style={{ display: "flex", gap: 8, alignItems: "center",flexWrap:'wrap' }}>
+          {(['up','down'] as const).map(side=>{const name=side==='up'?'向上':'向下',value=p.traceDepths?.[side]??1;
+            return <label key={side} style={{display:'flex',alignItems:'center',gap:5,fontSize:12}}>
+              {name}（{side==='up'?'前因／依据':'后续／影响'}）
+              <button type="button" aria-label={`减少${name}追溯距离`} disabled={value===0} onClick={()=>p.onTraceDepthChange?.(side,value-1)}>−</button>
+              <input type="number" aria-label={`${name}追溯距离`} min={0} max={8} value={value} onChange={event=>p.onTraceDepthChange?.(side,Number(event.target.value))}
+                style={{width:45,padding:'3px 4px',background:'#222',color:'#fff',border:'1px solid #666',borderRadius:4}}/>
+              <button type="button" aria-label={`增加${name}追溯距离`} disabled={value===8} onClick={()=>p.onTraceDepthChange?.(side,value+1)}>+</button>
+            </label>;})}
+          <span style={{fontSize:11,color:'#94a3b8'}}>0 为关闭该方向，最大 8</span>
         </div>}
 
         {p.draftGroups.length === 0 ? (
@@ -367,6 +377,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
               <li key={`DG-${g.messageId}`} style={{ borderBottom: "1px solid #333", paddingBottom: 6, marginBottom: 6 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                   <StagedMessageLabel messageId={g.messageId} message={messageMap.get(g.messageId)} status={g.wholeSelected ? '已选择整条' : `已选择 ${g.fragments.length} 处`} />
+                  {g.wholeSelected && <button type="button" aria-label={`跳转到暂存消息 ${g.messageId}`} onClick={() => p.onNavigateToMessage(g.messageId)} style={{fontSize:10,padding:'0 6px',borderRadius:4,border:'1px solid #475569',background:'#243448',color:'#bae6fd',cursor:'pointer',marginRight:6,flexShrink:0}}>跳转</button>}
                   {g.wholeSelected && <button onClick={() => g.wholeUnits.forEach(p.removeUnitFromDraft)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>删除整条</button>}
                 </div>
                 {g.fragments.length > 0 && (
@@ -521,14 +532,15 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
             const isCustomSubType = p.subType === 'CUSTOM' && ((p.relationType === "tag" && (p.secondaryRelationType === "recommend" || p.secondaryRelationType === "archive")) || p.relationType === "recommend" || p.relationType === "archive");
             const isTagWithoutSecondary = p.relationType === "tag" && p.secondaryRelationType === "none";
             const textAreaDisabled =
-              isTagWithoutSecondary
+              p.joinOnlyAction || isTagWithoutSecondary
               || (isCustomSubType ? false : (
                 (p.draftHasRelationTarget && p.relationType === "correct")
                 || (p.isTagWithQuickAnnotate && p.hasTargetsAvailable)
                 || (p.isMergeType && p.hasTargetsAvailable)
                 || (p.isGovernanceOrOpsType && p.relationType === "proposal" && (p.secondaryRelationType === '分配收入' || p.secondaryRelationType === '终止结算'))
               ));
-            const placeholderText = isCustomSubType ? "输入自定义理由（最长20字）"
+            const placeholderText = p.joinOnlyAction ? "加入已有容器消息，此处不可输入"
+              : isCustomSubType ? "输入自定义理由（最长20字）"
               : isTagWithoutSecondary ? "请先在上方选择推荐或冷藏"
               : textAreaDisabled
               ? (p.draftHasRelationTarget && p.relationType === "correct" ? "关系消息不能作为更正目标，请选择普通文本消息" : p.isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : p.isMergeType ? "归并关系为与会者-消息关系，此处不应输入内容" : p.isGovernanceOrOpsType && p.relationType === "proposal"
@@ -546,7 +558,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                 data-guide-message-input="true"
                 style={{ width: "100%", minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: textAreaDisabled ? "#1a1a1a" : "#222", color: textAreaDisabled ? "#666" : "#eee", fontSize: 13, resize: "vertical" }}
                 placeholder={placeholderText}
-                value={p.newMessageContent}
+                value={p.joinOnlyAction ? '' : p.newMessageContent}
                 readOnly={textAreaDisabled}
                 onChange={e => !textAreaDisabled && p.setNewMessageContent(e.target.value)}
               />

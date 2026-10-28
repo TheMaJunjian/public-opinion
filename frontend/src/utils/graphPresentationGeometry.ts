@@ -13,9 +13,10 @@ export const DEC_RIGHT_GAP = 6; // horizontal gap between card right edge and de
 export const DEC_RIGHT_TOP = 4; // y offset from card top
 export const DEC_ICON_W = 20;   // clickable icon area width within a decoration badge
 export const EDGE_HINT_W = 16;
+export const EDGE_LABEL_HINT_GAP = 2;
 
 export function getEdgeDecorationLeft(label: Rect, hasHint = true): number {
-  return label.x + label.width + DEC_RIGHT_GAP + (hasHint ? EDGE_HINT_W + DEC_GAP : 0);
+  return label.x + label.width + (hasHint ? EDGE_LABEL_HINT_GAP + EDGE_HINT_W : 0) + DEC_RIGHT_GAP;
 }
 
 export function getDecorationColumnWidth(expanded: boolean): number {
@@ -118,9 +119,9 @@ export function getGroupHeaderHeight(measuredHeights: Record<string, number>, re
 
 export function getGroupHeaderRect(frameRect: Rect, height = GROUP_HEADER_HEIGHT): Rect {
   return {
-    x: frameRect.x + GROUP_HEADER_X_OFFSET,
+    x: frameRect.x,
     y: frameRect.y - height,
-    width: Math.max(GROUP_HEADER_MIN_W, frameRect.width - 24),
+    width: frameRect.width,
     height,
   };
 }

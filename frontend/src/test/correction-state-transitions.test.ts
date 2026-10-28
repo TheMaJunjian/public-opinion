@@ -6,7 +6,7 @@ import {convertMessagesToDemoModel,computeCorrectionVersions,computeEffectiveSup
 import {deriveCorrectionStanceDisplay} from '../utils/correctionStanceDisplay';
 import {deriveContainerEffect} from '../pages/workbench/model/containerEffect';
 import {deriveDisplayHints} from '../pages/workbench/model/displayHints';
-import {readingMarksFor,deriveReadingProgress} from '../pages/workbench/model/readingProgress';
+import {readingMarksFor,deriveReadingProgress,influenceReadingMarks} from '../pages/workbench/model/readingProgress';
 import {createReadingVersionHistory,applyReadingVersions} from '../pages/workbench/model/readingVersions';
 const author={id:'editor',username:'editor',createdAt:''},viewer={id:'viewer',username:'viewer',createdAt:''};
 const original:Message={id:'m',kind:'TEXT',content:'甲乙',contentType:'TEXT',revision:1,createdAt:'2026-01-01',createdBy:author};
@@ -40,7 +40,7 @@ describe('correction opposition, retained reading and visible causes',()=>{
     const marks=initialMarks(),extra=[opinion('oppose3','t'),opinion('oppose4','a')],after=fixture(extra,marks);
     expect(after.hint).toMatchObject({unread:false,selectionChanged:true,displayed:{content:'甲乙'}});
     expect(deriveReadingProgress(after.reading).confirmed('m')).toBe(false);
-    const confirmed=fixture(extra,[...marks,...after.confirm()]);expect(confirmed.hint.selectionChanged).toBe(false);expect(deriveReadingProgress(confirmed.reading).confirmed('m')).toBe(true);
+    const confirmed=fixture(extra,[...marks,...after.confirm(),...influenceReadingMarks('m',deriveReadingProgress(after.reading).pendingInfluences.get('m')??[])]);expect(confirmed.hint.selectionChanged).toBe(false);expect(deriveReadingProgress(confirmed.reading).confirmed('m')).toBe(true);
     expect(confirmed.personal.get('m')?.versions).toHaveLength(2);
   });
   it('keeps explicit personal adoption while public recommendation rejects the same correction',()=>{

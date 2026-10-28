@@ -1,11 +1,26 @@
 import { migratePendingSends } from '../../../apps/migrate/src/browser-state';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { cancelCommandBatch, queueCommand, runCommandBatch, type CommandEnvelope } from '../api/commandBatch';
+import { buildRelationDemoMessage } from '../pages/workbench/model/relationComposition';
+import { displayDependencyIds } from '../utils/displayDependency';
+import type { Relation } from '../types';
 
 beforeEach(() => { sessionStorage.clear(); localStorage.setItem('user', JSON.stringify({ id: 'u', username: '用户' })); });
 const add = (body: object) => queueCommand('/messages', { method: 'POST', body: JSON.stringify(body) });
 
 describe('workbench sends', () => {
+  it.each(['source',null])('attaches a provisional reference to its source before catalog synchronization (legacy source: %s)', async sourceMessageId => {
+    const sourceRefs=[{messageId:'source',revision:1,context:{kind:'MESSAGE' as const},partId:'body',range:{start:0,end:2}}];
+    await runCommandBatch(async()=>{
+      const provisional=queueCommand('/relations',{method:'POST',body:JSON.stringify({
+        relationType:'REFERENCE',sourceMessageId,sourceRefs,targetRefs:[{kind:'message',messageId:'target'}],
+      })}) as Relation;
+      expect(provisional.parts).toEqual([]);
+      expect(provisional.sourceRefs).toEqual(sourceRefs);
+      expect(displayDependencyIds(buildRelationDemoMessage(provisional))).toEqual(['source']);
+    },vi.fn().mockResolvedValue({}));
+  });
+
   it('preserves references between new messages and submits the entire operation once', async () => {
     const commit = vi.fn<(input: CommandEnvelope) => Promise<unknown>>(async () => ({}));
     let target = '';

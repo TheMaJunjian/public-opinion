@@ -75,7 +75,7 @@ export default function CrossCanvasRelatedMessages({ groups, messages, selectedU
   return <div data-cross-canvas-related-messages style={{ marginTop: 5, fontSize: 11, color: '#a5b4fc' }}
     onMouseDown={stopControlPropagation} onMouseUp={stopControlPropagation}
     onClick={stopControlPropagation} onDoubleClick={stopControlPropagation}>
-    <button ref={triggerRef} type="button" aria-expanded={expanded} aria-haspopup="dialog" aria-controls={expanded ? popupId : undefined} onClick={() => setExpanded(value => !value)}
+    <button ref={triggerRef} type="button" data-jump-msgids={directions.flatMap(group => group.rows.map(row => row.id)).join(' ')} data-rel-overlay="true" aria-expanded={expanded} aria-haspopup="dialog" aria-controls={expanded ? popupId : undefined} onClick={() => setExpanded(value => !value)}
       style={{ color: 'inherit', background: 'none', border: 0, cursor: 'pointer', padding: 0, fontSize: 'inherit' }}>
       {expanded ? '▾' : '▸'} 其他相关消息：{count}
     </button>

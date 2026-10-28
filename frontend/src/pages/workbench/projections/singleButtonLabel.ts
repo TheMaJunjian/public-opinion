@@ -43,6 +43,9 @@ export function deriveSingleButtonLabel(input: DeriveSingleButtonLabelInput): st
   }
   const typeName = relationTypeName(relationType);
   const usingDraft = draftUnits.length > 0;
+  if (joinOnlyAction) return hasTargetsAvailable
+    ? `将${usingDraft ? '候选区' : '目标集合'}中的 ${getClassifyTargetRefs(usingDraft ? draftUnits : targetUnits).length} 个消息加入已有${typeName}`
+    : `请选择要加入已有${typeName}的目标消息`;
   if (isClassifyType) {
     const existingClassifySource = sourceUnits.some(unit =>
       relations.find(relation => relation.id === unit.messageId)?.relationType?.toUpperCase() === 'CLASSIFY'

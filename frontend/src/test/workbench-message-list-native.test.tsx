@@ -40,6 +40,36 @@ const renderList = (messages: DemoMessage[], props = listProps(messages)) => ren
 afterEach(() => { cleanup(); vi.restoreAllMocks(); window.getSelection()?.removeAllRanges(); });
 
 describe('native list content and navigation regressions', () => {
+  it('interleaves message types by publication time instead of placing relationship records after text cards',()=>{
+    const chronological=[message('text-first'),message('agree-second',{kind:'relation',relationType:'agree'}),message('text-third'),
+      message('round-fourth',{kind:'round'}),message('join-fifth',{kind:'join'})].map((item,index)=>({...item,createdAt:new Date(index*60000).toISOString()}));
+    const view=renderList([chronological[2],chronological[0],chronological[3],chronological[4],chronological[1]]);
+    expect([...view.container.querySelectorAll('[data-virtual-message-list] > [data-measure-id]')].map(row=>row.getAttribute('data-measure-id'))).toEqual(chronological.map(item=>item.id));
+    expect(view.queryByRole('separator')).toBeNull();
+    expect(view.container.querySelector('time,[data-message-authors]')).toBeNull();
+  });
+  it.each([['classify','分类'],['summary','总结'],['arrange','排列'],['merge','归并']] as const)('labels both JOIN endpoints with their concrete types in %s records', (type,label) => {
+    const parent=message('parent',{kind:'relation',relationType:type,relationPayload:{label:'容器的自定义标签'}}),target=message('target');
+    const nested=message('nested',{kind:'relation',relationType:'summary'});
+    const join=message('join',{kind:'join',content:'加入容器',parts:[{id:'body',type:'text',text:'建立关系：JOIN；目标：iy6ruf2a'}],joinInfo:{containerId:'parent',containerType:'JOIN',targetIds:['target','nested']}});
+    const messages=[parent,target,nested,join],props=listProps(messages);props.visibleMessages=[join];
+    const view=renderList(messages,props),card=view.container.querySelector<HTMLElement>('[data-msgid="join"]')!;
+    expect(card.querySelector('[data-join-endpoint-type="parent"]')).toHaveTextContent(`【${label}】ID：`);
+    expect(card).not.toHaveTextContent('容器 ID：');
+    expect(card.querySelector('[data-join-endpoint-type="target"]')).toHaveTextContent('【文本】');
+    expect(card.querySelector('[data-join-endpoint-type="nested"]')).toHaveTextContent('【总结】');
+    expect(card).not.toHaveTextContent('加入容器');
+    expect(card).not.toHaveTextContent('建立关系：JOIN');
+  });
+  it('keeps a rejected container and its released member visible in the message list',()=>{
+    const category=message('category',{kind:'relation',relationType:'classify',targetRefs:[{kind:'message',messageId:'leaf'}]});
+    const messages=[category,message('leaf')],props=listProps(messages);
+    props.display.rejectedContainerIds.add('category');
+    props.display.suppressedRelIds.add('category');
+    const view=renderList(messages,props);
+    expect(view.container.querySelector('[data-msgid="category"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-msgid="leaf"]')).not.toBeNull();
+  });
   it('groups received JOIN history, labels each current target location and updates after ownership changes',()=>{
     const user={id:'author',username:'作者',createdAt:''};
     const make=(id:string,type:string,parent:string|null,targets:string[],day=1):Relation=>({id,relationType:type,sourceMessageId:parent,
@@ -95,7 +125,7 @@ describe('native list content and navigation regressions', () => {
     expect(textCard).not.toHaveAttribute('data-relation-record');
     expect(textCard.style.backgroundColor).not.toBe('transparent');
     expect(textCard).toHaveTextContent('完整的关系正文');
-    expect(within(textCard).getAllByTitle('作者')).toHaveLength(1);
+    expect(textCard.querySelector('[data-message-authors],time')).toBeNull();
     expect(textCard).not.toHaveTextContent('发起');
     expect(recordRow).toHaveAttribute('data-relation-record', 'true');
     const textRow = view.container.querySelector<HTMLElement>('[data-msgid="text"]')!;

@@ -66,7 +66,7 @@ describe('merge canvas helpers', () => {
     ];
     const messageMap = new Map(messages.map(message => [message.id, message]));
 
-    const traceProjection = buildTraceProjection({ messages, edges, startIds: ['E'], distance: 1 });
+    const traceProjection = buildTraceProjection({ messages, edges, startIds: ['E'], distance: 1,expandedContainerIds:new Set(['E']) });
     const collapsedProjection = applyTraceFrameVisibility(traceProjection, new Set(['C']));
     const collapsedBlocks = buildFrameBlocks({
       edges: collapsedProjection.edges,

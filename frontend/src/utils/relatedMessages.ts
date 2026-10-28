@@ -1,9 +1,15 @@
 import type {DemoMessage} from './modelBridge';
 import type {Reference} from '@gonglun/core';
+import {getPresentationSpec} from '../types';
 export interface RelatedMessage {message:DemoMessage;target?:Reference}
 const containers=new Set(['classify','summary','merge','arrange']);
 export function isRejectedContainer(message:DemoMessage,ids?:ReadonlySet<string>) {
  return containers.has(message.relationType??'')&&!!(ids?ids.has(message.id):message.state?.suppressed);
+}
+/** An inactive connection keeps its own record card and receives the votes on it. */
+export function isRejectedRelation(message:DemoMessage|undefined,ids?:ReadonlySet<string>){
+ return !!message&&message.kind==='relation'&&['edge-label','inline-badge','decoration-label'].includes(getPresentationSpec(message.relationType??'').kind)
+  &&!!(ids?ids.has(message.id):message.state?.suppressed);
 }
 /** Retain rejected organization records beside the messages released from them.
  * Pure votes and round records already have graph presentations.

@@ -2,6 +2,7 @@ import type { Message as BackendMessage, Relation as BackendRelation, RelationPa
 import { bodyVersion, resolveStance, type BodyVersion, type Message as CoreMessage, type Part, type Reference, type ExecutedStance, type MessageState } from '@gonglun/core';
 import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
 import type {AuthorInvestment} from './messageAuthorship';
+import {chronologicalOrder} from './discussionOrder';
 
 export type MessageKind = "normal" | "join" | "relation" | "round" | "round_result" | "governance" | "code" | "operations";
 
@@ -384,7 +385,7 @@ export function convertMessagesToDemoModel(
         msgKind = 'join';
         joinInfo = {
           containerId: rel.sourceMessageId!,
-          containerType: 'JOIN',
+          containerType: relationById.get(rel.sourceMessageId ?? '')?.relationType.toUpperCase() ?? 'JOIN',
           targetIds: rel.targetRefs
             .map(r => r.kind === 'relation' ? r.relationId : r.messageId),
         };
@@ -550,19 +551,19 @@ export function computeCorrectionVersions(
 ): Map<string, { current?: CorrectionVersion; versions: CorrectionVersion[] }> {
   const msgMap = new Map(messages.map(message => [message.id, message]));
   const personal = computeUserCorrectionChoices(edges, messages, currentUsername);
-  const statistics = computeTransitiveVoteStats(edges, messages);
+  const statistics = computePublicStanceStats(edges, messages);
   const score = (version: CorrectionVersion) => {
-    const state = msgMap.get(version.correctionId)?.state;
-    const pro = state?.supportCount ?? statistics[version.correctionId]?.agreeCount ?? 0;
-    const con = state?.oppositionCount ?? statistics[version.correctionId]?.disagreeCount ?? 0;
+    const pro = statistics.get(version.correctionId)?.pro ?? 0;
+    const con = statistics.get(version.correctionId)?.con ?? 0;
     const stance = personal.get(version.correctionId);
     const chosenAt = stance?.type === 'agree' ? Date.parse(msgMap.get(stance.relMsgId)?.createdAt ?? '') || 0 : 0;
-    return [version.correctionId === options.previewCorrectionId ? 1 : 0, stance?.type === 'agree' ? 1 : 0, chosenAt, pro - con, pro];
+    const chosenSequence=stance?.type==='agree'?msgMap.get(stance.relMsgId)?.sequence??0:0;
+    return [version.correctionId === options.previewCorrectionId ? 1 : 0, stance?.type === 'agree' ? 1 : 0, chosenAt, chosenSequence, pro - con, pro];
   };
   const compare = (left: CorrectionVersion, right: CorrectionVersion) => {
     const a = score(left), b = score(right);
     for (let index = 0; index < a.length; index++) if (a[index] !== b[index]) return a[index] - b[index];
-    return left.createdAt.localeCompare(right.createdAt) || left.correctionId.localeCompare(right.correctionId);
+    return chronologicalOrder(msgMap.get(left.correctionId)!,msgMap.get(right.correctionId)!);
   };
   const result = new Map<string, { current?: CorrectionVersion; versions: CorrectionVersion[] }>();
   const correctionTargets = new Map(edges.filter(edge => edge.relationType === 'correct').map(edge => [edge.relationMessageId, edge.to.messageId]));
@@ -914,6 +915,12 @@ export function resolveDisplayedStance(edge: DemoEdge, msgMap: Map<string, DemoM
  *   AGREE (DISAGREE rel-arr)                  → don't suppress
  *   AGREE (AGREE rel-arr)                     → don't suppress
  */
+function stancePublication(edge:DemoEdge,map:ReadonlyMap<string,DemoMessage>) {
+  const record=map.get(edge.relationMessageId),source=map.get(edge.from.messageId);
+  // Older exports publish the stance with its source body and have no sequence.
+  return record?.sequence!==undefined?record:source??record;
+}
+
 export function computeUserSuppressedRelIds(
   edges: DemoEdge[],
   messages: DemoMessage[],
@@ -926,7 +933,7 @@ export function computeUserSuppressedRelIds(
   const stanceMap = buildStanceTargetMap(edges, msgMap);
 
   // For each ultimate target, track the user's latest effective stance.
-  const latestEffective = new Map<string, { type: 'agree' | 'disagree'; time: number }>();
+  const latestEffective = new Map<string, { type: 'agree' | 'disagree'; time: number; event:DemoMessage }>();
 
   for (const e of edges) {
     if (e.relationType !== 'agree' && e.relationType !== 'disagree') continue;
@@ -957,8 +964,9 @@ export function computeUserSuppressedRelIds(
     const effectiveType = resolved ? resolved.type : e.relationType as 'agree' | 'disagree';
 
     const prev = latestEffective.get(ultimateTarget);
-    if (!prev || time > prev.time) {
-      latestEffective.set(ultimateTarget, { type: effectiveType, time });
+    const event=stancePublication(e,msgMap);
+    if (event&&(!prev || chronologicalOrder(event,prev.event)>0)) {
+      latestEffective.set(ultimateTarget, { type: effectiveType, time, event });
     }
   }
 
@@ -993,7 +1001,7 @@ export function computeUserActiveStanceRelIds(
 
   // For each ultimate target, track the user's latest effective stance and which
   // of the user's own stance messages caused it.
-  const latest = new Map<string, { relMsgId: string; type: 'agree' | 'disagree'; time: number }>();
+  const latest = new Map<string, { relMsgId: string; type: 'agree' | 'disagree'; time: number; event:DemoMessage }>();
 
   for (const e of edges) {
     if (e.relationType !== 'agree' && e.relationType !== 'disagree') continue;
@@ -1021,8 +1029,9 @@ export function computeUserActiveStanceRelIds(
     const effectiveType = resolved ? resolved.type : e.relationType as 'agree' | 'disagree';
 
     const prev = latest.get(ultimateTarget);
-    if (!prev || time > prev.time) {
-      latest.set(ultimateTarget, { relMsgId: e.relationMessageId, type: effectiveType, time });
+    const event=stancePublication(e,msgMap);
+    if (event&&(!prev || chronologicalOrder(event,prev.event)>0)) {
+      latest.set(ultimateTarget, { relMsgId: e.relationMessageId, type: effectiveType, time, event });
     }
   }
 
@@ -1066,7 +1075,7 @@ export function computeUserOverriddenStanceRelIds(
   // Collect ALL of the user's stance relation message IDs.
   const userStanceRelIds = new Set<string>();
   // For each, also record the ultimate target and time.
-  const userStanceInfo = new Map<string, { ultimateTarget: string; time: number }>();
+  const userStanceInfo = new Map<string, { ultimateTarget: string; time:number; event:DemoMessage }>();
 
   for (const e of edges) {
     if (e.relationType !== 'agree' && e.relationType !== 'disagree') continue;
@@ -1094,8 +1103,9 @@ export function computeUserOverriddenStanceRelIds(
 
     userStanceRelIds.add(e.relationMessageId);
     const prev = userStanceInfo.get(e.relationMessageId);
-    if (!prev || time > prev.time) {
-      userStanceInfo.set(e.relationMessageId, { ultimateTarget, time });
+    const event=stancePublication(e,msgMap);
+    if (event&&(!prev || chronologicalOrder(event,prev.event)>0)) {
+      userStanceInfo.set(e.relationMessageId, { ultimateTarget, time, event });
     }
   }
 
@@ -1106,8 +1116,7 @@ export function computeUserOverriddenStanceRelIds(
     if (!prev) {
       activePerTarget.set(info.ultimateTarget, relMsgId);
     } else {
-      const prevTime = userStanceInfo.get(prev)?.time ?? 0;
-      if (info.time > prevTime) {
+      if (chronologicalOrder(info.event,userStanceInfo.get(prev)!.event)>0) {
         activePerTarget.set(info.ultimateTarget, relMsgId);
       }
     }
@@ -1237,26 +1246,52 @@ export function computeTransitiveVoteStats(
   return res;
 }
 
-/**
- * Compute relation messages rejected by the shared vote result.
- * A tie remains visible; only a strict DISAGREE majority suppresses a relation.
- */
+/** Public display uses stake amounts; the latest stance decides an equal total. */
+export function computePublicStanceStats(edges:DemoEdge[],messages:DemoMessage[]) {
+  const map=new Map(messages.map(message=>[message.id,message])),stances=buildStanceTargetMap(edges,map);
+  const result=new Map<string,{pro:number;con:number;latest?:{message:DemoMessage;type:'agree'|'disagree'};weighted:boolean}>();
+  const seen=new Set<string>();
+  for(const edge of edges){
+    if(!['agree','disagree'].includes(edge.relationType))continue;
+    if(edge.to.selection.kind!=='whole'&&!edge.to.reference&&!map.get(edge.relationMessageId)?.executedStance)continue;
+    const resolved=resolveDisplayedStance(edge,map,stances);if(!resolved)continue;
+    const id=resolved.targetId,event=stancePublication(edge,map);
+    if(!event||seen.has(JSON.stringify([event.id,id])))continue;
+    seen.add(JSON.stringify([event.id,id]));
+    const value=result.get(id)??{pro:0,con:0,weighted:false};
+    const amount=map.get(edge.relationMessageId)?.spending?.wager??event.spending?.wager;
+    value[resolved.type==='agree'?'pro':'con']+=amount??1;value.weighted ||= amount!==undefined;
+    if(!value.latest||chronologicalOrder(event,value.latest.message)>0)value.latest={message:event,type:resolved.type};
+    result.set(id,value);
+  }
+  for(const message of messages){
+    const state=message.state;if(!state)continue;
+    const value=result.get(message.id)??{pro:0,con:0,weighted:false};
+    if(state.contextStakes){
+      value.pro=0;value.con=0;
+      for(const stakes of Object.values(state.contextStakes)){value.pro+=stakes.truth.pro;value.con+=stakes.truth.con;}
+      value.weighted=true;
+    }else if(!value.weighted){value.pro=state.supportCount;value.con=state.oppositionCount;}
+    result.set(message.id,value);
+  }
+  return result;
+}
+
+/** Compute relation messages rejected by the shared display result. */
 export function computeGloballySuppressedRelIds(
   edges: DemoEdge[],
   messages: DemoMessage[],
 ): Set<string> {
-  const stats = computeTransitiveVoteStats(edges, messages);
-  const relationIds = new Set(messages.filter(message => message.kind === 'relation').map(message => message.id));
-  const suppressed = new Set(
-    Object.entries(stats)
-      .filter(([messageId, value]) => relationIds.has(messageId) && value.disagreeCount > value.agreeCount)
-      .map(([messageId]) => messageId),
-  );
-  for (const message of messages) {
-    if (!message.state) continue;
-    const correction = message.relationType === 'correct' && !isCorrectionProposal(message);
-    if (correction ? message.state.oppositionCount > message.state.supportCount : message.state.suppressed) suppressed.add(message.id);
-    else suppressed.delete(message.id);
+  const stats = computePublicStanceStats(edges,messages),suppressed=new Set<string>();
+  for(const message of messages){
+    if(message.kind!=='relation'&&!message.state)continue;
+    const value=stats.get(message.id);
+    const correction=message.relationType==='correct'&&!isCorrectionProposal(message);
+    let rejected=message.state&&!value?.weighted
+      ? correction?message.state.oppositionCount>message.state.supportCount:message.state.suppressed
+      :value?value.con>value.pro:message.state?.suppressed;
+    if(value&&value.pro===value.con&&value.latest&&(!message.state||value.weighted||value.pro>0))rejected=value.latest.type==='disagree';
+    if(rejected||message.state?.membershipDisabled||message.state?.organizationRetired)suppressed.add(message.id);
   }
   return suppressed;
 }

@@ -2,7 +2,7 @@ import React from "react";
 import type { Relation } from "../../../types";
 import { getPresentationSpec } from "../../../types";
 import type { WorkbenchDrawingTask } from '../../../context/WorkbenchDrawingContext';
-import { REVEAL_VIRTUAL_MESSAGE } from '../../../hooks/useVirtualMessageMounts';
+import { REVEAL_VIRTUAL_MESSAGE, type VirtualMessageRevealDetail } from '../../../hooks/useVirtualMessageMounts';
 import { getMessageJumpDisplay } from '../../../utils/messageJumpDisplay';
 import type {
   DemoEdge
@@ -60,7 +60,7 @@ export function showMessagePulse(dependencies: ShowMessagePulseDependencies, tar
         const currentCandidates = leftPanelRef.current
           ? findMessageElements(leftPanelRef.current, targetId)
           : [];
-        pulseElement = currentCandidates.find(candidate =>
+        pulseElement = currentCandidates.find(candidate=>candidate.hasAttribute('data-directed-edge-start')) ?? currentCandidates.find(candidate =>
           candidate.hasAttribute('data-rel-overlay') && candidate.getAttribute('data-msgid') === targetId,
         ) ?? currentCandidates[0];
       }
@@ -100,7 +100,7 @@ export function showMessagePulse(dependencies: ShowMessagePulseDependencies, tar
 }
 
 export function findMessageElements(container: HTMLElement, messageId: string): HTMLElement[] {
-  const directElements = Array.from(container.querySelectorAll('[data-msgid]'))
+  const directElements = Array.from(container.querySelectorAll('[data-msgid], [data-directed-edge-start]'))
     .filter(node => {
       const element = node as HTMLElement;
       if (element.getAttribute('data-msgid') === messageId) return true;
@@ -122,8 +122,8 @@ function viewportContainsTarget(element: HTMLElement, container: HTMLElement): b
   // or a nested comparison viewport.
   for (let parent = element.parentElement; parent; parent = parent.parentElement) {
     const style = getComputedStyle(parent);
-    const clipsX = parent === container || /auto|scroll|hidden|clip/.test(style.overflowX);
-    const clipsY = parent === container || /auto|scroll|hidden|clip/.test(style.overflowY);
+    const clipsX = parent === container || /auto|scroll|hidden|clip/.test(style.overflowX || style.overflow);
+    const clipsY = parent === container || /auto|scroll|hidden|clip/.test(style.overflowY || style.overflow);
     if (!clipsX && !clipsY) continue;
     const bounds = parent.getBoundingClientRect();
     if (clipsX) { left = Math.max(left, bounds.left); right = Math.min(right, bounds.right); }
@@ -161,7 +161,7 @@ interface ScrollMsgToCenterDependencies {
 
 export interface ScrollMessageOptions {
   dependencyIds?: string[];
-  onComplete?: (located: boolean) => void;
+  onComplete?: (located: boolean, cancelled?: boolean) => void;
 }
 
 export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, msgId: string, options?: ScrollMessageOptions): void {
@@ -171,6 +171,7 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
   const requestId = ++scrollRequestIdRef.current;
   pendingScrollMsgIdRef.current = targetId;
   let attempts = 0;
+  let completed = false;
   const run = (work: () => void) => { if (task) task.run(work); else work(); };
   const nextFrame = (work: () => void) => {
     const frame = requestAnimationFrame(() => run(work));
@@ -181,9 +182,17 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
     if (task?.afterLayout) task.afterLayout(work);
     else scrollRafRef.current = nextFrame(work);
   };
-  const complete = (located: boolean) => {
-    if (!located && requestId === scrollRequestIdRef.current) leftPanelRef.current?.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } }));
-    task?.complete(); options?.onComplete?.(located);
+  const complete = (located: boolean, cancelled = false) => {
+    if (completed) return;
+    completed = true;
+    if (!located && requestId === scrollRequestIdRef.current) {
+      pendingScrollMsgIdRef.current = null;
+      pendingScrollDependencyIdsRef.current = [];
+      leftPanelRef.current?.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } }));
+    }
+    task?.complete();
+    if (cancelled) options?.onComplete?.(false, true);
+    else options?.onComplete?.(located);
   };
   const tryScroll = () => {
     attempts++;
@@ -197,7 +206,9 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
     if (pendingScrollMsgIdRef.current !== targetId) { complete(false); return; }
     const container = leftPanelRef.current;
     if (!container) { scrollRafRef.current = nextFrame(tryScroll); return; }
-    container.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [targetId, ...dependencyIds] } }));
+    const reveal: VirtualMessageRevealDetail = { ids: [targetId, ...dependencyIds] };
+    container.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: reveal }));
+    if (reveal.positioningPending) { afterLayout(tryScroll); return; }
     const containerRect = container.getBoundingClientRect();
     const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
     const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
@@ -237,10 +248,10 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
         ? overlayComparisonCandidates
         : comparisonCandidates;
       return comparisonPair
-        ? preferredComparisonCandidates[0] ?? null
+        ? preferredComparisonCandidates.find(candidate=>candidate.hasAttribute('data-directed-edge-start')) ?? preferredComparisonCandidates[0] ?? null
         : isDecorationTarget
           ? preferredCandidates[0] ?? null
-          : preferredCandidates.find(candidate => !candidate.hasAttribute('data-rel-overlay')) ?? preferredCandidates[0] ?? null;
+          : preferredCandidates.find(candidate=>candidate.hasAttribute('data-directed-edge-start')) ?? preferredCandidates.find(candidate => !candidate.hasAttribute('data-rel-overlay')) ?? preferredCandidates[0] ?? null;
     };
     const el = findTargetElement();
     if (!el) { scrollRafRef.current = nextFrame(tryScroll); return; }
@@ -299,7 +310,7 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
   cancelScrollRafs();
   const task = dependencies.startPositioning?.();
   task?.onCancel(() => {
-    if (requestId === scrollRequestIdRef.current) leftPanelRef.current?.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } }));
+    complete(false, true);
   });
   // Measurement can move an already mounted card. Position only after the
   // destination scene has committed, then verify the resulting visible area.

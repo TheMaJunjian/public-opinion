@@ -1,5 +1,4 @@
 import { buildStanceTargetMap, resolveDisplayedStance } from '../../../utils/modelBridge';
-import { indexRelatedMessages } from '../../../utils/relatedMessages';
 import type { Relation } from '../../../types';
 import {bodyVersionKey,type BodyVersion,type ReadingMark} from '@gonglun/core';
 import {displayedBodyVersion} from '../../../utils/bodyVersions';
@@ -111,15 +110,13 @@ export function getMessageDisplayParts(input:DisplayHintsInput,id:string) {
 /** Resolve a hint to the workbench's existing correction records, container preview or trace. */
 export function displayHintDestination(input:DisplayHintsInput,id:string,record=false):{kind:'correction'|'corrections'|'container'|'related';id:string} {
   const map=new Map(input.messages.map(message=>[message.id,message])),message=map.get(id);
-  if(message?.relationType==='correct')return {kind:record?'correction':'corrections',id};
+  if(message?.relationType==='correct')return {kind:'corrections',id};
   if(isContainerType(message?.relationType))return {kind:'container',id};
   if(message?.kind==='join'&&message.joinInfo?.containerId)return {kind:'container',id:message.joinInfo.containerId};
+  if(record)return {kind:'related',id};
   const edge=input.edges.find(item=>item.relationMessageId===id&&['agree','disagree'].includes(item.relationType));
   const target=edge?resolveDisplayedStance(edge,map,buildStanceTargetMap(input.edges,map))?.targetId:undefined;
   if(target&&isContainerType(map.get(target)?.relationType))return {kind:'container',id:target};
   if(target&&map.get(target)?.relationType==='correct')return {kind:'corrections',id:target};
-  const rejected=indexRelatedMessages(input.messages,input.personalEffect.rejectedContainerIds).get(id)?.[0];
-  if(rejected)return {kind:'container',id:rejected.message.id};
-  const correction=input.edges.find(item=>item.relationType==='correct'&&item.to.messageId===id);
-  return correction?{kind:'corrections',id:correction.relationMessageId}:{kind:'related',id};
+  return {kind:'related',id};
 }

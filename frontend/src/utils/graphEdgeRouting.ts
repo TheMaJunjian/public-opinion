@@ -6,7 +6,7 @@ import { selectionIsText, relationTypeName } from './graphTextSelection';
 import type { LayoutBox, Rect } from './layout';
 import type { Box } from './frameLayout';
 import type { Point, LabelSeed } from './graphEdgeGeometry';
-import { getEdgeDecorationLeft, getDecorationColumnWidth, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, EDGE_HINT_W, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_MAX_LABEL_CHARS, MAX_RELATION_NESTING_DEPTH } from './graphPresentationGeometry';
+import { getEdgeDecorationLeft, getDecorationColumnWidth, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, EDGE_HINT_W, EDGE_LABEL_HINT_GAP, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_MAX_LABEL_CHARS, MAX_RELATION_NESTING_DEPTH } from './graphPresentationGeometry';
 import { quadAt, rayRectIntersectionFirst, samplePerimeterCandidates, computeLabelPlacementsAlongCurve } from './graphEdgeGeometry';
 import type { PositionedEdge } from './graphOverlays';
 
@@ -194,13 +194,12 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
       const names = users
         .filter(user => user && typeof user.username === 'string')
         .map(user => user.username);
-      return `${names.length > 0 ? names.join('、') : '与会者'}：通知`;
+      return `通知 ${names.length > 0 ? names.join('、') : '与会者'}`;
     }
-    const labelText = (e: DemoEdge, author: string) => {
-      if (e.relationType === "notify") return notifyEdgeLabel(e);
-      if (e.relationType === "reply") return `${author} · ${replyEdgeLabel(e.relationLabel)}`;
-      if (e.relationType === "reference") return `${author} · ${referenceEdgeLabel(e.relationLabel)}`;
-      return `${author} · ${edgeLabelName(e.relationType)}`;
+    const labelText = (e: DemoEdge, arrow='→') => {
+      const type=e.relationType==='notify'?notifyEdgeLabel(e):e.relationType==='reply'?replyEdgeLabel(e.relationLabel)
+        :e.relationType==='reference'?referenceEdgeLabel(e.relationLabel):edgeLabelName(e.relationType);
+      return `${type} ${arrow}`;
     };
 
     for (const e of edges) {
@@ -218,7 +217,7 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
       const fromBox = fromEp?.box ?? fromFrameRect;
       if (!fromBox) continue;
       const fromCol = fromEp?.col ?? colOf[fromMsg.id] ?? colOf[e.to.messageId] ?? 0;
-      const fromAuthor=fromMsg.author;
+      const fromAuthor=msgMap.get(e.relationMessageId)?.author ?? fromMsg.author;
       const toMsg=msgMap.get(e.to.messageId);
 
       // Tag and arrange relations are rendered as decorations/frames — no directed arrows.
@@ -242,7 +241,7 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
           rawEdges.push({
             drawId:e.id,edge:e,fromAuthor,
             fromBox,toBox:toEpN.box,fromCol,toCol:toEpN.col,
-            fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
+            fragRectCanvas:null,edgeLabelText:labelText(e),expandedToEdgeId:null,
             start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
           });
           continue;
@@ -265,7 +264,7 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
               drawId:e.id,edge:e,fromAuthor,
               fromBox,toBox:{x:frameRect.x,y:frameRect.y,width:frameRect.width,height:frameRect.height},
               fromCol,toCol:fromCol,
-              fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
+              fragRectCanvas:null,edgeLabelText:labelText(e),expandedToEdgeId:null,
               start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
             });
           }
@@ -280,7 +279,7 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
               drawId:e.id,edge:e,fromAuthor,
               fromBox,toBox:{x:tagInfo.rect.x,y:tagInfo.rect.y,width:tagInfo.rect.width,height:tagInfo.rect.height},
               fromCol,toCol:fromCol,
-              fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
+              fragRectCanvas:null,edgeLabelText:labelText(e),expandedToEdgeId:null,
               start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
             });
           }
@@ -300,7 +299,7 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
             rawEdges.push({
               drawId:e.id,edge:e,fromAuthor,
               fromBox,toBox:visualBox,fromCol,toCol,
-              fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
+              fragRectCanvas:null,edgeLabelText:labelText(e),expandedToEdgeId:null,
               start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
             });
           }
@@ -320,7 +319,7 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
               fromBox,
               toBox:{x:visualBox.x,y:visualBox.y,width:visualBox.width,height:visualBox.height},
               fromCol,toCol:fromCol,
-              fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
+              fragRectCanvas:null,edgeLabelText:labelText(e),expandedToEdgeId:null,
               start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
             });
           }
@@ -346,7 +345,7 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
 
       rawEdges.push({
         drawId:e.id,edge:e,fromAuthor,fromBox,toBox:toEp.box,fromCol,toCol:toEp.col,
-        fragRectCanvas,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
+        fragRectCanvas,edgeLabelText:labelText(e),expandedToEdgeId:null,
         start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
       });
     }
@@ -482,7 +481,7 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
         decoratedLabels.add(relId);
         const hasHint=!normalSet.has(relId);
         const owners=['annotation','reference','reply'].includes(edge.relationType)&&(voteBadgeCount(relId)>0||relationTags.has(relId))?[relId]:[];
-        rightWidth=hasHint?DEC_RIGHT_GAP+EDGE_HINT_W:0;
+        rightWidth=hasHint?EDGE_LABEL_HINT_GAP+EDGE_HINT_W:0;
         for(const owner of owners){
           const expanded=!input.visibleDecorationIds||input.visibleDecorationIds.has(owner);
           const count=voteBadgeCount(owner);
@@ -492,7 +491,7 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
         const tags=relationTags.get(relId);
         if(tags?.size&&(!input.visibleDecorationIds||input.visibleDecorationIds.has(relId))){
           const widths=[...tags].map(([label,count])=>Math.max(TAG_MIN_W,(count>1?`${label}（${count}人）`:label).length*8+36));
-          rightWidth=Math.max(rightWidth,DEC_RIGHT_GAP+(hasHint?EDGE_HINT_W+DEC_GAP:0)+EDGE_HINT_W+DEC_GAP+Math.max(...widths));
+          rightWidth=Math.max(rightWidth,(hasHint?EDGE_LABEL_HINT_GAP+EDGE_HINT_W:0)+DEC_RIGHT_GAP+EDGE_HINT_W+DEC_GAP+Math.max(...widths));
           const tagHeight=tags.size*TAG_H+(tags.size-1)*TAG_V_GAP;
           rightHeight=voteBadgeCount(relId)>0||owners.length>1
             ? rightHeight+2*(DEC_GAP+tagHeight) : Math.max(rightHeight,tagHeight);
@@ -502,7 +501,12 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
     }
 
     const placements=computeLabelPlacementsAlongCurve({seeds:labelSeeds,forbiddenRects:globalForbiddenRects});
-    const positionedEdges = (rawEdges.map(pe => ({ ...pe, labelX:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).x, labelY:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).y })));
+    const arrows=['→','↘','↓','↙','←','↖','↑','↗'];
+    const positionedEdges = rawEdges.map(pe => {
+      const position=placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5);
+      const direction=(Math.round(Math.atan2(pe.end.y-pe.start.y,pe.end.x-pe.start.x)/(Math.PI/4))+8)%8;
+      return {...pe,edgeLabelText:labelText(pe.edge,arrows[direction]),labelX:position.x,labelY:position.y};
+    });
 
   return positionedEdges;
 }

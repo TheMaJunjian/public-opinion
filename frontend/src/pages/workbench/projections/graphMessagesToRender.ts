@@ -9,6 +9,7 @@ import { applyTraceFrameVisibility, buildTraceProjection, type TraceContainerMem
 import { collectContainerVisibleIds,collectOwnedByRelation,type ContainerOwnership } from '../model/ownership';
 import { filterMessageListContext } from './messageListContext';
 import type { TraceEntry } from "../types";
+import type {TraceDirection} from '../../../utils/traceRange';
 import { edgeDisplayDependencyIds } from '../../../utils/displayDependency';
 
 interface DeriveGraphMessagesToRenderInput {
@@ -21,6 +22,8 @@ interface DeriveGraphMessagesToRenderInput {
   traceContainerMemberships: TraceContainerMembership[];
   effectiveSuppressedRelIdsForLayout: Set<string>;
   traceDistance: number;
+  traceDepths?: import('../../../utils/traceRange').TraceDepths;
+  traceDirection?: TraceDirection;
   traceExpandedFrameIds: Set<string>;
   isInsideClassify: boolean;
   currentClassifyRelMsgId: string | null;
@@ -63,6 +66,9 @@ export function deriveGraphMessagesToRender(input: DeriveGraphMessagesToRenderIn
       excludedRelationIds: effectiveSuppressedRelIdsForLayout,
       startIds: traceStartIds,
       distance: traceDistance,
+      depths: input.traceDepths,
+      direction: input.traceDirection,
+      expandedContainerIds:new Set([...traceExpandedFrameIds,...traceStartIds]),
     });
     const listProjection = applyTraceFrameVisibility(
       traceProjection,

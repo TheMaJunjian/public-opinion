@@ -175,14 +175,15 @@ describe('viewport message rendering with measured browser geometry', () => {
     act(() => { host.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [targetId] } })); });
     expect(host.querySelectorAll('[data-msgid^="m-"]:not([data-rel-overlay])')).toHaveLength(memberIds.length);
     // A viewport update between positioning and the mask commit must keep members alive.
-    host.scrollTop = 1000; fireEvent.scroll(host); frames(4);
+    const canvas = host.querySelector<HTMLElement>('[data-jump-canvas]')!;
+    // jsdom does not clamp scrollTop like the browser does for a compact frame.
+    host.scrollTop = Math.min(1000,Math.max(0,Number.parseFloat(canvas.style.height)-host.getBoundingClientRect().height)); fireEvent.scroll(host); frames(4);
     expect(host.querySelector('[data-msgid="m-79"]')).not.toBeNull();
     const target = host.querySelector<HTMLElement>(`[data-msgid="${targetId}"][data-rel-overlay]`)!;
     const display = getMessageJumpDisplay(target, targetId);
     for (const id of memberIds) expect(display.elements?.has(host.querySelector(`[data-msgid="${id}"]:not([data-rel-overlay])`)!)).toBe(true);
-    const canvas = host.querySelector<HTMLElement>('[data-jump-canvas]')!;
     const overlay = render(<MessageJumpOverlay messageId={targetId} targetElement={target}
-      targetRect={new DOMRect(0, -1000, parseFloat(canvas.style.width), parseFloat(canvas.style.height))} />);
+      targetRect={new DOMRect(0, -host.scrollTop, parseFloat(canvas.style.width), parseFloat(canvas.style.height))} />);
     const regions = [...document.querySelectorAll('[data-message-jump-region]')];
     const uncoveredIds = regions.flatMap(region => region.getAttribute('data-message-jump-region')!.split(/\s+/));
     // Every mounted display component contributes an opening; clipping may
@@ -266,6 +267,52 @@ describe('viewport message rendering with measured browser geometry', () => {
     expect(document.activeElement).toBe(button);
     act(() => { view.getByRole('button', { name: '外部控件' }).focus(); });
     expect(view.container.querySelector('[data-msgid="m-0"]')).toBeNull();
+  });
+
+  it('locates an offscreen reference at its start without retaining its source card', () => {
+    vi.spyOn(SVGElement.prototype,'getBoundingClientRect').mockImplementation(function(this:SVGElement){
+      const host=this.closest<HTMLElement>('[data-workbench-left-panel]');
+      return new DOMRect(Number(this.getAttribute('x'))-30-(host?.scrollLeft??0),
+        Number(this.getAttribute('y'))-7-(host?.scrollTop??0),60,14);
+    });
+    const messages = [...ids.map(message), { ...message('remote-reference'), kind: 'relation' as const, relationType: 'reference' as const }];
+    const edges: DemoEdge[] = [{ id: 'remote-reference-edge', relationMessageId: 'remote-reference', relationType: 'reference', relationLabel: '引用',
+      from: { messageId: 'm-599', selection: { kind: 'whole' } }, to: { messageId: 'm-598', selection: { kind: 'whole' } } }];
+    const view = render(<div data-workbench-left-panel style={{ overflow: 'auto', height: 500 }}>
+      <GraphView messages={messages} edges={edges} draftUnits={[]} activeTextSelectId={null} lastClickedMessageId={null} {...callbacks} />
+    </div>);
+    frames(55);
+    const host = view.container.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+    expect(host.querySelector('[data-msgid="m-599"]:not([data-rel-overlay])')).toBeNull();
+    act(() => { host.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: ['remote-reference'] } })); });
+    frames(3);
+    expect(host.querySelector('[data-msgid="m-599"]:not([data-rel-overlay])')).toBeNull();
+    const label=host.querySelector<HTMLElement>('[data-directed-edge-label="remote-reference"]')!;
+    expect(label).not.toBeNull();
+    const display=getMessageJumpDisplay(label,'remote-reference');
+    expect([...display.elements!]).toEqual([label]);
+    const canvas=host.querySelector<HTMLElement>('[data-jump-canvas]')!;
+    Object.defineProperties(host,{clientWidth:{value:800},clientHeight:{value:500},
+      scrollWidth:{value:parseFloat(canvas.style.width)},scrollHeight:{value:parseFloat(canvas.style.height)}});
+    // Keep the compact label's actual size instead of the generic card fixture.
+    Object.defineProperty(label,'getBoundingClientRect',{value:()=>new DOMRect(
+      parseFloat(label.style.left)-host.scrollLeft,parseFloat(label.style.top)-host.scrollTop,
+      parseFloat(label.style.width),parseFloat(label.style.height))});
+    const start=host.querySelector<HTMLElement>('[data-directed-edge-start="remote-reference"]')!;
+    Object.defineProperty(start,'getBoundingClientRect',{value:()=>new DOMRect(
+      parseFloat(start.style.left)-host.scrollLeft,parseFloat(start.style.top)-host.scrollTop,16,16)});
+    const completed=vi.fn(),pulse=vi.fn<Parameters<typeof scrollMsgToCenter>[0]['showMessagePulse']>((_id,_element,_request,onShown)=>onShown?.(true));
+    scrollMsgToCenter({scrollRequestIdRef:{current:0},pendingScrollMsgIdRef:{current:null},MAX_SCROLL_ATTEMPTS:60,
+      pendingScrollDependencyIdsRef:{current:[]},leftPanelRef:{current:host as HTMLDivElement},scrollRafRef:{current:null},
+      findMessageElements,relationsRef:{current:[]},edgesRef:{current:edges},cancelScrollRafs:vi.fn(),showMessagePulse:pulse},
+      'remote-reference',{onComplete:completed});
+    frames(8);
+    expect(completed).toHaveBeenCalledExactlyOnceWith(true);
+    expect(pulse.mock.calls[0][0]).toBe('remote-reference');
+    expect(pulse.mock.calls[0][1]).toBe(start);
+    expect(start.getBoundingClientRect().top).toBeGreaterThanOrEqual(0);
+    expect(start.getBoundingClientRect().bottom).toBeLessThanOrEqual(500);
+    act(() => { host.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } })); });
   });
 
   it('reveals an offscreen relation decoration with a reachable target card', () => {

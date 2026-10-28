@@ -10,6 +10,25 @@ function firstGuide() {
   return { x, y, endX, endY };
 }
 
+it('unmasks only the directed edge label, leaving its long path and other decorations covered',()=>{
+  const canvas=document.createElement('div');canvas.dataset.jumpCanvas='true';
+  canvas.innerHTML='<svg><g data-jump-visual-msgids="reference"><path/><text>引用 → 作者</text></g></svg><div data-msgid="reference" data-directed-edge-label="reference" data-rel-overlay>引用入口</div><div data-msgid="reference" data-jump-msgids="vote" data-rel-overlay>赞同装饰</div>';
+  document.body.append(canvas);
+  const label=canvas.querySelector<HTMLElement>('[data-directed-edge-label]')!;
+  const geometry=vi.spyOn(Element.prototype,'getBoundingClientRect').mockImplementation(function(this:Element){
+    if(this.hasAttribute('data-message-jump-overlay'))return new DOMRect(0,0,window.innerWidth,window.innerHeight);
+    return this===label?new DOMRect(220,180,120,28):new DOMRect(10,100,900,500);
+  });
+  const display=getMessageJumpDisplay(label,'reference',new DOMRect(10,100,900,500));
+  const view=render(<MessageJumpOverlay messageId="reference" targetElement={label} targetRect={display.rect}/>);
+  try{
+    expect([...display.elements!]).toEqual([label]);expect(display.rect.width).toBe(120);
+    const regions=document.querySelectorAll('[data-message-jump-region]');expect(regions).toHaveLength(1);
+    expect(regions[0]).toHaveAttribute('x','220');expect(regions[0]).toHaveAttribute('width','120');
+    expect(regions[0]).toHaveAttribute('height','28');
+  }finally{view.unmount();geometry.mockRestore();canvas.remove();}
+});
+
 it('cuts the live message out of the entire prompt, including guides and hint text', () => {
   const canvas = document.createElement('div');
   canvas.setAttribute('data-jump-canvas', 'true');

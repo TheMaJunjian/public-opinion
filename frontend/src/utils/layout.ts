@@ -215,11 +215,8 @@ export function computeSimpleNoOverlapLayout(params: {
   }
 
   // Sort by creation time (oldest at top — meeting-speak-order)
-  const sorted = [...normals].sort((a, b) => {
-    const ta = new Date(a.createdAt).getTime();
-    const tb = new Date(b.createdAt).getTime();
-    return ta !== tb ? ta - tb : a.id.localeCompare(b.id);
-  });
+  const sorted = [...normals].sort((a,b)=>(Date.parse(a.createdAt)||0)-(Date.parse(b.createdAt)||0)
+    ||(a.sequence??0)-(b.sequence??0)||a.id.localeCompare(b.id));
 
   let maxBottom = GRID_TOP;
 

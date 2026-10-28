@@ -6,6 +6,7 @@ import type { DemoMessage } from '../utils/modelBridge';
 import type { User } from '../types';
 import { LEADERBOARD_PREFERENCES_KEY } from '../utils/leaderboardPreferences';
 import * as leaderboardMetrics from '../utils/leaderboardMetrics';
+import {buildLeaderboardRows} from '../utils/leaderboardRows';
 
 beforeEach(() => { localStorage.removeItem(LEADERBOARD_PREFERENCES_KEY); });
 afterEach(() => { vi.restoreAllMocks(); localStorage.removeItem(LEADERBOARD_PREFERENCES_KEY); });
@@ -541,7 +542,7 @@ describe('排行榜', () => {
       edges={[0, 1].map(index => ({ id: `reference-b:${index}`, relationMessageId: 'reference-b', relationType: 'reference', relationLabel: '引用',
         from: { messageId: 'text-b', selection: { kind: 'whole' } }, to: { messageId: 'reply-a', selection: { kind: 'whole' } } }))}
     />);
-    expect(cells(rows()[0])).toEqual(['1', 'user-alice', 'alice', '80', '6', '1', '5', '20', '7', '10.00', '1', '1', '112']);
+    expect(cells(rows()[0])).toEqual(['1', 'user-alice', 'alice', '80', '6', '1', '5', '20', '7', '10.00', '1', '1', '112', '-']);
     fireEvent.click(screen.getByRole('button', { name: '消息榜' }));
     expect(cells(rows()[0]).slice(1, 3)).toEqual(['reply-a', 'reply-a']);
     expect(cells(rows()[0]).slice(4, 10)).toEqual(['20', '10', '7', '-40.00', '1', '1']);
@@ -566,6 +567,39 @@ describe('排行榜', () => {
     expect(rows()).toHaveLength(0);
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: 0 } });
     expect(cells(rows()[0])[2]).toBe('bob');
+  });
+
+  it.each([false,true])('人榜末列显示注册时间，支持按实际时间双向排序、翻页和搜索（全局数据=%s）',global=>{
+    const {rerender,props}=setup();
+    const people:User[]=Array.from({length:23},(_,index)=>({id:`registered-${String(index).padStart(2,'0')}`,username:`member-${index}`,
+      createdAt:new Date(Date.UTC(2026,9,1,0,0,index)).toISOString()}));
+    people[21].createdAt='2026-10-01T09:00:00+08:00';
+    people[22].createdAt='2026-09-30T23:59:59-02:00';
+    people.push({id:'unknown',username:'missing-time',createdAt:''},{id:'invalid',username:'invalid-time',createdAt:'invalid'});
+    const records=[message('orphan-message','orphan')];
+    const globalRows=global?buildLeaderboardRows(leaderboardMetrics.buildLeaderboardMetrics(records,[],[],people),people,{},{}):undefined;
+    rerender(<LeaderboardModal {...props} users={people} messages={records} globalRows={globalRows}/>);
+    expect(screen.getAllByRole('columnheader').at(-1)).toHaveTextContent('注册时间');
+    fireEvent.click(screen.getByRole('button',{name:'下一页'}));
+    fireEvent.change(screen.getByRole('combobox',{name:'排序条件'}),{target:{value:'registeredAt'}});
+    expect(cells(rows()[0]).slice(0,3)).toEqual(['1','registered-22','member-22']);
+    expect(cells(rows()[1])[2]).toBe('member-21');
+    expect(rows()[0].cells.item(13)?.querySelector('time')).toHaveAttribute('datetime',people[22].createdAt);
+    expect(cells(rows()[0]).at(-1)).toMatch(/2026/);
+    fireEvent.click(screen.getByRole('button',{name:'末页'}));
+    expect(rows().slice(0,3).map(row=>cells(row)[2])).toEqual(['member-2','member-1','member-0']);
+    expect(rows().slice(-3).map(row=>cells(row).at(-1))).toEqual(['-','-','-']);
+    fireEvent.click(screen.getByRole('button',{name:'降序'}));
+    expect(cells(rows()[0]).slice(0,3)).toEqual(['1','registered-00','member-0']);
+    fireEvent.click(screen.getByRole('button',{name:'末页'}));
+    expect(rows().slice(0,3).map(row=>cells(row)[2])).toEqual(['member-20','member-21','member-22']);
+    expect(rows().slice(-3).map(row=>cells(row).at(-1))).toEqual(['-','-','-']);
+    fireEvent.change(screen.getByPlaceholderText('搜索与会者ID/与会者'),{target:{value:'member-22'}});
+    expect(rows()).toHaveLength(1);expect(cells(rows()[0])[0]).toBe('1');
+    expect(rows()[0].cells.item(13)?.querySelector('time')).toHaveAttribute('datetime',people[22].createdAt);
+    fireEvent.click(screen.getByRole('button',{name:'消息榜'}));
+    expect(screen.queryByRole('columnheader',{name:'注册时间'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('option',{name:'按注册时间'})).not.toBeInTheDocument();
   });
 
   it('消息榜的所有排序选项与方向均生效，净支持率最小样本排除无押注消息', () => {

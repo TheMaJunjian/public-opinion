@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { MessageDisplayHintsProvider, MessageDisplayMarker,useViewedBodyReference } from '../components/MessageDisplayHints';
+import { MessageDisplayHintsProvider, MessageDisplayHintsScope, MessageDisplayMarker,useViewedBodyReference } from '../components/MessageDisplayHints';
 import MessageCard from '../components/MessageCard';
 import GraphView from '../components/GraphView';
 import type { Message, Relation } from '../types';
@@ -10,7 +10,7 @@ import { correctionRecordHint, deriveDisplayHints, getMessageDisplaySignature, g
 import { getLatestUserReadStatusByMessageId } from '../pages/workbench/model/filters';
 import {createDisplayHintWindow} from '../pages/workbench/model/displayHintWindow';
 import {createCurrentContainerLookup} from '../pages/workbench/model/displayHintContainers';
-import {readingMarksFor} from '../pages/workbench/model/readingProgress';
+import {readingMarksFor,deriveReadingProgress,influenceReadingMarks} from '../pages/workbench/model/readingProgress';
 import type {ReadingMark} from '@gonglun/core';
 import {withFixtureReadingMarks} from './readingFixture';
 import {WorkbenchDrawingContext,createWorkbenchDrawingTasks} from '../context/WorkbenchDrawingContext';
@@ -26,6 +26,13 @@ function fixture(records:Message[],relations:Relation[],readStatus=new Map<strin
 }
 
 describe('computed display hints',()=>{
+  it.each(['source','target'])('jumps to the reference record from the %s hint instead of highlighting its source',targetId=>{
+    const input=fixture([text('source'),text('target')],[rel('reference','REFERENCE',['target'],'source')]),onReadNavigate=vi.fn();
+    render(<MessageDisplayHintsProvider input={input} onView={vi.fn()} onReadNavigate={onReadNavigate}><MessageDisplayMarker messageId={targetId}/></MessageDisplayHintsProvider>);
+    fireEvent.click(screen.getByRole('button',{name:new RegExp(`显示提示 ${targetId}：`)}));
+    fireEvent.click(within(screen.getByRole('tooltip')).getByRole('button',{name:'跳转未读'}));
+    expect(onReadNavigate).toHaveBeenCalledWith('reference',[expect.objectContaining({destinationId:'reference',targetId,influence:expect.objectContaining({messageId:'reference'})})]);
+  });
   it('freezes the exact original base revision and keeps it after an authorized base update',()=>{
     const base={...text('m','原文'),revision:1,parts:[{id:'body',type:'text' as const,text:'原文'}]};
     const edit={...rel('c','CORRECT',['m']),revision:1,targetRefs:[{kind:'message' as const,messageId:'m',reference:{messageId:'m',revision:1,partId:'body'}}],payload:{correctionBeforeContent:'原文',correctionAfterContent:'更正版'}};
@@ -68,7 +75,7 @@ describe('computed display hints',()=>{
     expect(popup).not.toHaveTextContent('当前用户选择');expect(screen.getByRole('radio',{checked:true})).toHaveTextContent('推荐选择');
     expect(screen.getAllByRole('radio')).toHaveLength(2);
     view.rerender(element(next));expect(popup).not.toHaveTextContent('尚未选择');
-    expect(screen.getByRole('radio',{checked:true})).toHaveTextContent('与当前用户选择相同');
+    expect(screen.getByRole('radio',{checked:true})).toHaveTextContent('当前用户选择相同');
     view.rerender(element(input));expect(popup).toHaveTextContent('尚未选择');expect(popup).not.toHaveTextContent('当前用户选择');
   });
   it.each(['TEXT','MEANING'] as const)('recognizes publishing a %s correction as a choice and follows later sends and stances',correctionKind=>{
@@ -188,7 +195,7 @@ describe('computed display hints',()=>{
     openVersions();fireEvent.click(screen.getByRole('button',{name:'关闭版本选择'}));expect(screen.queryByRole('dialog')).toBeNull();
     expect(onView).not.toHaveBeenCalled();
   });
-  it.each(['A','R'])('confirms the displayed nested placement path when viewing %s, keeping sibling containers separate',async currentContainerId=>{
+  it.each(['A','R'])('keeps nested placement confirmations independent from the member body when viewing %s',async currentContainerId=>{
     const input=fixture([text('m')],[rel('A','CLASSIFY'),rel('R','ARRANGE'),rel('S','SUMMARY'),
       rel('frame-in-category','JOIN',['R'],'A'),rel('sibling-in-category','JOIN',['S'],'A'),
       rel('old-classification','JOIN',['m'],'A','2026-01-02'),rel('old-sibling','JOIN',['m'],'S','2026-01-01'),rel('active','JOIN',['m'],'R','2026-01-03')]);
@@ -205,11 +212,11 @@ describe('computed display hints',()=>{
     expect(onView).toHaveBeenCalledWith('old-sibling',expect.anything(),true);
     await act(async()=>fireEvent.click(within(tooltip).getByRole('button',{name:'标记当前消息已阅'})));
     const marks=onMarkRead.mock.calls[0][0];
-    expect(new Set(marks.filter(mark=>mark.scope!=='influence').map(mark=>mark.messageId))).toEqual(new Set(['m','old-classification','active','frame-in-category']));
+    expect(new Set(marks.filter(mark=>mark.scope!=='influence').map(mark=>mark.messageId))).toEqual(new Set(['m']));
     view.rerender(element({...input,readingMarks:marks}));
     const after=screen.getByRole('tooltip');
-    expect(after).toHaveTextContent('1 条影响待阅');expect(after).toHaveTextContent('加入 · old-sibling');
-    expect(after).not.toHaveTextContent('加入 · old-classification');expect(after).not.toHaveTextContent('加入 · active');
+    expect(after).toHaveTextContent('加入 · old-sibling');expect(after).toHaveTextContent('加入 · active');
+    expect(deriveDisplayHints({...input,readingMarks:marks}).hints.get('m')?.relatedUnreadIds).toEqual(deriveDisplayHints(input).hints.get('m')?.relatedUnreadIds);
   });
   it('keeps the complete effective path current without including the container message itself or its historical members',()=>{
     const input=fixture([text('member')],[rel('A','CLASSIFY'),rel('R','ARRANGE'),rel('category','CLASSIFY',['member']),rel('other','SUMMARY'),
@@ -223,8 +230,8 @@ describe('computed display hints',()=>{
     const tooltip=screen.getByRole('tooltip');
     expect(tooltip).toHaveTextContent('分类：A（当前）');expect(tooltip).toHaveTextContent('排列：R（当前）');
     expect(tooltip).not.toHaveTextContent('分类：category（当前）');
-    fireEvent.click(within(tooltip).getByRole('button',{name:/^被加入 · old-member/}));
-    expect(onView).toHaveBeenCalledWith('old-member',expect.anything(),true);
+    fireEvent.click(within(tooltip).getByRole('button',{name:'查看被加入目标 member'}));
+    expect(onView).toHaveBeenCalledWith('member',expect.anything(),false);
   });
   it('restores the version anchor only after asynchronous graph measurements finish',async()=>{
     const input=fixture([text('m','原文')],[{...rel('c','CORRECT',['m']),payload:{correctionBeforeContent:'原文',correctionAfterContent:'更正'}}]);
@@ -275,26 +282,25 @@ describe('computed display hints',()=>{
     expect(tooltip).not.toHaveTextContent('分类 · container');
     await act(async()=>fireEvent.click(within(tooltip).getByRole('button',{name:'标记当前消息已阅'})));
     const marks=onMarkRead.mock.calls[0][0];
-    for(const id of ['m','join'])expect(marks).toContainEqual(expect.objectContaining({messageId:id,scope:'message'}));
-    expect(marks.filter(mark=>mark.scope!=='influence')).toHaveLength(2);expect(marks.some(mark=>mark.messageId==='container'&&mark.scope!=='influence')).toBe(false);
-    const after={...input,readingMarks:marks,readStatus:new Map<string,'READ'|'UNREAD'>([['m','READ'],['join','READ']])};
-    expect(deriveDisplayHints(after).hints.get('container')).toMatchObject({unread:true,unreadMemberCount:1});
-    view.rerender(element(after));expect(screen.getByRole('button',{name:/显示提示 m：消息已阅/})).toHaveAttribute('data-display-reading','read');
-    expect(screen.getByRole('tooltip')).not.toHaveTextContent('影响待阅');expect(onView).not.toHaveBeenCalled();
+    expect(marks).toHaveLength(1);expect(marks[0]).toMatchObject({messageId:'m',scope:'message'});
+    const after={...input,readingMarks:[...input.readingMarks??[],...marks]};
+    expect(deriveDisplayHints(after).hints.get('container')).toMatchObject({unread:true,unreadMemberCount:alreadyRead?1:2});
+    view.rerender(element(after));expect(screen.getByRole('button',{name:/显示提示 m：消息已阅/})).toHaveAttribute('data-display-reading',alreadyRead?'read':'related-unread');
+    if(!alreadyRead)expect(screen.getByRole('tooltip')).toHaveTextContent('影响待阅');expect(onView).not.toHaveBeenCalled();
   });
-  it('confirms a current placement with the main read action and no duplicate JOIN button',async()=>{
+  it('reads the body separately from the explicit current JOIN confirmation',async()=>{
     const input=fixture([text('m')],[rel('container','CLASSIFY',['m']),rel('join','JOIN',['m'],'container')]),onMarkRead=vi.fn<(marks:ReadingMark[])=>Promise<void>>(async()=>{});
     render(<MessageDisplayHintsProvider input={input} onView={vi.fn()} onMarkRead={onMarkRead} currentContainerId="container"><MessageDisplayMarker messageId="m"/></MessageDisplayHintsProvider>);
     fireEvent.click(screen.getByRole('button',{name:/显示提示 m：/}));
-    const automatic=screen.getByRole('region',{name:'点击已阅将自动确认'});
-    expect(within(automatic).getAllByRole('button')).toHaveLength(1);
+    const automatic=screen.getByRole('region',{name:'点击已阅将确认已读'});
+    expect(within(automatic).getAllByRole('button',{name:'标记当前消息已阅'})).toHaveLength(1);
     expect(screen.queryByRole('button',{name:'标记加入 join 已阅'})).toBeNull();
     await act(async()=>fireEvent.click(within(automatic).getByRole('button',{name:'标记当前消息已阅'})));
     const marks=onMarkRead.mock.calls[0][0];
-    expect(marks.filter(mark=>mark.scope!=='influence')).toHaveLength(2);expect(marks).toContainEqual(expect.objectContaining({messageId:'join',scope:'message'}));
+    expect(marks.filter(mark=>mark.scope!=='influence')).toHaveLength(1);expect(marks.some(mark=>mark.messageId==='join')).toBe(false);
     expect(marks).toContainEqual(expect.objectContaining({messageId:'m',scope:'message'}));
     expect(marks.some(mark=>mark.messageId==='container'&&mark.scope!=='influence')).toBe(false);
-    expect(deriveDisplayHints({...input,readingMarks:marks}).hints.get('m')).toMatchObject({unread:false,relatedUnreadIds:[]});
+    expect(deriveDisplayHints({...input,readingMarks:marks}).hints.get('m')).toMatchObject({unread:false,relatedUnreadIds:['join']});
   });
   it('keeps different placement records separate while folding their shared container context',()=>{
     const input=fixture([text('m')],[rel('container','CLASSIFY',['m']),rel('old','JOIN',['m'],'container','2026-01-02'),rel('new','JOIN',['m'],'container','2026-01-03')]);
@@ -320,30 +326,33 @@ describe('computed display hints',()=>{
     if(type==='CLASSIFY')expect(tooltip).toHaveTextContent(`双击进入${label}查看。`);
     else expect(tooltip).not.toHaveTextContent('双击进入');
     expect(within(tooltip).queryByRole('button',{name:/member/})).toBeNull();
-    const explanation=within(tooltip).getByText('点击已阅将自动确认'),confirm=within(tooltip).getByRole('button',{name:'确认当前显示'});
+    const explanation=within(tooltip).getByText('点击已阅将确认已读'),confirm=within(tooltip).getByRole('button',{name:'当前消息已阅'});
+    expect(confirm).toBeDisabled();
     expect(explanation.compareDocumentPosition(confirm)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(tooltip).getByText('选择显示')).toHaveStyle({textAlign:'left'});
     expect(onView).not.toHaveBeenCalled();expect(onMarkRead).not.toHaveBeenCalled();
   });
-  it('separates automatically confirmed placements and influence categories from replies requiring individual confirmation',async()=>{
+  it('confirms annotations with the body while leaving placement and reply records separate',async()=>{
     const tag={...rel('tag','TAG',['m']),payload:{label:'有趣'}};
     const input=fixture([text('m')],[rel('container','CLASSIFY',['m']),rel('join','JOIN',['m'],'container'),tag,rel('reply','REPLY',['m'])]);
     const onMarkRead=vi.fn<(marks:ReadingMark[])=>Promise<void>>(async()=>{});
     render(<MessageDisplayHintsProvider input={input} onView={vi.fn()} onMarkRead={onMarkRead}><MessageDisplayMarker messageId="m"/></MessageDisplayHintsProvider>);
     fireEvent.click(screen.getByRole('button',{name:/显示提示 m：/}));
-    const automatic=screen.getByRole('region',{name:'点击已阅将自动确认'}),individual=screen.getByRole('region',{name:'需分别查看确认'});
+    const automatic=screen.getByRole('region',{name:'点击已阅将确认已读'}),individual=screen.getByRole('region',{name:'需分别查看确认'});
     expect(automatic.compareDocumentPosition(individual)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(automatic).toHaveTextContent('当前消息 · m');expect(automatic).toHaveTextContent('加入 · join');expect(automatic).toHaveTextContent('标注「有趣」');
-    expect(automatic).not.toHaveTextContent('回复 · reply');expect(individual).toHaveTextContent('回复 · reply');expect(individual).not.toHaveTextContent('加入 · join');
-    expect(within(automatic).getAllByRole('button')).toHaveLength(1);
-    expect(within(individual).getByRole('button',{name:'标记回复 reply 已阅'})).toBeInTheDocument();
+    expect(automatic).toHaveTextContent('当前消息 · m');expect(automatic).not.toHaveTextContent('加入 · join');expect(automatic).toHaveTextContent('标注「有趣」');
+    expect(individual).not.toHaveTextContent('标注「有趣」');
+    expect(automatic).not.toHaveTextContent('回复 · reply');expect(individual).toHaveTextContent('回复 · reply');expect(individual).toHaveTextContent('加入 · join');
+    expect(within(automatic).getAllByRole('button',{name:'标记当前消息已阅'})).toHaveLength(1);
+    expect(within(individual).queryByRole('button',{name:/已阅/})).toBeNull();
+    expect(individual).toHaveTextContent('消息待阅 · 影响待阅');
     await act(async()=>fireEvent.click(within(automatic).getByRole('button',{name:'标记当前消息已阅'})));
     const marks=onMarkRead.mock.calls[0][0];
-    expect(marks).toContainEqual(expect.objectContaining({messageId:'join',scope:'message'}));
-    expect(marks).toContainEqual(expect.objectContaining({messageId:'m',scope:'influence',key:'tag:有趣'}));
+    expect(marks).toHaveLength(2);expect(marks[0]).toMatchObject({messageId:'m',scope:'message'});
+    expect(marks[1]).toMatchObject({messageId:'m',scope:'influence',key:'tag:有趣'});
     expect(marks.some(mark=>mark.messageId==='reply'||mark.messageId==='tag'&&mark.scope!=='influence')).toBe(false);
   });
-  it('groups received JOIN reminders in the status window, follows current target locations and confirms them individually',async()=>{
+  it('shows received JOIN targets and their progress without confirming them from the container',async()=>{
     const records=[text('direct'),text('nested-member'),text('outside')];
     const relations=[rel('container','CLASSIFY'),rel('nested','CLASSIFY'),rel('elsewhere','CLASSIFY'),rel('nested-join','JOIN',['nested'],'container'),
       rel('old-direct','JOIN',['direct'],'container'),rel('current-direct','JOIN',['direct'],'container','2026-01-03'),
@@ -352,27 +361,36 @@ describe('computed display hints',()=>{
     const input=fixture(records,relations),onMarkRead=vi.fn<(marks:ReadingMark[])=>Promise<void>>(async()=>{}),onView=vi.fn();
     const element=(value:DisplayHintsInput)=><MessageDisplayHintsProvider input={value} onView={onView} onMarkRead={onMarkRead}><MessageDisplayMarker messageId="container"/></MessageDisplayHintsProvider>;
     const view=render(element(input));fireEvent.click(screen.getByRole('button',{name:/显示提示 container：/}));
-    const adopted=screen.getByRole('region',{name:'当前采用的待阅被加入记录'}),unadopted=screen.getByRole('region',{name:'未采用的待阅被加入记录'});
+    const adopted=screen.getByRole('region',{name:'当前采用的被加入目标'}),unadopted=screen.getByRole('region',{name:'未采用的被加入目标'});
     expect(adopted).toHaveTextContent('当前采用（2 条）');expect(unadopted).toHaveTextContent('未采用（3 条）');
+    expect(adopted.querySelector('[data-display-hint-members]')).not.toBeNull();
+    expect(unadopted.querySelector('[data-display-hint-members]')).toBeNull();
+    expect(within(adopted).getByRole('button',{name:'查看被加入目标 direct'})).toHaveTextContent('【文本】 ID：direct');
+    expect(within(adopted).getByRole('button',{name:'查看被加入目标 nested'})).toHaveTextContent('【分类】 ID：nested');
     for(const [id,label] of [['old-direct','本容器'],['old-nested','嵌套容器中'],['old-outside','范围外']]){
       const rows=unadopted.querySelectorAll(`[data-reading-join-record="${id}"]`);expect(rows).toHaveLength(1);
       expect(rows[0].querySelector('[data-join-target-location]')).toHaveTextContent(label);
     }
-    expect(screen.getByRole('region',{name:'点击已阅将自动确认'}).querySelector('[data-reading-received-joins]')).toBeNull();
+    expect(screen.getByRole('region',{name:'点击已阅将确认已读'}).querySelector('[data-reading-received-joins]')).toBeNull();
     fireEvent.click(within(unadopted).getByRole('button',{name:'查看被加入目标 nested-member'}));expect(onView).toHaveBeenCalledWith('nested-member',expect.anything(),false);
     const changed=fixture(records,[...relations,rel('choice','AGREE',['old-nested'],null,'2026-01-04','alice')]);
     view.rerender(element(changed));
-    const moved=screen.getByRole('region',{name:'当前采用的待阅被加入记录'}).querySelector('[data-reading-join-record="old-nested"]');
+    const moved=screen.getByRole('region',{name:'当前采用的被加入目标'}).querySelector('[data-reading-join-record="old-nested"]');
     expect(moved).not.toBeNull();expect(moved!.querySelector('[data-join-target-location]')).toHaveTextContent('本容器');
     view.rerender(element(input));
     await act(async()=>fireEvent.click(screen.getByRole('button',{name:'标记当前消息已阅'})));
     const mainMarks=onMarkRead.mock.calls[0][0];expect(mainMarks.some(mark=>mark.scope!=='influence'&&['nested-join','current-direct','direct','nested-member','outside'].includes(mark.messageId))).toBe(false);
-    await act(async()=>fireEvent.click(screen.getByRole('button',{name:'标记被加入 old-nested 已阅'})));
-    const recordMarks=onMarkRead.mock.calls[1][0];expect(recordMarks).toContainEqual(expect.objectContaining({messageId:'old-nested',scope:'message'}));
-    expect(recordMarks.some(mark=>mark.scope!=='influence'&&mark.messageId==='nested-member')).toBe(false);
-    view.rerender(element({...input,readingMarks:[...mainMarks,...recordMarks]}));
-    expect(screen.getByRole('region',{name:'未采用的待阅被加入记录'})).toHaveTextContent('未采用（2 条）');
-    expect(screen.getByRole('tooltip').querySelector('[data-reading-join-record="old-nested"]')).toBeNull();
+    const received=screen.getByRole('tooltip').querySelector('[data-reading-received-joins]')!;
+    expect(within(received as HTMLElement).queryAllByRole('button',{name:/已阅|跳转未读/})).toHaveLength(0);
+    expect(received).toHaveTextContent('消息待阅');expect(received).toHaveTextContent('条新影响待确认');
+    expect(received).not.toHaveTextContent('被加入 · old-nested');
+    const targetHint=deriveDisplayHints(input).hints.get('nested-member')!;
+    const targetMarks=[...readingMarksFor({...input,memberships:input.personalEffect.memberships,displays:new Map([['nested-member',targetHint.displayed]])},'nested-member',targetHint.displayed),
+      ...influenceReadingMarks('nested-member',targetHint.pendingInfluences)];
+    view.rerender(element({...input,readingMarks:[...mainMarks,...targetMarks]}));
+    const targetRow=screen.getByRole('tooltip').querySelector('[data-reading-join-record="old-nested"]')!;
+    expect(targetRow).toHaveTextContent('消息已阅 · 暂无新影响');
+    expect(onMarkRead).toHaveBeenCalledOnce();
   });
   it.each(['CLASSIFY','SUMMARY'])('retains %s member reminders across original and corrected bodies without confirming members',async type=>{
     const correction={...rel('correction','CORRECT',['container']),payload:{correctionBeforeContent:'container',correctionAfterContent:'修正标题'}};
@@ -380,8 +398,8 @@ describe('computed display hints',()=>{
     render(<MessageDisplayHintsProvider input={input} onView={vi.fn()} onMarkRead={onMarkRead}><MessageDisplayMarker messageId="container"/></MessageDisplayHintsProvider>);
     expect(deriveDisplayHints(input).hints.get('container')).toMatchObject({unreadMemberCount:1,displayed:{content:'修正标题',memberIds:['member']}});
     fireEvent.click(screen.getByRole('button',{name:/显示提示 container：/}));
-    expect(screen.getByRole('region',{name:'需分别查看确认'})).toHaveTextContent('成员消息：共 1 条 · 1 条成员消息待阅');
-    expect(screen.getByRole('region',{name:'点击已阅将自动确认'})).not.toHaveTextContent('成员消息');
+    expect(screen.getByRole('region',{name:'当前采用的被加入目标'})).toHaveTextContent('成员消息：共 1 条 · 1 条成员消息待阅');
+    expect(screen.getByRole('region',{name:'点击已阅将确认已读'})).not.toHaveTextContent('成员消息');
     fireEvent.click(screen.getByRole('button',{name:'切换消息 container 的版本'}));fireEvent.click(screen.getByRole('radio',{name:'原文'}));
     fireEvent.click(screen.getByRole('button',{name:/显示提示 container：/}));
     expect(screen.getByRole('region',{name:'需分别查看确认'})).toHaveTextContent('1 条成员消息待阅');
@@ -392,11 +410,12 @@ describe('computed display hints',()=>{
     const correction={...rel('correction','CORRECT',['container']),payload:{correctionBeforeContent:'container',correctionAfterContent:'修正标题'}};
     const input=fixture([text('member')],[rel('container','CLASSIFY',members?['member']:[]),correction],new Map([['member','READ']]));
     input.readingMarks=readingMarksFor({...input,memberships:input.personalEffect.memberships},'member',deriveDisplayHints(input).hints.get('member')!.displayed);
+    input.readingMarks.push(...influenceReadingMarks('member',deriveReadingProgress({...input,marks:input.readingMarks,memberships:input.personalEffect.memberships}).pendingInfluences.get('member')??[]));
     render(<MessageDisplayHintsProvider input={input} onView={vi.fn()}><MessageDisplayMarker messageId="container"/></MessageDisplayHintsProvider>);
     fireEvent.click(screen.getByRole('button',{name:/显示提示 container：/}));
-    const individual=screen.getByRole('region',{name:'需分别查看确认'});
-    expect(individual).toHaveTextContent(`成员消息：共 ${members} 条`);
-    expect(individual).toHaveTextContent(members?'成员消息暂无待阅':'当前无有效成员消息');
+    const adopted=screen.getByRole('region',{name:'当前采用的被加入目标'});
+    expect(adopted).toHaveTextContent(`成员消息：共 ${members} 条`);
+    expect(adopted).toHaveTextContent(members?'成员消息暂无待阅':'当前无有效成员消息');
   });
   it('keeps target reading, display comparison and unread influences independent',()=>{
     const earlier=rel('earlier','REPLY',['m'],null,'2026-01-02');
@@ -413,7 +432,7 @@ describe('computed display hints',()=>{
     expect(marker).toHaveAttribute('data-display-reading','related-unread');
     fireEvent.click(marker);
     expect(screen.getByRole('tooltip')).toHaveTextContent('1 条影响待阅');
-    expect(screen.getByRole('tooltip')).not.toHaveTextContent(/正文|已读/);
+    expect(screen.getByRole('region',{name:'消息状态'})).not.toHaveTextContent(/正文|已读/);
     expect(screen.getByRole('img',{name:'当前显示与上次已阅一致'})).toHaveTextContent('=');
   });
 
@@ -489,21 +508,23 @@ describe('computed display hints',()=>{
     const input=fixture([text('pending'),text('read'),text('mine','mine','alice'),text('marked','marked','alice')],[],new Map([['read','READ'],['marked','UNREAD']]));
     const before=JSON.stringify(input.messages),status=[...input.readStatus],{hints}=deriveDisplayHints(input);
     expect(hints.get('pending')).toMatchObject({unread:true,explicitlyUnread:false});
-    expect(hints.get('read')?.unread).toBe(false);expect(hints.get('mine')?.unread).toBe(true);
+    expect(hints.get('read')?.unread).toBe(false);expect(hints.get('mine')?.unread).toBe(false);
     expect(hints.get('marked')).toMatchObject({unread:true,explicitlyUnread:true});
     expect(JSON.stringify(input.messages)).toBe(before);expect([...input.readStatus]).toEqual(status);
     expect(deriveDisplayHints({...input,username:null}).hints.get('pending')?.unread).toBe(false);
   });
 
-  it.each(['CLASSIFY','SUMMARY','MERGE','ARRANGE'])('routes released %s members to their rejected container',type=>{
+  it.each(['CLASSIFY','SUMMARY','MERGE','ARRANGE'])('keeps released %s members as the destination and summarizes their progress on parents',type=>{
     const relations=[rel('A','CLASSIFY',['C']),rel('C',type),rel('old','JOIN',['m'],'A','2026-01-02'),
       rel('new','JOIN',['m'],'C','2026-01-03'),rel('opposition','DISAGREE',['C'],null,'2026-01-04')];
     relations[1].state={messageId:'C',revision:1,suppressed:true,supportCount:0,oppositionCount:1,recommendationTotal:0};
     const read=new Map<string,'READ'|'UNREAD'>(['A','C','old','new','m'].map(id=>[id,'READ'])),input=fixture([text('m')],relations,read);
     expect(input.personalEffect.ownership.direct('A').textIds.has('m')).toBe(true);
-    for(const id of ['C','m','A'])expect(deriveDisplayHints(input).hints.get(id)).toMatchObject({unread:false,relatedUnreadIds:['opposition']});
-    expect(displayHintDestination(input,'m')).toEqual({kind:'container',id:'C'});
+    for(const id of ['C','m'])expect(deriveDisplayHints(input).hints.get(id)).toMatchObject({unread:false,relatedUnreadIds:['opposition']});
+    expect(deriveDisplayHints(input).hints.get('A')).toMatchObject({relatedUnreadIds:[],unreadMemberCount:2});
+    expect(displayHintDestination(input,'m')).toEqual({kind:'related',id:'m'});
     expect(displayHintDestination(input,'opposition')).toEqual({kind:'container',id:'C'});
+    expect(displayHintDestination(input,'opposition',true)).toEqual({kind:'related',id:'opposition'});
     const preview={...input,displayEffect:deriveContainerEffect({...input,stakeCounts:{},assumption:{messageId:'C',side:'agree'}})};
     expect(deriveDisplayHints(preview).hints.get('C')).toMatchObject({matchesPersonal:false,matchesRecommended:false});
     read.set('opposition','READ');
@@ -543,8 +564,8 @@ describe('computed display hints',()=>{
     const input=fixture([text('m','原文')],relations),data=deriveDisplayHints(input);
     expect(correctionRecordHint(input,data,'first')).toMatchObject({matchesPersonal:true,matchesRecommended:false});
     expect(correctionRecordHint(input,data,'second')).toMatchObject({matchesPersonal:false,matchesRecommended:true});
-    expect(displayHintDestination(input,'m')).toEqual({kind:'corrections',id:'first'});
-    expect(displayHintDestination(input,'second',true)).toEqual({kind:'correction',id:'second'});
+    expect(displayHintDestination(input,'m')).toEqual({kind:'related',id:'m'});
+    expect(displayHintDestination(input,'second',true)).toEqual({kind:'corrections',id:'second'});
     const preview=computeCorrectionVersions(input.messages,input.edges,new Set(),input.username,{previewCorrectionId:'second'});
     expect(deriveDisplayHints({...input,displayCorrections:preview}).correctionHints.get('m')).toMatchObject({
       matchesPersonal:false,matchesRecommended:true,personal:{content:'我的版本'},recommended:{content:'推荐版本'},
@@ -607,6 +628,99 @@ describe('computed display hints',()=>{
 });
 
 describe('shared display markers',()=>{
+  it.each(['id','unread'])('updates the original influence after reading a record reached by %s from a comparison pane',async route=>{
+    const input=fixture([text('source'),text('m')],[rel('reference','REFERENCE',['m'],'source')]);
+    const onMarkRead=vi.fn<(marks:ReadingMark[])=>Promise<void>>(async()=>{}),windowState=createDisplayHintWindow();
+    const element=(value:DisplayHintsInput,comparison:boolean)=><MessageDisplayHintsProvider input={value} onView={vi.fn()} onMarkRead={onMarkRead} onReadNavigate={vi.fn()} windowState={windowState}>
+      {comparison?<MessageDisplayHintsScope messageId="m" side="agree"><MessageDisplayMarker messageId="source"/></MessageDisplayHintsScope>:<><MessageDisplayMarker messageId="source"/><MessageDisplayMarker messageId="reference"/></>}
+    </MessageDisplayHintsProvider>;
+    const view=render(element(input,true));fireEvent.click(screen.getByRole('button',{name:/^显示提示 source：/}));
+    fireEvent.click(route==='id'?screen.getByTitle('查看引用 reference'):screen.getByRole('button',{name:'跳转未读'}));
+    view.rerender(element(input,false));fireEvent.click(screen.getByRole('button',{name:/^显示提示 reference：/}));
+    await act(async()=>fireEvent.click(screen.getByRole('button',{name:'标记当前消息已阅'})));
+    const updated={...input,readingMarks:[...input.readingMarks??[],...onMarkRead.mock.calls[0][0]]};
+    view.rerender(element(updated,false));
+    expect(screen.getByRole('button',{name:'当前消息已阅'})).toBeDisabled();
+    expect(screen.getByRole('button',{name:/^显示提示 reference：消息已阅/})).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button',{name:/^显示提示 source：/}));
+    expect(screen.getByRole('region',{name:'需分别查看确认'})).toHaveTextContent('消息已阅 · 影响已阅');
+    expect(screen.queryByRole('button',{name:'跳转未读'})).toBeNull();
+    expect(deriveDisplayHints(updated).hints.get('source')?.relatedUnreadIds).toEqual([]);
+    expect(deriveDisplayHints(updated).hints.get('m')?.relatedUnreadIds).toContain('reference');
+    expect(onMarkRead).toHaveBeenCalledOnce();
+  });
+  it('disables completed confirmation while keeping individual influences pending and enables new automatic influences',async()=>{
+    const input=fixture([text('m')],[rel('reply','REPLY',['m'])]),onMarkRead=vi.fn<(marks:ReadingMark[])=>Promise<void>>(async()=>{});
+    const element=(value:DisplayHintsInput)=><MessageDisplayHintsProvider input={value} onView={vi.fn()} onMarkRead={onMarkRead}><MessageDisplayMarker messageId="m"/></MessageDisplayHintsProvider>;
+    const view=render(element(input));fireEvent.click(screen.getByRole('button',{name:/^显示提示 m：/}));
+    await act(async()=>fireEvent.click(screen.getByRole('button',{name:'标记当前消息已阅'})));
+    const read={...input,readingMarks:onMarkRead.mock.calls[0][0]};view.rerender(element(read));
+    const completed=screen.getByRole('button',{name:'当前消息已阅'});expect(completed).toBeDisabled();fireEvent.click(completed);
+    expect(onMarkRead).toHaveBeenCalledOnce();expect(screen.getByRole('region',{name:'点击已阅将确认已读'})).toHaveTextContent('当前消息 · m（已阅）');
+    expect(screen.getByRole('region',{name:'需分别查看确认'})).toHaveTextContent('影响待阅');
+    const changed={...fixture([text('m')],[...input.relations,rel('vote','AGREE',['m'])]),readingMarks:read.readingMarks};view.rerender(element(changed));
+    await act(async()=>fireEvent.click(screen.getByRole('button',{name:'确认新影响'})));
+    view.rerender(element({...changed,readingMarks:[...read.readingMarks,...onMarkRead.mock.calls[1][0]]}));
+    expect(screen.getByRole('button',{name:'当前消息已阅'})).toBeDisabled();
+    expect(screen.getByRole('region',{name:'需分别查看确认'})).toHaveTextContent('影响待阅');
+  });
+  it('confirms a pending origin separately when its record was already read, and preserves it after a failed save',async()=>{
+    const initial=fixture([text('source'),text('m')],[rel('reference','REFERENCE',['m'],'source')]);
+    const input={...initial,readingMarks:readingMarksFor(initial,'reference',deriveDisplayHints(initial).hints.get('reference')!.displayed)};
+    const onMarkRead=vi.fn<(marks:ReadingMark[])=>Promise<void>>().mockRejectedValueOnce(new Error('保存失败')).mockResolvedValue(undefined);
+    const element=(value:DisplayHintsInput)=><MessageDisplayHintsProvider input={value} onView={vi.fn()} onMarkRead={onMarkRead} onReadNavigate={vi.fn()}>
+      <MessageDisplayMarker messageId="source"/><MessageDisplayMarker messageId="reference"/>
+    </MessageDisplayHintsProvider>;
+    const view=render(element(input));fireEvent.click(screen.getByRole('button',{name:/^显示提示 source：/}));
+    fireEvent.click(screen.getByRole('button',{name:'跳转未读'}));fireEvent.click(screen.getByRole('button',{name:/^显示提示 reference：/}));
+    await act(async()=>fireEvent.click(screen.getByRole('button',{name:'确认本次影响'})));
+    expect(screen.getByRole('alert')).toHaveTextContent('保存失败');expect(screen.getByRole('button',{name:'确认本次影响'})).toBeEnabled();
+    expect(deriveDisplayHints(input).hints.get('source')?.relatedUnreadIds).toContain('reference');
+    await act(async()=>fireEvent.click(screen.getByRole('button',{name:'确认本次影响'})));
+    view.rerender(element({...input,readingMarks:[...input.readingMarks,...onMarkRead.mock.calls[1][0]]}));
+    expect(screen.getByRole('button',{name:'当前消息已阅'})).toBeDisabled();
+    fireEvent.click(screen.getByRole('button',{name:/^显示提示 source：/}));expect(screen.getByRole('region',{name:'需分别查看确认'})).toHaveTextContent('消息已阅 · 影响已阅');
+  });
+  it('confirms the original influence only after jumping to and reading its record, preserving other targets and newer events',async()=>{
+    const records=[text('source'),text('m'),text('peer')],relations=[rel('reference','REFERENCE',['m','peer'],'source')];
+    const before=fixture(records,relations),onMarkRead=vi.fn<(marks:ReadingMark[])=>Promise<void>>(async()=>{});
+    const element=(input:DisplayHintsInput)=><MessageDisplayHintsProvider input={input} onView={vi.fn()} onMarkRead={onMarkRead} onReadNavigate={vi.fn()}>
+      <MessageDisplayMarker messageId="m"/><MessageDisplayMarker messageId="reference" viewTag/>
+    </MessageDisplayHintsProvider>;
+    const view=render(element(before));fireEvent.click(screen.getByRole('button',{name:/^显示提示 m：/}));
+    expect(within(screen.getByRole('region',{name:'需分别查看确认'})).queryByRole('button',{name:/已阅/})).toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:'跳转未读'}));expect(onMarkRead).not.toHaveBeenCalled();
+    const later=fixture(records,[...relations,rel('later-reference','REFERENCE',['m'],'source')]);view.rerender(element(later));
+    fireEvent.click(screen.getByRole('button',{name:/^查看消息 reference：/}));
+    fireEvent.click(screen.getByRole('button',{name:/^显示提示 reference：/}));
+    const confirm=screen.getByRole('button',{name:'标记当前消息已阅'});expect(confirm.getAttribute('title')).toContain('消息 m 的本次影响');
+    await act(async()=>fireEvent.click(confirm));
+    const marks=onMarkRead.mock.calls[0][0],after=deriveDisplayHints({...later,readingMarks:marks});
+    expect(after.hints.get('reference')?.unread).toBe(false);
+    expect(after.hints.get('m')?.relatedUnreadIds).toEqual(['later-reference']);
+    expect(after.hints.get('peer')?.relatedUnreadIds).toContain('reference');
+    expect(marks.some(mark=>mark.messageId==='peer')).toBe(false);
+  });
+  it('collapses confirmation and membership sections and restores them with the saved window',()=>{
+    const input=fixture([text('member')],[rel('container','CLASSIFY'),rel('join','JOIN',['member'],'container'),rel('vote','AGREE',['container']),rel('reply','REPLY',['container'])]);
+    const windowState=createDisplayHintWindow(),onReadNavigate=vi.fn(),onMarkRead=vi.fn(async()=>{});
+    render(<MessageDisplayHintsProvider input={input} onView={vi.fn()} onReadNavigate={onReadNavigate} onMarkRead={onMarkRead} windowState={windowState}><MessageDisplayMarker messageId="container"/></MessageDisplayHintsProvider>);
+    fireEvent.click(screen.getByRole('button',{name:/^显示提示 container：/}));
+    const automatic=screen.getByRole('region',{name:'点击已阅将确认已读'}),individual=screen.getByRole('region',{name:'需分别查看确认'});
+    expect(within(automatic).queryByRole('button',{name:'跳转未读'})).toBeNull();
+    expect(within(individual).queryByRole('button',{name:/已阅/})).toBeNull();
+    expect(individual).toHaveTextContent('消息待阅 · 影响待阅');
+    for(const name of [/^收起当前采用/,/^收起未采用/,/^收起需分别查看确认/,/^收起点击已阅将确认已读/])fireEvent.click(screen.getByRole('button',{name}));
+    expect(within(individual).queryByRole('button',{name:'查看被加入目标 member'})).toBeNull();
+    expect(within(automatic).getByRole('button',{name:'标记当前消息已阅'})).toBeVisible();
+    const saved=windowState.capture();expect(saved?.collapsedSections).toEqual(['adopted','unadopted','individual','automatic']);
+    act(()=>{windowState.suspend();});expect(screen.queryByRole('tooltip')).toBeNull();
+    act(()=>{windowState.restore(saved);});
+    expect(screen.getByRole('button',{name:'展开点击已阅将确认已读'})).toHaveAttribute('aria-expanded','false');
+    fireEvent.click(screen.getByRole('button',{name:'展开需分别查看确认'}));
+    expect(screen.getByRole('button',{name:/^展开当前采用/})).toHaveAttribute('aria-expanded','false');
+    expect(onMarkRead).not.toHaveBeenCalled();expect(onReadNavigate).not.toHaveBeenCalled();
+  });
   it('restores a pinned hint and both scroll positions after its message remounts, and remembers an explicit close',()=>{
     const input=fixture([text('m'),text('destination')],Array.from({length:12},(_,index)=>rel(`impact-${index}`,'REPLY',['m'])));
     const windowState=createDisplayHintWindow(),onView=vi.fn(),element=(id:string)=><MessageDisplayHintsProvider input={input} onView={onView} windowState={windowState}>
@@ -627,7 +741,7 @@ describe('shared display markers',()=>{
     expect(screen.queryByRole('tooltip')).toBeNull();
   });
 
-  it('labels a JOIN into the current container without navigation or duplicate read buttons',async()=>{
+  it('labels a JOIN into the current container and keeps its explicit influence confirmation',async()=>{
     const input=fixture([text('m')],[rel('A','CLASSIFY'),rel('B','CLASSIFY'),rel('here','JOIN',['m'],'A','2026-01-03'),rel('other','JOIN',['m'],'B')]);
     const onView=vi.fn(),onMarkRead=vi.fn(async()=>{});
     render(<MessageDisplayHintsProvider input={input} onView={onView} onMarkRead={onMarkRead} currentContainerId="A"><MessageDisplayMarker messageId="m"/></MessageDisplayHintsProvider>);
@@ -637,7 +751,7 @@ describe('shared display markers',()=>{
     expect(within(tooltip).getByText('分类：B')).toBeInTheDocument();
     expect(within(tooltip).queryByRole('button',{name:/^加入 · here/})).toBeNull();
     expect(within(tooltip).queryByRole('button',{name:'标记加入 here 已阅'})).toBeNull();
-    expect(within(screen.getByRole('region',{name:'需分别查看确认'})).getByRole('button',{name:'标记加入 other 已阅'})).toBeInTheDocument();
+    expect(within(screen.getByRole('region',{name:'需分别查看确认'})).queryByRole('button',{name:/已阅/})).toBeNull();
     await act(async()=>fireEvent.click(within(tooltip).getByRole('button',{name:'标记当前消息已阅'})));
     expect(onMarkRead).toHaveBeenCalledOnce();expect(onView).not.toHaveBeenCalled();
     fireEvent.click(within(tooltip).getByRole('button',{name:/^加入 · other/}));expect(onView).toHaveBeenCalledWith('other',expect.anything(),true);
@@ -772,7 +886,8 @@ describe('shared display markers',()=>{
     expect(within(details).getByRole('button',{name:'标记当前消息已阅'})).toBeInTheDocument();
     expect(details).toHaveTextContent('点击 ID 跳转到对应消息（“当前”项除外）。');
     expect(within(details).getByRole('button',{name:'回复 · reply'})).toBeInTheDocument();
-    expect(within(details).getByRole('button',{name:'标记回复 reply 已阅'})).toHaveTextContent('已阅');
+    expect(within(details).queryByRole('button',{name:'标记回复 reply 已阅'})).toBeNull();
+    expect(details).toHaveTextContent('消息待阅 · 影响待阅');
     expect(screen.getByRole('group',{name:'选择与推荐一致'})).toBeInTheDocument();expect(marker).toHaveAttribute('aria-expanded','true');
     fireEvent.mouseLeave(marker);expect(screen.getByRole('tooltip')).toBeInTheDocument();
     fireEvent.keyDown(marker,{key:'Escape'});expect(screen.queryByRole('tooltip')).toBeNull();

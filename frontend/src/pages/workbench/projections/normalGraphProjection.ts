@@ -23,7 +23,7 @@ interface DeriveNormalGraphProjectionInput {
   effectiveJoinRelationIds: Set<string>;
 }
 
-export function deriveNormalGraphProjection(input: DeriveNormalGraphProjectionInput): { messages: DemoMessage[]; scopedMessages: DemoMessage[]; edges: DemoEdge[]; } {
+export function deriveNormalGraphProjection(input: DeriveNormalGraphProjectionInput): { messages: DemoMessage[]; scopedMessages: DemoMessage[]; edges: DemoEdge[]; rejectedRelationIds:ReadonlySet<string>; } {
   const { graphMessagesToRender, correctionVersions, cleanVisibleIds, homeFilterResult, msgFilter, edges, messages, displayUser, graphEdgesToRender, relations, effectiveJoinRelationIds } = input;
   const corrected = graphMessagesToRender.map(message => {
     const version = correctionVersions.get(message.id)?.current;
@@ -62,6 +62,7 @@ export function deriveNormalGraphProjection(input: DeriveNormalGraphProjectionIn
   return {
     messages: filteredMessages,
     scopedMessages,
+    rejectedRelationIds:suppressedRelIds,
     edges: homeEdges.filter(edge => edge.relationType === 'correct' || !suppressedRelIds.has(edge.relationMessageId)),
   };
 }

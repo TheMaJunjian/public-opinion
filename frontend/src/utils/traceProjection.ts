@@ -1,6 +1,7 @@
 import type { DemoEdge, DemoMessage } from './modelBridge';
 import { isTraceTextLikeMessage } from './modelBridge';
 import { getPresentationSpec } from '../types';
+import {traceRange,type TraceDirection} from './traceRange';
 
 export interface TraceContainerMembership {
   containerId: string;
@@ -15,12 +16,18 @@ export interface TraceProjectionInput {
   excludedRelationIds?: ReadonlySet<string>;
   startIds: string[];
   distance: number;
+  depths?: import('./traceRange').TraceDepths;
+  direction?: TraceDirection;
+  /** Deliberately browsing a traced container is separate from distance traversal. */
+  expandedContainerIds?:ReadonlySet<string>;
 }
 
 export interface TraceProjection {
   messages: DemoMessage[];
   edges: DemoEdge[];
   distanceMessageIds?: ReadonlySet<string>;
+  semanticMessageIds?: ReadonlySet<string>;
+  ancestorContainerIds?: ReadonlySet<string>;
   expandableContainerIds: ReadonlySet<string>;
 }
 
@@ -34,17 +41,10 @@ function getExpandableContainerIds(messages: DemoMessage[]): ReadonlySet<string>
   );
 }
 
-function addAdjacency(adjacency: Map<string, Set<string>>, left: string, right: string): void {
-  if (!adjacency.has(left)) adjacency.set(left, new Set());
-  if (!adjacency.has(right)) adjacency.set(right, new Set());
-  adjacency.get(left)!.add(right);
-  adjacency.get(right)!.add(left);
-}
-
 /**
  * Builds the ordinary GraphView input for a trace window.
- * Only card-like messages consume distance. Other relation messages are
- * transparent connections and are projected when their endpoints are visible.
+ * Distance follows directed semantic connections. Rendering dependencies and
+ * ancestor containers add context without creating traversal shortcuts.
  */
 export function buildTraceProjection(input: TraceProjectionInput): TraceProjection {
   const { messages, edges, containerMemberships = [], excludedRelationIds = new Set<string>(), startIds, distance } = input;
@@ -76,28 +76,8 @@ export function buildTraceProjection(input: TraceProjectionInput): TraceProjecti
       });
     });
   }
-  const adjacency = new Map<string, Set<string>>();
-
-  for (const edge of traceEdges) {
-    const endpoints = [edge.from.messageId, edge.to.messageId]
-      .filter(id => !id.startsWith('anon:') && id !== edge.relationMessageId && messageMap.has(id));
-    for (const endpointId of endpoints) addAdjacency(adjacency, edge.relationMessageId, endpointId);
-  }
-
-  const distances = new Map<string, number>();
-  const queue = startIds.filter(id => messageMap.has(id));
-  for (const id of queue) distances.set(id, 0);
-  for (let index = 0; index < queue.length; index += 1) {
-    const current = queue[index];
-    const currentDistance = distances.get(current)!;
-    for (const next of adjacency.get(current) ?? []) {
-      const nextDistance = currentDistance + (isTraceTextLikeMessage(messageMap.get(next)) ? 1 : 0);
-      if (nextDistance > distance || nextDistance >= (distances.get(next) ?? Number.POSITIVE_INFINITY)) continue;
-      distances.set(next, nextDistance);
-      queue.push(next);
-    }
-  }
-
+  const range=traceRange(messages,traceEdges,startIds,input.depths??distance,input.direction??'both');
+  const distances=range.distances;
   const visibleIds = new Set<string>(
     [...distances]
       .filter(([id, value]) => value <= distance && isTraceTextLikeMessage(messageMap.get(id)))
@@ -105,6 +85,19 @@ export function buildTraceProjection(input: TraceProjectionInput): TraceProjecti
   );
   for (const startId of startIds) if (messageMap.has(startId)) visibleIds.add(startId);
   const distanceMessageIds = new Set(visibleIds);
+  // Only a selected container may reveal its contents on explicit expansion.
+  // Auto-expanding an ancestor of a traced message never enrolls its siblings.
+  // These bodies are display context and do not start another distance search.
+  const structuralChildren=new Map<string,Set<string>>();
+  for(const edge of traceEdges)if(getPresentationSpec(edge.relationType).isContainer){
+    const children=structuralChildren.get(edge.relationMessageId)??new Set<string>();children.add(edge.to.messageId);structuralChildren.set(edge.relationMessageId,children);
+  }
+  const expanded=input.expandedContainerIds??new Set<string>(),expandedPaths=new Set<string>(),contextQueue=[...startIds];
+  for(let index=0;index<contextQueue.length;index++){
+    const id=contextQueue[index];if(expandedPaths.has(id)||!expanded.has(id)&&!['merge','arrange'].includes(messageMap.get(id)?.relationType??''))continue;
+    expandedPaths.add(id);
+    for(const child of structuralChildren.get(id)??[]){if(!messageMap.has(child))continue;visibleIds.add(child);contextQueue.push(child);}
+  }
 
   const nonCardRelationIds = new Set(messages
     .filter(message => message.kind === 'relation' && !isTraceTextLikeMessage(message))
@@ -146,6 +139,7 @@ export function buildTraceProjection(input: TraceProjectionInput): TraceProjecti
     if (!shouldComplete && !(endpoints.length > 0 && endpoints.every(id => visibleIds.has(id)))) continue;
     for (const id of [relationId, ...sourceIds, ...(completeTargets ? targetIds : [])]) {
       if (visibleIds.has(id)) continue;
+      if(inlineFrame&&id!==relationId&&!range.ids.has(id))continue;
       // Completing a connection must not spend another hop outside the trace
       // window. Corrections retain their paired versions as one display unit.
       if (!(completeTargets && !inlineFrame) && isTraceTextLikeMessage(messageMap.get(id))
@@ -157,12 +151,26 @@ export function buildTraceProjection(input: TraceProjectionInput): TraceProjecti
     }
   }
 
+  // An enclosing organization is context, not another distance hop. Restore
+  // only the path to a reached message, never its unvisited siblings.
+  const parents = new Map<string, Set<string>>();
+  for (const edge of traceEdges) {
+    if (!getPresentationSpec(edge.relationType).isContainer || !messageMap.has(edge.relationMessageId)) continue;
+    const owners = parents.get(edge.to.messageId) ?? new Set<string>();
+    owners.add(edge.relationMessageId); parents.set(edge.to.messageId, owners);
+  }
+  const ancestorContainerIds = new Set<string>();
+  for (const id of visibleIds) for (const parentId of parents.get(id) ?? []) {
+    if (parentId === id || traceStartIds.has(parentId)) continue;
+    visibleIds.add(parentId);
+    if (['classify', 'summary'].includes(messageMap.get(parentId)?.relationType ?? '')) ancestorContainerIds.add(parentId);
+  }
   const projectedMessages = messages.filter(message => visibleIds.has(message.id));
   const projectedMessageIds = new Set(projectedMessages.map(message => message.id));
   const projectedEdges = traceEdges.filter(edge => {
     const owner = edge.relationMessageId;
     if (isTraceTextLikeMessage(messageMap.get(owner))) {
-      return projectedMessageIds.has(owner);
+      return projectedMessageIds.has(owner) && (!getPresentationSpec(edge.relationType).isContainer || projectedMessageIds.has(edge.to.messageId));
     }
     if (!projectedMessageIds.has(owner)) return false;
     const fromVisible = edge.from.messageId.startsWith('anon:') || projectedMessageIds.has(edge.from.messageId);
@@ -183,6 +191,8 @@ export function buildTraceProjection(input: TraceProjectionInput): TraceProjecti
     messages: projectedMessages,
     edges: projectedEdges,
     distanceMessageIds,
+    semanticMessageIds:range.ids,
+    ancestorContainerIds,
     expandableContainerIds: getExpandableContainerIds(projectedMessages),
   };
 }
@@ -257,8 +267,12 @@ export function applyTraceFrameVisibility(
   let removedDependency = true;
   while (removedDependency) {
     removedDependency = false;
+    const validOwners = new Set(projection.edges.filter(edge =>
+      (edge.from.messageId.startsWith('anon:') || visibleIds.has(edge.from.messageId))
+      && (edge.to.messageId.startsWith('anon:') || visibleIds.has(edge.to.messageId)))
+      .map(edge => edge.relationMessageId));
     for (const edge of projection.edges) {
-      if (!visibleIds.has(edge.relationMessageId) || isTraceTextLikeMessage(messageMap.get(edge.relationMessageId))) continue;
+      if (!visibleIds.has(edge.relationMessageId) || isTraceTextLikeMessage(messageMap.get(edge.relationMessageId)) || validOwners.has(edge.relationMessageId)) continue;
       const relationType = messageMap.get(edge.relationMessageId)?.relationType?.toLowerCase();
       const sourceVisible = edge.from.messageId.startsWith('anon:') || visibleIds.has(edge.from.messageId);
       const targetVisible = edge.to.messageId.startsWith('anon:') || visibleIds.has(edge.to.messageId);
@@ -286,6 +300,8 @@ export function applyTraceFrameVisibility(
     messages,
     edges,
     distanceMessageIds: projection.distanceMessageIds,
+    semanticMessageIds: projection.semanticMessageIds,
+    ancestorContainerIds: projection.ancestorContainerIds,
     expandableContainerIds: getExpandableContainerIds(messages),
   };
 }

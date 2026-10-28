@@ -1,9 +1,9 @@
 // CleanFilterPanel.tsx — 聚焦模式过滤器面板
 // 提供可视化界面来添加/移除/查看过滤规则，以及匹配结果统计。
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useId } from 'react';
 import type { CleanFilterRule } from '../types';
-import { CLEAN_FILTER_LABELS, defaultCleanRule } from '../types';
+import { CLEAN_FILTER_LABELS, CLEAN_MESSAGE_TYPES, CLEAN_CONTENT_TYPES, defaultCleanRule } from '../types';
 
 interface CleanFilterPanelProps {
   /** 是否激活聚焦模式 */
@@ -25,11 +25,15 @@ interface CleanFilterPanelProps {
   onClear: () => void;
 }
 
-const RULE_KINDS: CleanFilterRule['kind'][] = ['sender', 'stake', 'participants', 'rounds', 'tag', 'relationType'];
+const RULE_KINDS: CleanFilterRule['kind'][] = ['messageType', 'time', 'sender', 'stake', 'participants', 'rounds', 'tag'];
 
 /** 单条规则的简要描述 */
 function ruleSummary(rule: CleanFilterRule): string {
   switch (rule.kind) {
+    case 'time':
+      return `发送时间: ${rule.from.replace('T',' ')||'不限开始'} 至 ${rule.to.replace('T',' ')||'不限结束'}`;
+    case 'messageType':
+      return `消息类型: ${rule.messageTypes.map(type => type === 'CONTENT' ? '内容型' : type === 'RELATION' ? '关系型' : CLEAN_MESSAGE_TYPES.find(([value]) => value === type)?.[1] ?? type).join('、') || '(未选择)'}`;
     case 'sender':
       return rule.username ? `发送者: ${rule.username}` : '发送者: (未设置)';
     case 'stake': {
@@ -57,12 +61,15 @@ export default function CleanFilterPanel({
   pending,
   onAdd,
   onRemove,
+  onUpdate,
   onClear,
 }: CleanFilterPanelProps) {
   const [open, setOpen] = useState(false);
   const [addingKind, setAddingKind] = useState<CleanFilterRule['kind'] | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const [tempRule, setTempRule] = useState<CleanFilterRule | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const editorId = useId();
 
   // 点击外部关闭
   useEffect(() => {
@@ -72,6 +79,7 @@ export default function CleanFilterPanel({
         setOpen(false);
         setAddingKind(null);
         setTempRule(null);
+        setEditingId(null);
       }
     };
     document.addEventListener('mousedown', handler);
@@ -79,30 +87,32 @@ export default function CleanFilterPanel({
   }, [open]);
 
   const handleToggle = () => {
-    if (active) {
-      onClear();
-    } else {
-      setOpen(true);
-    }
+    setOpen(value => !value);
   };
 
   const handleAddKind = (kind: CleanFilterRule['kind']) => {
     const rule = defaultCleanRule(kind);
     setAddingKind(kind);
+    setEditingId(null);
     setTempRule(rule);
   };
 
   const confirmAdd = () => {
     if (tempRule) {
-      onAdd(tempRule);
+      if (tempRule.kind === 'messageType' && !tempRule.messageTypes.length) return;
+      if (tempRule.kind === 'time' && (!tempRule.from&&!tempRule.to || tempRule.from&&tempRule.to&&Date.parse(tempRule.from)>Date.parse(tempRule.to))) return;
+      if (editingId) onUpdate(editingId, () => tempRule);
+      else onAdd(tempRule);
       setAddingKind(null);
       setTempRule(null);
+      setEditingId(null);
     }
   };
 
   const cancelAdd = () => {
     setAddingKind(null);
     setTempRule(null);
+    setEditingId(null);
   };
 
   return (
@@ -110,7 +120,8 @@ export default function CleanFilterPanel({
       {/* Toggle 按钮 */}
       <button
         onClick={handleToggle}
-        title={active ? '过滤已激活 — 点击关闭' : '过滤：按规则筛选消息视图'}
+        title="打开或编辑过滤规则"
+        aria-expanded={open}
         style={{
           padding: '4px 10px',
           borderRadius: 4,
@@ -134,6 +145,9 @@ export default function CleanFilterPanel({
             right: 0,
             marginTop: 4,
             width: 320,
+            maxWidth: 'calc(100vw - 24px)',
+            maxHeight: 'min(600px, calc(100dvh - 130px))',
+            overflowY: 'auto',
             background: '#1a1a2e',
             border: '1px solid #334155',
             borderRadius: 8,
@@ -145,11 +159,20 @@ export default function CleanFilterPanel({
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: '#e2e8f0' }}>
             🔍 过滤器
           </div>
+          <div style={{display:'flex',gap:6,marginBottom:8}}>
+            {(['CONTENT','RELATION'] as const).map(type => <button key={type} type="button" onClick={() => {
+              const existing = filters.find(rule => rule.kind === 'messageType');
+              const rule: CleanFilterRule = {...defaultCleanRule('messageType'),kind:'messageType',messageTypes:[type]};
+              if (existing) onUpdate(existing.id, () => ({...rule,id:existing.id})); else onAdd(rule);
+              cancelAdd();
+            }}>{type === 'CONTENT' ? '内容型' : '关系型'}</button>)}
+            {active && <button type="button" onClick={() => {onClear();cancelAdd();}}>清空过滤</button>}
+          </div>
 
           {/* 已有规则列表 */}
           {filters.length === 0 && !addingKind && (
             <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8 }}>
-              添加规则来过滤消息视图。多条规则之间为 AND 关系。
+              同一消息类型可多选（满足任一类型）；不同规则需同时满足。
             </div>
           )}
           {filters.map(rule => (
@@ -168,9 +191,11 @@ export default function CleanFilterPanel({
                 color: '#e2e8f0',
               }}
             >
-              <span>{ruleSummary(rule)}</span>
+              <button type="button" title="展开或收起规则" aria-expanded={editingId === rule.id} aria-controls={editingId === rule.id ? editorId : undefined}
+                onClick={() => {if (editingId === rule.id) cancelAdd();else {setEditingId(rule.id);setAddingKind(rule.kind);setTempRule({...rule});}}}
+                style={{border:0,background:'transparent',color:'inherit',textAlign:'left',cursor:'pointer',fontSize:'inherit'}}>{ruleSummary(rule)}</button>
               <button
-                onClick={() => onRemove(rule.id)}
+                onClick={() => {onRemove(rule.id);if (editingId === rule.id) cancelAdd();}}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -189,12 +214,12 @@ export default function CleanFilterPanel({
 
           {/* 正在添加的规则编辑区 */}
           {addingKind && tempRule && (
-            <RuleEditor
+            <div id={editorId}><RuleEditor
               rule={tempRule}
               onChange={setTempRule}
               onConfirm={confirmAdd}
               onCancel={cancelAdd}
-            />
+            /></div>
           )}
 
           {/* 添加规则按钮区 */}
@@ -236,7 +261,9 @@ export default function CleanFilterPanel({
                 color: '#86efac',
               }}
             >
-              {pending ? '正在准备全局筛选结果…' : `匹配 ${matchCount} 条 / 共 ${totalCount} 条内容消息`}
+              {pending ? '正在准备全局筛选结果…' : filters.some(rule => rule.kind === 'messageType'||rule.kind==='time')
+                ? `显示 ${matchCount} 条 / 共 ${totalCount} 条消息（含必要关联上下文）`
+                : `匹配 ${matchCount} 条 / 共 ${totalCount} 条内容消息`}
             </div>
           )}
         </div>
@@ -256,6 +283,36 @@ interface RuleEditorProps {
 
 function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
   switch (rule.kind) {
+    case 'time': {
+      const invalid=!!rule.from&&!!rule.to&&Date.parse(rule.from)>Date.parse(rule.to);
+      return <div style={{marginBottom:8,display:'grid',gap:6,fontSize:12}}>
+        <label>开始时间<input aria-label="开始时间" type="datetime-local" value={rule.from} onChange={event=>onChange({...rule,from:event.target.value})} style={{display:'block',width:'100%',boxSizing:'border-box'}}/></label>
+        <label>结束时间<input aria-label="结束时间" type="datetime-local" value={rule.to} onChange={event=>onChange({...rule,to:event.target.value})} style={{display:'block',width:'100%',boxSizing:'border-box'}}/></label>
+        <div style={{fontSize:11,color:'#94a3b8'}}>按本地时间筛选，可只填一端；结束时间包含所选整分钟。必要的关联消息会作为上下文保留。</div>
+        {invalid&&<div role="alert" style={{color:'#fca5a5'}}>结束时间不能早于开始时间</div>}
+        <EditorButtons onConfirm={onConfirm} onCancel={onCancel}/>
+      </div>;
+    }
+    case 'messageType': {
+      const selected = CLEAN_MESSAGE_TYPES.map(([type]) => type).filter(type => rule.messageTypes.includes(type)
+        || rule.messageTypes.includes('CONTENT') && CLEAN_CONTENT_TYPES.includes(type)
+        || rule.messageTypes.includes('RELATION') && !CLEAN_CONTENT_TYPES.includes(type));
+      return <div style={{marginBottom:8}}>
+        <div style={{fontSize:11,color:'#94a3b8',marginBottom:4}}>消息类型（可多选）：</div>
+        <div style={{display:'grid',gap:8,maxHeight:260,overflowY:'auto'}}>
+          {(['CONTENT','RELATION'] as const).map(group => <fieldset key={group} style={{border:'1px solid #475569',borderRadius:4,padding:8,minWidth:0}}>
+            <legend style={{fontSize:12,color:'#93c5fd'}}>{group === 'CONTENT' ? '内容型' : '关系型'}</legend>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4}}>
+          {CLEAN_MESSAGE_TYPES.filter(([value]) => CLEAN_CONTENT_TYPES.includes(value) === (group === 'CONTENT')).map(([value,label]) => <label key={value} style={{fontSize:12,color:'#e2e8f0'}}>
+            <input type="checkbox" checked={selected.includes(value)} onChange={event => onChange({...rule,messageTypes:event.target.checked
+              ? [...selected,value] : selected.filter(type => type !== value)})}/>{label}
+          </label>)}
+            </div>
+          </fieldset>)}
+        </div>
+        <EditorButtons onConfirm={onConfirm} onCancel={onCancel}/>
+      </div>;
+    }
     case 'sender':
       return (
         <div style={{ marginBottom: 8 }}>

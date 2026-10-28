@@ -8,6 +8,7 @@ import { projectContainerCanvas } from './containerCanvas';
 import type { TraceEntry } from '../types';
 import { deriveCrossCanvasRelations } from '../../../utils/crossCanvasRelations';
 import { projectGraphScene } from '../../../utils/graphProjection';
+import {isRejectedRelation} from '../../../utils/relatedMessages';
 
 export interface DeriveComparisonGraphProjectionsInput {
   comparisonReviewed: boolean;
@@ -29,6 +30,8 @@ export interface DeriveComparisonGraphProjectionsInput {
   traceRelationMsgIds: Set<string>;
   traceContainerMemberships: TraceContainerMembership[];
   traceDistance: number;
+  traceDepths?: import('../../../utils/traceRange').TraceDepths;
+  traceDirection?: import('../../../utils/traceRange').TraceDirection;
   traceExpandedFrameIds: Set<string>;
   filterMessages?: (messages: DemoMessage[]) => DemoMessage[];
 }
@@ -85,12 +88,15 @@ export function projectComparisonSide(input: DeriveComparisonGraphProjectionsInp
     }
     const withTarget = new Map<string,DemoMessage>(baseMessages.map(message => [message.id, {...message,state:msgMap.get(message.id)?.state}]));
     for (const id of targetIds) if (!withTarget.has(id) && msgMap.has(id)) withTarget.set(id,msgMap.get(id)!);
+    // Releasing a container can expose an inactive connection whose source
+    // was previously inside it. Its record belongs to this side's new scope.
+    for(const message of organizationScope?.messages??[])if(isRejectedRelation(message,suppressed))withTarget.set(message.id,message);
     const scopedIds = new Set(baseMessages.map(message => message.id));
     const forcedVisibleIds = side==='agree'?targetIds:new Set([...(releasedTarget?.textIds??[]),...(releasedTarget?.relationIds??[])]);
-    const projectedMessages = (side === 'agree' || releasedTarget || traceStartIdSet.has(comparisonTargetId) ? [...withTarget.values()] : baseMessages).filter(message => {
+    const projectedMessages = (side === 'agree' || releasedTarget || traceStartIdSet.has(comparisonTargetId)||isRejectedRelation(effect.msgMap.get(comparisonTargetId),suppressed) ? [...withTarget.values()] : baseMessages).filter(message => {
       if(organizationScopeIds&&!organizationScopeIds.has(message.id))return false;
       if (forcedVisibleIds.has(message.id)) return true;
-      if (suppressed.has(message.id)) return false;
+      if (suppressed.has(message.id)) return isRejectedRelation(message,suppressed);
       if (!organizationEffect && isInsideClassify && scopedIds.has(message.id)) return true;
       if (isContentKind(message.kind) && (hiddenTextIds.has(message.id) || ownedRelationIds.has(message.id))) return false;
       return message.kind !== 'relation' || !hiddenRelationIds.has(message.id);
@@ -136,7 +142,8 @@ export function projectComparisonSide(input: DeriveComparisonGraphProjectionsInp
       }
       const trace = applyTraceFrameVisibility(buildTraceProjection({
         messages:traceMessages, edges:organizationEffect?effect.edges:canvas.edges,
-        containerMemberships:memberships,excludedRelationIds:effect.suppressed,startIds:traceStartIds,distance:traceDistance,
+        containerMemberships:memberships,excludedRelationIds:effect.suppressed,startIds:traceStartIds,distance:traceDistance,depths:input.traceDepths,direction:input.traceDirection,
+        expandedContainerIds:new Set([...traceExpandedFrameIds,...effect.rejectedContainerIds]),
       }),new Set([...traceExpandedFrameIds,...effect.rejectedContainerIds]));
       const allowed = organizationEffect ? null : new Set(canvas.messages.map(message => message.id));
       const visible = trace.messages.filter(message => !allowed || allowed.has(message.id));
@@ -147,7 +154,8 @@ export function projectComparisonSide(input: DeriveComparisonGraphProjectionsInp
     const finalMessages=input.filterMessages?.(canvas.messages)??canvas.messages;
     const scene=projectGraphScene({messages:finalMessages,edges:canvas.edges,
       traceExpandedFrameIds,isTraceWindow:traceStartIds.length>0,
-      rejectedContainerIds:effect.rejectedContainerIds,hiddenMessageIds:effect.suppressed});
+      rejectedContainerIds:effect.rejectedContainerIds,rejectedRelationIds:effect.suppressed,
+      hiddenMessageIds:new Set([...effect.suppressed].filter(id=>!isRejectedRelation(effect.msgMap.get(id),effect.suppressed)))});
     const allowedRelations=new Set((input.filterMessages?.(effect.messages)??effect.messages).map(message=>message.id));
     const relatedEdges=effect.edges.filter(edge=>allowedRelations.has(edge.relationMessageId));
     const crossCanvasRelations=deriveCrossCanvasRelations({

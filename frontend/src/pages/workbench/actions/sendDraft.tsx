@@ -26,8 +26,8 @@ export async function handleQuickSendAndRelateFromDraftTargets(dependencies: Dra
   if (!requireAuth()) return;
   if (!singleButtonEnabled) return;
   const text = newMessageContent.trim();
-  // Clear saved text on type switch since user is sending/committing
-  savedTextOnTypeSwitchRef.current = "";
+  // A JOIN sends only membership records; its hidden text draft remains unsent.
+  if (!joinOnlyAction) savedTextOnTypeSwitchRef.current = "";
 
   if (draftUnits.length > 0 && targetUnits.length > 0) {
     setSendError('候选区和目标集合不能同时有内容，请先将候选区移入目标集合或清空其中一方');

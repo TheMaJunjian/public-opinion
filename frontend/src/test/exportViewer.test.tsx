@@ -19,6 +19,18 @@ function archiveWithout<K extends keyof ReturnType<typeof archive>>(...keys: K[]
 afterEach(() => { cleanup(); sessionStorage.clear(); });
 
 describe('export viewer verification', () => {
+  it('reopens exported time and message-type filters and rejects invalid time ranges',()=>{
+    const view={username:null,mode:'graph',messageFilter:{hideSettlement:true,hideJoin:true},homeFilter:null,classificationId:null,
+      cleanFilters:[{id:'time',kind:'time',from:'2026-10-27T10:00',to:'2026-10-27T11:00'},{id:'type',kind:'messageType',messageTypes:['CONTENT']}]};
+    const data={...archive(),view};
+    expect(validateExportForViewing(JSON.parse(JSON.stringify(data))).data.view).toEqual(view);
+    expect(()=>validateExportForViewing({...data,view:{...view,cleanFilters:[{id:'time',kind:'time',from:'2026-10-28T10:00',to:'2026-10-27T11:00'}]}})).toThrow('阅览设置格式无效');
+  });
+  it.each([undefined,null,'TEXT',[],[null],[37],['UNKNOWN']].map(messageTypes=>({messageTypes})))('rejects malformed message-type filters before opening the viewer: $messageTypes',({messageTypes})=>{
+    const view={username:null,mode:'graph',messageFilter:{hideSettlement:true,hideJoin:true},homeFilter:null,classificationId:null,
+      cleanFilters:[{id:'type',kind:'messageType',messageTypes}]};
+    expect(()=>validateExportForViewing({...archive(),view})).toThrow('阅览设置格式无效');
+  });
   it('replays region records while preserving the selected read-only view', () => {
     const data = archive();
     const result = validateExportForViewing(data);

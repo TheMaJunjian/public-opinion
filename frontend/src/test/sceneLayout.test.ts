@@ -5,12 +5,106 @@ import type { DemoMessage, DemoEdge } from '../utils/modelBridge';
 import { buildFrameBlocks } from '../utils/graphOrganizations';
 import { extractTextTargetsForMessage } from '../utils/graphTextSelection';
 import { CARD_W, COL_GAP, GRID_LEFT, GRID_TOP, ROW_GAP } from '../utils/layout';
+import {applyAgreeDisagreeColumnOverride} from '../utils/graphColumnRules';
+import {projectGraphScene} from '../utils/graphProjection';
 
 const message = (id: string): DemoMessage => ({ id, author: 'a', kind: 'normal', content: id, createdAt: '2026-01-01T00:00:00Z' });
 const edge = (id: string, source: string, target: string): DemoEdge => ({ id, relationMessageId: id, relationType: 'disagree', relationLabel: '反对', from: { messageId: source, selection: { kind: 'whole' } }, to: { messageId: target, selection: { kind: 'whole' } } });
 const frame = (id: string, members: string[], children: string[] = []): FrameBlock => ({ relMsgId: id, cardIds: new Set([...members, ...children]), directCardIds: new Set(members), childRelMsgIds: children, isMerge: false, hasGroupHeader: true });
 
 describe('scene layout', () => {
+  it.each((['annotation','archive','recommend','attention','block','tag'] as const).flatMap(type=>[false,true].flatMap(sourced=>[false,true].map(nested=>({type,sourced,nested})))))('lays out a text-bearing $type like a citation (source=$sourced, nested=$nested)',({type,sourced,nested})=>{
+    const target=message('target'),source:DemoMessage={...message('source'),createdAt:'2026-10-28',
+      ...(!sourced?{kind:'relation' as const,relationType:type}:{}),parts:[{id:'body',type:'text',text:'标注的原因'}]};
+    const annotation:DemoMessage={...message('annotation'),kind:'relation',relationType:type};
+    const nodes=[target,source,...(sourced?[annotation]:[])],link:DemoEdge={...edge(sourced?'annotation':'source',sourced?'source':'anon:source','target'),relationType:type};
+    const scene=projectGraphScene({messages:nodes,edges:[link],isTraceWindow:false,traceExpandedFrameIds:new Set()});
+    const run=(links:DemoEdge[])=>computeSceneLayout({normals:scene.normals,allMessages:nodes,edges:links,colOf:scene.pipelineCol,maxCol:scene.pipelineMaxCol,
+      measuredHeights:{},measuredWidths:{},frameBlocks:nested?[frame('group',['source','target'])]:[]});
+    const actual=run(scene.layoutEdges),citation=run([{...link,relationType:'reference',from:{...link.from,messageId:'source'}}]);
+    expect(actual.layout).toEqual(citation.layout);
+    expect(actual.layout.source.x).toBeGreaterThan(actual.layout.target.x);
+    expect(link.relationType).toBe(type);expect(link.from.messageId).toBe(sourced?'source':'anon:source');
+  });
+  it('does not turn a bodyless cold-storage annotation into a source card',()=>{
+    const annotation:DemoMessage={...message('archive'),kind:'relation',relationType:'archive',content:''};
+    const link:DemoEdge={...edge('archive','anon:archive','target'),relationType:'archive'};
+    const scene=projectGraphScene({messages:[message('target'),annotation],edges:[link],isTraceWindow:false,traceExpandedFrameIds:new Set()});
+    expect(scene.normalIds).toEqual(['target']);expect(scene.layoutEdges[0]).toBe(link);
+  });
+  it('moves the existing leftmost targets right when a new supporter needs space on their left',()=>{
+    const nodes=['target','support','new-support','opposition'].map((id,index)=>({...message(id),createdAt:new Date(index*1000).toISOString()}));
+    const links=[{...edge('first-support','support','target'),relationType:'agree' as const},
+      {...edge('second-support','new-support','support'),relationType:'agree' as const},edge('objection','opposition','target')];
+    for(const ordered of [links,[...links].reverse()]){
+      const result=applyAgreeDisagreeColumnOverride({normals:nodes,edges:ordered,col:{target:0,support:0,'new-support':0,opposition:1},maxCol:1});
+      expect(result.col['new-support']).toBeGreaterThanOrEqual(0);
+      expect(result.col.support).toBeGreaterThan(result.col['new-support']);expect(result.col.target).toBeGreaterThan(result.col.support);
+      expect(result.col.opposition).toBeGreaterThan(result.col.target);
+    }
+    const classification='cmtgyl9ph00zz13qjjl7gqoc0';
+    const result=computeSceneLayout({normals:nodes,allMessages:nodes,edges:links,colOf:{},maxCol:0,measuredHeights:{},measuredWidths:{},frameBlocks:[frame(classification,nodes.map(node=>node.id))]});
+    expect(result.layout['new-support'].x).toBeGreaterThanOrEqual(result.frameRects[classification].x);
+    expect(result.layout.support.x).toBeGreaterThan(result.layout['new-support'].x);expect(result.layout.target.x).toBeGreaterThan(result.layout.support.x);
+    expect(result.layout.opposition.x).toBeGreaterThan(result.layout.target.x);
+  });
+  it.each([false,true])('does not reparent an old container when a new member cites another discussion (nested: %s)',nested=>{
+    const texts=['a1','a2','b1','b2','citation'].map((id,index)=>({...message(id),createdAt:new Date(index*1000).toISOString()}));
+    const containers=['group-a','group-b','outer'].map(id=>({...message(id),kind:'relation' as const,relationType:'arrange' as const}));
+    const ref=(target:string)=>({...edge('cite-'+target,'citation',target),relationType:'reference' as const});
+    const run=(added:boolean,reverse=false)=>{
+      const normals=added?texts:texts.slice(0,-1),links=added?[ref('a2'),ref('b2')]:[];
+      const frames=[frame('group-a',['a1','a2',...(added?['citation']:[])]),frame('group-b',['b1','b2']),...(nested?[frame('outer',[],['group-a','group-b'])]:[])];
+      return computeSceneLayout({normals:reverse?[...normals].reverse():normals,allMessages:[...normals,...containers],edges:reverse?[...links].reverse():links,
+        frameBlocks:reverse?[...frames].reverse():frames,colOf:{},maxCol:0,measuredHeights:{},measuredWidths:{}});
+    };
+    const before=run(false),after=run(true);
+    expect(after.placementOrder.filter(id=>id!=='citation')).toEqual(before.placementOrder);
+    for(const id of ['a1','a2','b1','b2'])expect(after.layout[id].x).toBe(before.layout[id].x);
+    expect(after.layout.a1.y).toBeLessThan(after.layout.b1.y);
+    expect(after.layout).toEqual(run(true,true).layout);
+  });
+  it('places a citation after its primary target inside a container',()=>{
+    const normals=['first','target','citation'].map((id,index)=>({...message(id),createdAt:new Date(index*1000).toISOString()}));
+    const result=computeSceneLayout({normals,allMessages:normals,edges:[{...edge('cite','citation','target'),relationType:'reference'}],
+      frameBlocks:[frame('group',normals.map(message=>message.id))],colOf:{},maxCol:0,measuredHeights:{},measuredWidths:{}});
+    expect(result.layout.citation.y).toBeGreaterThanOrEqual(result.layout.target.y);
+  });
+  it('aligns an outside citation to the cited member rather than the container header',()=>{
+    const normals=['first','target','citation'].map((id,index)=>({...message(id),createdAt:new Date(index*1000).toISOString()}));
+    const result=computeSceneLayout({normals,allMessages:normals,edges:[{...edge('cite','citation','target'),relationType:'reference'}],
+      frameBlocks:[frame('group',['first','target'])],colOf:{},maxCol:0,measuredHeights:{},measuredWidths:{}});
+    expect(result.layout.citation.y).toBeGreaterThanOrEqual(result.layout.target.y);
+  });
+  it.each([false,true])('preserves the existing reply order when cited later (nested: %s)',nested=>{
+    const old='cmv0xqmon00xt78kz0774od10',cited='cmv4rsvps0brfmd14xiwtb0jz',source='b676c94e-82b4-4c45-b32c-f91033e330a6';
+    const normals=[{...message(old),author:'b',createdAt:'2026-10-09'},
+      {...message(cited),createdAt:'2026-10-12'},{...message(source),createdAt:'2026-10-26'}];
+    const edges=[{...edge('cite',source,cited),relationType:'reference' as const},{...edge('reply',cited,old),relationType:'reply' as const}];
+    const run=(normals:DemoMessage[],edges:DemoEdge[])=>computeSceneLayout({normals,allMessages:normals,edges,colOf:{},maxCol:0,
+      measuredHeights:{[cited]:210},measuredWidths:{},frameBlocks:nested?[frame('group',[old,cited,source])]:[]});
+    const result=run(normals,edges),reversed=run([...normals].reverse(),[...edges].reverse());
+    const before=run(normals.filter(message=>message.id!==source),edges.filter(edge=>edge.relationType==='reply'));
+    expect(result.layout[old].y).toBe(before.layout[old].y);
+    expect(result.layout[cited].y).toBe(before.layout[cited].y);
+    expect(result.layout).toEqual(reversed.layout);
+    expect(result.layout[source].y).toBe(result.layout[cited].y);
+  });
+  it.each(['row','flow'] as const)('preserves explicit %s member order over relationship constraints',display=>{
+    const normals=['old','cited','source'].map(message);
+    const organization:DemoMessage={...message('row'),parts:[{id:'display',type:'display',layout:display,relationPartId:'members'}]};
+    const result=computeSceneLayout({normals,allMessages:[...normals,organization],colOf:{},maxCol:0,measuredHeights:{},measuredWidths:{},
+      frameBlocks:[{...frame('row',['old','cited','source']),targetLayout:display==='row'?'single-row':'single-column'}],
+      edges:[{...edge('cite','source','cited'),relationType:'reference'},{...edge('reply','cited','old'),relationType:'reply'}]});
+    if(display==='row'){
+      expect(result.layout.old.x).toBeLessThan(result.layout.cited.x);
+      expect(result.layout.cited.x).toBeLessThan(result.layout.source.x);
+      expect(result.layout.old.y).toBe(result.layout.cited.y);
+    }else{
+      expect(result.layout.old.x).toBe(result.layout.cited.x);expect(result.layout.cited.x).toBe(result.layout.source.x);
+      expect(result.layout.old.y).toBeLessThan(result.layout.cited.y);expect(result.layout.cited.y).toBeLessThan(result.layout.source.y);
+    }
+  });
   it('reserves the measured merge header above members and shrinks when that header becomes shorter', () => {
     const normals = ['a', 'b'].map(message);
     const merge = { ...frame('merge', ['a', 'b']), isMerge: true, hasGroupHeader: false };

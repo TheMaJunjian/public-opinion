@@ -4,6 +4,7 @@ import type {
 } from "../../../utils/modelBridge";
 import { applyTraceFrameVisibility, buildTraceProjection, type TraceContainerMembership } from "../../../utils/traceProjection";
 import type { TraceEntry } from "../types";
+import type {TraceDirection} from '../../../utils/traceRange';
 
 interface DeriveMessagesToShowInput {
   traceEntries: TraceEntry[];
@@ -12,16 +13,20 @@ interface DeriveMessagesToShowInput {
   traceContainerMemberships: TraceContainerMembership[];
   effectiveSuppressedRelIdsForLayout: Set<string>;
   traceDistance: number;
+  traceDepths?: import('../../../utils/traceRange').TraceDepths;
+  traceDirection?: TraceDirection;
   traceExpandedFrameIds: Set<string>;
 }
 
-export function deriveMessagesToShow(input: DeriveMessagesToShowInput): { messagesToShow: DemoMessage[]; edgesToShow: DemoEdge[]; traceExpandableContainerIds: ReadonlySet<string>; } {
+export function deriveMessagesToShow(input: DeriveMessagesToShowInput): { messagesToShow: DemoMessage[]; edgesToShow: DemoEdge[]; traceExpandableContainerIds: ReadonlySet<string>; traceAncestorContainerIds: ReadonlySet<string>; traceScopeIds:ReadonlySet<string>; } {
   const { traceEntries, messages, edges, traceContainerMemberships, effectiveSuppressedRelIdsForLayout, traceDistance, traceExpandedFrameIds } = input;
   if (traceEntries.length === 0) {
     return {
       messagesToShow: messages,
       edgesToShow: edges,
       traceExpandableContainerIds: new Set<string>(),
+      traceAncestorContainerIds: new Set<string>(),
+      traceScopeIds:new Set<string>(),
     };
   }
   const startIds = traceEntries[traceEntries.length - 1].ids.filter(Boolean);
@@ -30,6 +35,8 @@ export function deriveMessagesToShow(input: DeriveMessagesToShowInput): { messag
       messagesToShow: messages,
       edgesToShow: edges,
       traceExpandableContainerIds: new Set<string>(),
+      traceAncestorContainerIds: new Set<string>(),
+      traceScopeIds:new Set<string>(),
     };
   }
   const traceProjection = buildTraceProjection({
@@ -39,11 +46,16 @@ export function deriveMessagesToShow(input: DeriveMessagesToShowInput): { messag
     excludedRelationIds: effectiveSuppressedRelIdsForLayout,
     startIds,
     distance: traceDistance,
+    depths: input.traceDepths,
+    direction: input.traceDirection,
+    expandedContainerIds:traceExpandedFrameIds,
   });
   const projection = applyTraceFrameVisibility(traceProjection, traceExpandedFrameIds);
   return {
     messagesToShow: projection.messages,
     edgesToShow: projection.edges,
     traceExpandableContainerIds: projection.expandableContainerIds,
+    traceAncestorContainerIds: traceProjection.ancestorContainerIds ?? new Set(),
+    traceScopeIds:traceProjection.semanticMessageIds??traceProjection.distanceMessageIds??new Set(),
   };
 }

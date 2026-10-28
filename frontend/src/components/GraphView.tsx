@@ -1,11 +1,16 @@
 import { useGraphOverlays } from '../hooks/useGraphOverlays';
 import { projectGraphScene } from '../utils/graphProjection';
-import { unionLayoutRects, getGroupHeaderHeight, getGroupHeaderRect, getMergeCardHeaderRect, getEdgeDecorationLeft, getDecorationColumnWidth, getAnnotationPlacement, GROUP_HEADER_HEIGHT, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, DEC_ICON_W, EDGE_HINT_W, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_HIT_PAD, TAG_HIT_PAD_X, FRAME_RADIUS, GROUP_FRAME_STROKE, SHOW_SELECTED_ACTUAL_RECTS, INLINE_BADGE_COLOR } from '../utils/graphPresentationGeometry';
+import {projectFrameViewports,createFrameClipResolver,type FrameScroll} from '../utils/frameViewports';
+import {useAvailableFrameWidth} from '../hooks/useAvailableFrameWidth';
+import type {FrameViewSize} from '../utils/frameLayout';
+import {FrameViewportTools,FrameViewportScrollbars,clipFrameScene} from './graph/FrameViewport';
+import { unionLayoutRects, getGroupHeaderHeight, getGroupHeaderRect, getMergeCardHeaderRect, getEdgeDecorationLeft, getDecorationColumnWidth, getAnnotationPlacement, GROUP_HEADER_HEIGHT, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, DEC_ICON_W, EDGE_HINT_W, EDGE_LABEL_HINT_GAP, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_HIT_PAD, TAG_HIT_PAD_X, FRAME_RADIUS, GROUP_FRAME_STROKE, SHOW_SELECTED_ACTUAL_RECTS, INLINE_BADGE_COLOR } from '../utils/graphPresentationGeometry';
 import { unitEquals, selectionIsText, extractTextTargetsForMessage, relationTypeName, buildAnnoTree, renderAnnoNodes } from '../utils/graphTextSelection';
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CardWidthContext, CardWidthHandle } from './graph/CardWidthContext';
 import { effectiveCardWidths } from '../utils/cardWidth';
-import MessageAuthors from './MessageAuthors';
+import JoinEndpointType from './JoinEndpointType';
+import ViewTargetCorners from './ViewTargetCorners';
 import { useCardHeaderWidths } from '../hooks/useCardHeaderWidths';
 import type { DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge';
 import { getRelationMessageLabel } from '../utils/attachedRelationLabels';
@@ -14,7 +19,7 @@ import type { JoinEffectSource } from '../pages/workbench/model/joinDisplay';
 import { computeCorrectionVersions, isCardMessage } from '../utils/modelBridge';
 import { useSceneComputation } from '../hooks/useSceneComputation';
 import { useCardMeasurements } from '../hooks/useCardMeasurements';
-import { useVirtualMessageMounts } from '../hooks/useVirtualMessageMounts';
+import { useVirtualMessageMounts, type VirtualMessageRevealDetail } from '../hooks/useVirtualMessageMounts';
 import { intersectsViewport } from '../hooks/useCanvasViewport';
 import { createMessageJumpGroups, registerMessageJumpGroups } from '../utils/messageJumpDisplay';
 import { getMessageProminence, getOrganizationTitle, isBodyCorrection, needsSeparateStanceCard } from '../utils/messageDisplay';
@@ -25,6 +30,7 @@ import { PART_SELECTION_EVENT, isMessageElementSelected, isWholeMessageSelection
 import MessageElement from './MessageElement';
 import ClassificationCard from './graph/ClassificationCard';
 import OrganizationFrameHeader from './graph/OrganizationFrameHeader';
+import HomeFilterBadge from './HomeFilterBadge';
 import { MessageDisplayMarker, MessageDisplayHintsScope } from './MessageDisplayHints';
 import MessageSettlementActions from './MessageSettlementActions';
 import SettlementPanel from './SettlementPanel';
@@ -34,7 +40,7 @@ import CrossCanvasRelatedMessages from './CrossCanvasRelatedMessages';
 import { deriveCrossCanvasRelations } from '../utils/crossCanvasRelations';
 import JoinRecordBadges from './JoinRecordBadges';
 import ComparisonPane, { COMPARISON_HEADER_HEIGHT } from './ComparisonPane';
-import {indexRelatedMessages,isRejectedContainer} from '../utils/relatedMessages';
+import {indexRelatedMessages,isRejectedContainer,isRejectedRelation} from '../utils/relatedMessages';
 import { CARD_W, GRID_LEFT, CANVAS_BOTTOM_PAD, CANVAS_RIGHT_PAD, FRAME_PAD, MERGE_CARD_H } from '../utils/layout';
 import { getPresentationSpec, type Relation } from '../types';
 import { noteWorkbenchDrawingProgress, reportWorkbenchDrawingDuration } from '../utils/workbenchActivity';
@@ -57,9 +63,11 @@ export interface GraphViewProps {
   onRelatedRelationView?:(id:string)=>void;
   standaloneMessageIds?:ReadonlySet<string>;
   rejectedContainerIds?:ReadonlySet<string>;
+  rejectedRelationIds?:ReadonlySet<string>;
   onRelatedMessageNavigate?:(id:string)=>void;
   edges: DemoEdge[];
   homeMatchIds?: Set<string>;
+  homeReasonByMessageId?: Map<string,string>;
   homeContextRoleByMessageId?: Map<string, 'source' | 'target' | 'source-target'>;
   invalidCorrectionIds?: Set<string>;
   draftUnits: UnitSelection[];
@@ -122,11 +130,11 @@ export interface GraphViewProps {
   comparisonDisplay?: 'agree' | 'disagree';
   comparisonRecommendedDisplay?: 'agree' | 'disagree';
   comparisonAgreeMessages?: DemoMessage[];
-  comparisonAgreeContext?: Pick<GraphViewProps,'relatedMessages'|'relatedEdges'|'rejectedContainerIds'|'joinStatusByMessage'|'joinEffectSourcesByMessage'|'crossCanvasRelations'>;
+  comparisonAgreeContext?: Pick<GraphViewProps,'relatedMessages'|'relatedEdges'|'rejectedContainerIds'|'rejectedRelationIds'|'joinStatusByMessage'|'joinEffectSourcesByMessage'|'crossCanvasRelations'>;
   comparisonAgreeEdges?: DemoEdge[];
   comparisonAgreeHideMessageIds?: Set<string>;
   comparisonDisagreeMessages?: DemoMessage[];
-  comparisonDisagreeContext?: Pick<GraphViewProps,'relatedMessages'|'relatedEdges'|'rejectedContainerIds'|'joinStatusByMessage'|'joinEffectSourcesByMessage'|'crossCanvasRelations'>;
+  comparisonDisagreeContext?: Pick<GraphViewProps,'relatedMessages'|'relatedEdges'|'rejectedContainerIds'|'rejectedRelationIds'|'joinStatusByMessage'|'joinEffectSourcesByMessage'|'crossCanvasRelations'>;
   comparisonDisagreeEdges?: DemoEdge[];
   comparisonDisagreeHideMessageIds?: Set<string>;
   comparisonAgreeSuppressedRelIds?: Set<string>;
@@ -158,13 +166,14 @@ export interface GraphViewProps {
   joinRelationsByTarget?: Map<string, Relation[]>;
   /** JOIN records emitted by each container. */
   joinRelationsBySource?: Map<string, Relation[]>;
+  joinFilterTargetId?: string | null;
   onJoinFilterClick?: (messageId: string, direction: 'incoming' | 'outgoing') => void;
   joinStatusByMessage?: Map<string, JoinStatus>;
   joinEffectSourcesByMessage?: ReadonlyMap<string, ReadonlySet<JoinEffectSource>>;
 }
 
 const EMPTY_COMPARISON_SUPPRESSED_REL_IDS = new Set<string>();
-const EMPTY_SCENE_LAYOUT = { layout: {} as Record<string, LayoutBox>, frameRects: {} as Record<string, LayoutBox>, colOf: {} as Record<string, number>, canvasHeight: 0 };
+const EMPTY_SCENE_LAYOUT = { layout: {} as Record<string, LayoutBox>, frameRects: {} as Record<string, LayoutBox>, frameContentRects:{} as Record<string,LayoutBox>, frameViewportSizes:{} as Record<string,FrameViewSize>, colOf: {} as Record<string, number>, canvasHeight: 0, fullFrameIds: [] as string[] };
 
 const COMPARISON_CANVAS_EXTRA_RIGHT_PAD = 96;
 
@@ -434,15 +443,25 @@ function GraphViewCanvas(props: GraphViewProps) {
   // An entering trace can briefly render with the previous expansion state.
   // Only frames belonging to the current trace may be rendered as expanded.
   const traceExpandedFrameIds = useMemo(
-    () => new Set(props.traceExpandedFrameIds ?? []),
-    [props.traceExpandedFrameIds],
+    () => new Set([...(props.traceExpandedFrameIds ?? [])].filter(id=>props.traceFrameIds?.has(id))),
+    [props.traceExpandedFrameIds,props.traceFrameIds],
   );
   const comparisonSuppressedRelIds = props.comparisonSuppressedRelIds ?? EMPTY_COMPARISON_SUPPRESSED_REL_IDS;
-  const effectiveHideMessageIds = useMemo(() => props.hideMessageIds
-    ? new Set([...props.hideMessageIds, ...comparisonSuppressedRelIds])
-    : comparisonSuppressedRelIds, [props.hideMessageIds, comparisonSuppressedRelIds]);
+  const rejectedRelationIds=props.rejectedRelationIds??(comparisonSuppressedRelIds.size?comparisonSuppressedRelIds:undefined);
+  const effectiveHideMessageIds = useMemo(() =>new Set([...props.hideMessageIds??[],
+    ...[...comparisonSuppressedRelIds].filter(id=>!isRejectedRelation(messages.find(message=>message.id===id),rejectedRelationIds))]),
+    [props.hideMessageIds,comparisonSuppressedRelIds,rejectedRelationIds,messages]);
 
   const canvasRef = useRef<HTMLDivElement|null>(null);
+  const [frameViewSizes,setFrameViewSizes]=useState<Record<string,FrameViewSize>>({});
+  const [frameScrolls,setFrameScrolls]=useState<Record<string,FrameScroll>>({});
+  const frameViewsRef=useRef<ReturnType<typeof projectFrameViewports>|null>(null);
+  const edgeStartsRef=useRef(new Map<string,{x:number;y:number}>());
+  const resizeFrame=useCallback((id:string,value:FrameViewSize|undefined)=>{
+    setFrameViewSizes(previous=>{const next={...previous};if(value)next[id]=value;else delete next[id];return next;});
+    if(!value)setFrameScrolls(previous=>{const next={...previous};delete next[id];return next;});
+  },[]);
+  const scrollFrame=useCallback((id:string,value:FrameScroll)=>setFrameScrolls(previous=>previous[id]?.left===value.left&&previous[id]?.top===value.top?previous:{...previous,[id]:value}),[]);
   const cardRefs = useRef<Record<string,HTMLDivElement|null>>({});
   const contentRefs = useRef<Record<string,HTMLDivElement|null>>({});
   const headerRefs = useRef<Record<string,HTMLDivElement|null>>({});
@@ -484,9 +503,11 @@ function GraphViewCanvas(props: GraphViewProps) {
   const cardFrameIds = useMemo(() => new Set([...expandedFrameIds, ...revealedFrameIds,
     ...(widthContext?.editing ? [widthContext.editing.messageId] : []),
     ...(props.comparisonDisplay&&props.comparisonTargetId?[props.comparisonTargetId]:[])]), [expandedFrameIds, revealedFrameIds,props.comparisonDisplay,props.comparisonTargetId,widthContext?.editing?.messageId]);
-  const resolveRevealIds = useCallback((ids: string[]) => {
+  const resolveRevealIds = useCallback((ids: string[], detail: VirtualMessageRevealDetail) => {
     const targets = new Set(ids);
     const decorationEdges=new Map<string,DemoEdge[]>();
+    const relationEdges=new Map<string,DemoEdge[]>();
+    for(const edge of edges)relationEdges.set(edge.relationMessageId,[...(relationEdges.get(edge.relationMessageId)??[]),edge]);
     for(const edge of edges)if(['agree','disagree','tag'].includes(edge.relationType)||getPresentationSpec(edge.relationType).kind==='inline-badge')
       decorationEdges.set(edge.relationMessageId,[...(decorationEdges.get(edge.relationMessageId)??[]),edge]);
     const revealedDecorations=new Set<string>(),revealedAnnotations=new Set<string>(),visited=new Set<string>(),queue=[...ids];
@@ -497,6 +518,36 @@ function GraphViewCanvas(props: GraphViewProps) {
       visited.add(target);targets.add(target);queue.push(target);
     }
     const frames = messages.filter(message => message.relationType === 'arrange' && targets.has(message.id)).map(message => message.id);
+    const views=frameViewsRef.current;
+    if(views){
+      // Reveal an edge's routed start, including a fragment of a tall card,
+      // rather than centering the entire source message in every frame.
+      const anchorBoxes=new Map<string,LayoutBox>();
+      const host=(id:string,seen=new Set<string>()):string=>{
+        if(views.layout[id]||views.frameRects[id]||seen.has(id))return id;
+        seen.add(id);const edge=relationEdges.get(id)?.[0];
+        return edge?host(edge.from.messageId.startsWith('anon:')?edge.to.messageId:edge.from.messageId,seen):id;
+      };
+      const anchors=detail.ids.slice(0,1).flatMap(id=>{
+        const owned=relationEdges.get(id)??[],directed=owned.filter(edge=>getPresentationSpec(edge.relationType).kind==='edge-label'&&!edge.from.messageId.startsWith('anon:'));
+        if(!directed.length&&(views.layout[id]||views.frameRects[id]))return [id];
+        return (directed.length?directed:owned).slice(0,1).map(edge=>{
+          const directed=getPresentationSpec(edge.relationType).kind==='edge-label'&&!edge.from.messageId.startsWith('anon:');
+          const anchor=host(directed?edge.from.messageId:edge.to.messageId),start=directed?edgeStartsRef.current.get(id):undefined;
+          if(start){
+            let {x,y}=start;
+            for(const parent of views.ancestors(anchor)){x+=views.offsets[parent]?.left??0;y+=views.offsets[parent]?.top??0;}
+            anchorBoxes.set(anchor,{x:x-8,y:y-8,width:16,height:16});
+          }
+          return anchor;
+        });
+      });
+      const next=views.reveal([...new Set(anchors)],anchorBoxes);
+      if(Object.entries(next).some(([id,offset])=>views.offsets[id]?.left!==offset.left||views.offsets[id]?.top!==offset.top)){
+        detail.positioningPending=true;
+        setFrameScrolls(previous=>({...previous,...next}));
+      }
+    }
     setRevealedDecorationIds(previous=>previous.size===revealedDecorations.size&&[...previous].every(id=>revealedDecorations.has(id))?previous:revealedDecorations);
     setRevealedAnnotationIds(previous=>previous.size===revealedAnnotations.size&&[...previous].every(id=>revealedAnnotations.has(id))?previous:revealedAnnotations);
     setRevealedFrameIds(previous => previous.length === frames.length && previous.every((id, index) => id === frames[index]) ? previous : frames);
@@ -508,8 +559,9 @@ function GraphViewCanvas(props: GraphViewProps) {
   const { msgMap, edgesByRelMsg, classifyRelMsgIds, relationCardMsgIds, normals,
     layoutEdges, hiddenTargetIds, correctionsByTargetMsgId, frameBlocks, frameDepthMap,
     correctedEdgeIdsByRelMsg, pipelineCol, pipelineMaxCol } = useMemo(() => projectGraphScene({
-      messages, edges, traceExpandedFrameIds, isTraceWindow,standaloneMessageIds:props.standaloneMessageIds,rejectedContainerIds:props.rejectedContainerIds,hiddenMessageIds:effectiveHideMessageIds,cardFrameIds,
-    }), [messages, edges, traceExpandedFrameIds, isTraceWindow,props.standaloneMessageIds,props.rejectedContainerIds,props.hideMessageIds,comparisonSuppressedRelIds,cardFrameIds]);
+      messages, edges, traceExpandedFrameIds, isTraceWindow,standaloneMessageIds:props.standaloneMessageIds,rejectedContainerIds:props.rejectedContainerIds,rejectedRelationIds,hiddenMessageIds:effectiveHideMessageIds,cardFrameIds,
+    }), [messages, edges, traceExpandedFrameIds, isTraceWindow,props.standaloneMessageIds,props.rejectedContainerIds,rejectedRelationIds,effectiveHideMessageIds,cardFrameIds]);
+  const availableFrameWidth=useAvailableFrameWidth(canvasRef,frameBlocks.some(frame=>frame.hasGroupHeader));
 
   const measuredHeights = useCardMeasurements(canvasRef, cardRefs);
   useWorkbenchDrawingCommit();
@@ -581,14 +633,39 @@ function GraphViewCanvas(props: GraphViewProps) {
     () => ({ kind: 'layout' as const, input: {
       normals, colOf: pipelineCol, measuredHeights, measuredWidths,
       maxCol: pipelineMaxCol, correctedTargetIds: hiddenTargetIds,
-      frameBlocks, allMessages: messages, edges: layoutEdges, traceMode: isTraceWindow,
+      frameBlocks, frameViewSizes, availableFrameWidth, allMessages: messages, edges: layoutEdges, traceMode: isTraceWindow,
       structureOrder: props.structureOrder,
     } }),
     [normals, pipelineCol, pipelineMaxCol, measuredHeights, measuredWidths,
-      hiddenTargetIds, frameBlocks, messages, layoutEdges, isTraceWindow, props.structureOrder],
+      hiddenTargetIds, frameBlocks, frameViewSizes, availableFrameWidth, messages, layoutEdges, isTraceWindow, props.structureOrder],
   );
   const sceneLayout = useSceneComputation(layoutJob, true);
-  const { layout, frameRects: finalFrameRects, colOf, canvasHeight } = sceneLayout ?? EMPTY_SCENE_LAYOUT;
+  const naturalScene=sceneLayout??EMPTY_SCENE_LAYOUT;
+  const effectiveFrameSizes=useMemo(()=>Object.fromEntries(Object.entries({...naturalScene.frameViewportSizes,...frameViewSizes})
+    .filter(([id])=>!naturalScene.fullFrameIds.includes(id))),[naturalScene.frameViewportSizes,naturalScene.fullFrameIds,frameViewSizes]);
+  const manualFrameIds=useMemo(()=>new Set(Object.keys(frameViewSizes)),[frameViewSizes]);
+  const frameViews=useMemo(()=>projectFrameViewports(naturalScene.layout,naturalScene.frameRects,naturalScene.frameContentRects??{},frameBlocks,effectiveFrameSizes,frameScrolls,CANVAS_RIGHT_PAD,manualFrameIds),[naturalScene,frameBlocks,effectiveFrameSizes,frameScrolls,manualFrameIds]);
+  frameViewsRef.current=frameViews;
+  const {layout,frameRects:finalFrameRects}=frameViews;
+  const {colOf,canvasHeight}=naturalScene;
+  useLayoutEffect(()=>{
+    const canvas=canvasRef.current;if(!canvas)return;
+    const wheel=(event:WheelEvent)=>{
+      if(event.ctrlKey||event.target instanceof Element&&event.target.closest('[data-frame-scrollbar],[data-frame-size-controls],input,select,textarea'))return;
+      const views=frameViewsRef.current;if(!views)return;
+      const bounds=canvas.getBoundingClientRect(),scaleX=canvas.offsetWidth?bounds.width/canvas.offsetWidth:1,scaleY=canvas.offsetHeight?bounds.height/canvas.offsetHeight:1;
+      const x=(event.clientX-bounds.left)/(scaleX||1),y=(event.clientY-bounds.top)/(scaleY||1);
+      for(const [id,viewport] of Object.entries(views.viewports).sort(([a],[b])=>views.ancestors(b).length-views.ancestors(a).length)){
+        const clip=views.extent(id,viewport);if(x<clip.x||x>clip.x+clip.width||y<clip.y||y>clip.y+clip.height)continue;
+        const current=views.offsets[id],content=views.contentRects[id],factor=event.deltaMode===1?16:event.deltaMode===2?viewport.height:1;
+        const left=Math.max(0,Math.min(content.width-viewport.width,current.left+(event.shiftKey?event.deltaY:event.deltaX)*factor));
+        const top=Math.max(0,Math.min(content.height-viewport.height,current.top+(event.shiftKey?0:event.deltaY)*factor));
+        if(left===current.left&&top===current.top)continue;
+        event.preventDefault();event.stopPropagation();scrollFrame(id,{left,top});return;
+      }
+    };
+    canvas.addEventListener('wheel',wheel,{passive:false});return()=>canvas.removeEventListener('wheel',wheel);
+  },[naturalScene.frameContentRects,scrollFrame]);
   const visibleNormals = useMemo(() => props.visibleMessageIds ? normals.filter(message => props.visibleMessageIds!.has(message.id)) : normals, [normals, props.visibleMessageIds]);
   const visibleNormalIds = useMemo(() => visibleNormals.map(message => message.id), [visibleNormals]);
   const visibleEdges = useMemo(() => props.visibleEdgeIds ? edges.filter(edge => props.visibleEdgeIds!.has(edge.id)) : edges, [edges, props.visibleEdgeIds]);
@@ -605,8 +682,9 @@ function GraphViewCanvas(props: GraphViewProps) {
       if (frame.isMerge || frame.hasCardHeader) boxes[frame.relMsgId] = { ...getMergeCardHeaderRect(rect, measuredWidths[frame.relMsgId]), height: measuredHeights[frame.relMsgId] ?? MERGE_CARD_H };
       else if (frame.hasGroupHeader) boxes[frame.relMsgId] = getGroupHeaderRect(rect, getGroupHeaderHeight(measuredHeights, frame.relMsgId));
     }
+    for(const [id,box] of Object.entries(boxes))boxes[id]=frameViews.extent(id,box);
     return boxes;
-  }, [layout, finalFrameRects, frameBlocks, measuredHeights, measuredWidths]);
+  }, [layout, finalFrameRects, frameBlocks, measuredHeights, measuredWidths,frameViews]);
   const virtualPins = useMemo(() => new Set([lastClickedMessageId, activeTextSelectId, settlementOpenMsgId, props.autoCenterMessageId]
     .filter((id): id is string => !!id)), [lastClickedMessageId, activeTextSelectId, settlementOpenMsgId, props.autoCenterMessageId]);
   const revealGroups = useMemo(() => createMessageJumpGroups(messages, edges, new Map(frameBlocks.map(frame => [frame.relMsgId,
@@ -619,25 +697,24 @@ function GraphViewCanvas(props: GraphViewProps) {
   const visibleBottom = useMemo(() => {
     let bottom = 0;
     for (const [id, box] of [...Object.entries(layout), ...Object.entries(finalFrameRects)]) {
-      if (!props.visibleMessageIds || props.visibleMessageIds.has(id)) bottom = Math.max(bottom, box.y + box.height);
+      const visible=frameViews.extent(id,box);
+      if (!props.visibleMessageIds || props.visibleMessageIds.has(id)) bottom = Math.max(bottom, visible.y + visible.height);
     }
     return bottom;
-  }, [layout, finalFrameRects, props.visibleMessageIds]);
+  }, [layout, finalFrameRects, props.visibleMessageIds,frameViews]);
   const actualCanvasWidth = useMemo(() => {
     let w = canvasWidth;
-    for (const box of Object.values(layout)) w = Math.max(w, box.x + box.width + canvasRightPad);
-    for (const r of Object.values(finalFrameRects)) w = Math.max(w, r.x + r.width + canvasRightPad);
+    for (const [id,box] of [...Object.entries(layout),...Object.entries(finalFrameRects)]){const visible=frameViews.extent(id,box);w=Math.max(w,visible.x+visible.width+canvasRightPad);}
     return w;
-  }, [canvasWidth, canvasRightPad, layout, finalFrameRects]);
+  }, [canvasWidth, canvasRightPad, layout, finalFrameRects,frameViews]);
   const actualCanvasHeight = useMemo(() => {
     // Reserve geometry in the layout model, not empty scrollable DOM space.
     // End/scrollbar navigation must reach the mounted boundary and load onward.
     if (props.visibleMessageIds) return visibleBottom + CANVAS_BOTTOM_PAD;
     let h = canvasHeight;
-    for (const box of Object.values(layout)) h = Math.max(h, box.y + box.height + CANVAS_BOTTOM_PAD);
-    for (const r of Object.values(finalFrameRects)) h = Math.max(h, r.y + r.height + CANVAS_BOTTOM_PAD);
+    for (const [id,box] of [...Object.entries(layout),...Object.entries(finalFrameRects)]){const visible=frameViews.extent(id,box);h=Math.max(h,visible.y+visible.height+CANVAS_BOTTOM_PAD);}
     return h;
-  }, [canvasHeight, layout, finalFrameRects, props.visibleMessageIds, visibleBottom]);
+  }, [canvasHeight, layout, finalFrameRects, props.visibleMessageIds, visibleBottom,frameViews]);
   const anonCorrectedRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
     for (const e of edges) {
@@ -656,6 +733,8 @@ function GraphViewCanvas(props: GraphViewProps) {
     labelViewport: virtual.viewport, labelRetainedIds: virtual.retained,
     canvasRef, normalIds: visibleNormalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals: visibleNormals, headerRefs, contentRefs, edges: visibleEdges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, textRefs, actualCanvasWidth, actualCanvasHeight,
   });
+  edgeStartsRef.current=new Map();
+  for(const positioned of overlays.positionedEdges)if(!edgeStartsRef.current.has(positioned.edge.relationMessageId))edgeStartsRef.current.set(positioned.edge.relationMessageId,positioned.start);
   const { labelBboxes, decorationsByMsgState, relDecByRelMsgState, tagsByRelMsgState } = overlays;
   const overlayRetained = useMemo(() => {
     const retained = new Set(virtual.retained);
@@ -870,10 +949,10 @@ function GraphViewCanvas(props: GraphViewProps) {
   const homeRoleLabel = (messageId: string) => {
     if (props.homeMatchIds?.has(messageId)) return '命中';
     const role = props.homeContextRoleByMessageId?.get(messageId);
-    return role === 'source' ? '来源' : role === 'target' ? '目标' : role === 'source-target' ? '来源/目标' : null;
+    return role === 'source' ? '来源' : role === 'target' ? '目标' : role === 'source-target' ? '来源/目标' : props.homeReasonByMessageId?.has(messageId) ? '上下文' : null;
   };
-
-  return (
+  const frameClipFor=useMemo(()=>createFrameClipResolver(frameViews,edges),[frameViews,edges]);
+  const canvas=(
     <div ref={canvasRef} data-jump-canvas="true" style={{position:"relative",width:actualCanvasWidth,height:actualCanvasHeight,zIndex:0}}
       onDoubleClick={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
       {props.visibleMessageIds && <div data-message-window-boundary="true" aria-hidden="true" style={{ position: 'absolute', top: visibleBottom, left: 0, height: 1, width: 1 }} />}
@@ -916,7 +995,7 @@ function GraphViewCanvas(props: GraphViewProps) {
             return <ClassificationCard key={msg.id} msg={msg} selectedUnits={draftUnits} box={box} targetCount={targetCount} title={classificationTitle}
               correctionRecords={renderCorrectionRecords(msg.id)}
               activeText={activeTextSelectId === msg.id} isWhole={isWhole} isActive={isActive} isStanceTarget={isClassificationStanceTarget}
-              homeLabel={homeRoleLabel(msg.id)} stakes={stakeCounts?.[msg.id]}
+              homeLabel={homeRoleLabel(msg.id)} homeReason={props.homeReasonByMessageId?.get(msg.id)} stakes={stakeCounts?.[msg.id]}
               relatedJoinRelations={relatedJoinRelations} outgoingJoinRelations={outgoingJoinRelations}
               relatedMessages={<><RelatedMessages rows={relatedByTarget.get(msg.id)} selectedUnits={draftUnits} onNavigate={props.onRelatedMessageNavigate??onNavigateToMessage}/>{renderRelatedConnections(msg.id)}</>}
               isJoinEffective={isJoinEffective}
@@ -971,6 +1050,7 @@ function GraphViewCanvas(props: GraphViewProps) {
 
           // Kind-based styling for governance / code / settlement messages
           const kindMeta = (() => {
+            if (msg.kind === 'join') return { color: '#a78bfa', label: '加入', bg: 'rgba(167,139,250,0.08)' };
             if (msg.kind === 'governance') return { color: '#f59e0b', label: getRelationMessageLabel(msg) ?? '提案', bg: 'rgba(245,158,11,0.08)' };
             if (msg.kind === 'code')        return { color: '#14b8a6', label: '代码', bg: 'rgba(20,184,166,0.08)' };
             if (msg.kind === 'operations')  return { color: '#06b6d4', label: '📊 运营', bg: 'rgba(6,182,212,0.08)' };
@@ -1031,13 +1111,12 @@ function GraphViewCanvas(props: GraphViewProps) {
                       {correctionBadgeLabel}
                     </div>
                   )}
-                  {homeRoleLabel(msg.id) && <span style={{fontSize:10,fontWeight:700,padding:"2px 6px",borderRadius:4,background:homeRoleLabel(msg.id)==='命中'?"#0e7490":"#374151",color:homeRoleLabel(msg.id)==='命中'?"#cffafe":"#d1d5db"}}>{homeRoleLabel(msg.id)}</span>}
                   {kindMeta && (
                     <MessageElement reference={messageTypeReference(msg)} selected={isMessageElementSelected(draftUnits, messageTypeReference(msg))} label={kindMeta.label} style={{fontSize:10,fontWeight:700,padding:"2px 6px",borderRadius:4,background:isWhole?"#fbbf24":`${kindMeta.color}22`,color:isWhole?"#111827":kindMeta.color,lineHeight:"16px",border:isWhole?"1px solid #fbbf24":`1px solid ${kindMeta.color}44`}}>
                       {kindMeta.label}
                     </MessageElement>
                   )}
-                  <MessageAuthors message={msg} showSelfStake={isCardMessage(msg)}/>
+                  <HomeFilterBadge label={homeRoleLabel(msg.id)} reason={props.homeReasonByMessageId?.get(msg.id)}/>
                 </div>
                 {/* The badge opens the complete correction history; votes belong to each history record. */}
                 {msg.kind==="normal" && correctionBadge && (
@@ -1087,6 +1166,10 @@ function GraphViewCanvas(props: GraphViewProps) {
               {msg.state?.suppressed && ['summary', 'merge', 'arrange', 'classify'].includes(msg.relationType ?? '') && (
                 <div style={{ fontSize: 11, color: '#fcd34d' }}>{msg.relationType === 'summary' ? '覆盖已取消' : '显示组织已取消'} · 原消息已恢复，仍可查看和表态</div>
               )}
+              {isRejectedRelation(msg,rejectedRelationIds)&&<div style={{fontSize:11,color:'#fcd34d',display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                <span>显示效果已取消 · 记录与表态保留</span>
+                {props.onRelatedMessageNavigate&&<button onClick={event=>{event.stopPropagation();props.onRelatedMessageNavigate?.(msg.id);}}>查看有效时的效果</button>}
+              </div>}
               {joinStatus && (
                 <div title={joinPresentation?.hint} style={{ fontSize: 10, fontWeight: 600, color: joinIsInvalid ? '#fca5a5' : '#86efac', alignSelf: 'flex-start', padding: '1px 6px', borderRadius: 4, background: joinIsInvalid ? 'rgba(239,68,68,0.16)' : 'rgba(34,197,94,0.15)', border: `1px solid ${joinIsInvalid ? 'rgba(239,68,68,0.35)' : 'rgba(34,197,94,0.3)'}` }}>
                   {joinPresentation?.label}
@@ -1144,7 +1227,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                     )}
                   </div>
                 );
-              })() : (
+              })() : !msg.joinInfo && (
               <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"#f5f5f5"}}>
                 {msg.parts?.some(part => ['text', 'web', 'code'].includes(part.type))
                   ? msg.parts.filter(part => ['text', 'web', 'code'].includes(part.type)).map(part =>
@@ -1174,17 +1257,15 @@ function GraphViewCanvas(props: GraphViewProps) {
               {/* 加入容器消息：显示容器和目标消息 ID 标签（可点击跳转） */}
               {msg.joinInfo && (() => {
                 const { containerId, containerType, targetIds } = msg.joinInfo;
-                const containerTypeLabel = containerType === 'CLASSIFY' ? '分类' : containerType === 'SUMMARY' ? '总结' : containerType === 'ARRANGE' ? '排列' : containerType === 'MERGE' ? '归并' : '容器';
                 return (
                   <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }}>容器:</span>
-                      <span style={{ fontSize: 10, fontWeight: 600, color: "#a78bfa", padding: "1px 4px", borderRadius: 3, background: "rgba(167,139,250,0.15)", flexShrink: 0 }}>{containerTypeLabel}</span>
+                      <JoinEndpointType messageId={containerId} messages={relatedCatalog} containerType={containerType} containerLabel/>
                       {onNavigateToMessage ? (
                         <span
                             onClick={(e) => { e.stopPropagation(); onNavigateToMessage(containerId); }}
                           style={{ fontSize: 10, fontFamily: "monospace", color: "#93c5fd", cursor: "pointer", padding: "1px 4px", borderRadius: 3, background: "rgba(59,130,246,0.15)", textDecoration: "underline", textUnderlineOffset: 2 }}
-                          title={`跳转到 ${containerTypeLabel}消息 ${containerId}`}
+                          title={`跳转到容器消息 ${containerId}`}
                         >{containerId}</span>
                       ) : (
                         <span style={{ fontSize: 10, fontFamily: "monospace", color: "#6b7280", padding: "1px 4px", borderRadius: 3, background: "rgba(107,114,128,0.1)" }}>{containerId}</span>
@@ -1193,7 +1274,9 @@ function GraphViewCanvas(props: GraphViewProps) {
                     {targetIds.length > 0 && (
                       <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
                         <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }}>目标:</span>
-                        {targetIds.map(tid => (
+                        {targetIds.map(tid => <span key={tid} data-join-target={tid} style={{display:'inline-flex',alignItems:'center',gap:4}}>
+                          <JoinEndpointType messageId={tid} messages={relatedCatalog}/>
+                          {
                           onNavigateToMessage ? (
                             <span
                               key={tid}
@@ -1204,7 +1287,9 @@ function GraphViewCanvas(props: GraphViewProps) {
                           ) : (
                             <span key={tid} style={{ fontSize: 10, fontFamily: "monospace", color: "#6b7280", padding: "1px 4px", borderRadius: 3, background: "rgba(107,114,128,0.1)" }}>{tid}</span>
                           )
-                        ))}
+                          }
+                          {tid===props.joinFilterTargetId&&<span data-join-target-self={tid} style={{fontSize:10,color:'#9ca3af',whiteSpace:'nowrap'}}>（自身）</span>}
+                          </span>)}
                       </div>
                     )}
                   </div>
@@ -1263,11 +1348,12 @@ function GraphViewCanvas(props: GraphViewProps) {
             if (sf.isBlankCorrected) return null;
             const isWhole=isRelWholeSel(sf.relMsgId);
             return (
-              <rect key={`supp-frame-${sf.relMsgId}`} data-jump-visual-msgids={sf.relMsgId} x={sf.rect.x} y={sf.rect.y} width={sf.rect.width} height={sf.rect.height}
+              <g key={`supp-frame-${sf.relMsgId}`} data-frame-visual={sf.relMsgId}><rect data-jump-visual-msgids={sf.relMsgId} x={sf.rect.x} y={sf.rect.y} width={sf.rect.width} height={sf.rect.height}
                 rx={FRAME_RADIUS} ry={FRAME_RADIUS}
                 fill={isWhole?"rgba(251,191,36,0.22)":"rgba(130,80,200,0.04)"}
                 stroke={isWhole?"rgba(251,191,36,1)":"rgba(130,80,200,0.55)"}
                 strokeWidth={isWhole?3:2} strokeDasharray={isWhole?undefined:"5 3"}/>
+              <ViewTargetCorners {...sf.rect}/></g>
             );
           })}
           {/* GROUP frames (CLASSIFY/MERGE) and REPLACE-OVERLAY (SUMMARY); hidden when blank-corrected */}
@@ -1279,11 +1365,13 @@ function GraphViewCanvas(props: GraphViewProps) {
               ? 'rgba(251,191,36,1)'
               : (isReplaceOverlay ? (GROUP_FRAME_STROKE[gf.relColor] ?? 'rgba(180,120,0,0.7)') : (GROUP_FRAME_STROKE[gf.relColor] ?? 'rgba(140,140,150,0.55)'));
             const fillColor = isWhole ? 'rgba(251,191,36,0.22)' : isReplaceOverlay ? 'rgba(200,150,0,0.04)' : 'rgba(130,130,140,0.03)';
+            const headerHeight=['classify','summary'].includes(gf.relType)?getGroupHeaderHeight(measuredHeights,gf.relMsgId):0;
             return (
-              <rect key={`gf-${gf.relMsgId}`} data-jump-visual-msgids={gf.relMsgId} x={gf.rect.x} y={gf.rect.y} width={gf.rect.width} height={gf.rect.height}
+              <g key={`gf-${gf.relMsgId}`} data-frame-visual={gf.relMsgId}><rect data-jump-visual-msgids={gf.relMsgId} x={gf.rect.x} y={gf.rect.y} width={gf.rect.width} height={gf.rect.height}
                 rx={FRAME_RADIUS} ry={FRAME_RADIUS}
                 fill={fillColor} stroke={strokeColor}
                 strokeWidth={isWhole?3:2} strokeDasharray={isReplaceOverlay?undefined:(isWhole?undefined:"6 3")}/>
+              <ViewTargetCorners {...gf.rect} y={gf.rect.y-headerHeight} height={gf.rect.height+headerHeight}/></g>
             );
           })}
         </svg>
@@ -1325,7 +1413,7 @@ function GraphViewCanvas(props: GraphViewProps) {
             // Blank-corrected: anon-source CORRECT targets a relation message → hide arrow/text, keep bbox for badge
             const isBlankCorrected=anonCorrectedRelMsgIds.has(relId);
             return (
-              <g key={pe.drawId} data-jump-visual-msgids={edge.relationMessageId}>
+              <g key={pe.drawId} data-jump-visual-msgids={edge.relationMessageId} data-frame-edge-id={edge.id}>
                 {!isBlankCorrected&&<path d={path} stroke={color} strokeWidth={edgeStrokeWidth} fill="none" strokeDasharray={isEvidenceEdge?"6 3":undefined}/>}
                 {!isBlankCorrected&&<path d={`M ${ax1} ${ay1} L ${end.x} ${end.y} L ${ax2} ${ay2}`} fill={color}/>}
                 {/* Text always rendered (opacity 0 when blank) so labelBboxes are stable for badge positioning */}
@@ -1340,6 +1428,9 @@ function GraphViewCanvas(props: GraphViewProps) {
       )}
 
       {/* Edge label HTML hit areas */}
+      {positionedEdges.filter(pe=>!pe.edge.from.messageId.startsWith('anon:')&&getPresentationSpec(pe.edge.relationType).kind==='edge-label'&&!anonCorrectedRelMsgIds.has(pe.edge.relationMessageId)).map(pe=><div key={`start-${pe.drawId}`}
+        data-directed-edge-start={pe.edge.relationMessageId} data-directed-edge-source={pe.edge.from.messageId} data-jump-msgids={pe.edge.relationMessageId} data-frame-edge-id={pe.edge.id}
+        style={{position:'absolute',left:pe.start.x-8,top:pe.start.y-8,width:16,height:16,pointerEvents:'none'}}/>)}
       {(()=>{
         const corrRendered=new Set<string>();
         const statusRendered=new Set<string>();
@@ -1363,13 +1454,14 @@ function GraphViewCanvas(props: GraphViewProps) {
           if (showCorrBadge) corrRendered.add(relId);
           const padX=8,padY=6;
           const extraLeft=showCorrBadge?CORR_BADGE_W_EDGE+4:0;
-          const box:LayoutBox={x:bb.x-padX-extraLeft,y:bb.y-padY,width:bb.width+padX*2+extraLeft+(showStatisticalStatus?DEC_RIGHT_GAP+EDGE_HINT_W:0),height:bb.height+padY*2};
+          const box:LayoutBox={x:bb.x-padX-extraLeft,y:bb.y-padY,width:bb.width+padX*2+extraLeft+(showStatisticalStatus?EDGE_LABEL_HINT_GAP+EDGE_HINT_W:0),height:bb.height+padY*2};
           const isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,pe.edge.id);
           return (
-            <div key={`hit-${pe.drawId}`} role="group" tabIndex={0} aria-label={`关系消息 ${relId}`} aria-keyshortcuts="Enter Space Shift+Enter" onKeyDown={activateMessageFromKeyboard} data-msgid={relId} data-jump-msgids={relId} data-rel-overlay="true" onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
+            <div key={`hit-${pe.drawId}`} role="group" tabIndex={0} aria-label={`关系消息 ${relId}`} aria-keyshortcuts="Enter Space Shift+Enter" onKeyDown={activateMessageFromKeyboard} data-msgid={relId} data-jump-msgids={relId} data-directed-edge-label={relId} data-frame-edge-id={pe.edge.id} data-rel-overlay="true" onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
               style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:13,cursor:"pointer",pointerEvents:"auto",background:isWhole||isFrag?"rgba(91,65,0,0.35)":"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(251,191,36,0.95)":"1px solid transparent",boxShadow:isWhole||isFrag?"0 1px 4px rgba(251,191,36,0.35)":"none"}}
               title={`relation=${pe.edge.relationMessageId} edge=${pe.edge.id}`}>
-              {showStatisticalStatus&&<div style={{position:'absolute',left:extraLeft+padX+bb.width+DEC_RIGHT_GAP,top:'50%',transform:'translateY(-50%)',display:'flex',alignItems:'center',background:'#101010',borderRadius:3}}>
+              <div data-edge-label-underline={relId} style={{position:'absolute',left:extraLeft+padX-2,right:padX-2,bottom:2,borderBottom:`1px solid ${isWhole||isFrag?'rgba(251,191,36,0.95)':'rgba(148,163,184,0.65)'}`,pointerEvents:'none'}}/>
+              {showStatisticalStatus&&<div data-edge-label-entry={relId} style={{position:'absolute',left:extraLeft+padX+bb.width+EDGE_LABEL_HINT_GAP,top:'50%',transform:'translateY(-50%)',height:EDGE_HINT_W,display:'flex',alignItems:'center',justifyContent:'center',background:'#101010',borderRadius:3}}>
                 <MessageDisplayMarker messageId={relId} />
               </div>}
               {showCorrBadge&&(()=>{
@@ -1550,6 +1642,8 @@ function GraphViewCanvas(props: GraphViewProps) {
             </button>}
             {!cardFrameIds.has(sf.relMsgId) && <div data-rel-overlay="true"
               style={{position:'absolute',left:x+(sfCorrInfo?100:8)+26,top:y-HH+1,zIndex:frameZ+2,pointerEvents:'auto',background:'#101010',display:'flex',alignItems:'center',gap:6}}>
+              {homeRoleLabel(sf.relMsgId)&&<><MessageElement reference={msgMap.get(sf.relMsgId)&&messageTypeReference(msgMap.get(sf.relMsgId)!)}
+                label="排列" style={{fontSize:10,color:'#c4b5fd'}}>排列</MessageElement><HomeFilterBadge label={homeRoleLabel(sf.relMsgId)} reason={props.homeReasonByMessageId?.get(sf.relMsgId)}/></>}
               <MessageDisplayMarker messageId={sf.relMsgId} />
               {renderCorrectionRecords(sf.relMsgId)}
               {relatedConnections?.has(sf.relMsgId) && <div data-msgid={sf.relMsgId} data-rel-overlay="true">
@@ -1568,6 +1662,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                 outline: lastClickedMessageId === sf.relMsgId ? '1px dashed #0b84ff' : 'none',
                 boxShadow: '0 6px 14px rgba(0,0,0,0.35)' }}>
               <OrganizationFrameHeader message={msgMap.get(sf.relMsgId)} messageId={sf.relMsgId} kind="arrange"
+                homeLabel={homeRoleLabel(sf.relMsgId)} homeReason={props.homeReasonByMessageId?.get(sf.relMsgId)}
                 correctionRecords={renderCorrectionRecords(sf.relMsgId)}
                 joinBadges={renderJoinRecords(sf.relMsgId,true,true)}
                 memberCount={new Set((edgesByRelMsg.get(sf.relMsgId) ?? []).filter(edge => !edge.to.messageId.startsWith('anon:')).map(edge => edge.to.messageId)).size}
@@ -1703,11 +1798,14 @@ function GraphViewCanvas(props: GraphViewProps) {
                   boxSizing: "border-box",
                 }}>
                 <OrganizationFrameHeader message={msgMap.get(gf.relMsgId)} messageId={gf.relMsgId} kind={gf.relType} joinBadges={renderJoinRecords(gf.relMsgId,true,true)}
+                  homeLabel={homeRoleLabel(gf.relMsgId)} homeReason={props.homeReasonByMessageId?.get(gf.relMsgId)}
                   correctionRecords={renderCorrectionRecords(gf.relMsgId)}
                   memberCount={new Set((edgesByRelMsg.get(gf.relMsgId) ?? []).filter(edge => !edge.to.messageId.startsWith('anon:')).map(edge => edge.to.messageId)).size}
                   selectedUnits={draftUnits} activeText={activeTextSelectId === gf.relMsgId} onTextMouseUp={onTextMouseUp}
                   counts={stakeCounts?.[gf.relMsgId]} openMessageId={settlementOpenMsgId} openType={settlementOpenType}
                   onTruth={onSettlementToggleTruth} onValue={onSettlementToggleValue} />
+                {(gf.relType==='classify'||gf.relType==='summary')&&!naturalScene.fullFrameIds.includes(gf.relMsgId)&&<FrameViewportTools id={gf.relMsgId} size={frameViewSizes[gf.relMsgId]}
+                  natural={gf.rect} onChange={size=>resizeFrame(gf.relMsgId,size)}/>}
                 {renderRelatedConnections(gf.relMsgId)}
               </div>
             )}
@@ -2063,8 +2161,13 @@ function GraphViewCanvas(props: GraphViewProps) {
         });
       })}
 
+      {visibleGroupFrames.filter(frame=>(frame.relType==='classify'||frame.relType==='summary')&&!naturalScene.fullFrameIds.includes(frame.relMsgId)).map(frame=><FrameViewportScrollbars key={`viewport-${frame.relMsgId}`}
+        id={frame.relMsgId} rect={frame.rect} content={frameViews.contentRects[frame.relMsgId]??frame.rect}
+        scroll={frameViews.offsets[frame.relMsgId]??{left:0,top:0}} resized={!!effectiveFrameSizes[frame.relMsgId]}
+        onScroll={value=>scrollFrame(frame.relMsgId,value)} onSize={size=>resizeFrame(frame.relMsgId,size)}/>)}
     </div>
   );
+  return Object.keys(frameViews.offsets).length?clipFrameScene(canvas,frameClipFor):canvas;
 }
 
 export default function GraphView(props: GraphViewProps) {

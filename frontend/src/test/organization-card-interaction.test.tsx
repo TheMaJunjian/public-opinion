@@ -15,6 +15,27 @@ const category: DemoMessage = {
 afterEach(() => { cleanup(); window.getSelection()?.removeAllRanges(); });
 
 describe('visible organization card elements', () => {
+  it('keeps the operations message ID in its header alongside its type',()=>{
+    const message:DemoMessage={...category,id:'operation-record',kind:'operations',backendKind:'OPERATIONS',relationType:'operations'};
+    const view=render(<MessageCard msg={message} ctx={{isGovernanceMsg:true}}/>);
+    expect(view.getByText('operation-record')).toBeInTheDocument();
+    expect(view.getByRole('button',{name:'选择运营'})).toBeInTheDocument();
+  });
+  it.each(['merge','arrange'] as const)('places the %s ID above its arbitration entries', kind => {
+    const message={...category,id:'frame',relationType:kind};
+    const view=render(<OrganizationFrameHeader message={message} messageId="frame" kind={kind} memberCount={1} selectedUnits={[]} activeText={false} onTruth={vi.fn()} onValue={vi.fn()}/>);
+    const identity=view.getByText('frame'),actions=view.container.querySelector('[data-message-settlement-actions]')!;
+    expect(identity.compareDocumentPosition(actions)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(identity.closest('[data-card-header]')!.parentElement).toBe(actions.parentElement);
+    const header=view.container.querySelector('[data-organization-card-header]')!;
+    const type=view.getByRole('button',{name:`选择${kind==='merge'?'归并':'排列'}`});
+    expect(header.firstElementChild?.contains(type)).toBe(true);
+    expect(type.compareDocumentPosition(identity)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+  it('puts an expanded summary ID before its text, level with the external arbitration row',()=>{
+    const view=render(<OrganizationFrameHeader message={{...category,id:'summary',content:'总结正文',relationType:'summary'}} messageId="summary" kind="summary" memberCount={1} selectedUnits={[]} activeText={false}/>);
+    expect(view.getByText('summary').compareDocumentPosition(view.getByText('总结正文'))&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
   it('shows the text selection hint when a classification enters correction selection', () => {
     const view = render(<ClassificationCard msg={category} selectedUnits={[]} box={{x:0,y:0,width:340}}
       targetCount={1} title={category.content} activeText isWhole={false} isActive isStanceTarget={false}

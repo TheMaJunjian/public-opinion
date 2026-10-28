@@ -6,6 +6,7 @@ export interface StakeCountItem { truth: { pro: number; con: number }; value: { 
 export interface UserRow {
   userId: string;
   username: string;
+  registeredAt: string;
   rechargeIncome: number;
   messageCount: number;
   textMessageCount: number;
@@ -51,6 +52,7 @@ export function buildLeaderboardRows(metrics: ReturnType<typeof buildLeaderboard
       byUser.set(user.username, {
         userId: user.id,
         username: user.username,
+        registeredAt: user.createdAt,
         rechargeIncome: 0,
         messageCount: 0,
         textMessageCount: 0,
@@ -72,6 +74,7 @@ export function buildLeaderboardRows(metrics: ReturnType<typeof buildLeaderboard
       const next: UserRow = {
         userId: knownId,
         username,
+        registeredAt: '',
         rechargeIncome: 0,
         messageCount: 0,
         textMessageCount: 0,

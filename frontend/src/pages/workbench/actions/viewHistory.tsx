@@ -16,41 +16,40 @@ interface CaptureSnapshotDependencies {
   viewMode: ViewMode;
   leftPanelRef: React.MutableRefObject<HTMLDivElement | null>;
   rightPanelRef: React.MutableRefObject<HTMLDivElement | null>;
-  draftUnits: UnitSelection[];
-  sourceUnits: UnitSelection[];
-  targetUnits: UnitSelection[];
-  activeTextSelectId: string | null;
-  lastClickedMessageId: string | null;
   traceDistance: number;
+  readingAnchorId?:string|null;
 }
 
 export function captureSnapshot(dependencies: CaptureSnapshotDependencies): TraceSnapshot {
-  const { viewMode, leftPanelRef, rightPanelRef, draftUnits, sourceUnits, targetUnits, activeTextSelectId, lastClickedMessageId, traceDistance } = dependencies;
+  const { viewMode, leftPanelRef, rightPanelRef, traceDistance } = dependencies;
   const pageScroll = document.scrollingElement;
+  const panel=leftPanelRef.current,id=dependencies.readingAnchorId;
+  const candidates=panel&&id?findMessageElements(panel,id):[];
+  const target=candidates.find(element=>!element.hasAttribute('data-rel-overlay'))??candidates[0];
+  let readingViewportAnchor:TraceSnapshot['readingViewportAnchor']=null;
+  if(panel&&target&&id){
+    const rect=target.getBoundingClientRect(),bounds=panel.getBoundingClientRect();
+    if(rect.width>0&&rect.height>0&&rect.bottom>bounds.top&&rect.top<bounds.bottom&&rect.right>bounds.left&&rect.left<bounds.right){
+      const x=panel.offsetWidth>0?bounds.width/panel.offsetWidth:1,y=panel.offsetHeight>0?bounds.height/panel.offsetHeight:1;
+      readingViewportAnchor={messageId:id,top:(rect.top-bounds.top)/(y||1),left:(rect.left-bounds.left)/(x||1)};
+    }
+  }
   return {
     viewMode,
     leftScroll: leftPanelRef.current ? { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft } : null,
     pageScroll: pageScroll ? { top: pageScroll.scrollTop, left: pageScroll.scrollLeft } : null,
     rightScroll: rightPanelRef.current ? { top: rightPanelRef.current.scrollTop, left: rightPanelRef.current.scrollLeft } : null,
-    draftUnits: draftUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })),
-    sourceUnits: sourceUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })),
-    targetUnits: targetUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })),
-    activeTextSelectId,
-    lastClickedMessageId,
     traceDistance,
+    readingViewportAnchor,
   };
 }
 
 interface RestoreSnapshotDependencies {
+  setTraceDepths?: (depths:import('../../../utils/traceRange').TraceDepths)=>void;
   startPositioning?: () => WorkbenchDrawingTask;
   onRestored?: () => void;
   showMessagePulse?: (targetId: string, element: HTMLElement, requestId: number, onShown: (shown: boolean) => void) => void;
   scrollRequestIdRef: React.MutableRefObject<number>;
-  setDraftUnits: React.Dispatch<React.SetStateAction<UnitSelection[]>>;
-  setSourceUnits: React.Dispatch<React.SetStateAction<UnitSelection[]>>;
-  setTargetUnits: React.Dispatch<React.SetStateAction<UnitSelection[]>>;
-  setActiveTextSelectId: React.Dispatch<React.SetStateAction<string | null>>;
-  setLastClickedMessageId: React.Dispatch<React.SetStateAction<string | null>>;
   setTraceDistance: React.Dispatch<React.SetStateAction<number>>;
   setViewMode: React.Dispatch<React.SetStateAction<ViewMode>>;
   cancelScrollRafs: () => void;
@@ -62,36 +61,32 @@ interface RestoreSnapshotDependencies {
 }
 
 export interface RestoreSnapshotOptions {
-  restoreSelection?: boolean;
   restoreScope?: boolean;
+  restoreMessageFilter?: boolean;
   pulseMessageId?: string;
 }
 
 export function restoreSnapshot(dependencies: RestoreSnapshotDependencies, s: TraceSnapshot | null, opts?: RestoreSnapshotOptions): void {
-  const { scrollRequestIdRef, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setLastClickedMessageId, setTraceDistance, setViewMode, cancelScrollRafs, scrollRafRef, scrollRaf2Ref, clampAndSetScroll, leftPanelRef, rightPanelRef } = dependencies;
+  const { scrollRequestIdRef, setTraceDistance, setViewMode, cancelScrollRafs, scrollRafRef, scrollRaf2Ref, clampAndSetScroll, leftPanelRef, rightPanelRef } = dependencies;
   if (!s) return;
   if (opts?.restoreScope !== false) s.restoreScope?.();
   const requestId = ++scrollRequestIdRef.current;
-  const restoreSel = opts?.restoreSelection !== false; // 默认 true，追溯模式恢复候选区
-  if (restoreSel) {
-    setDraftUnits(s.draftUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
-    setSourceUnits(s.sourceUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
-    setTargetUnits(s.targetUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
-  }
-  setActiveTextSelectId(s.activeTextSelectId);
-  setLastClickedMessageId(s.lastClickedMessageId);
-  setTraceDistance(s.traceDistance);
+  if(dependencies.setTraceDepths)dependencies.setTraceDepths(s.traceDepths??{up:s.traceDirection==='down'?0:s.traceDistance,down:s.traceDirection==='up'?0:s.traceDistance});
+  else setTraceDistance(s.traceDistance);
   setViewMode(s.viewMode);
   // Cancel any in-flight scroll rAF before scheduling new ones so that stale
   // callbacks never touch DOM nodes after React has reconciled them away.
   cancelScrollRafs();
   const task = dependencies.startPositioning?.();
-  const restore = () => {
-    scrollRafRef.current = null;
-    scrollRaf2Ref.current = null;
-    clampAndSetScroll(leftPanelRef.current, s.leftScroll?.top ?? null, s.leftScroll?.left ?? null);
-    clampAndSetScroll(document.scrollingElement as HTMLDivElement | null, s.pageScroll?.top ?? null, s.pageScroll?.left ?? null);
-    clampAndSetScroll(rightPanelRef.current, s.rightScroll?.top ?? null, s.rightScroll?.left ?? null);
+  task?.onCancel(()=>{
+    if(requestId===scrollRequestIdRef.current&&s.readingViewportAnchor)leftPanelRef.current?.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[]}}));
+  });
+  const afterLayout=(work:()=>void)=>{
+    if(task?.afterLayout)task.afterLayout(work);
+    else scrollRafRef.current=requestAnimationFrame(()=>{scrollRaf2Ref.current=requestAnimationFrame(()=>{if(task)task.run(work);else work();});});
+  };
+  const finishRestore = () => {
+    if(requestId!==scrollRequestIdRef.current){task?.complete();return;}
     dependencies.onRestored?.();
     const messageId = opts?.pulseMessageId;
     const showPulse = dependencies.showMessagePulse;
@@ -112,7 +107,34 @@ export function restoreSnapshot(dependencies: RestoreSnapshotDependencies, s: Tr
       else scrollRaf2Ref.current = requestAnimationFrame(pulse);
       return;
     }
+    if(s.readingViewportAnchor)leftPanelRef.current?.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[]}}));
     task?.complete();
+  };
+  const restore = () => {
+    scrollRafRef.current = null;
+    scrollRaf2Ref.current = null;
+    if(requestId!==scrollRequestIdRef.current){task?.complete();return;}
+    clampAndSetScroll(leftPanelRef.current, s.leftScroll?.top ?? null, s.leftScroll?.left ?? null);
+    clampAndSetScroll(document.scrollingElement as HTMLDivElement | null, s.pageScroll?.top ?? null, s.pageScroll?.left ?? null);
+    clampAndSetScroll(rightPanelRef.current, s.rightScroll?.top ?? null, s.rightScroll?.left ?? null);
+    const anchor=s.readingViewportAnchor,panel=leftPanelRef.current;
+    if(!anchor||!panel){finishRestore();return;}
+    // A background insertion can move the saved reading card. Pin it through
+    // virtual mounting, then restore its screen position against the new layout.
+    panel.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[anchor.messageId]}}));
+    afterLayout(()=>{
+      if(requestId!==scrollRequestIdRef.current){task?.complete();return;}
+      const candidates=findMessageElements(panel,anchor.messageId);
+      const target=candidates.find(element=>!element.hasAttribute('data-rel-overlay'))??candidates[0];
+      if(target){
+        const rect=target.getBoundingClientRect(),bounds=panel.getBoundingClientRect();
+        if(rect.width>0&&rect.height>0){
+          const x=panel.offsetWidth>0?bounds.width/panel.offsetWidth:1,y=panel.offsetHeight>0?bounds.height/panel.offsetHeight:1;
+          clampAndSetScroll(panel,panel.scrollTop+(rect.top-bounds.top)/(y||1)-anchor.top,panel.scrollLeft+(rect.left-bounds.left)/(x||1)-anchor.left);
+        }
+      }
+      afterLayout(finishRestore);
+    });
   };
   if (task?.afterLayout) task.afterLayout(restore);
   else scrollRafRef.current = requestAnimationFrame(() => {
@@ -172,7 +194,7 @@ interface ExitTemporaryCategoryDependencies {
   setComparisonSide: React.Dispatch<React.SetStateAction<"agree" | "disagree">>;
   setComparisonReviewBaseMessages: React.Dispatch<React.SetStateAction<DemoMessage[] | null>>;
   setComparisonReviewBaseEdges: React.Dispatch<React.SetStateAction<DemoEdge[] | null>>;
-  restoreSnapshot: (s: TraceSnapshot | null, opts?: { restoreSelection?: boolean; }) => void;
+  restoreSnapshot: (s: TraceSnapshot | null, options?: RestoreSnapshotOptions) => void;
 }
 
 export function exitTemporaryCategory(dependencies: ExitTemporaryCategoryDependencies, options?: { restoreMessageFilter?: boolean }): void {
@@ -191,12 +213,12 @@ export function exitTemporaryCategory(dependencies: ExitTemporaryCategoryDepende
   setComparisonSide(entry.comparisonSide);
   setComparisonReviewBaseMessages(entry.comparisonReviewBaseMessages);
   setComparisonReviewBaseEdges(entry.comparisonReviewBaseEdges);
-  restoreSnapshot(entry.snapshot);
+  restoreSnapshot(entry.snapshot, { restoreMessageFilter: options?.restoreMessageFilter });
 }
 
 interface ExitAllTemporaryCategoriesDependencies {
   temporaryCategoryStackRef: React.MutableRefObject<{ snapshot: TraceSnapshot; hideJoin: boolean; joinFilterTargetId: string | null; joinFilterDirection: "incoming" | "outgoing"; correctionFilterTargetId: string | null; comparisonMode: boolean; comparisonReviewed: boolean; comparisonTargetId: string | null; comparisonSide: "agree" | "disagree"; comparisonReviewBaseMessages: DemoMessage[] | null; comparisonReviewBaseEdges: DemoEdge[] | null; }[]>;
-  restoreSnapshot: (s: TraceSnapshot | null, opts?: { restoreSelection?: boolean; }) => void;
+  restoreSnapshot: (s: TraceSnapshot | null, options?: RestoreSnapshotOptions) => void;
   setMsgFilter: React.Dispatch<React.SetStateAction<MessageFilterSettings>>;
   setJoinFilterTargetId: React.Dispatch<React.SetStateAction<string | null>>;
   setCorrectionFilterTargetId: React.Dispatch<React.SetStateAction<string | null>>;
@@ -211,7 +233,7 @@ export function exitAllTemporaryCategories(dependencies: ExitAllTemporaryCategor
   const { temporaryCategoryStackRef, restoreSnapshot, setMsgFilter, setJoinFilterTargetId, setCorrectionFilterTargetId, setComparisonMode, setComparisonReviewed, setComparisonTargetId, setComparisonReviewBaseMessages, setComparisonReviewBaseEdges } = dependencies;
   const entries = temporaryCategoryStackRef.current.splice(0);
   const firstEntry = entries[0];
-  if (firstEntry) restoreSnapshot(firstEntry.snapshot);
+  if (firstEntry) restoreSnapshot(firstEntry.snapshot, { restoreMessageFilter: options?.restoreMessageFilter });
   if (firstEntry && options?.restoreMessageFilter !== false) {
     setMsgFilter(previous => ({ ...previous, hideJoin: firstEntry.hideJoin }));
   }
@@ -318,7 +340,7 @@ interface ExitTraceDependencies {
   classifyStackRef: React.MutableRefObject<ClassifyStackEntry[]>;
   setClassifyRelMsgId: React.Dispatch<React.SetStateAction<string | null>>;
   setClassifyKey: React.Dispatch<React.SetStateAction<number>>;
-  restoreSnapshot: (s: TraceSnapshot | null, opts?: { restoreSelection?: boolean; }) => void;
+  restoreSnapshot: (s: TraceSnapshot | null) => void;
 }
 
 export function exitTrace(dependencies: ExitTraceDependencies): void {
@@ -337,7 +359,7 @@ export function exitTrace(dependencies: ExitTraceDependencies): void {
   classifyStackRef.current = entry?.classifyStack ?? [];
   setClassifyRelMsgId(entry?.classifyRelMsgId ?? null);
   setClassifyKey(key => key + 1);
-  if (snapshot) restoreSnapshot(snapshot, { restoreSelection: true });
+  if (snapshot) restoreSnapshot(snapshot);
 }
 
 interface ExitAllTraceDependencies {
@@ -348,7 +370,7 @@ interface ExitAllTraceDependencies {
   classifyStackRef: React.MutableRefObject<ClassifyStackEntry[]>;
   setClassifyRelMsgId: React.Dispatch<React.SetStateAction<string | null>>;
   setClassifyKey: React.Dispatch<React.SetStateAction<number>>;
-  restoreSnapshot: (s: TraceSnapshot | null, opts?: { restoreSelection?: boolean; }) => void;
+  restoreSnapshot: (s: TraceSnapshot | null) => void;
 }
 
 export function exitAllTrace(dependencies: ExitAllTraceDependencies): void {
@@ -439,7 +461,7 @@ export function exitClassification(dependencies: ExitClassificationDependencies,
   if (_options?.restoreSnapshot !== false && entry?.snapshot) {
     // Classification navigation changes the current layer within the active
     // trace/comparison view; those surrounding modes keep their own history.
-    restoreSnapshot(entry.snapshot, { restoreSelection: false, restoreScope: false, pulseMessageId: entry.relMsgId });
+    restoreSnapshot(entry.snapshot, { restoreScope: false, pulseMessageId: entry.relMsgId });
   }
   if (_options?.preserveViewMode) setViewMode(_options.preserveViewMode);
 }

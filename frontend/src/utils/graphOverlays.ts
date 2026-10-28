@@ -287,7 +287,7 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
         isBlankCorrected: anonCorrectedRelMsgIds.has(relMsgId), rect,
         relAgreeCount: 0, relDisagreeCount: 0, relAgreeMsgIds: [], relDisagreeMsgIds: [] };
       if (relType === 'arrange' && !renderedArrangeIds.has(relMsgId)) newArrangeFrames.push(base);
-      if (relType === 'merge' && !renderedGroupIds.has(relMsgId)) {
+      if (relType && ['merge', 'classify', 'summary'].includes(relType) && !renderedGroupIds.has(relMsgId)) {
         const spec = getPresentationSpec(relType);
         newGroupFrames.push({ ...base, relType, relKind: spec.kind, relLabel: spec.label, relColor: spec.color });
       }

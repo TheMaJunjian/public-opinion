@@ -1,6 +1,6 @@
 import { resolveMemberships, type MembershipAction, type Reference } from '@gonglun/core';
 import type { Relation } from '../../../types';
-import { buildStanceTargetMap, resolveDisplayedStance, type DemoEdge, type DemoMessage } from '../../../utils/modelBridge';
+import { buildStanceTargetMap, computePublicStanceStats, resolveDisplayedStance, type DemoEdge, type DemoMessage } from '../../../utils/modelBridge';
 
 export type JoinStakeCounts = Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }>;
 export type JoinEffectSource = 'personal' | 'recommended';
@@ -22,11 +22,13 @@ export function resolveJoinDisplay(input: {
   const joins = relations.filter(relation => relation.relationType.toUpperCase() === 'JOIN' && relation.sourceMessageId);
   const retired = new Set(relations.filter(relation => relation.state?.organizationRetired).map(relation => relation.id));
   const excluded = new Set(input.suppressed);
+  const publicStances=computePublicStanceStats(edges,messages);
   for (const relation of relations) {
     if (!containers.has(relation.relationType.toUpperCase()) && relation.relationType.toUpperCase() !== 'JOIN') continue;
     const score = stakes[relation.id];
     if (!score) continue;
-    if (score.truth.con + score.value.con > score.truth.pro + score.value.pro) excluded.add(relation.id);
+    const pro=score.truth.pro+score.value.pro,con=score.truth.con+score.value.con;
+    if (con>pro||con===pro&&publicStances.get(relation.id)?.latest?.type==='disagree') excluded.add(relation.id);
     else excluded.delete(relation.id);
   }
   const events: Event[] = [];
@@ -104,8 +106,9 @@ export function resolveJoinDisplay(input: {
   }
   const pro = (join: Relation) => (stakes[join.id]?.truth.pro ?? 0) + (stakes[join.id]?.value.pro ?? 0);
   for (const list of recommended.values()) list.sort((a, b) => pro(b) - pro(a)
-    || (b.payload?.membershipHistory?.order ?? 0) - (a.payload?.membershipHistory?.order ?? 0)
-    || (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0) || b.id.localeCompare(a.id));
+    || (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0)
+    || (b.sequence??0)-(a.sequence??0)
+    || (b.payload?.membershipHistory?.order ?? 0) - (a.payload?.membershipHistory?.order ?? 0) || b.id.localeCompare(a.id));
   const actions: MembershipAction[] = [], joinForAction = new Map<string, string>();
   const sourceForAction = new Map<string, JoinEffectSource>();
   for (const memberId of new Set([...heads.keys(), ...recommended.keys()])) {

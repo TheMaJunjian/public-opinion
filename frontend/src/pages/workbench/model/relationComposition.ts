@@ -168,11 +168,14 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
   }
   return {
     id: relation.id,
+    sequence: relation.sequence,
     revision: relation.revision,
     parts: relation.parts,
     executedStance: relation.executedStance,
     state: relation.state,
     spending: relation.spending,
+    sourceMessageId: relation.sourceMessageId,
+    sourceRefs: relation.sourceRefs,
     targetRefs: relation.targetRefs,
     author: relation.createdBy.username,
     authorId: relation.createdBy.id,

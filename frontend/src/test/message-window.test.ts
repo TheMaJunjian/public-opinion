@@ -6,6 +6,14 @@ import { createWorkbenchDrawingTasks, WorkbenchDrawingContext } from '../context
 import { createElement, type ReactNode } from 'react';
 
 const messages: DemoMessage[] = Array.from({ length: 150 }, (_, index) => ({ id: `m-${index}`, author: '用户', kind: 'normal', content: '', createdAt: new Date(index * 1000).toISOString() }));
+it('pages a mixed message list chronologically while keeping the graph placement available for discussion reading',()=>{
+  const texts=messages.slice(0,52).map((message,index)=>({...message,createdAt:new Date(index*60000).toISOString()}));
+  const record:DemoMessage={...messages[0],id:'early-record',kind:'relation',relationType:'agree',createdAt:new Date(30000).toISOString()};
+  const {result}=renderHook(()=>useMessageWindow([...texts,record],[],true,'list',[],true,'time'));
+  expect(result.current.messages.slice(0,3).map(message=>message.id)).toEqual(['m-0','early-record','m-1']);
+  expect(result.current.messages).toHaveLength(50);expect(result.current.hasMore).toBe(true);
+  expect(result.current.structureOrder?.at(-1)).toBe('early-record');
+});
 it('keeps independent page ranges for each scope and restores the parent range on return', async () => {
   const { result, rerender } = renderHook(({ scope, pinned }) => useMessageWindow(messages, [], true, scope, pinned),
     { initialProps: { scope: 'root', pinned: [] as string[] } });

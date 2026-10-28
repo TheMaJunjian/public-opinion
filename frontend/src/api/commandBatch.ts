@@ -72,7 +72,7 @@ export function queueCommand(path: string, options: RequestInit): Message | Rela
   const content = typeof body.content === 'string' ? body.content : '';
   const parts = content ? [{ id: 'body', type: 'text' as const, text: content }] : [];
   const response = relationType ? {
-    id, relationType, sourceMessageId: body.sourceMessageId ?? null,
+    id, relationType, sourceMessageId: body.sourceMessageId ?? null, sourceRefs: body.sourceRefs,
     targetRefs: body.targetRefs ?? [], payload: body.payload, revision: 1, parts,
     createdAt: stamp, createdBy: user,
   } as Relation : {

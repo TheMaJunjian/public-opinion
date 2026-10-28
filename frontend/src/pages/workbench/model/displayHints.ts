@@ -108,7 +108,7 @@ export function deriveDisplayHints(input: DisplayHintsInput) {
     hint.personalActive=active(id,'personal')&&(!targets?.length||targets.every(target=>active(target.targetId,'personal')===(target.type==='agree')));
     hint.recommendedActive=active(id,'recommended')&&(!targets?.length||targets.every(target=>active(target.targetId,'recommended')===(target.type==='agree')));
   }
-  return { hints, correctionHints, recommendedEffect, recommendedCorrections, readDisplays, personalCorrectionChoices };
+  return { hints, correctionHints, recommendedEffect, recommendedCorrections, readDisplays, personalCorrectionChoices,reading };
 }
 
 /** The existing correction viewer shows this record's complete replacement body. */

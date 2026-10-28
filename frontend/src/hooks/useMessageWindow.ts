@@ -4,15 +4,15 @@ import { useSceneComputation } from './useSceneComputation';
 import { WorkbenchDrawingContext, useWorkbenchDrawingTask, type WorkbenchDrawingTask } from '../context/WorkbenchDrawingContext';
 import { useWorkbenchDrawingPreparation } from '../components/WorkbenchLoadingBoundary';
 
-/** Reveal complete structures in the graph's placement order, in either presentation. */
-export function useMessageWindow(messages: DemoMessage[], edges: DemoEdge[], enabled: boolean, key: string, pinned: string[], organize = enabled) {
+/** Reveal complete structures in the selected presentation order. */
+export function useMessageWindow(messages: DemoMessage[], edges: DemoEdge[], enabled: boolean, key: string, pinned: string[], organize = enabled, order:'placement'|'time'='placement') {
   const [limits, setLimits] = useState<ReadonlyMap<string, number>>(() => new Map());
   const [loading, setLoading] = useState(false);
   const startTask = useWorkbenchDrawingTask('positioning');
   const prepareDrawing = useWorkbenchDrawingPreparation();
   const tasks = useContext(WorkbenchDrawingContext);
   const request = useRef<{ key: string; limit: number; task: WorkbenchDrawingTask; promise: Promise<void>; finish(): void; cancelPreparation(): void; started?: boolean } | null>(null);
-  const job = useMemo(() => organize ? { kind: 'structures' as const, input: { messages, edges } } : null, [messages, edges, organize]);
+  const job = useMemo(() => organize ? { kind: 'structures' as const, input: { messages, edges, order } } : null, [messages, edges, organize,order]);
   // A body-version change must not unmount the existing canvas while its new
   // structure order is computed. Never reuse another scope's paging plan.
   const structure = useSceneComputation(job, true, key);
@@ -80,6 +80,6 @@ export function useMessageWindow(messages: DemoMessage[], edges: DemoEdge[], ena
     }));
     return promise;
   }, [key, structure, effectiveLimit, hasMore, startTask, tasks, prepareDrawing]);
-  return { messages: visible, edges: visibleEdges, visibleIds, edgeIds, structureOrder: structure?.order,
+  return { messages: visible, edges: visibleEdges, visibleIds, edgeIds, structureOrder: structure?.placementOrder,
     hasMore, more, loading: loading || (organize && !structure), enabled };
 }

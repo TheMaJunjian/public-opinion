@@ -665,6 +665,7 @@ describe('computeEffectiveSuppressedRelIds', () => {
       makeRelationMsg('rel-alice-dis', 'alice', 'disagree'),
       makeRelationMsg('rel-bob-dis', 'bob', 'disagree'),
     ];
+    messages.forEach((message,index)=>{message.createdAt='2026-10-27T10:00:00Z';message.sequence=message.id==='rel-alice-agree'?10:index;});
     const edges = [
       makeEdge('e1', 'rel-arr', 'arrange', 'm1', 'm1'),
       makeEdge('e2', 'rel-alice-agree', 'agree', 'anon:agree', 'rel-arr'),

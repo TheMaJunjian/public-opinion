@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createWorkbenchDrawingTasks } from '../context/WorkbenchDrawingContext';
 import { findMessageElements, scrollMsgToCenter } from '../pages/workbench/actions/scrollNavigation';
-import { REVEAL_VIRTUAL_MESSAGE } from '../hooks/useVirtualMessageMounts';
+import { REVEAL_VIRTUAL_MESSAGE, type VirtualMessageRevealDetail } from '../hooks/useVirtualMessageMounts';
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); document.body.replaceChildren(); });
 
@@ -15,6 +15,23 @@ function navigation(panel: HTMLDivElement) {
     pendingScrollDependencyIdsRef: { current: [] as string[] }, leftPanelRef: { current: panel }, scrollRafRef: { current: null as number | null },
     findMessageElements, relationsRef: { current: [] }, edgesRef: { current: [] }, showMessagePulse: pulse, cancelScrollRafs: vi.fn() };
 }
+
+it('locates a directed relation at its start instead of its distant label or source card center',()=>{
+  vi.useFakeTimers();
+  const panel=document.createElement('div'),label=document.createElement('div'),start=document.createElement('div');
+  label.dataset.msgid='citation';label.dataset.directedEdgeLabel='citation';label.dataset.relOverlay='true';
+  start.dataset.directedEdgeStart='citation';start.dataset.jumpMsgids='citation';
+  panel.append(label,start);document.body.append(panel);
+  dimensions(panel,{clientWidth:400,offsetWidth:400,clientHeight:300,offsetHeight:300,scrollWidth:4000,scrollHeight:5000});
+  vi.spyOn(panel,'getBoundingClientRect').mockReturnValue(new DOMRect(0,100,400,300));
+  vi.spyOn(label,'getBoundingClientRect').mockImplementation(()=>new DOMRect(1700-panel.scrollLeft,100+2400-panel.scrollTop,80,30));
+  vi.spyOn(start,'getBoundingClientRect').mockImplementation(()=>new DOMRect(800-panel.scrollLeft,100+1200-panel.scrollTop,16,16));
+  const dependencies=navigation(panel),completed=vi.fn();
+  scrollMsgToCenter(dependencies,'citation',{onComplete:completed});vi.advanceTimersByTime(100);
+  expect(panel.scrollLeft).toBe(608);expect(panel.scrollTop).toBe(1058);
+  expect(dependencies.showMessagePulse).toHaveBeenCalledWith('citation',start,1,expect.any(Function));
+  expect(completed).toHaveBeenCalledExactlyOnceWith(true);
+});
 
 it.each([0.7, 1, 1.5])('centers a JOIN message in the pane at interface scale %s before announcing success', scale => {
   vi.useFakeTimers();
@@ -55,6 +72,33 @@ it('scrolls a nested clipping viewport even when the target is already inside th
   expect(reveal).toHaveBeenCalledWith({ behavior: 'instant', block: 'center', inline: 'center' });
   expect(card.getBoundingClientRect().bottom).toBeLessThanOrEqual(nested.getBoundingClientRect().bottom);
   expect(completed).toHaveBeenCalledExactlyOnceWith(true);
+});
+
+it('waits for a frame scroll to commit before centering the pane and showing the target prompt', () => {
+  vi.useFakeTimers();
+  const panel=document.createElement('div'),clip=document.createElement('div'),card=document.createElement('div');
+  card.dataset.msgid='frame-member';clip.style.overflow='clip';clip.append(card);panel.append(clip);document.body.append(panel);
+  dimensions(panel,{clientWidth:600,clientHeight:400,scrollWidth:600,scrollHeight:400});
+  vi.spyOn(panel,'getBoundingClientRect').mockReturnValue(new DOMRect(0,0,600,400));
+  vi.spyOn(clip,'getBoundingClientRect').mockReturnValue(new DOMRect(20,120,400,180));
+  let committed=false;
+  vi.spyOn(card,'getBoundingClientRect').mockImplementation(()=>new DOMRect(40,committed?150:1500,320,80));
+  const nativeScroll=vi.spyOn(card,'scrollIntoView');
+  panel.addEventListener(REVEAL_VIRTUAL_MESSAGE,event=>{
+    const detail=(event as CustomEvent<VirtualMessageRevealDetail>).detail;
+    if(!detail.ids.length||committed)return;
+    detail.positioningPending=true;
+    requestAnimationFrame(()=>{committed=true;});
+  });
+  const dependencies=navigation(panel),completed=vi.fn();
+  scrollMsgToCenter(dependencies,'frame-member',{onComplete:completed});
+  vi.advanceTimersByTime(17);
+  expect(dependencies.showMessagePulse).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(100);
+  expect(completed).toHaveBeenCalledExactlyOnceWith(true);
+  expect(dependencies.showMessagePulse).toHaveBeenCalledWith('frame-member',card,1,expect.any(Function));
+  expect(nativeScroll).not.toHaveBeenCalled();
+  expect(clip.scrollTop).toBe(0);
 });
 
 it('keeps the native correction when only part of the pane is visible on the page', () => {
@@ -138,4 +182,18 @@ it('does not report success or show a mask if scrolling never exposes the target
   expect(completed).toHaveBeenCalledExactlyOnceWith(false);
   expect(dependencies.pendingScrollMsgIdRef.current).toBeNull();
   expect(reveal.mock.lastCall![0].detail.ids).toEqual([]);
+});
+
+it('settles a cancelled location once and releases the virtual pin without showing success', () => {
+  vi.useFakeTimers();
+  const tasks = createWorkbenchDrawingTasks(), positioning = tasks.begin('positioning');
+  const panel = document.createElement('div'); document.body.append(panel);
+  const dependencies = { ...navigation(panel), startPositioning: () => ({ ...positioning, complete: positioning.release, run: (work: () => void) => work() }) };
+  const completed = vi.fn();
+  scrollMsgToCenter(dependencies, 'missing-message', { onComplete: completed });
+  positioning.cancel(); vi.advanceTimersByTime(200);
+  expect(completed).toHaveBeenCalledExactlyOnceWith(false, true);
+  expect(dependencies.pendingScrollMsgIdRef.current).toBeNull();
+  expect(dependencies.showMessagePulse).not.toHaveBeenCalled();
+  expect(tasks.pending).toBe(0);
 });

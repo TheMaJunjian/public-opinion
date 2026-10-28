@@ -38,10 +38,10 @@ export async function markReading(store:Store,userId:string,marks:ReadingMark[])
   const updatedAt=new Date().toISOString(),result:ReadingMark[]=[];
   for(const mark of marks){
     // Also validate influence targets; private progress cannot create phantom messages.
-    await store.message(mark.messageId);
+    const subject=await store.message(mark.messageId);
     if(mark.version){if(mark.version.messageId!==mark.messageId)throw new DomainError('已阅版本与消息不一致');await validateBodyVersion(store,mark.version);}
     const prior=await store.db.prepare('SELECT body FROM reading_marks WHERE "userId"=$1 AND "messageId"=$2 AND scope=$3 AND key=$4').get<{body:ReadingMark}>(userId,mark.messageId,'message',readingStorageKey({messageId:mark.messageId,scope:'message',key:messageReadingKey(mark.messageId)}));
-    const wasConfirmed=!!prior?.body.firstConfirmedAt||prior?.body.state==='READ';
+    const wasConfirmed=!!prior?.body.firstConfirmedAt||prior?.body.state==='READ'||subject.authorId===userId&&subject.revision===1;
     if(mark.scope==='message'&&mark.state!=='UNREAD'&&!wasConfirmed){
       // Establish the first-read boundary against publication of new corrections.
       // Later confirmations and influence acknowledgments need no public lock.

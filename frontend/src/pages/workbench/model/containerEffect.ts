@@ -32,6 +32,13 @@ export function deriveContainerEffect(input: {
   const display = input.stakeCounts ? resolveJoinDisplay({relations,messages,edges:input.edges,username,
     stakes:input.stakeCounts,suppressed,assumption}) : null;
   if(display)suppressed=display.suppressed;
+  else for(const relation of relations){
+    if(!isContainerType(relation.relationType)&&relation.relationType.toUpperCase()!=='JOIN')continue;
+    const state=msgMap.get(relation.id)?.state??relation.state;
+    // Import/reconciliation follows the protocol snapshot. Historical wager
+    // totals cannot replace its latest executed membership decision.
+    if(state){if(state.suppressed)suppressed.add(relation.id);else suppressed.delete(relation.id);}
+  }
   if(assumption){
     if(assumption.side === 'agree')suppressed.delete(assumption.messageId);
     else suppressed.add(assumption.messageId);
@@ -89,7 +96,7 @@ export function deriveContainerEffect(input: {
       targetIds:[...direct.textIds,...direct.relationIds]};
   });
   const context = {
-    relatedMessages: messages, relatedEdges: edges, rejectedContainerIds,
+    relatedMessages: messages, relatedEdges: edges, rejectedContainerIds,rejectedRelationIds:suppressed,
     joinStatusByMessage: getJoinStatusByMessage(relations,effectiveJoinIds,rejectedContainerIds,rejectedJoinRelationIds),
     joinEffectSourcesByMessage: display?.sourcesByJoin,
   };

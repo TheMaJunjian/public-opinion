@@ -1,6 +1,6 @@
 import type { DemoMessage, UnitSelection } from '../utils/modelBridge';
 import { isContentKind } from '../utils/modelBridge';
-import MessageAuthors from './MessageAuthors';
+import HomeFilterBadge from './HomeFilterBadge';
 import { getPresentationSpec } from '../types';
 import { getRelationMessageLabel } from '../utils/attachedRelationLabels';
 import MessageTextPart from './MessageTextPart';
@@ -29,6 +29,7 @@ export interface MessageCardContext {
   lastClickedMsgId?: string | null;
   readStatus?: 'READ' | 'UNREAD';
   homeMatch?: boolean;
+  homeReason?: string;
   homeContextRole?: 'source' | 'target' | 'source-target';
 }
 
@@ -42,7 +43,6 @@ export interface MessageCardProps {
   onMouseUp?: (e: React.MouseEvent, msgId: string) => void;
   /** Extra content rendered in the header right area (stances, stakes, settlement toggles) */
   headerExtra?: React.ReactNode;
-  headerAuthor?:React.ReactNode;
   /** Override the default message title in the header. */
   headerLabel?: React.ReactNode;
   /** Content rendered at the far left of the header. */
@@ -76,7 +76,6 @@ export default function MessageCard({
   headerBetweenIdAuthor,
   headerLeading,
   headerExtra,
-  headerAuthor,
   headerLabel,
   badges,
   overlays,
@@ -95,6 +94,7 @@ export default function MessageCard({
     lastClickedMsgId,
     readStatus,
     homeMatch,
+    homeReason,
     homeContextRole,
   } = ctx;
 
@@ -129,7 +129,7 @@ export default function MessageCard({
       : bk === 'ROUND_RESULT' ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? '价值仲裁已结算' : '真假仲裁已结算')
         : bk === 'GOVERNANCE' ? (specificMessageLabel ? msg.id : '治理提案')
           : bk === 'CODE' ? '代码'
-            : bk === 'OPERATIONS' ? '运营'
+            : bk === 'OPERATIONS' ? msg.id
               : msg.id;
 
   const cardBorder = isWholeSelected ? '2px solid #fbbf24'
@@ -196,16 +196,7 @@ export default function MessageCard({
             {typeBadgeLabel}
           </MessageElement>
           {' '}
-          {homeMatch && (
-            <span style={{ marginRight: 6, padding: '2px 6px', borderRadius: 4, background: '#0e7490', color: '#cffafe', fontWeight: 700, opacity: 1 }}>
-              命中
-            </span>
-          )}
-          {!homeMatch && homeContextRole && (
-            <span style={{ marginRight: 6, padding: '2px 6px', borderRadius: 4, background: '#374151', color: '#d1d5db', fontWeight: 600, opacity: 1 }}>
-              {homeContextRole === 'source' ? '来源' : homeContextRole === 'target' ? '目标' : '来源/目标'}
-            </span>
-          )}
+          <HomeFilterBadge label={homeMatch?'命中':homeContextRole==='source'?'来源':homeContextRole==='target'?'目标':homeContextRole==='source-target'?'来源/目标':homeReason?'上下文':null} reason={homeReason}/>
           {headerLabel ?? defaultHeaderLabel}
           {headerLeading === undefined && <MessageDisplayMarker messageId={msg.id} />}
           {headerBetweenIdAuthor && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 6, verticalAlign: 'middle', maxWidth: '100%', flexWrap: 'wrap' }}>{headerBetweenIdAuthor}</span>}
@@ -213,8 +204,8 @@ export default function MessageCard({
         {inlineRelationContent && <div style={{ display: 'contents' }} onMouseUp={e => onContentMouseUp?.(e, msg.id)}>{children}</div>}
         {isRelationRecord && badges}
         <span style={{ textAlign: 'right', marginLeft: 'auto', maxWidth: '100%', ...(isRelationRecord ? { order: 2 } : {}) }}>
-          <div data-message-author-controls="true" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' }}>
-            <span style={{minWidth:0,display:'inline-flex',alignItems:'center',gap:5}}>{headerAuthor??<MessageAuthors message={msg} prefix="作者："/>}{headerAfterAuthor}</span>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' }}>
+            {headerAfterAuthor}
             {headerExtra}
           </div>
         </span>
@@ -316,7 +307,6 @@ export default function MessageCard({
       {isOrganizationMessage && (
         <div style={{ fontSize: 12, color: '#94a3b8', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           <MessageElement reference={messageMembersReference(msg)} selected={isMessageElementSelected(selectedUnits, messageMembersReference(msg))} label="所含消息">💬 {memberCount ?? 0} 条观点</MessageElement>
-          <span>{new Date(msg.createdAt).toLocaleDateString('zh-CN')}</span>
         </div>
       )}
 

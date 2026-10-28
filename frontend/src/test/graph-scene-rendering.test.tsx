@@ -9,6 +9,8 @@ import type { Relation } from '../types';
 import { planMessageStructures } from '../utils/messageStructurePlan';
 import { findMessageElements } from '../pages/workbench/actions/scrollNavigation';
 import { REVEAL_VIRTUAL_MESSAGE } from '../hooks/useVirtualMessageMounts';
+import {useRef} from 'react';
+import {useViewedMessageHighlight} from '../hooks/useViewedMessageHighlight';
 
 const message = (id: string): DemoMessage => ({ id, author: 'tester', content: id, kind: 'normal', createdAt: '2026-01-01T00:00:00Z' });
 const relation = (id: string, type: DemoEdge['relationType'], source: string, target: string): DemoEdge => ({
@@ -26,6 +28,205 @@ function renderScene(messages: DemoMessage[], edges: DemoEdge[],extra:Partial<Gr
 }
 
 describe('rendered graph scene', () => {
+  it('keeps a cross-frame citation visible and reveals its routed start inside the source viewport',async()=>{
+    const group=(id:string):DemoMessage=>({...message(id),kind:'relation',relationType:'classify'});
+    const members=Array.from({length:8},(_,index)=>message(`member-${index}`));
+    const links=[...members.map(member=>relation('source-frame','classify','anon:source-frame',member.id)),
+      relation('target-frame','classify','anon:target-frame','target'),relation('citation','reference','member-7','target')];
+    const view=renderScene([group('source-frame'),group('target-frame'),...members,message('target')],links,
+      {traceFrameIds:new Set(['source-frame','target-frame']),traceExpandedFrameIds:new Set(['source-frame','target-frame'])});
+    fireEvent.click(view.getByRole('button',{name:'调整框架大小 source-frame'}));
+    fireEvent.change(view.getByRole('spinbutton',{name:'框架宽度 source-frame'}),{target:{value:'480'}});
+    fireEvent.change(view.getByRole('spinbutton',{name:'框架高度 source-frame'}),{target:{value:'220'}});
+    await act(async()=>{});
+    const canvas=view.container.querySelector('[data-jump-canvas]')!;
+    const detail={ids:['citation'],positioningPending:false};
+    act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail}));});
+    await act(async()=>{});
+    expect(detail.positioningPending).toBe(true);
+    // Scrolling changes routing geometry; navigation retries after that layout commits.
+    for(let attempt=0;attempt<8;attempt++){
+      act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:['citation']}}));});
+      await act(async()=>{});
+    }
+    const start=view.container.querySelector<HTMLElement>('[data-directed-edge-start="citation"]')!;
+    expect(findMessageElements(view.container,'citation')).toContain(start);
+    expect(start.closest('[data-frame-clip]')).not.toBeNull();
+    const clip=view.container.querySelector('[data-msgid="member-7"]')!.closest<HTMLElement>('[data-frame-clip]')!;
+    expect(parseFloat(start.style.top)).toBeGreaterThanOrEqual(parseFloat(clip.style.top));
+    expect(parseFloat(start.style.top)+16).toBeLessThanOrEqual(parseFloat(clip.style.top)+parseFloat(clip.style.height));
+    expect(view.container.querySelector('[data-directed-edge-label="citation"]')!.closest('[data-frame-clip]')).toBeNull();
+    expect(view.container.querySelector('g[data-jump-visual-msgids="citation"]')!.parentElement).not.toHaveAttribute('viewBox');
+  });
+  it('clips references to other edge labels inside the expanded frame and marks the full organization once',async()=>{
+    const group:DemoMessage={...message('group'),kind:'relation',relationType:'classify'};
+    const citation:DemoMessage={...message('citation'),kind:'relation',relationType:'reference',content:''};
+    const members=['a','b','c'].map(message);
+    const links=[...members.map(member=>relation('group','classify','anon:group',member.id)),relation('citation','reference','a','b'),relation('nested-citation','reference','c','citation')];
+    function Harness(){
+      const root=useRef<HTMLDivElement>(null);useViewedMessageHighlight(root,['group']);
+      return <div ref={root}><GraphView messages={[group,citation,...members,message('outside')]} edges={links} draftUnits={[]} activeTextSelectId={null} lastClickedMessageId={null}
+        traceFrameIds={new Set(['group'])} traceExpandedFrameIds={new Set(['group'])} onMessageClick={vi.fn()} onMessageDoubleClick={vi.fn()}
+        onTextMouseUp={vi.fn()} onEdgeLabelSingleClick={vi.fn()} onEdgeLabelDoubleClick={vi.fn()} onFragmentAnchorClick={vi.fn()} isFragmentSelected={()=>false}/></div>;
+    }
+    const view=render(<Harness/>);
+    fireEvent.click(view.getByRole('button',{name:'调整框架大小 group'}));
+    fireEvent.change(view.getByRole('spinbutton',{name:'框架宽度 group'}),{target:{value:'480'}});
+    fireEvent.change(view.getByRole('spinbutton',{name:'框架高度 group'}),{target:{value:'180'}});
+    await act(async()=>{});
+    for(const id of ['citation','nested-citation']){
+      expect(view.container.querySelector(`g[data-jump-visual-msgids="${id}"]`)?.parentElement).toHaveAttribute('viewBox');
+      expect(view.container.querySelector(`[data-directed-edge-label="${id}"]`)?.closest('[data-frame-clip]')).not.toBeNull();
+    }
+    const visual=view.container.querySelector('[data-frame-visual="group"]')!;
+    expect(visual).toHaveAttribute('data-view-target','true');
+    expect(view.container.querySelectorAll('[data-view-target]')).toHaveLength(1);
+    const header=view.getByRole('group',{name:'组织消息 group'}),corner=visual.querySelector('.view-target-corners')!;
+    expect(corner.getAttribute('d')).toContain(` ${Number.parseFloat(header.style.top)-4} H `);
+    const before=corner.getAttribute('d');fireEvent.keyDown(view.getByRole('button',{name:'拖动调整框架大小 group'}),{key:'ArrowDown'});
+    expect(visual.querySelector('.view-target-corners')?.getAttribute('d')).not.toBe(before);
+  });
+  it.each(['classify','summary'] as const)('automatically opens a %s in columns and anchors all four resize edges',type=>{
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockImplementation(function(this:HTMLElement){return new DOMRect(0,0,Number.parseFloat(this.style.width)||1000,Number.parseFloat(this.style.height)||86);});
+    try{
+    const members=Array.from({length:6},(_,index)=>({...message(`flow-${index}`),sequence:index+1}));
+    const group:DemoMessage={...message('group'),kind:'relation',relationType:type,parts:[{id:'display',type:'display',layout:'flow',relationPartId:'members'}]};
+    const selected=vi.fn(),view=renderScene([group,...members,message('outside')],[...members.map(member=>relation('group',type,'anon:group',member.id)),relation('citation','reference','flow-0','flow-1')],
+      {traceFrameIds:new Set(['group']),traceExpandedFrameIds:new Set(['group']),onMessageClick:selected});
+    const visibleMembers=()=>Array.from(view.container.querySelectorAll<HTMLElement>('[data-msgid^="flow-"]'));
+    const columns=()=>new Set(visibleMembers().map(card=>card.style.left)).size;
+    expect(columns()).toBe(2);
+    expect(visibleMembers()).toHaveLength(4);
+    expect(Number.parseFloat(view.container.querySelector<HTMLElement>('[data-msgid="flow-0"]')!.style.left)).toBeGreaterThan(Number.parseFloat(view.container.querySelector<HTMLElement>('[data-msgid="flow-1"]')!.style.left));
+    expect(view.queryByRole('button',{name:'横向调整框架宽度 group'})).toBeNull();
+    fireEvent.click(view.getByRole('button',{name:'调整框架大小 group'}));
+    const width=view.getByRole('spinbutton',{name:'框架宽度 group'}) as HTMLInputElement,height=view.getByRole('spinbutton',{name:'框架高度 group'}) as HTMLInputElement;
+    const beforeWidth=Number(width.value),beforeHeight=Number(height.value);
+    const header=view.getByRole('group',{name:'组织消息 group'}),anchor={left:header.style.left,top:header.style.top};
+    fireEvent.keyDown(view.getByRole('button',{name:'从上边缘调整框架高度 group'}),{key:'ArrowUp'});
+    expect(height).toHaveValue(beforeHeight+20);expect(width).toHaveValue(beforeWidth);
+    fireEvent.keyDown(view.getByRole('button',{name:'从上边缘调整框架高度 group'}),{key:'ArrowDown'});
+    expect(height).toHaveValue(beforeHeight);
+    fireEvent.keyDown(view.getByRole('button',{name:'从左边缘调整框架宽度 group'}),{key:'ArrowLeft'});
+    expect(width).toHaveValue(beforeWidth+20);expect(height).toHaveValue(beforeHeight);
+    fireEvent.keyDown(view.getByRole('button',{name:'从左边缘调整框架宽度 group'}),{key:'ArrowRight'});
+    expect(width).toHaveValue(beforeWidth);
+    fireEvent.keyDown(view.getByRole('button',{name:'从右边缘调整框架宽度 group'}),{key:'ArrowRight'});
+    expect(width).toHaveValue(beforeWidth+20);expect(height).toHaveValue(beforeHeight);
+    fireEvent.keyDown(view.getByRole('button',{name:'从下边缘调整框架高度 group'}),{key:'ArrowDown'});
+    expect(width).toHaveValue(beforeWidth+20);expect(height).toHaveValue(beforeHeight+20);
+    expect({left:header.style.left,top:header.style.top}).toEqual(anchor);
+    const frame=view.container.querySelector<SVGRectElement>('rect[data-jump-visual-msgids="group"]')!;
+    expect(Number.parseFloat(header.style.width)).toBe(Number(frame.getAttribute('width')));
+    fireEvent.scroll(view.getByLabelText('框架垂直滚动条 group'),{target:{scrollTop:200}});
+    expect(view.container.querySelector('[data-msgid="flow-5"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-msgid="flow-0"]')).toBeNull();
+    expect(selected).not.toHaveBeenCalled();
+    }finally{geometry.mockRestore();}
+  });
+  it('keeps nested frame scrollbars inside the outer viewport and supports keyboard resizing',()=>{
+    const outer:DemoMessage={...message('outer'),kind:'relation',relationType:'classify'},inner:DemoMessage={...message('inner'),kind:'relation',relationType:'summary'};
+    const members=Array.from({length:5},(_,index)=>message(`nested-${index}`));
+    const view=renderScene([outer,inner,...members,message('outside')],[relation('outer','classify','anon:outer','inner'),...members.map(member=>relation('inner','summary','anon:inner',member.id))],
+      {traceFrameIds:new Set(['outer','inner']),traceExpandedFrameIds:new Set(['outer','inner'])});
+    for(const [id,width,height] of [['outer','500','360'],['inner','400','180']]){
+      fireEvent.click(view.getByRole('button',{name:`调整框架大小 ${id}`}));
+      fireEvent.change(view.getByRole('spinbutton',{name:`框架宽度 ${id}`}),{target:{value:width}});
+      fireEvent.change(view.getByRole('spinbutton',{name:`框架高度 ${id}`}),{target:{value:height}});
+    }
+    expect(view.getByLabelText('框架水平滚动条 inner').closest('[data-frame-clip]')).not.toBeNull();
+    fireEvent.keyDown(view.getByRole('button',{name:'拖动调整框架大小 inner'}),{key:'ArrowRight'});
+    expect(view.getByRole('spinbutton',{name:'框架宽度 inner'})).toHaveValue(420);
+    fireEvent.keyDown(view.getByRole('button',{name:'拖动调整框架大小 inner'}),{key:'ArrowDown'});
+    expect(view.getByRole('spinbutton',{name:'框架高度 inner'})).toHaveValue(200);
+  });
+  it.each(['classify','summary'] as const)('resizes and scrolls an expanded %s temporarily without squeezing member cards',type=>{
+    const members=Array.from({length:8},(_,index)=>message(`member-${index}`));
+    const group:DemoMessage={...message('group'),kind:'relation',relationType:type,relationPayload:{title:'展开框架'}};
+    const edges=[...members.map(member=>relation('group',type,'anon:group',member.id)),relation('reference','reference','member-7','member-0')];
+    const selected=vi.fn(),view=renderScene([group,...members,message('outside')],edges,{traceFrameIds:new Set(['group']),traceExpandedFrameIds:new Set(['group']),onMessageClick:selected});
+    fireEvent.click(view.getByRole('button',{name:'调整框架大小 group'}));
+    fireEvent.change(view.getByRole('spinbutton',{name:'框架宽度 group'}),{target:{value:'8'}});
+    expect(view.getByRole('spinbutton',{name:'框架宽度 group'})).toHaveValue(8);
+    fireEvent.change(view.getByRole('spinbutton',{name:'框架宽度 group'}),{target:{value:'480'}});
+    fireEvent.change(view.getByRole('spinbutton',{name:'框架高度 group'}),{target:{value:'180'}});
+    const vertical=view.getByLabelText('框架垂直滚动条 group');expect(vertical).toHaveStyle({overflowY:'scroll'});
+    expect(view.getByLabelText('框架水平滚动条 group')).toHaveStyle({overflowX:'scroll'});
+    const first=view.container.querySelector<HTMLElement>('[data-msgid="member-0"]')!;
+    expect(first.style.width).toBe('320px');expect(first.closest('[data-frame-clip]')).not.toBeNull();
+    const top=Number.parseFloat(first.style.top);fireEvent.scroll(vertical,{target:{scrollTop:200}});
+    expect(Number.parseFloat(view.container.querySelector<HTMLElement>('[data-msgid="member-0"]')!.style.top)).toBe(top-200);
+    const canvas=view.container.querySelector('[data-jump-canvas]')!;
+    const beforeJump={width:frameSize('width'),height:frameSize('height')};
+    function frameSize(axis:'width'|'height'){return view.getByRole('spinbutton',{name:`框架${axis==='width'?'宽度':'高度'} group`}).getAttribute('value');}
+    // The ancestor and other dependencies are mounted for highlighting, but
+    // must not override the explicit member destination's scroll position.
+    act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:['member-6','group','member-0']}}));});
+    expect(view.getByLabelText('框架垂直滚动条 group').scrollTop).toBeGreaterThan(200);
+    expect({width:frameSize('width'),height:frameSize('height')}).toEqual(beforeJump);
+    expect(view.container.querySelector('[data-msgid="member-6"]')?.closest('[data-frame-clip]')).toHaveStyle({overflow:'clip'});
+    expect(view.container.querySelector('[data-jump-visual-msgids="reference"]')?.parentElement).toHaveAttribute('viewBox');
+    fireEvent.click(view.getByRole('button',{name:'恢复自适应'}));
+    expect(view.queryByLabelText('框架垂直滚动条 group')).toBeNull();expect(view.container.querySelector('[data-frame-clip]')).toBeNull();
+    expect(selected).not.toHaveBeenCalled();
+  });
+  it('uses the full natural size for a sole traced classification without a redundant resize control',()=>{
+    const members=Array.from({length:8},(_,index)=>message(`full-${index}`));
+    const group:DemoMessage={...message('group'),kind:'relation',relationType:'classify'};
+    const view=renderScene([group,...members],members.map(member=>relation('group','classify','anon:group',member.id)),
+      {traceFrameIds:new Set(['group']),traceExpandedFrameIds:new Set(['group'])});
+    expect(view.container.querySelectorAll('[data-msgid^="full-"]')).toHaveLength(8);
+    expect(view.queryByRole('button',{name:'调整框架大小 group'})).toBeNull();
+    expect(view.container.querySelector('[data-frame-resize]')).toBeNull();
+    expect(view.queryByLabelText('框架垂直滚动条 group')).toBeNull();
+    expect(view.queryByLabelText('框架水平滚动条 group')).toBeNull();
+    expect(view.container.querySelector('[data-frame-clip]')).toBeNull();
+  });
+  it('renders an explicitly inspected vote on a JOIN as a reachable record card',()=>{
+    const join:DemoMessage={...message('join'),kind:'join',joinInfo:{containerId:'parent',containerType:'CLASSIFY',targetIds:['member']}};
+    const vote:DemoMessage={...message('vote'),kind:'relation',relationType:'disagree',targetRefs:[{kind:'message',messageId:'join'}]};
+    const view=renderScene([join,vote],[relation('vote','disagree','anon:vote','join')],{standaloneMessageIds:new Set(['vote'])});
+    expect(view.container.querySelector('[data-msgid="vote"]:not([data-rel-overlay])')).not.toBeNull();
+    expect(findMessageElements(view.container,'vote').length).toBeGreaterThan(0);
+  });
+  it('ignores stale trace expansion after returning to the ordinary graph',()=>{
+    const category={...message('category'),kind:'relation' as const,relationType:'classify' as const};
+    const props={traceFrameIds:new Set<string>(),traceExpandedFrameIds:new Set(['category'])};
+    const scene=projectGraphScene({messages:[category],edges:[],isTraceWindow:false,traceExpandedFrameIds:props.traceExpandedFrameIds});
+    expect(scene.normals.map(message=>message.id)).toContain('category');
+    const view=renderScene([category],[],props);
+    expect(view.container.querySelector('[data-msgid="category"]')).not.toBeNull();
+  });
+  it.each(['normal','classify','summary','arrange','merge'] as const)('puts the home match badge after the %s type and exposes its reason',type=>{
+    const target=type==='normal'?message('target'):{...message('target'),kind:'relation' as const,relationType:type};
+    const edges=type==='arrange'||type==='merge'?[relation('target',type,'anon:target','member')]:[];
+    const view=renderScene([target,message('member')],edges,{homeMatchIds:new Set(['target']),homeReasonByMessageId:new Map([['target','由本人发送\n待确认：正文未阅']])});
+    const badge=view.container.querySelector('[data-home-filter-label="命中"]')!;
+    expect(badge.getAttribute('title')).toContain('由本人发送');
+    expect(badge.getAttribute('title')).toContain('正文未阅');
+    expect(badge.previousElementSibling?.textContent).toBe({normal:'文本',classify:'分类',summary:'总结',arrange:'排列',merge:'归并'}[type]);
+    view.unmount();
+  });
+  it('labels retained table context with a different explanation from matches',()=>{
+    const view=render(<MessageCard msg={message('context')} ctx={{homeMatch:false,homeReason:'未直接命中筛选条件；作为外层容器保留'}}/>);
+    const badge=view.container.querySelector('[data-home-filter-label="上下文"]')!;
+    expect(badge.getAttribute('title')).toContain('主页显示原因');
+    expect(badge.getAttribute('title')).toContain('未直接命中');
+    expect(badge.previousElementSibling?.textContent).toBe('文本');
+  });
+  it.each([['classify','分类'],['summary','总结'],['arrange','排列'],['merge','归并']] as const)('shows concrete JOIN endpoint types for %s from the full catalog without redundant body text', (type,label) => {
+    const parent:DemoMessage={...message('parent'),kind:'relation',relationType:type,relationPayload:{label:'容器的自定义标签'}};
+    const target=message('target'),nested:DemoMessage={...message('nested'),kind:'relation',relationType:'summary'};
+    const join:DemoMessage={...message('join'),kind:'join',content:'加入容器',parts:[{id:'body',type:'text',text:'建立关系：JOIN；目标：iy6ruf2a'}],joinInfo:{containerId:'parent',containerType:'JOIN',targetIds:['target','nested']}};
+    const view=renderScene([join],[],{relatedMessages:[parent,target,nested,join]});
+    const card=view.container.querySelector<HTMLElement>('[data-msgid="join"]:not([data-rel-overlay])')!;
+    expect(card.querySelector('[data-join-endpoint-type="parent"]')).toHaveTextContent(`【${label}】ID：`);
+    expect(card).not.toHaveTextContent('容器 ID：');
+    expect(card.querySelector('[data-join-endpoint-type="target"]')).toHaveTextContent('【文本】');
+    expect(card.querySelector('[data-join-endpoint-type="nested"]')).toHaveTextContent('【总结】');
+    expect(card).not.toHaveTextContent('加入容器');
+    expect(card).not.toHaveTextContent('建立关系：JOIN');
+  });
   it('uses the same statistic and arbitration order as the message list', () => {
     const onTruth = vi.fn(), onValue = vi.fn();
     const view = renderScene([message('target')], [], {
@@ -515,6 +716,31 @@ it('keeps current component votes attached rather than creating another card',()
   expect(projectGraphScene(input).normalIds).toEqual(['claim']);
 });
 
+it.each(['agree','disagree'] as const)('does not invent a %s card when the targeted annotation is hidden',type=>{
+  const id=type==='disagree'?'cmt4anc26001dggsrzhe4f668':'support',annotationId='cmt00hjs200r1kysjrigj448h';
+  const annotation:DemoMessage={...message(annotationId),kind:'relation',relationType:'annotation',revision:1,
+    parts:[{id:'presentation',type:'display',relationPartId:'relation',layout:'relation'}],
+    state:{messageId:annotationId,revision:1,suppressed:true,supportCount:1,oppositionCount:1,recommendationTotal:0}};
+  const vote:DemoMessage={...message(id),kind:'relation',relationType:type,revision:1,
+    parts:[{id:'body',type:'text',text:`建立关系：${type.toUpperCase()}；目标：rigj448h`},
+      {id:'presentation',type:'display',relationPartId:'relation',layout:'relation'}],
+    executedStance:{partId:'relation',sourceRevision:1,side:type==='agree'?'pro':'con',target:{messageId:annotationId,revision:1}}};
+  // The rejected annotation's edge is absent from the ordinary graph, while
+  // its declaration and the vote remain available for status and inspection.
+  const input={messages:[message('claim'),annotation,vote],edges:[relation(id,type,`anon:${id}`,annotationId)],isTraceWindow:false,traceExpandedFrameIds:new Set<string>()};
+  const scene=projectGraphScene(input);
+  expect(scene.normalIds).toEqual(['claim',annotationId]);expect(scene.msgMap.has(id)).toBe(true);expect(scene.edgesByRelMsg.has(id)).toBe(true);
+  const preview=vi.fn(),view=renderScene(input.messages,input.edges,{onRelatedMessageNavigate:preview});
+  expect(view.container.querySelector(`[data-msgid="${id}"]:not([data-rel-overlay])`)).toBeNull();
+  expect(view.container.querySelector(`[data-msgid="${annotationId}"]:not([data-rel-overlay])`)).not.toBeNull();
+  fireEvent.click(view.getByRole('button',{name:'查看有效时的效果'}));expect(preview).toHaveBeenCalledWith(annotationId);
+  fireEvent.click(view.getByRole('button',{name:`显示装饰 ${annotationId}`}));
+  expect(findMessageElements(view.container,id).length).toBeGreaterThan(0);
+  expect(projectGraphScene({...input,standaloneMessageIds:new Set([id])}).normalIds).toContain(id);
+  const withBody={...vote,parts:[{id:'reason',type:'text' as const,text:'我补充了一段表态理由'}]};
+  expect(projectGraphScene({...input,messages:[input.messages[0],annotation,withBody]}).normalIds).toContain(id);
+});
+
 it('uses display parts to retain horizontal and vertical frame geometry',()=>{
   for(const [layout,direction] of [['row','single-row'],['flow','single-column']] as const){
     const arrange:DemoMessage={...message('arrange'),kind:'relation',relationType:'arrange',parts:[{id:'display',type:'display',relationPartId:'relation',layout}]};
@@ -527,13 +753,13 @@ it('uses display parts to retain horizontal and vertical frame geometry',()=>{
   }
 });
 
-it('shows a rejected container as a related part instead of a separate card, while retaining explicit inspection',()=>{
+it('keeps a rejected container visible as a separate card as well as its related entry',()=>{
  const claim=message('claim'),container:DemoMessage={...message('category'),kind:'relation',relationType:'classify',targetRefs:[{kind:'message',messageId:'claim'}],state:{messageId:'category',revision:1,suppressed:true,supportCount:0,oppositionCount:1,recommendationTotal:0}};
  const input={messages:[claim,container],edges:[relation('category','classify','anon:category','claim')],isTraceWindow:false,traceExpandedFrameIds:new Set<string>()};
- expect(projectGraphScene(input).normalIds).toEqual(['claim']);
+ expect(projectGraphScene(input).normalIds).toEqual(['claim','category']);
  expect(projectGraphScene({...input,standaloneMessageIds:new Set(['category'])}).normalIds).toEqual(['claim','category']);
  const {container:dom,getByText}=renderScene(input.messages,input.edges);
- expect(dom.querySelector('[data-msgid="category"]')).toBeNull();
+ expect(dom.querySelector('[data-msgid="category"]')).toBeTruthy();
  expect(dom.querySelector('[data-related-message-id="category"]')).toBeNull();
  fireEvent.click(getByText('▸ 被反对的容器：1'));
  expect(dom.querySelector('[data-related-message-id="category"]')).toBeTruthy();
@@ -544,7 +770,7 @@ it('shows a rejected container as a related part instead of a separate card, whi
 it('allows inspecting a personally rejected merge even when its global state is not suppressed',()=>{
  const claim=message('claim'),group:DemoMessage={...message('merge'),kind:'relation',relationType:'merge',parts:[]};
  const input={messages:[claim,group],edges:[],isTraceWindow:false,traceExpandedFrameIds:new Set<string>(),rejectedContainerIds:new Set(['merge'])};
- expect(projectGraphScene(input).normalIds).toEqual(['claim']);
+ expect(projectGraphScene(input).normalIds).toEqual(['claim','merge']);
  expect(projectGraphScene({...input,standaloneMessageIds:new Set(['merge'])}).normalIds).toEqual(['claim','merge']);
 });
 

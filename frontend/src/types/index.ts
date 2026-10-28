@@ -415,32 +415,48 @@ export interface StanceHistoryResponse {
  * 与会者可以自由组合规则来投影消息图的不同切片。
  */
 export type CleanFilterRule =
+  | { id: string; kind: 'time'; from: string; to: string }
   | { id: string; kind: 'sender'; username: string }
   | { id: string; kind: 'tag'; tagType: string; minCount: number }
   | { id: string; kind: 'stake'; minAmount: number; side?: 'PRO' | 'CON' }
   | { id: string; kind: 'rounds'; minRounds: number }
   | { id: string; kind: 'participants'; minCount: number }
+  | { id: string; kind: 'messageType'; messageTypes: string[] }
   | { id: string; kind: 'relationType'; relationType: string };
 
 /** 过滤器规则中文标签 */
 export const CLEAN_FILTER_LABELS: Record<CleanFilterRule['kind'], string> = {
+  time:         '按发送时间',
   sender:       '按发送者',
   tag:          '按标签',
   stake:        '按押注额度',
   rounds:       '按结算轮次',
   participants: '按站队人数',
+  messageType:  '按消息类型',
   relationType: '按关系类型',
 };
+
+export const CLEAN_MESSAGE_TYPES = [
+  ['TEXT', '文本'], ['CLASSIFY', '分类'], ['SUMMARY', '总结'], ['PROPOSAL', '提案'],
+  ['DELEGATION', '委托'], ['CODE_CHANGE', '代码'], ['OPERATIONS', '运营'],
+  ['ANNOTATION', '注释'], ['REFERENCE', '引用'], ['REPLY', '回复'], ['NOTIFY', '通知'],
+  ['AGREE', '赞同'], ['DISAGREE', '反对'], ['CORRECT', '更正'], ['MERGE', '归并'],
+  ['ARRANGE', '排列'], ['JOIN', '加入'], ['RECOMMEND', '推荐'], ['ARCHIVE', '冷藏'],
+  ['TAG', '标注'], ['ATTENTION', '关注'], ['BLOCK', '拉黑'], ['ROUND', '结算'], ['ROUND_RESULT', '结算结果'],
+] as const;
+export const CLEAN_CONTENT_TYPES: readonly string[] = ['TEXT', 'CLASSIFY', 'SUMMARY', 'PROPOSAL', 'DELEGATION', 'CODE_CHANGE', 'OPERATIONS'];
 
 /** 过滤器规则默认值 */
 export function defaultCleanRule(kind: CleanFilterRule['kind']): CleanFilterRule {
   const id = `cf_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   switch (kind) {
+    case 'time':         return { id, kind: 'time', from: '', to: '' };
     case 'sender':       return { id, kind: 'sender', username: '' };
     case 'tag':          return { id, kind: 'tag', tagType: 'ARCHIVE', minCount: 5 };
     case 'stake':        return { id, kind: 'stake', minAmount: 50 };
     case 'rounds':       return { id, kind: 'rounds', minRounds: 2 };
     case 'participants': return { id, kind: 'participants', minCount: 8 };
+    case 'messageType':  return { id, kind: 'messageType', messageTypes: ['TEXT'] };
     case 'relationType': return { id, kind: 'relationType', relationType: 'OPERATIONS' };
   }
 }

@@ -15,7 +15,7 @@ const USER_COLUMNS = [
   { label: '充值收入', width: 100 }, { label: '发送消息总数', width: 112 }, { label: '文本消息数', width: 100 },
   { label: '关系消息数', width: 100 }, { label: '被站队贡献点', width: 112 }, { label: '被表态贡献点', width: 112 },
   { label: '净支持率%', width: 100 }, { label: '被引用热度', width: 100 }, { label: '结算活跃度', width: 100 },
-  { label: '充值及受押总点', width: 128 },
+  { label: '充值及受押总点', width: 128 }, { label: '注册时间', width: 190 },
 ];
 const MESSAGE_COLUMNS = [
   { label: '#', width: 48 }, { label: '消息ID', width: 180 }, { label: '消息摘要', width: 280 },
@@ -35,7 +35,8 @@ type UserSortKey =
   | 'receivedStanceStake'
   | 'netSupportRate'
   | 'referenceHeat'
-  | 'settlementActivity';
+  | 'settlementActivity'
+  | 'registeredAt';
 type MessageSortKey =
   | 'stakeTotal'
   | 'sideGap'
@@ -50,6 +51,15 @@ type MessageSortKey =
 interface StakeCountItem {
   truth: { pro: number; con: number };
   value: { pro: number; con: number };
+}
+
+const registrationTimeFormat = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+});
+
+function RegistrationTime({ value }: { value: string }) {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? <time dateTime={value}>{registrationTimeFormat.format(timestamp)}</time> : <>-</>;
 }
 
 export interface LeaderboardModalProps {
@@ -102,8 +112,17 @@ function LeaderboardModal({
     buildLeaderboardMetrics(messages, edges, relations, users), users, stakeCounts, messageBettorCounts),
     [globalRows, messages, edges, relations, users, stakeCounts, messageBettorCounts]);
 
-  const sortedUserRows = useMemo(() => [...userRows].sort((a, b) =>
-    (b[userSort] - a[userSort]) * (userSortDir === 'desc' ? 1 : -1)), [userRows, userSort, userSortDir]);
+  const sortedUserRows = useMemo(() => [...userRows].sort((a, b) => {
+    if (userSort === 'registeredAt') {
+      const left = Date.parse(a.registeredAt), right = Date.parse(b.registeredAt);
+      // Unknown registration dates stay last in either direction.
+      const validLeft = Number.isFinite(left), validRight = Number.isFinite(right);
+      return Number(validRight) - Number(validLeft)
+        || (validLeft && validRight ? (right - left) * (userSortDir === 'desc' ? 1 : -1) : 0)
+        || a.userId.localeCompare(b.userId) || a.username.localeCompare(b.username);
+    }
+    return (b[userSort] - a[userSort]) * (userSortDir === 'desc' ? 1 : -1);
+  }), [userRows, userSort, userSortDir]);
 
   const filteredUserRows = useMemo(() => {
     const normalized = userKeyword.trim().toLowerCase();
@@ -288,6 +307,7 @@ function LeaderboardModal({
                 <option value="referenceHeat">按被引用热度</option>
                 <option value="settlementActivity">按结算活跃度</option>
                 <option value="totalIncome">按充值及受押总点</option>
+                <option value="registeredAt">按注册时间</option>
               </select>
               <button
                 onClick={() => { setUserSortDir(prev => prev === 'desc' ? 'asc' : 'desc'); setUserPage(1); }}
@@ -334,6 +354,7 @@ function LeaderboardModal({
                       <td style={{ padding: '6px 8px', borderBottom: '1px solid #1e293b' }}>{row.referenceHeat}</td>
                       <td style={{ padding: '6px 8px', borderBottom: '1px solid #1e293b' }}>{row.settlementActivity}</td>
                       <td style={{ padding: '6px 8px', borderBottom: '1px solid #1e293b' }}>{Math.round(row.totalIncome)}</td>
+                      <td style={{ padding: '6px 8px', borderBottom: '1px solid #1e293b', whiteSpace: 'nowrap', color: '#94a3b8' }}><RegistrationTime value={row.registeredAt} /></td>
                     </tr>
                   ))}
               </LeaderboardTable>

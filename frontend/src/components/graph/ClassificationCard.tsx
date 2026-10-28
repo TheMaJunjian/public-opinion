@@ -11,7 +11,7 @@ import { MessageDisplayMarker } from '../MessageDisplayHints';
 import MessageSettlementActions from '../MessageSettlementActions';
 import JoinRecordBadges from '../JoinRecordBadges';
 import { CardWidthHandle } from './CardWidthContext';
-import MessageAuthors from '../MessageAuthors';
+import HomeFilterBadge from '../HomeFilterBadge';
 
 type CardCallbacks = Pick<GraphViewProps, 'onMessageClick' | 'onMessageDoubleClick' | 'onMessageMouseDown' | 'onMessageMouseUp' | 'onTextMouseUp' | 'onSettlementToggleTruth' | 'onSettlementToggleValue' | 'onJoinFilterClick' | 'settlementOpenMsgId' | 'settlementOpenType'>;
 interface ClassificationCardProps extends CardCallbacks {
@@ -25,6 +25,7 @@ interface ClassificationCardProps extends CardCallbacks {
   isActive: boolean;
   isStanceTarget: boolean;
   homeLabel: string | null;
+  homeReason?: string;
   stakes?: { truth: { pro: number; con: number }; value: { pro: number; con: number } };
   relatedJoinRelations: Relation[];
   outgoingJoinRelations: Relation[];
@@ -39,7 +40,7 @@ interface ClassificationCardProps extends CardCallbacks {
 /** Classification presentation shares the card's click/double-click surface with its title. */
 export default function ClassificationCard({
   msg, selectedUnits, box, targetCount, title, activeText, isWhole, isActive, isStanceTarget,
-  homeLabel, stakes, relatedJoinRelations, outgoingJoinRelations, isJoinEffective,
+  homeLabel, homeReason, stakes, relatedJoinRelations, outgoingJoinRelations, isJoinEffective,
   cardRef, headerRef, contentRef, relatedMessages, correctionRecords, onMessageClick, onMessageDoubleClick, onMessageMouseDown, onMessageMouseUp,
   onTextMouseUp, onSettlementToggleTruth, onSettlementToggleValue, onJoinFilterClick, settlementOpenMsgId, settlementOpenType,
 }: ClassificationCardProps) {
@@ -61,8 +62,7 @@ export default function ClassificationCard({
                 <div data-card-header="true" data-card-header-content="true" ref={headerRef} style={{fontSize:11,opacity:0.85,display:"flex",whiteSpace:'nowrap',width:'max-content',minWidth:'100%',gap:12,alignItems:"center",justifyContent:"space-between"}}>
                   <span style={{display:"flex",alignItems:"center",flexShrink:0,gap:6}}>
                     <MessageElement reference={messageTypeReference(msg)} selected={isMessageElementSelected(selectedUnits, messageTypeReference(msg))} label="分类" style={{fontSize:10,fontWeight:800,padding:"2px 6px",borderRadius:4,background:isWhole?"#fbbf24":"rgba(167,139,250,0.18)",color:isWhole?"#111827":"#a78bfa",lineHeight:"16px",border:isWhole?"1px solid #fbbf24":"1px solid rgba(167,139,250,0.35)"}}>分类</MessageElement>
-                    {homeLabel && <span style={{fontSize:10,fontWeight:700,padding:"2px 6px",borderRadius:4,background:homeLabel==='命中'?"#0e7490":"#374151",color:homeLabel==='命中'?"#cffafe":"#d1d5db"}}>{homeLabel}</span>}
-                    <MessageAuthors message={msg} showSelfStake/>
+                    <HomeFilterBadge label={homeLabel} reason={homeReason}/>
                     {correctionRecords}
                   </span>
                   <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2,flexShrink:0,marginLeft:'auto'}}>
@@ -81,7 +81,6 @@ export default function ClassificationCard({
                   </div>
                   <div style={{fontSize:12,color:"#9ca3af",display:"flex",gap:12,flexWrap:"wrap"}}>
                     <MessageElement reference={messageMembersReference(msg)} selected={isMessageElementSelected(selectedUnits, messageMembersReference(msg))} label="所含消息">💬 {targetCount} 条观点</MessageElement>
-                    <span>{new Date(msg.createdAt).toLocaleDateString('zh-CN')}</span>
                   </div>
                 </div>
 

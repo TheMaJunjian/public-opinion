@@ -21,11 +21,11 @@ describe('card width controls', () => {
     fireEvent.change(input, { target: { value: '9000' } }); fireEvent.blur(input);
     expect(input).toHaveValue(2400);
   });
-  it('truncates the author and resizes a draft in canvas pixels even when the canvas is zoomed', async () => {
+  it('keeps author details off the card and resizes a draft in canvas pixels even when the canvas is zoomed', async () => {
     function Scene() { const [width, setWidth] = useState(400); return <CardWidthContext.Provider value={{ widths: {}, editing: { messageId: message.id, width, onChange: setWidth } }}><GraphView {...props} /></CardWidthContext.Provider>; }
     const view = render(<Scene />);
     const card = view.container.querySelector<HTMLElement>('[data-msgid="message-id"]')!;
-    expect(card.querySelector('[title="' + message.author + '"]')?.textContent).toHaveLength(message.id.length);
+    expect(card.querySelector('[data-message-authors],time')).toBeNull();
     const handle = view.getByRole('separator', { name: '调整消息 message-id 的宽度' });
     Object.defineProperty(card, 'offsetWidth', { configurable: true, get: () => 400 });
     vi.spyOn(card, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 200, 100));
@@ -76,7 +76,10 @@ describe('card width controls', () => {
     </CardWidthContext.Provider>);
     const handle = view.getByRole('separator', { name: '调整消息 frame 的宽度' });
     expect(handle.parentElement).toHaveAttribute('data-frame-header');
-    expect(handle.parentElement?.style.width).toBe('640px');
+    if(type==='classify'||type==='summary'){
+      const outline=view.container.querySelector('rect[data-jump-visual-msgids="frame"]')!;
+      expect(Number.parseFloat(handle.parentElement!.style.width)).toBe(Number(outline.getAttribute('width')));
+    }else expect(handle.parentElement?.style.width).toBe('640px');
   });
   it('keeps the merge message card at its own width when a member widens the frame', () => {
     const frame = { ...message, id: 'frame', kind: 'relation' as const, relationType: 'merge' as const };

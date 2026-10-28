@@ -7,8 +7,8 @@ import type {
 import { nextId } from '../model/selection';
 import type { DraftSendDependencies } from "./sendDraftTypes";
 
-export async function sendOrganizationJoin(dependencies: Pick<DraftSendDependencies, "sourceUnits" | "relationsRef" | "appendContainerType" | "setSendError" | "getJoinContainerCycleError" | "showAlert" | "createJoinRelationsForContainer" | "setEdges" | "setDraftUnits" | "setSourceUnits" | "setTargetUnits" | "setActiveTextSelectId" | "setNewMessageContent" | "setSubType" | "setRelationType" | "setSecondaryRelationType">, { effectiveTargets }: { effectiveTargets: UnitSelection[]; }): Promise<void> {
-  const { sourceUnits, relationsRef, appendContainerType, setSendError, getJoinContainerCycleError, showAlert, createJoinRelationsForContainer, setEdges, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setNewMessageContent, setSubType, setRelationType, setSecondaryRelationType } = dependencies;
+export async function sendOrganizationJoin(dependencies: Pick<DraftSendDependencies, "sourceUnits" | "relationsRef" | "appendContainerType" | "setSendError" | "getJoinContainerCycleError" | "showAlert" | "createJoinRelationsForContainer" | "setEdges" | "setDraftUnits" | "setSourceUnits" | "setTargetUnits" | "setActiveTextSelectId" | "newMessageContent" | "savedTextOnTypeSwitchRef" | "setNewMessageContent" | "setSubType" | "setRelationType" | "setSecondaryRelationType">, { effectiveTargets }: { effectiveTargets: UnitSelection[]; }): Promise<void> {
+  const { sourceUnits, relationsRef, appendContainerType, setSendError, getJoinContainerCycleError, showAlert, createJoinRelationsForContainer, setEdges, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, newMessageContent, savedTextOnTypeSwitchRef, setNewMessageContent, setSubType, setRelationType, setSecondaryRelationType } = dependencies;
   const containerSource = sourceUnits
     .map(unit => relationsRef.current.find(relation => relation.id === unit.messageId))
     .find((relation): relation is Relation => relation?.relationType?.toUpperCase() === appendContainerType);
@@ -45,7 +45,9 @@ export async function sendOrganizationJoin(dependencies: Pick<DraftSendDependenc
     });
   }
   setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
-  setNewMessageContent(""); setSubType("");
+  if (!newMessageContent && savedTextOnTypeSwitchRef.current) setNewMessageContent(savedTextOnTypeSwitchRef.current);
+  savedTextOnTypeSwitchRef.current = '';
+  setSubType("");
   setRelationType(null); setSecondaryRelationType("none");
   return;
 }

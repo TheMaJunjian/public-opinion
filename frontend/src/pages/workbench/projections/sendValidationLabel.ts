@@ -51,6 +51,7 @@ export function deriveSendValidationLabel(input: DeriveSendValidationLabelInput)
   if (hasCorrectionRelationTarget) return "关系消息不能作为更正目标，请选择普通文本消息";
   if (hasInvalidCorrectTarget) return secondaryRelationType === 'width-adjustment' ? '宽度调整需要选择一条当前完整消息，且不能有来源' : "更正只能选择原始内容中的一个文本字段";
   if (hasInvalidContainerSource) return "来源集合必须是当前关系类型对应的容器消息";
+  if (joinOnlyAction && !hasTargetsAvailable) return '请选择要加入已有容器的目标消息，此处不可输入';
   if (hasInvalidJoinTarget) return invalidJoinTargetMessage as string;
   if (hasCrossLinkValidationError) return crossLinkValidationMessage as string;
   if (hasOrphanContainerLabel) return "选中的关系标签不属于当前目标集合";
@@ -63,6 +64,6 @@ export function deriveSendValidationLabel(input: DeriveSendValidationLabelInput)
     : "运营收入提案格式无效，请填写收入金额和来源";
   if (relationType === 'tag' && secondaryRelationType === 'none') return "请先选择推荐、冷藏、已读、未读或已有标签";
   if (!hasTargetsAvailable && relationType !== null && !isClassifyType && !isGovernanceOrOpsType) return "请先选择目标消息";
-  if (relationType !== null && !hasTextContent && !isAgreeDisagreeType && !isArrangeType && !isMergeType && !isTagWithQuickAnnotate && !isTagWithInlineBadge) return "请输入消息内容";
+  if (!joinOnlyAction && relationType !== null && !hasTextContent && !isAgreeDisagreeType && !isArrangeType && !isMergeType && !isTagWithQuickAnnotate && !isTagWithInlineBadge) return "请输入消息内容";
   return null;
 }

@@ -8,11 +8,13 @@ export function useReadingState(userId:string|undefined,enabled:boolean) {
   const [state,setState]=useState<{owner?:string;marks:ReadingMark[]}>({marks:[]});
   const owner=enabled?userId:undefined,ownerRef=useRef(owner);ownerRef.current=owner;
   const [error,setError]=useState<string|null>(null);
+  const [loadedOwner,setLoadedOwner]=useState<string|undefined>();
   useEffect(()=>{
-    let current=true;setError(null);
+    let current=true;setError(null);setLoadedOwner(undefined);
     if(!owner){setState({marks:[]});return;}
     const refresh=()=>{void api.getReadingState().then(value=>{
       if(!current)return;
+      setLoadedOwner(owner);
       setError(null);setState(previous=>{
         const merged=new Map(value.marks.map(mark=>[readingMarkId(mark),mark]));
         for(const mark of previous.owner===owner?previous.marks:[]){
@@ -39,5 +41,5 @@ export function useReadingState(userId:string|undefined,enabled:boolean) {
       return {owner,marks:[...values.values()]};
     });
   },[owner]);
-  return {marks:state.owner===owner?state.marks:EMPTY_MARKS,markRead:owner?markRead:undefined,error};
+  return {marks:state.owner===owner?state.marks:EMPTY_MARKS,markRead:owner?markRead:undefined,error,ready:!!owner&&loadedOwner===owner&&state.owner===owner};
 }

@@ -1,6 +1,9 @@
 import { archiveChangeFingerprint, replayArchive, type Archive, type ArchiveCheckpoint } from '@gonglun/core';
 import type { ExportData, ExportUpdateData } from '../api/client';
 import {isHomeFilterMode} from '../pages/workbench/model/homeFilter';
+import {CLEAN_MESSAGE_TYPES} from '../types';
+
+const cleanMessageTypes=new Set<string>(['CONTENT','RELATION',...CLEAN_MESSAGE_TYPES.map(([type])=>type)]);
 
 /** Convert old files locally, on demand, without adding a migration dialog. */
 export async function prepareExportForViewing(input:unknown){
@@ -43,7 +46,12 @@ export function validateExportForViewing(input: unknown): { data: ExportData; ve
     || !['list', 'graph'].includes(view.mode)
     || typeof view.messageFilter?.hideSettlement !== 'boolean' || typeof view.messageFilter?.hideJoin !== 'boolean'
     || !isHomeFilterMode(view.homeFilter)
-    || !Array.isArray(view.cleanFilters) || view.cleanFilters.some(rule => !rule || !['sender', 'tag', 'stake', 'rounds', 'participants', 'relationType'].includes(rule.kind))
+    || !Array.isArray(view.cleanFilters) || view.cleanFilters.some(rule => !rule || !['sender', 'tag', 'stake', 'rounds', 'participants', 'relationType','messageType','time'].includes(rule.kind)
+      ||rule.kind==='messageType'&&(!Array.isArray(rule.messageTypes)||!rule.messageTypes.length
+        ||rule.messageTypes.some(type=>!cleanMessageTypes.has(type)))
+      ||rule.kind==='time'&&(typeof rule.from!=='string'||typeof rule.to!=='string'
+        ||!rule.from&&!rule.to||rule.from&&!Number.isFinite(Date.parse(rule.from))||rule.to&&!Number.isFinite(Date.parse(rule.to))
+        ||rule.from&&rule.to&&Date.parse(rule.from)>Date.parse(rule.to)))
     || !(view.classificationId === null || typeof view.classificationId === 'string'))) {
     throw new Error('阅览设置格式无效');
   }

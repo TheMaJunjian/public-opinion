@@ -3,12 +3,12 @@ import RelatedMessages from '../../../components/RelatedMessages';
 import CrossCanvasRelatedMessages from '../../../components/CrossCanvasRelatedMessages';
 import type { CrossCanvasRelationGroups } from '../../../utils/crossCanvasRelations';
 import JoinRecordBadges from '../../../components/JoinRecordBadges';
-import {indexRelatedMessages,isRejectedContainer} from '../../../utils/relatedMessages';
+import JoinEndpointType from '../../../components/JoinEndpointType';
+import {indexRelatedMessages} from '../../../utils/relatedMessages';
 import { useNavigate } from 'react-router-dom';
 import MessageCard, { type MessageCardContext, type MessageCardProps } from '../../../components/MessageCard';
 import MessageSettlementActions from '../../../components/MessageSettlementActions';
-import MessageAuthors from '../../../components/MessageAuthors';
-import {deriveMessageAuthorship} from '../../../utils/messageAuthorship';
+import {chronologicalOrder} from '../../../utils/discussionOrder';
 import { MessageDisplayMarker } from '../../../components/MessageDisplayHints';
 import RoundHistory from '../../../components/RoundHistory';
 import SettlementPanel from '../../../components/SettlementPanel';
@@ -48,6 +48,7 @@ interface MessageDisplay {
   overriddenStanceRelIds: Set<string>;
   readStatusByMessageId: Map<string, 'READ' | 'UNREAD'>;
   homeMatchIds?: Set<string>;
+  homeReasonByMessageId?: Map<string,string>;
   homeDisplayRoleByMessageId: Map<string, 'source' | 'target' | 'source-target'>;
   authorStakes: Record<string, number>;
   stakeCounts: Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }>;
@@ -97,17 +98,16 @@ export default function WorkbenchMessageList(props: Props) {
     onNavigate: handleNavigateToMessage, onCorrectionNavigate: handleNavigateFromCorrectionTemporaryCategory,
     renderRelation: renderRelationContentWithTargets, renderContent: renderMessageContentWithAnchorsForList } = props;
   const { messages, edges, msgMap, relationById, relationTypeByRelMsgId, joinRelationsByTarget, joinRelationsBySource, effectiveJoinRelationIds, summaryCoverageByMessageId, correctionVersions } = props.catalog;
-  const { embeddedMessageIds, suppressedRelIds, rejectedContainerIds, overriddenStanceRelIds, readStatusByMessageId, homeMatchIds, homeDisplayRoleByMessageId, authorStakes, stakeCounts, correctionFilterTargetId } = props.display;
+  const { embeddedMessageIds, suppressedRelIds, rejectedContainerIds, overriddenStanceRelIds, readStatusByMessageId, homeMatchIds, homeReasonByMessageId, homeDisplayRoleByMessageId, stakeCounts, correctionFilterTargetId } = props.display;
   const { comparisonReviewed, comparisonTargetId, comparisonRecommendedDisplay, activeStanceByRelMsgId, activeStanceMap } = props.comparison;
   const { draftUnits, activeTextSelectId, lastClickedMessageId } = props.selection;
   const relatedByTarget=useMemo(()=>indexRelatedMessages(messages,rejectedContainerIds),[messages,rejectedContainerIds]);
   const standaloneMessageIds = props.standaloneMessageIds;
   const listMessages = useMemo(() => filterMessageListContext(
     messagesToRenderFiltered
-      .filter(msg => !embeddedMessageIds.has(msg.id))
-      .filter(msg => !isRejectedContainer(msg,rejectedContainerIds) || standaloneMessageIds?.has(msg.id)),
+      .filter(msg => !embeddedMessageIds.has(msg.id)),
     messages, edges, standaloneMessageIds,
-  ), [messagesToRenderFiltered, messages, edges, embeddedMessageIds, rejectedContainerIds, standaloneMessageIds]);
+  ).sort(chronologicalOrder), [messagesToRenderFiltered, messages, edges, embeddedMessageIds, rejectedContainerIds, standaloneMessageIds]);
   const { settlementOpenMsgId, settlementOpenType, settlementEntryHighlight, closeSettlement, openSettlement, onMessageCreated } = props.settlement;
   const rowIds = useMemo(() => listMessages.map(message => message.id), [listMessages]);
   const rowMap = useMemo(() => new Map(listMessages.map(message => [message.id, message])), [listMessages]);
@@ -160,6 +160,7 @@ export default function WorkbenchMessageList(props: Props) {
             lastClickedMsgId: lastClickedMessageId,
             readStatus: readStatusByMessageId.get(msg.id),
             homeMatch: homeMatchIds?.has(msg.id),
+            homeReason: homeReasonByMessageId?.get(msg.id),
             homeContextRole: homeDisplayRoleByMessageId.get(msg.id),
           };
           const sc = stakeCounts[msg.id];
@@ -247,7 +248,6 @@ export default function WorkbenchMessageList(props: Props) {
                     isContainer={isOrganizationMessage} isEffective={join => effectiveJoinRelationIds.has(join.id)} onOpen={onJoinFilter} compact />
                 </>
               }
-              headerAuthor={<MessageAuthors message={msg} prefix="作者：" showSelfStake stakePlacement="inline" authorship={deriveMessageAuthorship(msg,correctionVersions.get(msg.id),msgMap,authorStakes[msg.id]??0)}/>}
               headerLabel={msg.kind === 'join' ? (
                 <span style={{ color: '#93c5fd', fontFamily: 'monospace', fontWeight: 600 }}>{msg.id}</span>
               ) : correctionFilterTargetId !== null && msg.relationType === 'correct' ? (
@@ -366,27 +366,28 @@ export default function WorkbenchMessageList(props: Props) {
                   {(msg.joinInfo?.targetIds ?? []).length > 0 ? msg.joinInfo!.targetIds.map(targetId => {
                     const target=joinEntry?.targets.find(target=>target.id===targetId);
                     return <span key={targetId} data-join-target={targetId} style={{display:'inline-flex',alignItems:'center',gap:4,maxWidth:'100%',flexWrap:'wrap',fontSize:12}}>
+                    <JoinEndpointType messageId={targetId} messages={msgMap}/>
                     <button
                       type="button"
                       onClick={event => { event.stopPropagation(); handleNavigateToMessage(targetId); }}
                       style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, border: '1px solid rgba(59,130,246,0.45)', background: 'rgba(59,130,246,0.16)', color: '#93c5fd', cursor: 'pointer', fontFamily: 'monospace' }}
                       title={`跳转到目标消息 ${targetId}`}
                     >{targetId}</button>
+                    {targetId===props.display.joinFilterTargetId&&<span data-join-target-self={targetId} style={{fontSize:10,color:'#9ca3af',whiteSpace:'nowrap'}}>（自身）</span>}
                     {target&&<span data-join-target-location={target.location} data-join-target-adopted={target.adopted?'true':'false'}
-                      style={{fontSize:10,padding:'0 5px',borderRadius:3,background:target.location==='container'?'rgba(16,185,129,0.14)':target.location==='nested'?'rgba(59,130,246,0.14)':'rgba(148,163,184,0.12)',
-                        color:target.location==='container'?'#a7f3d0':target.location==='nested'?'#bfdbfe':'#cbd5e1'}}>
+                      style={{fontSize:10,padding:'0 5px',borderRadius:3,background:target.location==='outside'?'rgba(245,158,11,0.14)':target.location==='nested'?'rgba(59,130,246,0.14)':'rgba(148,163,184,0.12)',
+                        color:target.location==='outside'?'#fbbf24':target.location==='nested'?'#bfdbfe':'#94a3b8',fontWeight:target.location==='outside'?600:undefined}}>
                       {JOIN_TARGET_LOCATION_LABELS[target.location]}{joinEntry?.adopted&&!target.adopted?' · 此目标未采用':''}
                     </span>}
                     </span>;
                   }) : <span>无</span>}
-                  <span>容器 ID：</span>
                   {msg.joinInfo?.containerId ? (
-                    <button
+                    <><JoinEndpointType messageId={msg.joinInfo.containerId} messages={msgMap} containerType={msg.joinInfo.containerType} containerLabel/><button
                       type="button"
                       onClick={event => { event.stopPropagation(); handleNavigateToMessage(msg.joinInfo!.containerId); }}
                       style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, border: '1px solid rgba(16,185,129,0.45)', background: 'rgba(16,185,129,0.16)', color: '#a7f3d0', cursor: 'pointer', fontFamily: 'monospace' }}
                       title={`跳转到容器消息 ${msg.joinInfo.containerId}`}
-                    >{msg.joinInfo.containerId}</button>
+                    >{msg.joinInfo.containerId}</button></>
                   ) : <span>无</span>}
                 </div>
               ) : msg.relationType === 'correct' ? (

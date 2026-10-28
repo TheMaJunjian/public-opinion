@@ -2,6 +2,8 @@ import type { DemoMessage, DemoEdge } from './modelBridge';
 import { hasActiveDisplayEffect } from './messageDisplay';
 import { convergeGroupingAndRightConstraints } from './layout';
 import { isAnyFrameRel, isCorrectionBadgeRel } from './graphPresentationGeometry';
+import { chronologicalOrder } from './discussionOrder';
+import {siblingColumns,type ColumnConstraints} from './graphSiblingColumns';
 
 export function computeMinColumnsForAnnoRefRule1(normalIds: string[], edges: DemoEdge[], relIds: Set<string>) {
   const normalSet = new Set(normalIds);
@@ -111,29 +113,15 @@ export function applyReplyLayoutAdjustmentsWithConstraints(params: {
     if (!replyTargetsByFrom.has(e.from.messageId)) replyTargetsByFrom.set(e.from.messageId, []);
     replyTargetsByFrom.get(e.from.messageId)!.push(e.to.messageId);
   }
-  function mode(nums: number[]) {
-    const cnt = new Map<number, number>();
-    for (const n of nums) cnt.set(n, (cnt.get(n) ?? 0) + 1);
-    let best = nums[0] ?? 0, bestC = -1;
-    for (const [k, c] of cnt) if (c > bestC || (c === bestC && k < best)) { best = k; bestC = c; }
-    return best;
-  }
-  const byAuthor = new Map<string, number[]>();
-  for (const m of normals) {
-    const arr = byAuthor.get(m.author) ?? [];
-    arr.push(baseCol[m.id] ?? 0);
-    byAuthor.set(m.author, arr);
-  }
+  // A later reference must not open a cheaper lane for an earlier reply.
+  // Accumulate only the author's published prefix and its then-visible width.
+  const chronological = [...normals].sort(chronologicalOrder);
+  const authorCounts = new Map<string, Map<number, number>>();
   const authorAnchor: Record<string, number> = {};
-  for (const [author, colsArr] of byAuthor) authorAnchor[author] = mode(colsArr);
   const authorPrevLane: Record<string, number | null> = {};
-  for (const a of Object.keys(authorAnchor)) authorPrevLane[a] = null;
+  let prefix = 0, historicalMax = 0;
   const replyFromIds = Array.from(replyTargetsByFrom.keys());
-  replyFromIds.sort((a, b) => {
-    const ta = new Date(msgById.get(a)?.createdAt ?? 0).getTime();
-    const tb = new Date(msgById.get(b)?.createdAt ?? 0).getTime();
-    return ta !== tb ? ta - tb : a.localeCompare(b);
-  });
+  replyFromIds.sort((a, b) => chronologicalOrder(msgById.get(a)!, msgById.get(b)!));
   function better(a: any, b: any) {
     if (!b) return true; if (!a) return false;
     for (const k of ["incMax","maxDist","sumDist","inLane","stable","c"]) {
@@ -143,6 +131,14 @@ export function applyReplyLayoutAdjustmentsWithConstraints(params: {
   }
   for (const fromId of replyFromIds) {
     const fromMsg = msgById.get(fromId); if (!fromMsg) continue;
+    while (prefix < chronological.length && chronologicalOrder(chronological[prefix], fromMsg) <= 0) {
+      const message = chronological[prefix++], lane = baseCol[message.id] ?? 0;
+      historicalMax = Math.max(historicalMax, lane);
+      const counts = authorCounts.get(message.author) ?? new Map<number, number>();
+      const count = (counts.get(lane) ?? 0) + 1; counts.set(lane, count); authorCounts.set(message.author, counts);
+      const best = authorAnchor[message.author];
+      if (best === undefined || count > (counts.get(best) ?? 0) || count === (counts.get(best) ?? 0) && lane < best) authorAnchor[message.author] = lane;
+    }
     const targets = replyTargetsByFrom.get(fromId) ?? [];
     const targetCols = targets.filter(t => normalSet.has(t)).map(t => col[t] ?? baseCol[t] ?? 0);
     const forbidden = new Set<number>(targetCols);
@@ -166,13 +162,14 @@ export function applyReplyLayoutAdjustmentsWithConstraints(params: {
       const sumDist = targetCols.reduce((s,t) => s+Math.abs(c-t), 0);
       const inLane = (c===anchor||c===anchor+1) ? 0 : 1;
       const stable = (prevLane!==null && c===prevLane) ? 0 : 1;
-      const incMax = c > maxCol ? c-maxCol : 0;
+      const incMax = c > historicalMax ? c-historicalMax : 0;
       return { incMax, maxDist, sumDist, inLane, stable, c };
     };
     let bestScore: any = null, bestC: number | null = null;
     for (const c of uniq) { const sc = scoreCandidate(c); if (sc && better(sc, bestScore)) { bestScore = sc; bestC = c; } }
-    if (bestC === null) { let c = Math.max(baseMin, maxCol+1); while (forbidden.has(c)) c++; bestC = c; }
+    if (bestC === null) { let c = Math.max(baseMin, historicalMax+1); while (forbidden.has(c)) c++; bestC = c; }
     col[fromId] = bestC; maxCol = Math.max(maxCol, bestC); authorPrevLane[fromMsg.author] = bestC;
+    historicalMax = Math.max(historicalMax, bestC);
   }
 
   // Propagate right-shift constraints after reply placement.
@@ -406,6 +403,20 @@ export function applyAgreeDisagreeColumnOverride(params: {
     if (col[fromId] > prevFromCol) {
       propagateRightDependents([fromId]);
     }
+  }
+  // A new supporter can require another lane on the left of an existing
+  // supporter. Propagate that space through every affected target, rather than
+  // clamping the new source into its target's column. Cycles stack in one lane.
+  const constraints:ColumnConstraints=[];
+  for(const edge of edges){
+    if(!normalSet.has(edge.from.messageId)||!normalSet.has(edge.to.messageId))continue;
+    if(edge.relationType==='agree')constraints.push([edge.from.messageId,edge.to.messageId]);
+    else if(['disagree','reference','annotation','notify'].includes(edge.relationType))constraints.push([edge.to.messageId,edge.from.messageId]);
+  }
+  if(constraints.length){
+    const resolved=siblingColumns(normals.map(message=>({id:message.id,column:col[message.id]??0,width:0})),constraints,false);
+    for(const [id,column] of resolved.columns)col[id]=column;
+    maxCol=Math.max(0,...Object.values(col));
   }
   return { col, maxCol };
 }

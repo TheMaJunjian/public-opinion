@@ -22,6 +22,24 @@ function scene(projection:{messages:ReturnType<typeof convertMessagesToDemoModel
   return {ids:[...result.normalIds].sort(),frames:result.frameBlocks.map(frame=>({id:frame.relMsgId,members:[...frame.directCardIds].sort()})),members:projection.edges.filter(edge=>edge.relationMessageId==='C').map(edge=>edge.to.messageId).sort()};
 }
 
+it.each(['ANNOTATION','REFERENCE','REPLY','NOTIFY'])('retains an inactive %s as a card and restores its connection in approval preview and comparison',type=>{
+  const relations=[rel('connection',type,['target'],'source'),rel('objection','DISAGREE',['connection'],null,'2026-01-02')];
+  const model=convertMessagesToDemoModel(['source','target'].map(text),relations);
+  const effect=deriveContainerEffect({...model,relations,username:'tester'}),ordinary=projectContainerCanvas(effect,{kind:'root'});
+  expect(effect.suppressed.has('connection')).toBe(true);
+  expect(ordinary.edges.some(edge=>edge.relationMessageId==='connection')).toBe(false);
+  expect(projectGraphScene({...ordinary,isTraceWindow:false,traceExpandedFrameIds:new Set()}).normalIds).toContain('connection');
+  const pair=compare(model,relations,'connection',null);
+  expect(pair.agree.edges.some(edge=>edge.relationMessageId==='connection')).toBe(true);
+  expect(pair.disagree.edges.some(edge=>edge.relationMessageId==='connection')).toBe(false);
+  for(const [side,card] of [[pair.agree,false],[pair.disagree,true]] as const){
+    const scene=projectGraphScene({...side,...side.context,isTraceWindow:false,traceExpandedFrameIds:new Set()});
+    expect(scene.normalIds.includes('connection')).toBe(card);
+    expect(scene.normalIds).not.toContain('objection');
+    expect(side.messages.some(message=>message.id==='objection')).toBe(true);
+  }
+});
+
 it.each(['CLASSIFY','SUMMARY','ARRANGE','MERGE'])('shares %s approval, JOIN switching and membership between preview and comparison',type=>{
   const relations=[rel('A','CLASSIFY',['C','one','two']),rel('C',type),rel('old','JOIN',['one','two'],'A'),rel('new','JOIN',['one','two'],'C','2026-01-02')];
   const model=convertMessagesToDemoModel(['one','two'].map(text),relations);
@@ -110,6 +128,7 @@ it.each(['MERGE', 'ARRANGE', 'SUMMARY'])('keeps a restored %s visible and empty 
 
 it('honors authoritative active JOIN state despite historical opposing records',()=>{
   const relations=[rel('C','CLASSIFY'),rel('joined','JOIN',['leaf'],'C'),rel('historical-against','DISAGREE',['joined'])];
+  relations[2].spending={wager:2,recommendation:0,protocol:0};
   const model=convertMessagesToDemoModel([text('leaf')],relations);
   model.messages.find(message=>message.id==='joined')!.state=state('joined',false);
   const effect=deriveContainerEffect({...model,relations,username:'tester'});
@@ -164,7 +183,7 @@ it('keeps JOIN-only released members reachable in comparison trace without resto
   model.messages.find(message=>message.id==='C')!.state=state('C',true);
   const comparison=compare(model,relations,'C',null,{traceEntries:[{ids:['C'],snapshot:null,mode:'trace',classifyRelMsgId:null,classifyStack:[]}]});
   expect(scene(comparison.agree).ids).toEqual(['C']);
-  expect(scene(comparison.disagree).ids).toEqual(['leaf']);
+  expect(scene(comparison.disagree).ids).toEqual(['C','leaf']);
 });
 
 it('uses exactly the original comparison agree side including surrounding messages, filters and trace context',()=>{

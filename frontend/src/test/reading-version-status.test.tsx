@@ -13,8 +13,9 @@ import {groupReadingInfluences} from '../pages/workbench/model/readingInfluenceG
 import {deriveHomeFilterResult} from '../pages/workbench/projections/homeFilterResult';
 
 const user={id:'alice',username:'alice',createdAt:''};
-const text=(id:string,content=id):Message=>({id,kind:'TEXT',content,contentType:'TEXT',createdAt:'2026-01-01',createdBy:user});
-const relation=(id:string,type:string,target:string,payload:Relation['payload']={},source:string|null=null):Relation=>({id,relationType:type,sourceMessageId:source,targetRefs:[{kind:'message',messageId:target}],payload,createdAt:`2026-01-0${id.includes('2')?3:2}`,createdBy:user});
+const writer={id:'writer',username:'writer',createdAt:''};
+const text=(id:string,content=id):Message=>({id,kind:'TEXT',content,contentType:'TEXT',createdAt:'2026-01-01',createdBy:writer});
+const relation=(id:string,type:string,target:string,payload:Relation['payload']={},source:string|null=null):Relation=>({id,relationType:type,sourceMessageId:source,targetRefs:[{kind:'message',messageId:target}],payload,createdAt:`2026-01-0${id.includes('2')?3:2}`,createdBy:writer});
 const corrections=[relation('c1','CORRECT','m',{correctionBeforeContent:'原文',correctionAfterContent:'版本一'}),relation('c2','CORRECT','m',{correctionBeforeContent:'原文',correctionAfterContent:'版本二'})];
 function fixture(relations:Relation[]=corrections,marks:ReadingMark[]=[],version='current'){
   const model=convertMessagesToDemoModel([text('m','原文'),text('x')],relations),personalEffect=deriveContainerEffect({...model,relations,username:'alice',stakeCounts:{}});
@@ -31,7 +32,8 @@ describe('shared reading status across display versions',()=>{
   const ready=(relations:Relation[]=corrections)=>{
     let marks=fixture(relations,[],'original').confirm('m');
     for(const id of relations.filter(item=>item.relationType==='CORRECT').map(item=>item.id))marks=[...marks,...fixture(relations,marks,'original').confirm(id)];
-    return marks;
+    const input=fixture(relations,marks).readingInput;
+    return [...marks,...influenceReadingMarks('m',(deriveReadingProgress(input).pendingInfluences.get('m')??[]).filter(item=>item.type==='correct'))];
   };
   it('records original progress without marking the root or hidden correction bodies read',()=>{
     const original=fixture(corrections,[],'original'),marks=original.confirm('m');
@@ -49,7 +51,7 @@ describe('shared reading status across display versions',()=>{
     expect(all.filter(item=>item.messageId==='m'&&item.scope==='message')).toHaveLength(1);
     expect(all.find(item=>item.messageId==='m'&&item.scope==='message')!.key).toBe(messageReadingKey('m'));
   });
-  it('retains discussion and correction influences across all displays without marking their bodies read',()=>{
+  it('confirms stance effects across displays while retaining discussion and unread relationship bodies',()=>{
     const relations=[...corrections,relation('agree1','AGREE','c1'),relation('agree2','AGREE','c2'),relation('reply','REPLY','m')];
     const marks=ready(relations),all=[...marks,...fixture(relations,marks).confirm('m')];
     for(const choice of ['original','c1','c2'])expect(fixture(relations,all,choice).hints.hints.get('m')).toMatchObject({unread:false,relatedUnreadIds:['reply']});
@@ -102,26 +104,31 @@ describe('shared reading status across display versions',()=>{
     expect(after.hints.hints.get('m')?.relatedUnreadIds).toEqual(expect.arrayContaining(['d','t1','t2','r1','r2']));
     expect(marks).toHaveLength(2);expect(marks.every(mark=>mark.messageId==='m'&&mark.scope==='influence'&&mark.key==='agree:'&&!!mark.eventId)).toBe(true);
   });
-  it('confirms grouped influences with the main button while retaining separate reply confirmation',async()=>{
+  it('confirms votes, annotations and settlement effects from the single current-message button',async()=>{
     const relations=[relation('agree1','AGREE','m'),relation('agree2','AGREE','m'),relation('oppose','DISAGREE','m'),relation('tag','TAG','m',{label:'可靠'}),relation('reply','REPLY','m')];
-    const before=fixture(relations),onMarkRead=vi.fn<(marks:ReadingMark[])=>Promise<void>>(async()=>{}),onView=vi.fn();
+    const base=fixture(relations),before={...base,input:{...base.input,messages:[...base.input.messages,
+      {...base.input.messages[0],id:'start',kind:'round' as const,settlementTargetId:'m'},
+      {...base.input.messages[0],id:'result',kind:'round_result' as const,settlementTargetId:'m'}]}},onMarkRead=vi.fn<(marks:ReadingMark[])=>Promise<void>>(async()=>{}),onView=vi.fn();
     const element=(input:DisplayHintsInput)=><MessageDisplayHintsProvider input={input} onView={onView} onMarkRead={onMarkRead}><MessageDisplayMarker messageId="m"/></MessageDisplayHintsProvider>;
     const view=render(element(before.input));fireEvent.click(screen.getByRole('button',{name:/^显示提示 m：/}));
     const tooltip=screen.getByRole('tooltip');
-    expect(tooltip).toHaveTextContent('4 条影响待阅');
+    expect(tooltip).toHaveTextContent('6 条影响待阅');
     const confirm=within(tooltip).getByRole('button',{name:'标记当前消息已阅'});
-    expect(confirm).toHaveAttribute('title','同时确认：当前消息、赞同、反对、标注「可靠」。');
+    expect(tooltip.querySelector('[data-display-hint-influences]')).toHaveStyle({scrollbarGutter:'stable',paddingRight:'6px',overflowX:'hidden'});
+    for(const label of ['当前消息','赞同','反对','标注「可靠」','结算 · 发起结算','结算 · 结算结果'])expect(confirm.getAttribute('title')).toContain(label);
     expect(tooltip).not.toHaveTextContent('agree1');expect(tooltip).not.toHaveTextContent('agree2');expect(tooltip).not.toHaveTextContent('当前更正');
-    expect(within(screen.getByRole('region',{name:'点击已阅将自动确认'})).getAllByRole('button')).toHaveLength(1);
+    expect(within(screen.getByRole('region',{name:'点击已阅将确认已读'})).getAllByRole('button',{name:'标记当前消息已阅'})).toHaveLength(1);
     await act(async()=>fireEvent.click(confirm));
     const marks=onMarkRead.mock.calls[0][0];
     expect(marks).toContainEqual(expect.objectContaining({messageId:'m',scope:'message'}));
-    for(const key of ['agree:','disagree:','tag:可靠'])expect(marks).toContainEqual(expect.objectContaining({messageId:'m',scope:'influence',key}));
+    expect(new Set(marks.filter(mark=>mark.scope==='influence').map(mark=>JSON.parse(mark.eventId!)[0]))).toEqual(new Set(['agree1','agree2','oppose','tag','start','result']));
     expect(marks.some(mark=>['agree1','agree2','oppose','tag','reply'].includes(mark.messageId)&&mark.scope!=='influence')).toBe(false);
     expect(onView).not.toHaveBeenCalled();
     view.rerender(element({...before.input,readingMarks:onMarkRead.mock.calls[0][0]}));
     expect(screen.getByRole('tooltip')).toHaveTextContent('1 条影响待阅');expect(screen.queryByRole('button',{name:'标记赞同影响已阅'})).toBeNull();
-    expect(within(screen.getByRole('region',{name:'需分别查看确认'})).getByRole('button',{name:'标记回复 reply 已阅'})).toBeInTheDocument();
+    expect(screen.queryByRole('button',{name:'标记反对影响已阅'})).toBeNull();
+    expect(onMarkRead).toHaveBeenCalledOnce();
+    expect(within(screen.getByRole('region',{name:'需分别查看确认'})).queryByRole('button',{name:/已阅/})).toBeNull();
   });
   it('keeps start, result and termination as distinct settlement confirmations',()=>{
     const initial=fixture([relation('stop','PROPOSAL','m',{operationType:'TERMINATE_SETTLEMENT'})]);

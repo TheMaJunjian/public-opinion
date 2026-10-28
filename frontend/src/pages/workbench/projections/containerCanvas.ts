@@ -4,6 +4,7 @@ import { expandTextIdsWithCorrections } from '../model/correction';
 import { expandTextIdsWithSettlementResults } from '../model/navigation';
 import { collectExclusiveRelationMsgIds } from '../actions/targetResolution';
 import { deriveGraphMessagesToRender } from './graphMessagesToRender';
+import {isRejectedRelation} from '../../../utils/relatedMessages';
 
 export type ContainerCanvasScope = {kind:'root'} | {kind:'inside';id:string};
 
@@ -29,6 +30,6 @@ export function projectContainerCanvas(effect:ContainerEffect,scope:ContainerCan
     classifiedTargetClassifyRelMsgIds:empty(),classifiedTargetMergeRelMsgIds:empty(),classifiedTargetARRANGERelMsgIds:empty(),
     graphExclusiveRelMsgIds:exclusive,graphHiddenTextIds:hiddenText,
   });
-  const visible=scoped.graphMessagesToRender.filter(message=>!effect.suppressed.has(message.id)||isContentKind(message.kind));
-  return {messages:visible,edges:effect.projectEdges(scoped.graphEdgesToRender,new Set(visible.map(message=>message.id))),hideMessageIds:scoped.hideMessageIds};
+  const visible=scoped.graphMessagesToRender.filter(message=>!effect.suppressed.has(message.id)||isContentKind(message.kind)||isRejectedRelation(message,effect.suppressed));
+  return {messages:visible,edges:effect.projectEdges(scoped.graphEdgesToRender,new Set(visible.map(message=>message.id))),hideMessageIds:scoped.hideMessageIds,rejectedRelationIds:effect.suppressed};
 }

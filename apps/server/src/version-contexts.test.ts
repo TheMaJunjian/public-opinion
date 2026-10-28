@@ -12,12 +12,17 @@ import {statesFor} from './projections.js';
 import {Mutation} from './db.js';
 const apps:Awaited<ReturnType<typeof createTestApp>>[]=[];
 afterEach(async()=>{for(const app of apps.splice(0))await app.close();await cleanupTestDatabases();});
-async function setup(){
+async function setup(receivedOriginal=false){
   const app=await createTestApp();apps.push(app);const agent=request.agent(app);
   const session=(await agent.post('/api/register').send({username:'版本测试',password:'test-password-123'})).body;
   const raw=(path:string,body:object)=>agent.post('/api/ui'+path).set('x-csrf-token',session.csrf).set('x-request-id',randomUUID()).send(body);
   const post=async(path:string,body:Record<string,unknown>)=>{const result=await raw(path,withTestCommandContributions(path,body));expect(result.status,result.text).toBe(201);return result.body;};
-  const m=await post('/messages',{content:'甲乙'});
+  let m;
+  if(receivedOriginal){
+    const publisher=request.agent(app),owner=(await publisher.post('/api/register').send({username:'原文发布者',password:'test-password-123'})).body;
+    const sent=await publisher.post('/api/ui/messages').set('x-csrf-token',owner.csrf).set('x-request-id',randomUUID()).send(withTestCommandContributions('/messages',{content:'甲乙'}));
+    expect(sent.status,sent.text).toBe(201);m=sent.body;
+  }else m=await post('/messages',{content:'甲乙'});
   const correction=(start:number,replacement:string)=>post('/relations',{relationType:'CORRECT',targetRefs:[{kind:'message',messageId:m.id,reference:{messageId:m.id,revision:1,partId:'body',range:{start,end:start+1}}}],payload:{correctionKind:'TEXT',correctionContent:replacement}});
   const t=await correction(0,'丙'),a=await correction(1,'丁');
   const version=(ids:string[])=>bodyVersion(m.id,1,ids.map(messageId=>({messageId,revision:1,kind:'TEXT'})));
@@ -49,7 +54,7 @@ it('quotes corrected fragments with exact evidence, rejecting forged versions wi
   expect(invalid.status).toBe(400);expect(await app.store.account(session.user.id)).toEqual(before);expect(await app.store.latestSequence()).toBe(sequence);
 });
 it('requires original and every correction, including rejected candidates, only before the first shared read',async()=>{
-  const {app,agent,post,raw,session,m,t,a,correction,version,mark,save}=await setup();
+  const {app,agent,post,raw,session,m,t,a,correction,version,mark,save}=await setup(true);
   await post('/relations',{relationType:'DISAGREE',targetRefs:[{kind:'message',messageId:a.id}],stakeAmount:1});
   expect((await raw('/reading-state',{marks:[mark(m.id,version([t.id]))]})).status).toBe(400);
   await save([mark(m.id,version([]),'original'),mark(t.id)]);
@@ -72,7 +77,7 @@ it('retains finite event acknowledgments and keeps later rounds independently co
   expect((await agent.get('/api/ui/reading-state')).body.marks.filter((mark:any)=>mark.scope==='influence')).toHaveLength(2);
 });
 it('also requires WIDTH corrections and rejects native meaning corrections without money changes',async()=>{
-  const {app,agent,post,raw,session,m,t,a,mark,save}=await setup();
+  const {app,agent,post,raw,session,m,t,a,mark,save}=await setup(true);
   const width=await post('/relations',{relationType:'CORRECT',targetRefs:[{kind:'message',messageId:m.id}],payload:{correctionKind:'WIDTH',correctionWidth:640}});
   await save([mark(m.id,bodyVersion(m.id),'original'),mark(t.id),mark(a.id)]);
   expect((await raw('/reading-state',{marks:[mark(m.id)]})).body.error).toContain(width.id);
@@ -139,7 +144,7 @@ it('supports different votes in consecutive ordinary correction rounds without r
   expect((await agent.get('/api/ui/reading-state')).body.marks.find((mark:any)=>mark.messageId===m.id&&mark.scope==='message')).toMatchObject({state:'READ',key:messageReadingKey(m.id)});
 });
 it('checks the first-read boundary against a concurrently committing correction',async()=>{
-  const {app,session,raw,m,t,a,mark,save,version}=await setup();
+  const {app,session,raw,m,t,a,mark,save,version}=await setup(true);
   await save([mark(m.id,version([]),'original'),mark(t.id),mark(a.id)]);
   let release!:()=>void,entered!:(id:string)=>void;
   const released=new Promise<void>(resolve=>release=resolve),ready=new Promise<string>(resolve=>entered=resolve);

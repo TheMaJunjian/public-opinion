@@ -2,7 +2,11 @@ import type { CleanFilterRule } from '../types';
 import type { CleanVisibleIds } from '../hooks/useCleanView';
 import type { DemoMessage, DemoEdge } from './modelBridge';
 import { isCardMessage, isContentKind } from './modelBridge';
-import { getPresentationSpec } from '../types';
+import { CLEAN_CONTENT_TYPES, getPresentationSpec } from '../types';
+
+function messageType(message: DemoMessage): string {
+  return message.relationType?.toUpperCase() ?? ({ normal: 'TEXT', governance: 'PROPOSAL', code: 'CODE_CHANGE' }[message.kind as string] ?? message.kind.toUpperCase());
+}
 
 /** 单条规则对单条消息的判定 */
 function rulePassesMessage(
@@ -18,6 +22,20 @@ function rulePassesMessage(
   },
 ): boolean {
   switch (rule.kind) {
+    case 'time': {
+      const time=Date.parse(ctx.msgMap.get(msgId)?.createdAt??'');
+      const from=rule.from?Date.parse(rule.from):-Infinity,to=rule.to?Date.parse(rule.to):Infinity;
+      // Inputs have minute precision; include the whole selected end minute.
+      return Number.isFinite(time)&&time>=from&&time<to+60000;
+    }
+    case 'messageType': {
+      const message = ctx.msgMap.get(msgId);
+      if (!message) return false;
+      const type = messageType(message);
+      return rule.messageTypes.some(value => value === type
+        || value === 'CONTENT' && CLEAN_CONTENT_TYPES.includes(type)
+        || value === 'RELATION' && !CLEAN_CONTENT_TYPES.includes(type));
+    }
     case 'sender': {
       const msg = ctx.msgMap.get(msgId);
       return msg?.author === rule.username;
@@ -109,10 +127,47 @@ export function deriveCleanVisibleIds({ messages, edges, stakeCounts, tagCounts 
     // too, including when a CORRECT edge targets the relation itself.
     const visibleTextIds = new Set<string>();
     const visibleRelIds = new Set<string>();
+    const filteringTypes = cleanFilters.some(rule => rule.kind === 'messageType'||rule.kind==='time');
     for (const m of messages) {
-      if (!isCardMessage(m)&&!getPresentationSpec(m.relationType??'').isContainer) continue;
+      if (!filteringTypes && !isCardMessage(m)&&!getPresentationSpec(m.relationType??'').isContainer) continue;
       const passes = cleanFilters.every(rule => rulePassesMessage(rule, m.id, ctx));
       if (passes)(isContentKind(m.kind)?visibleTextIds:visibleRelIds).add(m.id);
+    }
+
+    if (filteringTypes) {
+      // A matching relationship needs its endpoints; containing frames retain
+      // their hierarchy without introducing unrelated siblings or relationships.
+      const pending = [...visibleRelIds];
+      const visited = new Set<string>();
+      const edgesByRelation = new Map<string, DemoEdge[]>();
+      for (const edge of edges) {
+        const owned = edgesByRelation.get(edge.relationMessageId) ?? [];
+        owned.push(edge); edgesByRelation.set(edge.relationMessageId, owned);
+      }
+      for (let index = 0; index < pending.length; index++) {
+        const id = pending[index];
+        if (visited.has(id)) continue;
+        visited.add(id);
+        if (getPresentationSpec(msgMap.get(id)?.relationType ?? '').isContainer) continue;
+        for (const edge of edgesByRelation.get(id) ?? []) {
+          for (const endpoint of [edge.from.messageId, edge.to.messageId]) {
+            const message = msgMap.get(endpoint);
+            if (!message || endpoint.startsWith('anon:')) continue;
+            (isContentKind(message.kind) ? visibleTextIds : visibleRelIds).add(endpoint);
+            if (message.kind === 'relation') pending.push(endpoint);
+          }
+        }
+      }
+      let added = true;
+      while (added) {
+        added = false;
+        for (const edge of edges) if (getPresentationSpec(edge.relationType).isContainer
+          && (visibleTextIds.has(edge.to.messageId) || visibleRelIds.has(edge.to.messageId))
+          && !visibleRelIds.has(edge.relationMessageId)) {
+          visibleRelIds.add(edge.relationMessageId); added = true;
+        }
+      }
+      return { visibleTextIds, visibleRelIds };
     }
 
     // Step 2: 纳入端点都可见的关系消息。

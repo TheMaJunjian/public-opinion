@@ -35,6 +35,19 @@ export function getMessageJumpDisplay(target: HTMLElement, messageId: string, fa
   const canvas = target.closest<HTMLElement>('[data-jump-canvas]');
   if (!canvas) return { source: target, elements: undefined, rect: fallback };
   const groups = canvasGroups.get(canvas);
+  // An edge record is inspected through its compact label. Its entire SVG
+  // curve can span the canvas and must remain under the navigation mask.
+  const labels=Array.from(canvas.querySelectorAll('[data-directed-edge-label]'))
+    .filter(element=>element.getAttribute('data-directed-edge-label')===messageId);
+  if(target.hasAttribute('data-directed-edge-start'))return {source:canvas,elements:new Set<Element>([target,...labels]),rect:target.getBoundingClientRect()};
+  if(labels.length){
+    const elements=new Set<Element>(labels),first=labels[0].getBoundingClientRect();
+    const rect=labels.slice(1).reduce((bounds,element)=>{const next=element.getBoundingClientRect();
+      const left=Math.min(bounds.left,next.left),top=Math.min(bounds.top,next.top);
+      return new DOMRect(left,top,Math.max(bounds.right,next.right)-left,Math.max(bounds.bottom,next.bottom)-top);
+    },first);
+    return {source:canvas,elements,rect};
+  }
   const ids = new Set([messageId]);
   // A Set breaks cycles and also visits newly added nested members/dependants.
   for (const id of ids) for (const member of groups?.get(id) ?? []) ids.add(member);

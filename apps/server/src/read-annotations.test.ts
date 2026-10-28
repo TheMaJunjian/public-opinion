@@ -3,9 +3,50 @@ import request from 'supertest';
 import {randomUUID} from 'node:crypto';
 import {createTestApp,cleanupTestDatabases,withTestCommandContributions} from './test-database.js';
 import {bodyVersion,messageReadingKey,type ReadingMark} from '@gonglun/core';
+import {authoredReadingMark} from '../../../frontend/src/pages/workbench/model/readingProgress.js';
 
 const apps:Awaited<ReturnType<typeof createTestApp>>[]=[];
 afterEach(async()=>{for(const app of apps.splice(0))await app.close();await cleanupTestDatabases();});
+
+it('accepts the workbench author confirmation after sending and leaves targets unread',async()=>{
+  const app=await createTestApp();apps.push(app);const agent=request.agent(app);
+  const registration=await agent.post('/api/register').send({username:'发送后阅读',password:'test-password-123'});
+  const create=async(content:string)=>{
+    const response=await agent.post('/api/ui/messages').set('x-csrf-token',registration.body.csrf).set('x-request-id',randomUUID())
+      .send(withTestCommandContributions('/messages',{content}));
+    expect(response.status,response.text).toBe(201);return response.body;
+  };
+  const target=await create('引用目标'),sent=await create('刚发送的正文');
+  const citation=await agent.post('/api/ui/relations').set('x-csrf-token',registration.body.csrf).set('x-request-id',randomUUID())
+    .send(withTestCommandContributions('/relations',{relationType:'REFERENCE',sourceMessageId:sent.id,targetRefs:[{kind:'message',messageId:target.id}]}));
+  expect(citation.status,citation.text).toBe(201);
+  const saved=await agent.post('/api/ui/reading-state').set('x-csrf-token',registration.body.csrf)
+    .send({marks:[authoredReadingMark(sent,'display:author')]});
+  expect(saved.status,saved.text).toBe(200);
+  expect(saved.body.marks).toEqual([expect.objectContaining({messageId:sent.id,state:'READ',directConfirmedAt:expect.any(String)})]);
+  const state=(await agent.get('/api/ui/reading-state')).body.marks;
+  expect(state.some((mark:ReadingMark)=>mark.messageId===target.id)).toBe(false);
+});
+
+it('treats publication as the author’s original read while preserving another reader’s correction prerequisites',async()=>{
+  const app=await createTestApp();apps.push(app);const author=request.agent(app),other=request.agent(app),reader=request.agent(app);
+  const own=(await author.post('/api/register').send({username:'正文作者',password:'test-password-123'})).body;
+  const peer=(await other.post('/api/register').send({username:'更正读者',password:'test-password-123'})).body;
+  const viewer=(await reader.post('/api/register').send({username:'未阅读者',password:'test-password-123'})).body;
+  const sent=await author.post('/api/ui/messages').set('x-csrf-token',own.csrf).set('x-request-id',randomUUID())
+    .send(withTestCommandContributions('/messages',{content:'作者已读原文'}));
+  expect(sent.status,sent.text).toBe(201);
+  const correction=await other.post('/api/ui/relations').set('x-csrf-token',peer.csrf).set('x-request-id',randomUUID())
+    .send(withTestCommandContributions('/relations',{relationType:'CORRECT',sourceMessageId:null,targetRefs:[{kind:'message',messageId:sent.body.id,reference:{messageId:sent.body.id,revision:1,partId:'body'}}],payload:{correctionContent:'更正正文',correctionKind:'TEXT'}}));
+  expect(correction.status,correction.text).toBe(201);
+  const mark=authoredReadingMark(sent.body,'display:original'),sequence=await app.store.latestSequence();
+  const confirmed=await author.post('/api/ui/reading-state').set('x-csrf-token',own.csrf).send({marks:[mark]});
+  expect(confirmed.status,confirmed.text).toBe(200);
+  expect(confirmed.body.marks[0]).toMatchObject({messageId:sent.body.id,state:'READ',originalSeen:true});
+  const unknown=await reader.post('/api/ui/reading-state').set('x-csrf-token',viewer.csrf).send({marks:[mark]});
+  expect(unknown.status,unknown.text).toBe(400);expect(unknown.text).toContain('请先阅读全部更正消息');
+  expect(await app.store.latestSequence()).toBe(sequence);
+});
 
 it('stores viewing confirmations privately and durably without creating messages, fees, journal changes or notifications',async()=>{
   const app=await createTestApp();apps.push(app);

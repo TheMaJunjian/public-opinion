@@ -13,6 +13,77 @@ const edge = (id: string, source: string, target: string): DemoEdge => ({ id, re
 const frame = (id: string, members: string[], children: string[] = []): FrameBlock => ({ relMsgId: id, cardIds: new Set([...members, ...children]), directCardIds: new Set(members), childRelMsgIds: children, isMerge: false, hasGroupHeader: true });
 
 describe('scene layout', () => {
+  it.each([false,true].flatMap(nested=>['b1','group-b'].map(target=>({nested,target}))))('places a citing classification as a whole to the right of $target (nested: $nested)',({nested,target})=>{
+    const normals=['a1','a2','b1','b2'].map((id,index)=>({...message(id),createdAt:new Date(index*1000).toISOString()}));
+    const containers=['group-a','group-b','outer'].map(id=>({...message(id),kind:'relation' as const,relationType:'classify' as const}));
+    const frames=[frame('group-a',['a1','a2']),frame('group-b',['b1','b2']),...(nested?[frame('outer',[],['group-a','group-b'])]:[])];
+    const run=(links:DemoEdge[])=>computeSceneLayout({normals,allMessages:[...normals,...containers],edges:links,frameBlocks:frames,colOf:{},maxCol:0,measuredHeights:{},measuredWidths:{}});
+    const before=run([]),after=run([{...edge('citation','a2',target),relationType:'reference'}]);
+    expect(after.frameRects['group-a'].x).toBeGreaterThanOrEqual(after.frameRects['group-b'].x+after.frameRects['group-b'].width+COL_GAP);
+    for(const [container,ids] of [['group-a',['a1','a2']],['group-b',['b1','b2']]] as const)for(const id of ids){
+      expect(after.layout[id].x-after.frameRects[container].x).toBe(before.layout[id].x-before.frameRects[container].x);
+      expect(after.layout[id].y-after.frameRects[container].y).toBe(before.layout[id].y-before.frameRects[container].y);
+    }
+  });
+  it('cascades a new support through existing classifications without changing their internal layouts',()=>{
+    const normals=['b1','b2','a1','a2','c1','c2','support'].map((id,index)=>({...message(id),createdAt:new Date(index*1000).toISOString()}));
+    const containers=['A','B','C'].map(id=>({...message(id),kind:'relation' as const,relationType:'classify' as const}));
+    const frames=[frame('B',['b1','b2']),frame('A',['a1','a2']),frame('C',['c1','c2'])];
+    const original=[{...edge('a-b','a1','b1'),relationType:'reference' as const},{...edge('c-a','c1','a1'),relationType:'reference' as const}];
+    const run=(added:boolean,reverse=false)=>{
+      const nodes=added?normals:normals.slice(0,-1),links=added?[...original,{...edge('new-support','support','b1'),relationType:'agree' as const}]:original;
+      return computeSceneLayout({normals:reverse?[...nodes].reverse():nodes,allMessages:[...nodes,...containers],edges:reverse?[...links].reverse():links,frameBlocks:reverse?[...frames].reverse():frames,colOf:{},maxCol:0,measuredHeights:{},measuredWidths:{}});
+    };
+    const before=run(false),after=run(true);
+    expect(after.frameRects.B.x).toBeGreaterThanOrEqual(after.layout.support.x+after.layout.support.width+COL_GAP);
+    for(const [left,right] of [['B','A'],['A','C']])expect(after.frameRects[right].x).toBeGreaterThanOrEqual(after.frameRects[left].x+after.frameRects[left].width+COL_GAP);
+    for(const [container,ids] of [['B',['b1','b2']],['A',['a1','a2']],['C',['c1','c2']]] as const){
+      expect(after.frameRects[container].x).toBeGreaterThan(before.frameRects[container].x);
+      for(const id of ids){
+        expect(after.layout[id].x-after.frameRects[container].x).toBe(before.layout[id].x-before.frameRects[container].x);
+        expect(after.layout[id].y-after.frameRects[container].y).toBe(before.layout[id].y-before.frameRects[container].y);
+      }
+    }
+    expect(after.layout).toEqual(run(true,true).layout);
+  });
+  it.each(['row','flow'] as const)('orders citing child classifications inside a saved %s parent while preserving each child layout',display=>{
+    const normals=['a1','a2','b1','b2'].map(message);
+    const containers=['A','B','outer'].map(id=>({...message(id),kind:'relation' as const,relationType:'classify' as const,
+      ...(id==='outer'?{parts:[{id:'display',type:'display' as const,relationPartId:'members',layout:display}]}:{})}));
+    const frames=[frame('A',['a1','a2']),frame('B',['b1','b2']),{...frame('outer',[],['A','B']),targetLayout:display==='row'?'single-row' as const:'single-column' as const}];
+    for(const availableFrameWidth of [undefined,600]){
+      const run=(edges:DemoEdge[])=>computeSceneLayout({normals,allMessages:[...normals,...containers],edges,frameBlocks:frames,availableFrameWidth,colOf:{},maxCol:0,measuredHeights:{},measuredWidths:{}});
+      const before=run([]),after=run([{...edge('cross','a1','b1'),relationType:'reference'}]);
+      expect(after.frameRects.A.x).toBeGreaterThanOrEqual(after.frameRects.B.x+after.frameRects.B.width+COL_GAP);
+      for(const [parent,ids] of [['A',['a1','a2']],['B',['b1','b2']]] as const)for(const id of ids){
+        expect(after.layout[id].x-after.frameRects[parent].x).toBe(before.layout[id].x-before.frameRects[parent].x);
+        expect(after.layout[id].y-after.frameRects[parent].y).toBe(before.layout[id].y-before.frameRects[parent].y);
+      }
+    }
+  });
+  it('uses a secondary citation to shift its source and cascade to existing dependents',()=>{
+    const normals=['base','A','C','other-base','middle','B','isolated'].map((id,index)=>({...message(id),createdAt:new Date(index*1000).toISOString()}));
+    const ref=(source:string,target:string)=>({...edge(source+'-'+target,source,target),relationType:'reference' as const});
+    const original=[ref('A','base'),ref('C','A'),ref('middle','other-base'),ref('B','middle')];
+    const run=(links:DemoEdge[])=>computeSceneLayout({normals,allMessages:normals,edges:links,colOf:{},maxCol:0,measuredHeights:{},measuredWidths:{}});
+    const extra={...ref('A','B'),id:'zz-new-reference',relationMessageId:'zz-new-reference'};
+    const before=run(original),after=run([...original,extra]);
+    expect(after.layout.A.x).toBeGreaterThanOrEqual(after.layout.B.x+after.layout.B.width+COL_GAP);
+    expect(after.layout.C.x).toBeGreaterThanOrEqual(after.layout.A.x+after.layout.A.width+COL_GAP);
+    expect(after.layout.A.x).toBeGreaterThan(before.layout.A.x);expect(after.layout.C.x).toBeGreaterThan(before.layout.C.x);
+    expect(after.layout.isolated.x).toBe(before.layout.isolated.x);
+  });
+  it('stacks cyclic classification constraints in one lane without splitting their members',()=>{
+    const normals=['a1','a2','b1','b2'].map(message),containers=['A','B'].map(id=>({...message(id),kind:'relation' as const,relationType:'classify' as const}));
+    const links=[{...edge('a-b','a1','b1'),relationType:'reference' as const},{...edge('b-a','b2','a2'),relationType:'reference' as const}];
+    const run=(reverse:boolean)=>computeSceneLayout({normals:reverse?[...normals].reverse():normals,allMessages:[...normals,...containers],edges:reverse?[...links].reverse():links,
+      frameBlocks:[frame('A',['a1','a2']),frame('B',['b1','b2'])],colOf:{},maxCol:0,measuredHeights:{},measuredWidths:{}});
+    const result=run(false);
+    expect(result.frameRects.A.x).toBe(result.frameRects.B.x);
+    expect(result.frameRects.B.y).toBeGreaterThanOrEqual(result.frameRects.A.y+result.frameRects.A.height+ROW_GAP);
+    expect(new Set(result.placementOrder).size).toBe(result.placementOrder.length);
+    expect(result.layout).toEqual(run(true).layout);
+  });
   it.each((['annotation','archive','recommend','attention','block','tag'] as const).flatMap(type=>[false,true].flatMap(sourced=>[false,true].map(nested=>({type,sourced,nested})))))('lays out a text-bearing $type like a citation (source=$sourced, nested=$nested)',({type,sourced,nested})=>{
     const target=message('target'),source:DemoMessage={...message('source'),createdAt:'2026-10-28',
       ...(!sourced?{kind:'relation' as const,relationType:type}:{}),parts:[{id:'body',type:'text',text:'标注的原因'}]};
@@ -48,7 +119,7 @@ describe('scene layout', () => {
     expect(result.layout.support.x).toBeGreaterThan(result.layout['new-support'].x);expect(result.layout.target.x).toBeGreaterThan(result.layout.support.x);
     expect(result.layout.opposition.x).toBeGreaterThan(result.layout.target.x);
   });
-  it.each([false,true])('does not reparent an old container when a new member cites another discussion (nested: %s)',nested=>{
+  it.each([false,true])('moves a citing container without reparenting or separating its existing members (nested: %s)',nested=>{
     const texts=['a1','a2','b1','b2','citation'].map((id,index)=>({...message(id),createdAt:new Date(index*1000).toISOString()}));
     const containers=['group-a','group-b','outer'].map(id=>({...message(id),kind:'relation' as const,relationType:'arrange' as const}));
     const ref=(target:string)=>({...edge('cite-'+target,'citation',target),relationType:'reference' as const});
@@ -59,9 +130,12 @@ describe('scene layout', () => {
         frameBlocks:reverse?[...frames].reverse():frames,colOf:{},maxCol:0,measuredHeights:{},measuredWidths:{}});
     };
     const before=run(false),after=run(true);
-    expect(after.placementOrder.filter(id=>id!=='citation')).toEqual(before.placementOrder);
-    for(const id of ['a1','a2','b1','b2'])expect(after.layout[id].x).toBe(before.layout[id].x);
-    expect(after.layout.a1.y).toBeLessThan(after.layout.b1.y);
+    expect(after.frameRects['group-a'].x).toBeGreaterThanOrEqual(after.frameRects['group-b'].x+after.frameRects['group-b'].width+COL_GAP);
+    for(const [container,ids] of [['group-a',['a1','a2']],['group-b',['b1','b2']]] as const)for(const id of ids){
+      expect(after.layout[id].x-after.frameRects[container].x).toBe(before.layout[id].x-before.frameRects[container].x);
+      expect(after.layout[id].y-after.frameRects[container].y).toBe(before.layout[id].y-before.frameRects[container].y);
+      expect(after.placementOrder.filter(member=>member===id)).toHaveLength(1);
+    }
     expect(after.layout).toEqual(run(true,true).layout);
   });
   it('places a citation after its primary target inside a container',()=>{

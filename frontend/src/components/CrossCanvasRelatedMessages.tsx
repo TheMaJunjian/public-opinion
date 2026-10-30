@@ -4,6 +4,7 @@ import type { CrossCanvasRelationGroups } from '../utils/crossCanvasRelations';
 import type { DemoMessage, UnitSelection } from '../utils/modelBridge';
 import { isMessageElementSelected, messageTypeReference } from '../utils/messageElementSelection';
 import MessageElement from './MessageElement';
+import {useWorkbenchPortalTarget} from '../context/WorkbenchPortalContext';
 
 const stopControlPropagation = (event: SyntheticEvent) => {
   if (event.target instanceof Element && event.target.closest('button,[data-message-reference]')) event.stopPropagation();
@@ -15,6 +16,7 @@ export default function CrossCanvasRelatedMessages({ groups, messages, selectedU
   selectedUnits?: readonly UnitSelection[];
   onView?: (messageId: string) => void;
 }) {
+  const portalTarget=useWorkbenchPortalTarget();
   const [expanded, setExpanded] = useState(false);
   const [limit, setLimit] = useState(5);
   const triggerRef = useRef<HTMLButtonElement>(null), popupRef = useRef<HTMLDivElement>(null);
@@ -112,6 +114,6 @@ export default function CrossCanvasRelatedMessages({ groups, messages, selectedU
       {rows.length > limit && <button type="button" onClick={() => setLimit(value => value + 5)}>显示更多相关消息</button>}
     </div>)}
       </div>
-    </div>, document.body)}
+    </div>, portalTarget)}
   </div>;
 }

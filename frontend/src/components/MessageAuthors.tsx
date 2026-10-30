@@ -1,4 +1,4 @@
-import {useEffect,useRef,useState,type ReactNode} from 'react';
+import {useLayoutEffect,useRef,useState,type ReactNode} from 'react';
 import type {DemoMessage} from '../utils/modelBridge';
 import {bodyAuthorInvestment,messageAuthorInvestment,type AuthorContribution,type AuthorInvestment,type MessageAuthorship} from '../utils/messageAuthorship';
 import {cardAuthor} from '../utils/cardWidth';
@@ -46,13 +46,13 @@ export default function MessageAuthors({message,prefix='',showSelfStake=false,st
     const position=Math.max(0,authors.findIndex(author=>author.key===previous));
     return authors[(position+direction+authors.length)%authors.length]?.key;
   });
-  useEffect(()=>{
+  useLayoutEffect(()=>{
     const button=buttonRef.current;if(!button||authors.length<2)return;
     const wheel=(event:WheelEvent)=>{if(!event.deltaY)return;event.preventDefault();event.stopPropagation();step(event.deltaY>0?1:-1);};
     button.addEventListener('wheel',wheel,{passive:false});return()=>button.removeEventListener('wheel',wheel);
   },[authors]);
   const close=()=>{setOpen(false);buttonRef.current?.focus({preventScroll:true});};
-  useEffect(()=>{
+  useLayoutEffect(()=>{
     if(!open)return;
     contentRef.current?.focus({preventScroll:true});
     const escape=(event:KeyboardEvent)=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();close();}};

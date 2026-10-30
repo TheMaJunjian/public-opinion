@@ -1,8 +1,9 @@
-import {useEffect,useId,useLayoutEffect,useRef,useState,useSyncExternalStore} from 'react';
+import {useId,useLayoutEffect,useRef,useState,useSyncExternalStore} from 'react';
 import {createPortal} from 'react-dom';
 import {readingVersionLabel,readingVersionNavigation,type ReadingVersionChoice,type ReadingVersionHistory} from '../pages/workbench/model/readingVersions';
 import type {DisplayHintWindow} from '../pages/workbench/model/displayHintWindow';
 import HistoryArrowIcon from './HistoryArrowIcon';
+import {useWorkbenchPortalTarget} from '../context/WorkbenchPortalContext';
 
 export type ReadingVersionAction={select:string}|'back'|'forward';
 
@@ -16,6 +17,7 @@ export default function MessageReadingVersions({messageId,choices,displayedConte
   const markerRef=useRef<HTMLButtonElement>(null),popupRef=useRef<HTMLDivElement>(null),popupId=useId();
   const snapshot=useSyncExternalStore(history.subscribe,history.getSnapshot);
   const navigation=readingVersionNavigation(snapshot,messageId,versionContent,displayedContent,versionIdentity);
+  const portalTarget=useWorkbenchPortalTarget();
   const openWindow=useSyncExternalStore(windowState.subscribe,windowState.getSnapshot),key=JSON.stringify([windowScope,messageId,'versions']),open=openWindow?.key===key;
   const [position,setPosition]=useState({left:8,top:8,above:false});
   const label=readingVersionLabel(choices,displayedContent,displayedIdentity);
@@ -30,7 +32,7 @@ export default function MessageReadingVersions({messageId,choices,displayedConte
     setPosition({left:Math.max(8,Math.min(rect.left,window.innerWidth-308)),top:above?rect.top-6:rect.bottom+6,above});
   };
   useLayoutEffect(()=>{if(open)reposition();},[open,snapshot]);
-  useEffect(()=>{
+  useLayoutEffect(()=>{
     if(!open)return;
     const outside=(event:PointerEvent)=>{if(!markerRef.current?.contains(event.target as Node)&&!popupRef.current?.contains(event.target as Node))close();};
     const escape=(event:KeyboardEvent)=>{if(event.key==='Escape'){close();markerRef.current?.focus({preventScroll:true});}};
@@ -83,6 +85,6 @@ export default function MessageReadingVersions({messageId,choices,displayedConte
         <button type="button" aria-label={`版本后退 ${messageId}`} title="返回上一个阅览版本" disabled={navigation.back===undefined} onClick={()=>onNavigate('back',markerRef.current)} style={{...actionStyle,display:'inline-flex',opacity:navigation.back===undefined?0.4:1}}><HistoryArrowIcon direction="back"/></button>
         <button type="button" aria-label={`版本前进 ${messageId}`} title="前进到下一个阅览版本" disabled={navigation.forward===undefined} onClick={()=>onNavigate('forward',markerRef.current)} style={{...actionStyle,display:'inline-flex',opacity:navigation.forward===undefined?0.4:1}}><HistoryArrowIcon direction="forward"/></button>
       </div>}
-    </div>,document.body)}
+    </div>,portalTarget)}
   </span>;
 }

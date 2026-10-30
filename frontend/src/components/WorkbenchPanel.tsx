@@ -1,8 +1,10 @@
 import { messageScopePath } from '../utils/messageRoutes';
+import {DEFAULT_TRACE_DEPTHS} from '../utils/traceRange';
 import {targetInvestmentDimension} from '@gonglun/core';
 import CardWidthEditor from './graph/CardWidthEditor';
 import { lazy, useMemo, useRef } from 'react';
 import DeferredWorkbench from './DeferredWorkbench';
+import RecentWorkbenchViews from './RecentWorkbenchViews';
 import { describeUnit as describeVisibleSelection } from '../utils/selectionLabel';
 import { isWholeMessageSelection } from '../utils/messageElementSelection';
 import type { User } from '../types';
@@ -12,6 +14,7 @@ import type { DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge'
 import MessageRelationsView from './MessageRelationsView';
 import OperationLogView from './OperationLogView';
 import StagedMessageLabel from './StagedMessageLabel';
+import StanceReadingReminder from './StanceReadingReminder';
 import { useNavigate } from 'react-router-dom';
 const StanceHistoryPanel = lazy(() => import('./StanceHistoryPanel'));
 const AuditLogView = lazy(() => import('./AuditLogView'));
@@ -82,6 +85,8 @@ interface WorkbenchPanelProps {
   currentTraceIds: string[] | null;
   classifyKey: number;
   traceKey: number;
+  viewCacheKey?:string;
+  viewCacheOwner?:unknown;
 
   // Messages & edges
   messages: DemoMessage[];
@@ -277,6 +282,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
         ? <div style={{ color: "#fbbf24", fontSize: 11, marginTop: 4 }}>{p.sendValidationLabel}</div>
         : p.sendError && <div style={{ color: "#f87171", fontSize: 11, marginTop: 4 }}>{p.sendError}</div>}
       {p.sendWarning && <div style={{ color: "#fbbf24", fontSize: 11, marginTop: 4 }}>⚠️ {p.sendWarning}</div>}
+      <StanceReadingReminder relationType={p.relationType} secondaryRelationType={p.secondaryRelationType} targetIds={(p.draftUnits.length?p.draftUnits:p.targetUnits).map(unit=>unit.messageId)}/>
     </>
   );
   const isComparison = !p.singleSideReview && Boolean(p.comparisonMode || p.comparisonReviewed);
@@ -311,7 +317,9 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
         <div style={{ fontWeight: 600 }}>{p.singleSideReview.kind==='correction'?'更正查看':p.singleSideReview.kind==='relation'?'消息效果查看':'容器查看'}</div>
         <div style={{ fontSize: 12, opacity: 0.8 }}>当前目标：{p.singleSideReview.title}</div>
       </div>}
-      {p.traceReadingControls}
+      <RecentWorkbenchViews ownerKey={p.viewCacheOwner??p.scopeMessageId} viewKey={p.traceReadingControls?'reading':'none'} limit={2}>
+        {p.traceReadingControls}
+      </RecentWorkbenchViews>
       {(p.singleSideReview || p.canExitTrace) && <button onClick={p.canExitTrace ? p.exitAllTrace : p.singleSideReview?.onExit}
         style={{ padding: '5px 8px', borderRadius: 4, border: '1px solid #666', background: '#333', color: '#eee', cursor: 'pointer' }}
         title={p.canExitTrace ? '退出全部追溯并恢复进入第一次追溯前的现场' : '退出当前查看'}>{p.singleSideReview || p.isRelatedView ? '退出查看' : '退出追溯'}</button>}
@@ -358,7 +366,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
         </div>
 
         {p.canExitTrace && <div style={{ display: "flex", gap: 8, alignItems: "center",flexWrap:'wrap' }}>
-          {(['up','down'] as const).map(side=>{const name=side==='up'?'向上':'向下',value=p.traceDepths?.[side]??1;
+          {(['up','down'] as const).map(side=>{const name=side==='up'?'向上':'向下',value=p.traceDepths?.[side]??DEFAULT_TRACE_DEPTHS[side];
             return <label key={side} style={{display:'flex',alignItems:'center',gap:5,fontSize:12}}>
               {name}（{side==='up'?'前因／依据':'后续／影响'}）
               <button type="button" aria-label={`减少${name}追溯距离`} disabled={value===0} onClick={()=>p.onTraceDepthChange?.(side,value-1)}>−</button>
@@ -376,8 +384,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
             {p.draftGroups.map(g => (
               <li key={`DG-${g.messageId}`} style={{ borderBottom: "1px solid #333", paddingBottom: 6, marginBottom: 6 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                  <StagedMessageLabel messageId={g.messageId} message={messageMap.get(g.messageId)} status={g.wholeSelected ? '已选择整条' : `已选择 ${g.fragments.length} 处`} />
-                  {g.wholeSelected && <button type="button" aria-label={`跳转到暂存消息 ${g.messageId}`} onClick={() => p.onNavigateToMessage(g.messageId)} style={{fontSize:10,padding:'0 6px',borderRadius:4,border:'1px solid #475569',background:'#243448',color:'#bae6fd',cursor:'pointer',marginRight:6,flexShrink:0}}>跳转</button>}
+                  <StagedMessageLabel messageId={g.messageId} message={messageMap.get(g.messageId)} onNavigate={p.onNavigateToMessage} wholeMessage={g.wholeSelected} status={g.wholeSelected ? '已选择整条' : `已选择 ${g.fragments.length} 处`} />
                   {g.wholeSelected && <button onClick={() => g.wholeUnits.forEach(p.removeUnitFromDraft)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>删除整条</button>}
                 </div>
                 {g.fragments.length > 0 && (
@@ -386,9 +393,9 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                       const label = describeSelection(u);
                       return (
                         <li key={p.selKey(u)} style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center" }}>
-                          <StagedMessageLabel messageId={u.messageId} message={messageMap.get(u.messageId)}
+                          <StagedMessageLabel messageId={u.messageId} message={messageMap.get(u.messageId)} wholeMessage={false}
                             content={u.selection.kind === 'text' ? u.selection.text : label}
-                            ariaLabel={`暂存片段 ${p.selKey(u)}`} status={u.selection.kind === 'text' ? '已选择片段' : '已选择消息部件'} />
+                            ariaLabel={`暂存片段 ${p.selKey(u)}`} onNavigate={p.onNavigateToMessage} status={u.selection.kind === 'text' ? '已选择片段' : '已选择消息部件'} />
                           <button onClick={() => p.removeUnitFromDraft(u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer", flex: "0 0 auto" }}>删除片段</button>
                         </li>
                       );
@@ -416,7 +423,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
             <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, maxHeight: 120, overflow: "auto", fontSize: 12 }}>
               {p.sourceUnits.map(u => (
                 <li key={p.selKey(u)} style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
-                  <StagedMessageLabel messageId={u.messageId} message={messageMap.get(u.messageId)} ariaLabel={`来源消息 ${p.selKey(u)}`}
+                  <StagedMessageLabel messageId={u.messageId} message={messageMap.get(u.messageId)} ariaLabel={`来源消息 ${p.selKey(u)}`} wholeMessage={isWholeMessageSelection(u,u.messageId)}
                     content={collectionContent(u)} />
                   <button onClick={() => p.removeUnitFrom("source", u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>删除</button>
                 </li>
@@ -433,7 +440,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
             <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, maxHeight: 120, overflow: "auto", fontSize: 12 }}>
               {p.targetUnits.map(u => (
                 <li key={p.selKey(u)} style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
-                  <StagedMessageLabel messageId={u.messageId} message={messageMap.get(u.messageId)} ariaLabel={`目标消息 ${p.selKey(u)}`}
+                  <StagedMessageLabel messageId={u.messageId} message={messageMap.get(u.messageId)} ariaLabel={`目标消息 ${p.selKey(u)}`} wholeMessage={isWholeMessageSelection(u,u.messageId)}
                     content={collectionContent(u)} />
                   <button onClick={() => p.removeUnitFrom("target", u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>删除</button>
                 </li>
@@ -487,27 +494,18 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           {/* SubType selector */}
           {((p.relationType === "tag" && ['recommend','archive','attention','block'].includes(p.secondaryRelationType)) || ['recommend','archive','attention','block'].includes(p.relationType ?? '')) && (
             <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
-              <span style={{ opacity: 0.85 }}>标注理由：</span>
+              <span style={{ opacity: 0.85 }}>标注原因：</span>
               {((p.secondaryRelationType === 'attention' || p.secondaryRelationType === 'block') ? ['YES','NO'] : p.SUB_TYPE_OPTIONS).map(st => (
                 <button key={st || 'none'} aria-pressed={p.subType === st} onClick={() => {
-                  if (st === 'CUSTOM') {
-                    p.setNewMessageContent(p.subTypeCustomBufferRef.current);
-                    p.setSubType(st);
-                  } else if (p.subType === 'CUSTOM') {
-                    p.subTypeCustomBufferRef.current = p.newMessageContent;
-                    p.setNewMessageContent('');
-                    p.setSubType(st);
-                    p.setSubTypeCustomLabel('');
-                  } else {
-                    p.setSubType(st);
-                    p.setNewMessageContent('');
-                    if (st !== 'CUSTOM') p.setSubTypeCustomLabel('');
-                  }
+                  p.setSubType(st);
                 }}
                   style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.subType === st ? (p.secondaryRelationType === "recommend" ? "#f59e0b" : "#64748b") : "#222", color: p.subType === st ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
                   {st ? p.subTypeLabel(st) : '无'}
                 </button>
               ))}
+              {p.subType === 'CUSTOM' && <input type="text" aria-label="自定义标注原因" placeholder="输入自定义原因（最长20字）" maxLength={20}
+                value={p.subTypeCustomLabel} onChange={event=>p.setSubTypeCustomLabel(event.target.value)}
+                style={{flex:'1 1 160px',minWidth:120,padding:'3px 6px',borderRadius:4,border:'1px solid #555',background:'#222',color:'#eee'}}/>}
             </div>
           )}
           {/* Label input */}
@@ -529,18 +527,15 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           )}
           <div key={p.composerRefreshKey}>
           {!(p.relationType === 'correct' && p.secondaryRelationType === 'width-adjustment') && (() => {
-            const isCustomSubType = p.subType === 'CUSTOM' && ((p.relationType === "tag" && (p.secondaryRelationType === "recommend" || p.secondaryRelationType === "archive")) || p.relationType === "recommend" || p.relationType === "archive");
             const isTagWithoutSecondary = p.relationType === "tag" && p.secondaryRelationType === "none";
             const textAreaDisabled =
               p.joinOnlyAction || isTagWithoutSecondary
-              || (isCustomSubType ? false : (
+              || (
                 (p.draftHasRelationTarget && p.relationType === "correct")
-                || (p.isTagWithQuickAnnotate && p.hasTargetsAvailable)
                 || (p.isMergeType && p.hasTargetsAvailable)
                 || (p.isGovernanceOrOpsType && p.relationType === "proposal" && (p.secondaryRelationType === '分配收入' || p.secondaryRelationType === '终止结算'))
-              ));
+              );
             const placeholderText = p.joinOnlyAction ? "加入已有容器消息，此处不可输入"
-              : isCustomSubType ? "输入自定义理由（最长20字）"
               : isTagWithoutSecondary ? "请先在上方选择推荐或冷藏"
               : textAreaDisabled
               ? (p.draftHasRelationTarget && p.relationType === "correct" ? "关系消息不能作为更正目标，请选择普通文本消息" : p.isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : p.isMergeType ? "归并关系为与会者-消息关系，此处不应输入内容" : p.isGovernanceOrOpsType && p.relationType === "proposal"
@@ -575,7 +570,9 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
         <div style={{ fontSize: 12, opacity: 0.8 }}>当前追溯消息：{p.currentTraceIds ? p.currentTraceIds.join(", ") : "（无）"}</div>
       </div>}
 
-      <MessageRelationsView key={`sv-${p.classifyKey}-${p.traceKey}`} scopeMessageId={p.scopeMessageId} traceIds={p.currentTraceIds ?? []} messages={p.messages} edges={p.edges} onNavigateToMessage={p.onNavigateToMessage} />
+      <RecentWorkbenchViews ownerKey={p.viewCacheOwner??p.scopeMessageId} viewKey={p.viewCacheKey??JSON.stringify(p.currentTraceIds)}>
+        <MessageRelationsView scopeMessageId={p.scopeMessageId} traceIds={p.currentTraceIds ?? []} messages={p.messages} edges={p.edges} onNavigateToMessage={p.onNavigateToMessage} />
+      </RecentWorkbenchViews>
 
       {!p.isViewerMode && <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>

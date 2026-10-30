@@ -23,11 +23,12 @@ function FrameDimension({label,value,min,onChange}:{label:string;value:number;mi
     onBlur={event=>{const next=event.currentTarget.valueAsNumber;if(Number.isFinite(next))onChange(Math.max(min,next));setDraft(null);}}
     style={{width:66,padding:'2px 3px',border:'1px solid #475569',borderRadius:3,background:'#111827',color:'#e2e8f0'}}/>;
 }
-export function FrameViewportTools({id,size,natural,onChange}:{id:string;size?:FrameViewSize;natural:FrameViewSize;onChange:(value:FrameViewSize|undefined)=>void}){
+export function FrameViewportTools({id,size,natural,onChange,full=false,onToggleFull}:{id:string;size?:FrameViewSize;natural:FrameViewSize;onChange:(value:FrameViewSize|undefined)=>void;full?:boolean;onToggleFull?:()=>void}){
   const [open,setOpen]=useState(false),value=size??natural;
   return <div data-frame-size-controls={id} onClick={stop} onDoubleClick={stop} onMouseDown={stop} onMouseUp={stop} onKeyDown={stop} style={{fontSize:10,color:'#cbd5e1',cursor:'default',display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
-    <button type="button" aria-label={`调整框架大小 ${id}`} aria-expanded={open} onClick={()=>setOpen(!open)}>调整大小</button>
-    {open&&<><label>宽 <FrameDimension label={`框架宽度 ${id}`} min={240} value={value.width} onChange={width=>onChange({...value,width})}/></label>
+    {onToggleFull&&<button type="button" aria-label={`${full?'恢复':'完全展开'}框架 ${id}`} aria-pressed={full} onClick={onToggleFull}>{full?'恢复框架':'完全展开'}</button>}
+    {!full&&<button type="button" aria-label={`调整框架大小 ${id}`} aria-expanded={open} onClick={()=>setOpen(!open)}>调整大小</button>}
+    {!full&&open&&<><label>宽 <FrameDimension label={`框架宽度 ${id}`} min={240} value={value.width} onChange={width=>onChange({...value,width})}/></label>
       <label>高 <FrameDimension label={`框架高度 ${id}`} min={120} value={value.height} onChange={height=>onChange({...value,height})}/></label>
       <button type="button" disabled={!size} onClick={()=>onChange(undefined)}>恢复自适应</button><span>仅本次查看</span></>}
   </div>;

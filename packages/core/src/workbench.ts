@@ -87,6 +87,10 @@ export interface RelationPayload {
   subType?: 'SPAM' | 'OFFTOPIC' | 'LOWVALUE' | 'IMPORTANT' | 'CUSTOM' | 'YES' | 'NO';
   customLabel?: string;
   operationType?: string;
+  /** Settlement declaration provenance; the public author may be the system. */
+  openedBy?: string;
+  triggerId?: string;
+  subjectId?: string;
   amount?: number;
   revenuePoolShare?: number;
   recipientUserId?: string;
@@ -215,7 +219,7 @@ export interface ReadingMark {
   state?: 'READ' | 'UNREAD';
   selection?: {versionKey:string;outcomes:Record<string,string>;signature:string};
   messageId: string;
-  scope: 'message' | 'corrections' | 'influence' | 'original';
+  scope: 'message' | 'corrections' | 'influence' | 'original' | 'comparison';
   key: string;
   signature?: string;
   bodySignature?: string;

@@ -100,6 +100,10 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
       const m = msgMap.get(id);
       // Accept both normal text messages and relation messages currently rendered as cards.
       if (!m || (!isContentKind(m.kind) && !relationCardMsgIds.has(id))) return null;
+      // Routing uses the scene's measured geometry for mounted and virtual cards
+      // alike. A DOM-window change must not move an endpoint.
+      const box = layout[id];
+      if (box) return { box, col:colOf[id]??0 };
       const cardEl = cardRefs.current[id];
       if (cardEl) {
         const r = cardEl.getBoundingClientRect();
@@ -110,8 +114,7 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
           return { box:toCanvasRect(r), col:colOf[id]??0 };
         }
       }
-      const box = layout[id]; if (!box) return null;
-      return { box, col:colOf[id]??0 };
+      return null;
     }
 
     const globalForbiddenRects: Rect[] = [];

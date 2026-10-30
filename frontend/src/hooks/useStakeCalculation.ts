@@ -17,11 +17,11 @@ const amount=(value:number|''|undefined)=>typeof value==='number'&&Number.isFini
 export function calculateSendCost(deps:CostInput,protocolFee:number){
   const targets=deps.draftUnits.length?deps.draftUnits:deps.targetUnits,relation=deps.relationType;
   const content=deps.newMessageContent.trim().length>0;
-  const embedded=new Set(['classify','summary','tag','proposal','delegation','code_change','operations','correct','authorize']);
-  const usesSources=!!deps.sourceUnits?.length&&(relation==='notify'||!deps.draftUnits.length&&!!deps.targetUnits.length)&&!['classify','merge','arrange'].includes(relation??'');
+  const embedded=new Set(['classify','summary','proposal','delegation','code_change','operations','correct','authorize']);
+  const usesSources=!!deps.sourceUnits?.length&&(relation==='notify'||!deps.draftUnits.length&&!!deps.targetUnits.length)&&!['classify','merge','arrange','tag','recommend','archive','attention','block'].includes(relation??'');
   const hasText=!deps.joinOnlyAction&&content&&!usesSources&&(!relation||!embedded.has(relation));
   const sourceCount=usesSources?['agree','disagree'].includes(relation??'')?new Set(deps.sourceUnits!.map(source=>source.messageId)).size:deps.sourceUnits!.length:1;
-  const multi=new Set(['annotation','reference','reply','notify','agree','disagree','tag','authorize']);
+  const multi=new Set(['annotation','reference','reply','notify','agree','disagree','tag','recommend','archive','attention','block','authorize']);
   const multiplier=['annotation','reference','reply','notify','agree','disagree'].includes(relation??'')?sourceCount:1;
   const relCount=relation&&!deps.joinOnlyAction?(multi.has(relation)?Math.max(1,targets.length)*multiplier:1):0;
   const refCount=!usesSources&&['proposal','code_change','operations'].includes(relation??'')?targets.length:0;

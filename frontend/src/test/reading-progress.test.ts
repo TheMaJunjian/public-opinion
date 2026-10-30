@@ -5,7 +5,7 @@ import {convertMessagesToDemoModel,computeCorrectionVersions} from '../utils/mod
 import {deriveContainerEffect} from '../pages/workbench/model/containerEffect';
 import {deriveDisplayHints,getMessageDisplaySignature} from '../pages/workbench/model/displayHints';
 import {authoredReadingMark,authoredReadingMarks,deriveReadingProgress,readingMarksFor,influenceReadingMarks} from '../pages/workbench/model/readingProgress';
-import {bodyVersion,bodyVersionKey,messageReadingKey,originalReadingKey} from '@gonglun/core';
+import {bodyVersion,bodyVersionKey,messageReadingKey} from '@gonglun/core';
 import {deriveHomeFilterResult} from '../pages/workbench/projections/homeFilterResult';
 import {authoredReadingBackfill} from '../pages/workbench/model/authoredReadingBackfill';
 
@@ -37,6 +37,51 @@ it('records an authored body with the actual display fingerprint and keeps its c
   expect(hints.get('authored')).toMatchObject({unread:false,readChanged:false});
   expect(hints.get('target')).toMatchObject({unread:true});
 });
+it.each(['parts','payload'])('auto-reads a self-initiated settlement and its effects using %s attribution',source=>{
+  const system={id:'system',username:'公论规则',createdAt:''};
+  const round=(id:string,openedBy:string,triggerId:string):Message=>({...message(id,system),kind:'ROUND',sequence:20,
+    targetRefs:[{kind:'message',messageId:'target'}],
+    ...(source==='parts'?{parts:[{id:'basis',type:'data',value:{openedBy,triggerId}}]}:{relationPayload:{openedBy,triggerId,subjectId:'target'}})});
+  const own=round('own-round',user.id,'mine'),foreign=round('foreign-round',other.id,'foreign');
+  const result:Message={...round('later-result',user.id,'mine'),kind:'ROUND_RESULT',sequence:30};
+  const input=fixture([{...message('mine',user),sequence:10},{...message('target'),sequence:11},own,foreign,result],
+    [{...relation('incoming','AGREE',['mine']),sequence:31}]);
+  const progress=deriveReadingProgress(input);
+  expect(progress.pendingBodies.has('mine')).toBe(false);expect(progress.pendingBodies.has(own.id)).toBe(false);
+  for(const id of ['target',foreign.id,result.id])expect(progress.pendingBodies.has(id)).toBe(true);
+  expect(pending(input,'target')).toEqual(new Set([foreign.id,result.id]));expect(pending(input,'mine')).toEqual(new Set(['incoming']));
+  expect(deriveDisplayHints(input).hints.get(own.id)?.unread).toBe(false);
+  const marks=authoredReadingBackfill(input,user.id,id=>getMessageDisplaySignature(input,id));
+  expect(new Set(marks.filter(mark=>mark.scope==='message').map(mark=>mark.messageId))).toEqual(new Set(['mine',own.id]));
+  expect(marks.filter(mark=>mark.scope==='influence').map(mark=>JSON.parse(mark.eventId!)[0])).toEqual([own.id]);
+  expect(authoredReadingMarks(input,own.id,'display:sent').filter(mark=>mark.scope==='influence')).toEqual(marks.filter(mark=>mark.scope==='influence'));
+  const saved={...input,marks};expect(authoredReadingBackfill(saved,user.id,id=>getMessageDisplaySignature(input,id))).toEqual([]);
+  const unread=marks.map(mark=>({...mark,state:'UNREAD' as const}));
+  expect(deriveReadingProgress({...input,marks:unread}).pendingBodies.has(own.id)).toBe(true);
+  expect(authoredReadingBackfill({...input,marks:unread},user.id,id=>getMessageDisplaySignature(input,id))).toEqual([]);
+  expect(input.messages.find(message=>message.id===own.id)?.authorId).toBe('system');
+});
+it('identifies the settlement initiator even when the triggering message is not loaded',()=>{
+  const system={id:'system',username:'公论规则',createdAt:''};
+  const round:Message={...message('own-round',system),kind:'ROUND',sequence:20,relationPayload:{openedBy:user.id,triggerId:'unloaded',subjectId:'target'}};
+  const input={...fixture([message('target'),round],[]),userId:user.id};
+  expect(deriveDisplayHints(input).hints.get(round.id)?.unread).toBe(false);
+  expect(pending(input,'target')).toEqual(new Set());
+  const marks=authoredReadingBackfill(input,user.id,id=>getMessageDisplaySignature(input,id));
+  expect(marks.filter(mark=>mark.scope==='message').map(mark=>mark.messageId)).toEqual([round.id]);
+  expect(marks.filter(mark=>mark.scope==='influence').map(mark=>mark.messageId)).toEqual(['target']);
+  const confirmed=deriveHomeFilterResult({...input,displayUser:user,homeFilterMode:{scope:'all',status:'confirmed'},msgMap:new Map(input.messages.map(message=>[message.id,message])),
+    readStatusByMessageId:input.readStatus,traceContainerMemberships:input.memberships});
+  expect(confirmed?.matchIds.has(round.id)).toBe(true);
+});
+it('keeps authored reading progress when an export viewer has a display-only identity',()=>{
+  const system={id:'system',username:'公论规则',createdAt:''};
+  const round:Message={...message('own-round',system),kind:'ROUND',sequence:20,relationPayload:{openedBy:user.id,triggerId:'mine',subjectId:'mine'}};
+  const input={...fixture([message('mine',user),round],[]),userId:'viewer:alice'};
+  const progress=deriveReadingProgress(input);
+  expect(progress.pendingBodies.has('mine')).toBe(false);expect(progress.pendingBodies.has(round.id)).toBe(false);
+  expect(progress.pendingInfluences.has('mine')).toBe(false);
+});
 function fixture(records:Message[],relations:Relation[],marks:ReadingMark[]=[]){
   const model=convertMessagesToDemoModel(records,relations),personalEffect=deriveContainerEffect({...model,relations,username:user.username,stakeCounts:{}});
   const corrections=computeCorrectionVersions(model.messages,model.edges,personalEffect.suppressed,user.username);
@@ -53,24 +98,75 @@ function acknowledge(input:ReturnType<typeof fixture>,target:string,events?:stri
 }
 function readAndConfirm(input:ReturnType<typeof fixture>,id:string){return [...mark(input,id),...acknowledge(input,id)];}
 describe('private contextual reading progress',()=>{
+  it('remembers effective and ineffective correction influences separately without rereading a previously confirmed result',()=>{
+    const input=fixture([message('m')],[relation('correction','CORRECT',['m'],null,{correctionBeforeContent:'m',correctionAfterContent:'changed'})]);
+    const first=mark(input,'m'),inactiveCorrections=computeCorrectionVersions(input.messages,input.edges,new Set(['correction']));
+    const inactive={...input,corrections:inactiveCorrections,effectiveCorrections:inactiveCorrections,marks:first,readingMarks:first};
+    expect(deriveReadingProgress(inactive).pendingInfluences.get('m')).toContainEqual(expect.objectContaining({messageId:'correction',resultKey:'ineffective'}));
+    const both=[...first,...mark(inactive,'m')];
+    for(const state of [input,inactive,input]){
+      const progress=deriveReadingProgress({...state,marks:both});
+      expect(progress.pendingInfluences.get('m')??[]).toEqual([]);expect(progress.selectionChanges.has('m')).toBe(false);
+      expect(progress.pendingBodies.has('correction')).toBe(true);
+    }
+    expect(new Set(both.filter(mark=>mark.scope==='influence'&&mark.key==='correct:correction').map(mark=>mark.resultKey))).toEqual(new Set(['effective','ineffective']));
+  });
+  it.each(['CLASSIFY','SUMMARY','MERGE','ARRANGE','JOIN'])('remembers both %s relationship outcomes using the relation message identity',type=>{
+    const relations=type==='JOIN'?[relation('container','CLASSIFY',[]),relation('event','JOIN',['m'],'container')]:[relation('event',type,['m'])];
+    const base=fixture([message('m')],relations),input={...base,suppressedIds:new Set<string>()};
+    const first=mark(input,'m');
+    expect(first).toContainEqual(expect.objectContaining({messageId:'event',scope:'influence',resultKey:'effective'}));
+    expect(deriveReadingProgress({...input,marks:first}).pendingBodies.has('event')).toBe(true);
+    const readSource=[...first,...mark({...input,marks:first,readingMarks:first},'event')];
+    const inactive={...input,marks:readSource,readingMarks:readSource,suppressedIds:new Set(['event']),effectiveJoinIds:new Set<string>()};
+    const progress=deriveReadingProgress(inactive),change=progress.pendingInfluences.get('m')?.find(item=>item.messageId==='event');
+    expect(change).toMatchObject({messageId:'event',resultKey:'ineffective'});expect(JSON.parse(change!.eventId!)[0]).toBe('event');
+    expect(progress.pendingInfluences.get('event')??[]).not.toContainEqual(expect.objectContaining({messageId:'event'}));
+    const both=[...readSource,...influenceReadingMarks('m',progress.pendingInfluences.get('m')??[])];
+    for(const state of [input,inactive,input]){
+      const after=deriveReadingProgress({...state,marks:both});
+      expect(after.pendingInfluences.get('m')??[]).toEqual([]);expect(after.pendingInfluences.get('event')??[]).toEqual([]);
+      expect(after.pendingBodies.has('event')).toBe(false);
+    }
+    expect(new Set(both.filter(mark=>mark.scope==='influence'&&JSON.parse(mark.eventId!)[0]==='event').map(mark=>mark.resultKey))).toEqual(new Set(['effective','ineffective']));
+  });
+  it('does not automatically confirm later outcome changes of an authored correction',()=>{
+    const own={...relation('correction','CORRECT',['m'],null,{correctionBeforeContent:'m',correctionAfterContent:'mine'}),createdBy:user,sequence:10};
+    const input=fixture([{...message('m'),sequence:1}],[own]);
+    const first=authoredReadingBackfill(input,user.id,id=>getMessageDisplaySignature(input,id));
+    const corrections=computeCorrectionVersions(input.messages,input.edges,new Set([own.id]));
+    const changed={...input,corrections,effectiveCorrections:corrections,marks:first,readingMarks:first};
+    expect(deriveReadingProgress(changed).pendingInfluences.get('m')).toContainEqual(expect.objectContaining({messageId:own.id,resultKey:'ineffective'}));
+    expect(authoredReadingBackfill(changed,user.id,id=>getMessageDisplaySignature(changed,id))).toEqual([]);
+  });
+  it.each(['send','backfill'])('automatically confirms the relationship outcome caused by my own new stance (%s)',method=>{
+    const correction={...relation('correction','CORRECT',['m'],null,{correctionBeforeContent:'m',correctionAfterContent:'changed'}),sequence:2};
+    const original={...message('m'),sequence:1},before=fixture([original],[correction]),marks=mark(before,'m');
+    const stance={...relation('my-opposition','DISAGREE',['correction']),createdBy:user,sequence:3,createdAt:'2026-01-03'};
+    const input=fixture([original],[correction,stance],marks);
+    const saved=method==='send'?authoredReadingMarks(input,stance.id,getMessageDisplaySignature(input,stance.id)!):authoredReadingBackfill(input,user.id,id=>getMessageDisplaySignature(input,id));
+    expect(saved).toContainEqual(expect.objectContaining({messageId:'correction',scope:'influence',resultKey:'ineffective'}));
+    expect(saved.some(mark=>mark.messageId==='correction'&&mark.scope==='message')).toBe(false);
+    expect(pending({...input,marks:[...marks,...saved]})).toEqual(new Set());
+  });
   it('auto-confirms only the current message effects, preserving other targets, records and later events',()=>{
     const records=[message('m'),message('peer')],relations=[relation('shared-tag','TAG',['m','peer'],null,{label:'可靠'}),
       relation('vote','AGREE',['m']),relation('reference','REFERENCE',['peer'],'m'),relation('container','CLASSIFY',[]),relation('join','JOIN',['m'],'container')];
     const before=fixture(records,relations),marks=mark(before,'m'),after=fixture(records,relations,marks);
-    expect(pending(after)).toEqual(new Set(['reference','join']));
+    expect(pending(after)).toEqual(new Set());
     expect(pending(after,'peer').has('shared-tag')).toBe(true);
     expect(marks.filter(mark=>mark.scope==='message').map(mark=>mark.messageId)).toEqual(['m']);
     expect(deriveReadingProgress(after).pendingBodies.has('shared-tag')).toBe(true);
     const later=fixture(records,[...relations,relation('new-vote','DISAGREE',['m'])],marks);
-    expect(pending(later)).toEqual(new Set(['reference','join','new-vote']));
+    expect(pending(later)).toEqual(new Set(['new-vote']));
   });
   it.each(['CLASSIFY','SUMMARY','ARRANGE','MERGE'])('reads a member body without confirming its %s ancestry or siblings',type=>{
     const relations=[relation('container',type,['m','sibling']),relation('outer','CLASSIFY',['container']),relation('join','JOIN',['m'],'container')];
     const input=fixture([message('m'),message('sibling')],relations),marks=mark(input,'m'),after=fixture([message('m'),message('sibling')],relations,marks);
-    expect(marks).toHaveLength(1);expect(marks[0]).toMatchObject({messageId:'m',scope:'message'});
+    expect(marks.filter(mark=>mark.scope==='message')).toHaveLength(1);expect(marks[0]).toMatchObject({messageId:'m',scope:'message'});
     expect(deriveReadingProgress(after).pendingBodies.has('m')).toBe(false);
     for(const id of ['container','outer','join','sibling'])expect(deriveReadingProgress(after).pendingBodies.has(id)).toBe(true);
-    expect(pending(after).has('join')).toBe(true);
+    expect(pending(after).has('join')).toBe(false);
   });
   it('reading one multi-target relationship does not acknowledge either affected target implicitly',()=>{
     const records=[message('source'),message('x'),message('y')],relations=[relation('reference','REFERENCE',['x','y'],'source')];
@@ -88,13 +184,30 @@ describe('private contextual reading progress',()=>{
     expect(pending(input,'m').has('vote')).toBe(true);
     expect(progress.pendingMembers.get('container')?.has('m')).toBe(true);
   });
-  it('reading a JOIN body and confirming its effect are separate operations',()=>{
+  it('keeps a JOIN body separate from placement confirmation without duplicating receipt as an influence',()=>{
     const records=[message('m')],relations=[relation('container','CLASSIFY',[]),relation('join','JOIN',['m'],'container')];
     const before=fixture(records,relations),after=fixture(records,relations,mark(before,'join'));
     expect(pending(after).has('join')).toBe(true);
-    const confirmed=fixture(records,relations,[...after.marks,...acknowledge(after,'m',['join'])]);
-    expect(pending(confirmed).has('join')).toBe(false);expect(pending(confirmed,'container').has('join')).toBe(false);
-    expect(pending(before,'container').has('join')).toBe(false);
+    expect(after.marks).toContainEqual(expect.objectContaining({messageId:'join',scope:'message'}));
+    expect(after.marks.some(mark=>mark.scope==='influence')).toBe(false);
+    expect(deriveReadingProgress(after).pendingBodies.has('m')).toBe(true);expect(pending(after,'container').has('join')).toBe(false);
+    const targetMarks=acknowledge(after,'m',['join']),targetRead=fixture(records,relations,[...after.marks,...targetMarks]);
+    expect(pending(targetRead).has('join')).toBe(false);expect(pending(targetRead,'container').has('join')).toBe(false);
+    expect(targetMarks).toContainEqual(expect.objectContaining({messageId:'join',scope:'influence',key:'join:container:join',resultKey:'effective'}));
+    expect(deriveReadingProgress(targetRead).influences.get('container')??[]).toEqual([]);
+  });
+  it('lists only incoming placement effects and leaves received JOIN records in member progress',()=>{
+    const input=fixture([message('m')],[relation('outer','CLASSIFY',[]),relation('container','CLASSIFY',[]),
+      relation('into-outer','JOIN',['container'],'outer'),relation('into-container','JOIN',['m'],'container')]);
+    const progress=deriveReadingProgress(input),items=progress.influences.get('container')??[];
+    expect(items).toContainEqual(expect.objectContaining({messageId:'into-outer',type:'join'}));
+    expect(items.some(item=>item.messageId==='into-container')).toBe(false);
+    for(const [target,items] of progress.influences)expect(items.every(item=>item.messageId!==target)).toBe(true);
+    const marks=mark(input,'container'),after=fixture([message('m')],input.relations,marks);
+    expect(pending(after,'container')).toEqual(new Set());expect(pending(after,'m').has('into-container')).toBe(true);
+    expect(pending(after,'outer').has('into-outer')).toBe(false);
+    expect(marks.some(mark=>mark.messageId==='into-container')).toBe(false);
+    expect(marks.filter(mark=>mark.scope==='message').map(mark=>mark.messageId)).toEqual(['container']);
   });
   it.each(['CLASSIFY','SUMMARY'])('derives %s member counts from each current message, including later influences',type=>{
     const records=[message('first'),message('second')],relations=[relation('container',type,['first','second'])];
@@ -189,16 +302,17 @@ describe('private contextual reading progress',()=>{
     const later=fixture([message('m')],[...relations,relation('join-again','JOIN',['m'],'a')],after.marks);
     expect(pending(later).has('join-again')).toBe(true);
   });
-  it('requires the original before confirming a correction and keeps their reading records separate',()=>{
+  it('confirms a corrected body directly and keeps correction message bodies independent',()=>{
     const correction=relation('v2','CORRECT',['m'],null,{correctionBeforeContent:'m',correctionAfterContent:'新版正文'});
     const before=fixture([message('m')],[correction]);
-    expect(()=>mark(before,'m')).toThrow('请先切回原文并确认已阅');
+    const direct=mark(before,'m');expect(direct.some(item=>item.messageId==='v2'&&item.scope==='message')).toBe(false);
+    expect(direct.find(item=>item.scope==='message')?.version?.corrections.map(item=>item.messageId)).toEqual(['v2']);
     const displayed=deriveDisplayHints(before).hints.get('m')!.displayed;
     const originalMarks=readingMarksFor(before,'m',{...displayed,content:'m',correctionIds:[]});
-    expect(originalMarks.some(item=>item.messageId==='v2')).toBe(false);
+    expect(originalMarks.some(item=>item.messageId==='v2'&&item.scope==='message')).toBe(false);
     const correctionMarks=mark(fixture([message('m')],[correction],originalMarks),'v2');
     const marks=[...originalMarks,...correctionMarks,...mark(fixture([message('m')],[correction],[...originalMarks,...correctionMarks]),'m')];
-    expect(new Set(marks.filter(item=>item.messageId==='m'&&item.scope!=='influence').map(item=>item.bodySignature))).toEqual(new Set([originalReadingKey('m'),messageReadingKey('m')]));
+    expect(new Set(marks.filter(item=>item.messageId==='m'&&item.scope!=='influence').map(item=>item.bodySignature))).toEqual(new Set([messageReadingKey('m')]));
     expect(marks.some(item=>item.messageId==='v2'&&item.scope==='message')).toBe(true);
     const after=fixture([message('m')],[correction],[...marks,...acknowledge(before,'m',['v2'])]);
     expect(deriveReadingProgress(after).confirmed('m')).toBe(true);
@@ -206,14 +320,14 @@ describe('private contextual reading progress',()=>{
     const newer=relation('v3','CORRECT',['m'],null,{correctionBeforeContent:'m',correctionAfterContent:'新版正文'});
     expect(deriveReadingProgress(fixture([message('m')],[newer],marks)).pendingBodies.has('m')).toBe(false);
   });
-  it('keeps a previously saved corrected mark pending when its original was never confirmed',()=>{
+  it('keeps unknown historical marks pending without imposing a new original-reading prerequisite',()=>{
     const correction=relation('v2','CORRECT',['m'],null,{correctionBeforeContent:'m',correctionAfterContent:'新版正文'});
     const signature=bodyVersionKey(bodyVersion('m',1,[{messageId:'v2',revision:1,kind:'TEXT'}]));
     const input=fixture([message('m')],[correction],[{messageId:'m',scope:'message',key:signature,bodySignature:signature}]);
     const progress=deriveReadingProgress(input);
-    expect(progress.pendingBodies.has('m')).toBe(true);expect(progress.pendingOriginals.has('m')).toBe(true);
-    expect(progress.confirmed('m')).toBe(false);expect(deriveDisplayHints(input).hints.get('m')?.originalUnread).toBe(true);
-    expect(()=>mark(input,'m')).toThrow('请先切回原文并确认已阅');
+    expect(progress.pendingBodies.has('m')).toBe(true);expect(progress.pendingOriginals.has('m')).toBe(false);
+    expect(progress.confirmed('m')).toBe(false);expect(deriveDisplayHints(input).hints.get('m')?.originalUnread).toBe(false);
+    expect(()=>mark(input,'m')).not.toThrow();
   });
   it('combines following with viewing state and respects explicit unfollow independently of read',()=>{
     const records=[message('m'),message('unrelated')],follow={...relation('follow','ATTENTION',['m'],null,{subType:'YES'}),createdBy:user,sequence:1};

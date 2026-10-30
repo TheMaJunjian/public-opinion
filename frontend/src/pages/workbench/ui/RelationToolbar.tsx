@@ -20,7 +20,7 @@ interface Props {
 }
 export default function RelationToolbar({ barRef: relationBarRef, leftControlsRef: relationLeftControlsRef, rightControlsRef: relationRightControlsRef,
   top, springWidth: relationSpringWidth, rightOffset: relationControlsRightOffset, viewer: isPreloaded, messageIdInput, onMessageIdChange: setMessageIdInput, onJump: confirmMessageIdNavigation, composer }: Props) {
-  const { relationType, secondaryRelationType, newMessageContent, subType, setRelationType, setSecondaryRelationType, setNewMessageContent, lastTagSecondaryRef, lastDelegationSecondaryRef, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, guideTargetIdRef } = composer;
+  const { relationType, secondaryRelationType, newMessageContent, setRelationType, setSecondaryRelationType, setNewMessageContent, lastTagSecondaryRef, lastDelegationSecondaryRef, savedTextOnTypeSwitchRef, guideTargetIdRef } = composer;
   return (
     <div ref={relationBarRef} className="workbench-relation-toolbar" style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", flexWrap: "wrap", rowGap: 8, alignItems: "center", fontSize: 14, flexShrink: 0, position: "sticky", top, zIndex: Z_INDEX.popover }}>
       <div ref={relationLeftControlsRef} style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
@@ -54,25 +54,14 @@ export default function RelationToolbar({ barRef: relationBarRef, leftControlsRe
               if (relationType === "tag") { lastTagSecondaryRef.current = secondaryRelationType !== "none" ? secondaryRelationType : "recommend"; }
               const isDeselecting = relationType === rt;
               const newType = isDeselecting ? null : rt;
-              // Types that generally don't use the text input (user-to-message relations)
-              const isTextLessType = (t: string | null) => t === "tag" || t === "merge";
+              // Preserve the merge draft separately; annotations accept body text.
+              const isTextLessType = (t: string | null) => t === "merge";
               const wasTextLess = isTextLessType(relationType);
               const willBeTextLess = isTextLessType(newType);
               // Save and clear when switching TO a text-less type
               if (!wasTextLess && willBeTextLess && newMessageContent.trim()) {
                 savedTextOnTypeSwitchRef.current = newMessageContent;
-                // Also seed the subType buffer so that selecting CUSTOM
-                // after entering TAG will restore this text.
-                if (!subTypeCustomBufferRef.current) {
-                  subTypeCustomBufferRef.current = newMessageContent;
-                }
                 setNewMessageContent("");
-              }
-              // When switching FROM a text-less type (e.g. TAG), save CUSTOM
-              // reason text to subType buffer so it can be restored when the
-              // user switches back to TAG and selects CUSTOM again.
-              if (wasTextLess && !willBeTextLess && subType === 'CUSTOM' && newMessageContent.trim()) {
-                subTypeCustomBufferRef.current = newMessageContent;
               }
               // Restore when switching FROM a text-less type
               if (wasTextLess && !willBeTextLess && savedTextOnTypeSwitchRef.current) {

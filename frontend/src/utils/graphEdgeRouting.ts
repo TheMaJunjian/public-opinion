@@ -196,10 +196,10 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
         .map(user => user.username);
       return `通知 ${names.length > 0 ? names.join('、') : '与会者'}`;
     }
-    const labelText = (e: DemoEdge, arrow='→') => {
+    const labelText = (e: DemoEdge) => {
       const type=e.relationType==='notify'?notifyEdgeLabel(e):e.relationType==='reply'?replyEdgeLabel(e.relationLabel)
         :e.relationType==='reference'?referenceEdgeLabel(e.relationLabel):edgeLabelName(e.relationType);
-      return `${type} ${arrow}`;
+      return type;
     };
 
     for (const e of edges) {
@@ -501,11 +501,9 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
     }
 
     const placements=computeLabelPlacementsAlongCurve({seeds:labelSeeds,forbiddenRects:globalForbiddenRects});
-    const arrows=['→','↘','↓','↙','←','↖','↑','↗'];
     const positionedEdges = rawEdges.map(pe => {
       const position=placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5);
-      const direction=(Math.round(Math.atan2(pe.end.y-pe.start.y,pe.end.x-pe.start.x)/(Math.PI/4))+8)%8;
-      return {...pe,edgeLabelText:labelText(pe.edge,arrows[direction]),labelX:position.x,labelY:position.y};
+      return {...pe,labelX:position.x,labelY:position.y};
     });
 
   return positionedEdges;

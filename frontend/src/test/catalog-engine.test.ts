@@ -88,7 +88,7 @@ it('uses the viewer\'s chosen composition for home reading filters when public r
       const version=bodyVersion(messageId,1,versions.map(messageId=>({messageId,revision:1,kind:'TEXT' as const}))),key=messageReadingKey(version.messageId);void content;return {format:3,version,messageId,scope:'message',key,bodySignature:key,signature:'seen'};
     };
     const marks=[...messages.map(message=>mark(message.id,message.content)),...personal.versions.map(version=>mark('m',version.content,[version.correctionId])),
-      mark('m',personal.current!.content,personal.current!.appliedCorrectionIds),...([...readingInfluences({messages,edges,relations})].flatMap(([id,items])=>influenceReadingMarks(id,items)))];
+      mark('m',personal.current!.content,personal.current!.appliedCorrectionIds),...([...readingInfluences({messages,edges,relations,corrections:new Map([['m',personal]])})].flatMap(([id,items])=>influenceReadingMarks(id,items)))];
     const query={rules:[],user:alice,readingMarks:marks};
     expect(engine.filters({...query,home:{scope:'all',status:'confirmed'}}).home?.matchIds.has('m')).toBe(true);
     expect(engine.filters({...query,home:{scope:'all',status:'pending'}}).home?.matchIds.has('m')).toBe(false);

@@ -31,5 +31,6 @@ export function useBrowsingHistory<T>(key: unknown, capture: () => T, restore: (
   }, []);
   const back = useCallback(() => move('back'), [move]);
   const forward = useCallback(() => move('forward'), [move]);
-  return { record, back, forward, canGoBack: history.current.back.length > 0, canGoForward: history.current.forward.length > 0 };
+  return { record, back, forward, canGoBack: history.current.back.length > 0, canGoForward: history.current.forward.length > 0,
+    backSnapshot:history.current.back.at(-1),forwardSnapshot:history.current.forward.at(-1) };
 }

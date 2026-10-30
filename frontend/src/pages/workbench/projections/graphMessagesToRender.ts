@@ -13,6 +13,7 @@ import type {TraceDirection} from '../../../utils/traceRange';
 import { edgeDisplayDependencyIds } from '../../../utils/displayDependency';
 
 interface DeriveGraphMessagesToRenderInput {
+  frameScopeIds?: ReadonlySet<string>;
   containerOwnership?: ContainerOwnership;
   traceEntries: TraceEntry[];
   messagesToShow: DemoMessage[];
@@ -55,8 +56,11 @@ export function deriveGraphMessagesToRender(input: DeriveGraphMessagesToRenderIn
   // is cleared asynchronously when entering trace, so checking it here can
   // render the old sub-canvas together with the new trace window.
   const useTraceWindow = traceEntries.length > 0;
-  const baseMessages = useTraceWindow ? messagesToShow : messages.filter(message => !message.state?.organizationRetired);
-  const baseEdges = useTraceWindow ? edgesToShow : edges;
+  const scope=input.frameScopeIds;
+  const baseMessages = (useTraceWindow ? messagesToShow : messages.filter(message => !message.state?.organizationRetired))
+    .filter(message=>!scope||scope.has(message.id));
+  const baseEdges = (useTraceWindow ? edgesToShow : edges).filter(edge=>!scope||scope.has(edge.relationMessageId)
+    &&(edge.from.messageId.startsWith('anon:')||scope.has(edge.from.messageId))&&scope.has(edge.to.messageId));
   if (useTraceWindow) {
     const traceStartIds = traceEntries[traceEntries.length - 1].ids.filter(Boolean);
     const traceProjection = buildTraceProjection({

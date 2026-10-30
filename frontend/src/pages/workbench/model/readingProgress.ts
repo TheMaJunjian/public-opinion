@@ -1,15 +1,17 @@
-import {bodyVersion,bodyVersionKey,messageReadingKey,originalReadingKey,type ReadingMark,type BodyVersion,type ReferenceContext} from '@gonglun/core';
+import {bodyVersion,bodyVersionKey,messageReadingKey,type ReadingMark,type BodyVersion,type ReferenceContext} from '@gonglun/core';
 import {displayedBodyVersion} from '../../../utils/bodyVersions';
 import type {Relation} from '../../../types';
-import {buildStanceTargetMap,resolveDisplayedStance,type DemoMessage,type DemoEdge,type CorrectionVersion} from '../../../utils/modelBridge';
+import {buildStanceTargetMap,resolveDisplayedStance,computeCorrectionVersions,computeEffectiveSuppressedRelIds,type DemoMessage,type DemoEdge,type CorrectionVersion} from '../../../utils/modelBridge';
 import {displaySignature,type DisplaySnapshot} from './displayHintSnapshot';
 
-export type ReadingInfluence={messageId:string;key:string;type:string;versionId?:string;basisIds?:string[];context?:ReferenceContext;eventId?:string;resultKey?:string;causes?:string[]};
+export type ReadingInfluence={messageId:string;key:string;type:string;versionId?:string;basisIds?:string[];context?:ReferenceContext;eventId?:string;resultKey?:string;causes?:string[];acknowledgementMessageId?:string};
+export const influenceAcknowledgementId=(target:string,item:ReadingInfluence)=>item.acknowledgementMessageId??target;
 export type ReadingInput={messages:DemoMessage[];edges:DemoEdge[];relations:Relation[];marks?:ReadingMark[];
-  readStatus:ReadonlyMap<string,'READ'|'UNREAD'>;username:string|null;
+  readStatus:ReadonlyMap<string,'READ'|'UNREAD'>;username:string|null;userId?:string;
   corrections?:Map<string,{current?:CorrectionVersion;versions?:CorrectionVersion[]}>;
   effectiveCorrections?:Map<string,{current?:CorrectionVersion;versions?:CorrectionVersion[]}>;
   effectiveJoinIds?:ReadonlySet<string>;
+  suppressedIds?:ReadonlySet<string>;
   displays?:ReadonlyMap<string,DisplaySnapshot>;
   memberships?:ReadonlyArray<{containerId:string;targetIds:readonly string[]}>};
 const retired=(type:string|undefined)=>type==='read'||type==='unread';
@@ -20,6 +22,22 @@ export function bodySignature(content:string,versionIds:string[]=[],version?:Bod
 export function currentBodySignature(input:ReadingInput,id:string) {
   const message=input.messages.find(item=>item.id===id);
   return message?messageReadingKey(message.id):undefined;
+}
+
+/** Settlement declarations carry their initiator separately from their system author. */
+export function authoredReadingMessageIds(input:Pick<ReadingInput,'messages'|'username'|'userId'>,userId?:string){
+  const own=new Set(input.messages.filter(message=>input.username&&(userId&&message.authorId?message.authorId===userId:message.author===input.username)).map(message=>message.id));
+  if(!input.username)return own;
+  const accountIds=new Set(input.messages.filter(message=>own.has(message.id)).flatMap(message=>message.authorId?[message.authorId]:[]));
+  const accountId=userId??input.userId;
+  if(accountId)accountIds.add(accountId);
+  for(const message of input.messages){
+    if(message.kind!=='round'||message.authorId!=='system')continue;
+    const basis=message.parts?.flatMap(part=>part.type==='data'&&part.value&&typeof part.value==='object'&&!Array.isArray(part.value)?[part.value as Record<string,unknown>]:[])
+      .find(value=>typeof value.openedBy==='string')??message.roundPayload??message.relationPayload;
+    if(typeof basis?.openedBy==='string'?accountIds.has(basis.openedBy):typeof basis?.triggerId==='string'&&own.has(basis.triggerId))own.add(message.id);
+  }
+  return own;
 }
 
 /** The author has read the submitted original body, independently of its targets. */
@@ -33,43 +51,36 @@ export function authoredReadingMark(message:Pick<DemoMessage,'id'|'revision'>,si
 /** Sending confirms that submission and its effects, without reading its targets. */
 export function authoredReadingMarks(input:ReadingInput,id:string,signature:string):ReadingMark[] {
   const message=input.messages.find(message=>message.id===id);
-  if(!message||!input.username||message.author!==input.username)return [];
+  if(!message||!authoredReadingMessageIds(input).has(id))return [];
   const progress=deriveReadingProgress(input);
-  return [authoredReadingMark(message,signature),...[...progress.influences].flatMap(([target,items])=>{
+  const marks=[authoredReadingMark(message,signature),...[...progress.influences].flatMap(([target,items])=>{
     const own=items.filter(item=>item.messageId===id),selection=progress.selectionChanges.get(target);
-    return influenceReadingMarks(target,[...own,...(own.length&&selection?[selection]:[])]);
+    const outcomes=own.some(item=>['agree','disagree'].includes(item.type))?progress.relationOutcomes.get(target)??[]:[];
+    return influenceReadingMarks(target,[...own,...outcomes,...(own.length&&selection?[selection]:[])]);
   })];
+  return [...new Map(marks.map(mark=>[JSON.stringify([mark.messageId,mark.scope,mark.key,mark.eventId,mark.resultKey]),mark])).values()];
 }
 
 export function latestReadingMarks(marks:ReadingMark[]=[]){
   const result=new Map<string,ReadingMark>();
-  for(const mark of marks){if(mark.format!==3||mark.unknownContext||mark.scope==='influence')continue;
+  for(const mark of marks){if(mark.format!==3||mark.unknownContext||!['message','original'].includes(mark.scope))continue;
     const key=JSON.stringify([mark.messageId,mark.scope]),previous=result.get(key);
     if(!previous||(mark.position??0)>(previous.position??0)||(mark.position??0)===(previous.position??0)&&(mark.updatedAt??'')>=(previous.updatedAt??''))result.set(key,mark);
   }
   return result;
 }
-export function readingPrerequisiteIndex(input:Pick<ReadingInput,'messages'|'edges'|'marks'>&Partial<Pick<ReadingInput,'username'>>){
+/** Correction bodies retain their own progress, including candidates added later. */
+function unreadCorrectionIndex(input:Pick<ReadingInput,'messages'|'edges'|'marks'|'username'>,authored:ReadonlySet<string>){
   const marks=latestReadingMarks(input.marks),corrections=new Map<string,Set<string>>();
-  const authored=new Set(input.messages.filter(message=>input.username&&message.author===input.username&&(message.revision??1)===1).map(message=>message.id));
   for(const edge of input.edges)if(edge.relationType==='correct'&&!edge.proposalOnly){const ids=corrections.get(edge.to.messageId)??new Set<string>();ids.add(edge.relationMessageId);corrections.set(edge.to.messageId,ids);}
-  const read=(id:string)=>{const mark=marks.get(JSON.stringify([id,'message']));return mark?mark.state!=='UNREAD':authored.has(id);};
-  return (id:string)=>{
-    const own=marks.get(JSON.stringify([id,'message'])),completed=!!own&&(own.state!=='UNREAD'||!!own.firstConfirmedAt)||authored.has(id);
-    const original=marks.get(JSON.stringify([id,'original'])),originalSeen=completed||!!own?.originalSeen||!!original&&original.state!=='UNREAD';
-    const versions=[...corrections.get(id)??[]];
-    return {completed,originalSeen,originalRequired:!completed&&!!versions.length&&!originalSeen,unreadCorrections:completed?[]:versions.filter(id=>!read(id)),canConfirm:completed||originalSeen&&versions.every(read)||!versions.length};
-  };
-}
-export function readingPrerequisites(input:Pick<ReadingInput,'messages'|'edges'|'marks'>&Partial<Pick<ReadingInput,'username'>>,id:string){return readingPrerequisiteIndex(input)(id);}
-export function originalReadingRequired(input:Pick<ReadingInput,'messages'|'marks'|'readStatus'>&Partial<Pick<ReadingInput,'edges'>>,id:string,_display:Pick<DisplaySnapshot,'correctionIds'|'version'>){
-  void _display;
-  return readingPrerequisites({...input,edges:input.edges??[]},id).originalRequired;
+  return (id:string)=>[...corrections.get(id)??[]].filter(id=>{const mark=marks.get(JSON.stringify([id,'message']));return mark?mark.state==='UNREAD':!authored.has(id);});
 }
 
 /** All source/target directions participate; category acknowledgements are per affected message. */
-export function readingInfluences(input:Pick<ReadingInput,'messages'|'edges'|'relations'|'memberships'>) {
+export function readingInfluences(input:Pick<ReadingInput,'messages'|'edges'|'relations'|'memberships'|'corrections'|'effectiveCorrections'|'effectiveJoinIds'|'suppressedIds'>&Partial<Pick<ReadingInput,'username'>>) {
   const map=new Map(input.messages.map(message=>[message.id,message])),stances=buildStanceTargetMap(input.edges,map);
+  const correctionStates=input.effectiveCorrections??input.corrections??computeCorrectionVersions(input.messages,input.edges,
+    computeEffectiveSuppressedRelIds(input.edges,input.messages,input.username??null),input.username??null);
   const joinedPlacements=new Set<string>();
   for(const relation of input.relations)if(relation.relationType==='JOIN'&&relation.sourceMessageId&&!relation.state?.membershipDisabled)
     for(const ref of relation.targetRefs)joinedPlacements.add(JSON.stringify([relation.sourceMessageId,ref.kind==='relation'?ref.relationId:ref.messageId]));
@@ -114,8 +125,8 @@ export function readingInfluences(input:Pick<ReadingInput,'messages'|'edges'|'re
     }
   }
   for(const relation of input.relations)if(relation.relationType==='JOIN'&&relation.sourceMessageId){
-    // Membership is an influence on each member, read at that member's message.
-    // The container reports member progress instead of confirming it separately.
+    // Target placement belongs in automatic influences. The container already
+    // lists received JOIN records with its members, so do not count them twice.
     for(const ref of relation.targetRefs)add(ref.kind==='relation'?ref.relationId:ref.messageId,relation.id,'join',`join:${relation.sourceMessageId}:${relation.id}`);
   }
   // Trace a correction's downstream events back to its subject while retaining
@@ -184,36 +195,64 @@ export function readingInfluences(input:Pick<ReadingInput,'messages'|'edges'|'re
     // summarize pending member progress; they do not inherit these influences.
     for(const id of changed)add(id,edge.relationMessageId,resolved.type,`${resolved.type}:`);
   }
-  for(const [event,values] of byEvent)for(const [encoded,{type,versionId,basisIds,context}] of values){
-    const [target,key]=JSON.parse(encoded) as [string,string],list=result.get(target)??[];
+  const outcomeFor=(event:string,type:string)=>{
     const message=map.get(event);
-    list.push({messageId:event,key,type,context,eventId:JSON.stringify([event,message?.revision??1,message?.sequence??0]),...(versionId?{versionId}:{}),...(basisIds?{basisIds}:{})});result.set(target,list);
+    let effective:boolean|undefined;
+    if(type==='correct'){
+      const corrected=correctionTargets.get(event),entry=corrected?correctionStates.get(corrected):undefined;
+      effective=message?.relationPayload?.correctionKind==='WIDTH'?!(input.suppressedIds?.has(event)??message?.state?.suppressed??false)
+        :entry?.current?(entry.current.appliedCorrectionIds??[entry.current.correctionId]).includes(event):entry?.versions?.find(version=>version.correctionId===event)?.adopted??false;
+    }else if(type==='join')effective=input.effectiveJoinIds?.has(event)??message?.state?.membershipActive
+      ??input.memberships?.some(membership=>membership.containerId===(message?.joinInfo?.containerId??relationMap.get(event)?.sourceMessageId)
+        &&relationMap.get(event)?.targetRefs.some(ref=>membership.targetIds.includes(ref.kind==='relation'?ref.relationId:ref.messageId)))??false;
+    else if(container(type))effective=!(input.suppressedIds?.has(event)??message?.state?.suppressed??false);
+    return effective===undefined?undefined:effective?'effective':'ineffective';
+  };
+  const eventId=(id:string)=>JSON.stringify([id,map.get(id)?.revision??1,map.get(id)?.sequence??0]);
+  for(const [event,values] of byEvent)for(const [encoded,{type,versionId,basisIds,context}] of values){
+    const [target,key]=JSON.parse(encoded) as [string,string],list=result.get(target)??[],resultKey=outcomeFor(event,type);
+    list.push({messageId:event,key,type,context,eventId:eventId(event),...(resultKey?{resultKey,acknowledgementMessageId:event}:{}),...(versionId?{versionId}:{}),...(basisIds?{basisIds}:{})});result.set(target,list);
   }
   return result;
 }
 
 export function deriveReadingProgress(input:ReadingInput) {
   const marks=input.marks??[],influences=readingInfluences(input),latest=latestReadingMarks(marks),acknowledged=new Set<string>();
+  // Keep outgoing results available for author confirmations without inventing
+  // an incoming influence from a message to itself.
+  const relationOutcomes=new Map<string,ReadingInfluence[]>();
+  for(const items of influences.values())for(const item of items)if(item.acknowledgementMessageId){
+    const values=relationOutcomes.get(item.acknowledgementMessageId)??[];
+    if(!values.some(value=>value.key===item.key&&value.eventId===item.eventId&&value.resultKey===item.resultKey))values.push(item);
+    relationOutcomes.set(item.acknowledgementMessageId,values);
+  }
+  const observedOutcomes=new Set(marks.filter(mark=>mark.format===3&&mark.scope==='influence'&&mark.resultKey&&!mark.unknownContext)
+    .map(mark=>JSON.stringify([mark.messageId,mark.key,mark.eventId])));
   for(const mark of marks)if(mark.format===3&&mark.scope==='influence'&&mark.eventId&&!mark.unknownContext&&mark.state!=='UNREAD')acknowledged.add(JSON.stringify([mark.messageId,mark.key,mark.eventId,mark.resultKey??'']));
   const pendingInfluences=new Map<string,ReadingInfluence[]>(),otherVersionInfluences=new Map<string,ReadingInfluence[]>(),otherVersionUnread=new Map<string,Set<string>>(),pendingBodies=new Set<string>(),pendingOriginals=new Set<string>(),pendingCorrections=new Map<string,string[]>(),selectionChanges=new Map<string,ReadingInfluence>();
-  const messageMap=new Map(input.messages.map(message=>[message.id,message])),prerequisites=readingPrerequisiteIndex(input);
+  const ownIds=authoredReadingMessageIds(input),authoredIds=new Set(input.messages.filter(message=>ownIds.has(message.id)&&(message.revision??1)===1).map(message=>message.id));
+  const unreadCorrections=unreadCorrectionIndex(input,authoredIds);
   for(const message of input.messages){
     if(retired(message.relationType)||!input.username)continue;
     const own=latest.get(JSON.stringify([message.id,'message']));
-    const authored=message.author===input.username&&(message.revision??1)===1;
+    const authored=authoredIds.has(message.id);
     if(own?own.state==='UNREAD':!authored)pendingBodies.add(message.id);
-    const gate=prerequisites(message.id);
-    if(gate.originalRequired)pendingOriginals.add(message.id);
-    if(gate.unreadCorrections.length)pendingCorrections.set(message.id,gate.unreadCorrections);
+    const corrections=unreadCorrections(message.id);
+    if(corrections.length)pendingCorrections.set(message.id,corrections);
     const pending=(influences.get(message.id)??[]).filter(item=>{
-      const source=messageMap.get(item.messageId);
-      return !(source?.author===input.username&&(source.revision??1)===1)
-        &&!acknowledged.has(JSON.stringify([message.id,item.key,item.eventId,item.resultKey??'']));
+      const owner=influenceAcknowledgementId(message.id,item);
+      return !(authoredIds.has(item.messageId)&&(!item.resultKey||!observedOutcomes.has(JSON.stringify([owner,item.key,item.eventId]))))
+        &&!acknowledged.has(JSON.stringify([owner,item.key,item.eventId,item.resultKey??'']));
     });
     const previous=own?.selection,selection=previous?readingSelection(input,message.id,input.displays?.get(message.id)):undefined;
-    if(previous&&selection&&(previous.signature!==selection.signature||JSON.stringify(previous.outcomes)!==JSON.stringify(selection.outcomes))){
+    // Older confirmations used the shared message key here. Their recorded
+    // body version still proves which display was seen; do not invent a change.
+    const previousVersionKey=previous?.versionKey===messageReadingKey(message.id)?own?.version?bodyVersionKey(own.version):selection?.versionKey:previous?.versionKey;
+    if(previous&&selection&&(previousVersionKey!==selection.versionKey||previous.signature!==selection.signature||JSON.stringify(previous.outcomes)!==JSON.stringify(selection.outcomes))
+      &&((own?.version?.revision??1)!==(message.revision??1)||(influences.get(message.id)??[]).some(item=>item.type==='correct'
+        &&!acknowledged.has(JSON.stringify([influenceAcknowledgementId(message.id,item),item.key,item.eventId,item.resultKey??'']))))){
       const corrections=new Set(Object.keys(selection.outcomes)),causes=[...new Set(input.edges.filter(edge=>['agree','disagree'].includes(edge.relationType)&&corrections.has(edge.to.messageId)).map(edge=>edge.relationMessageId))];
-      const fingerprint=displaySignature({content:JSON.stringify([selection,causes.map(id=>{const source=messageMap.get(id);return [id,source?.revision,source?.sequence];})]),parentIds:[],memberIds:[],suppressed:false,correctionIds:[]}),key=`selection:${fingerprint}`;
+      const fingerprint=displaySignature({content:JSON.stringify(selection),parentIds:[],memberIds:[],suppressed:false,correctionIds:[]}),key=`selection:${fingerprint}`;
       const change:ReadingInfluence={messageId:message.id,key,type:'selection',eventId:key,resultKey:key,causes};
       if(!acknowledged.has(JSON.stringify([message.id,key,key,key]))){pending.push(change);selectionChanges.set(message.id,change);}
     }
@@ -234,45 +273,41 @@ export function deriveReadingProgress(input:ReadingInput) {
   for(const [id,containers] of parents)if(pendingIds.has(id))for(const container of containers){
     const values=pendingMembers.get(container)??new Set<string>();values.add(id);pendingMembers.set(container,values);
   }
-  return {influences,pendingInfluences,otherVersionInfluences,otherVersionUnread,pendingBodies,pendingOriginals,pendingCorrections,pendingMembers,selectionChanges,confirmed:(id:string)=>!!input.username&&!pendingIds.has(id),allVersionsConfirmed:(id:string)=>!!input.username&&!pendingIds.has(id)&&!otherVersionUnread.has(id)&&!otherVersionInfluences.has(id)};
+  return {influences,relationOutcomes,pendingInfluences,otherVersionInfluences,otherVersionUnread,pendingBodies,pendingOriginals,pendingCorrections,pendingMembers,selectionChanges,confirmed:(id:string)=>!!input.username&&!pendingIds.has(id),allVersionsConfirmed:(id:string)=>!!input.username&&!pendingIds.has(id)&&!otherVersionUnread.has(id)&&!otherVersionInfluences.has(id)};
 }
 
-export function readingSelection(input:ReadingInput,id:string,_display?:DisplaySnapshot):NonNullable<ReadingMark['selection']>{
-  void _display;
-  const message=input.messages.find(item=>item.id===id)!,entry=(input.effectiveCorrections??input.corrections)?.get(id),version=displayedBodyVersion(message,entry?.current);
+export function readingSelection(input:ReadingInput,id:string,display?:DisplaySnapshot):NonNullable<ReadingMark['selection']>{
+  const message=input.messages.find(item=>item.id===id)!,entry=input.corrections?.get(id),version=display?.version??displayedBodyVersion(message,entry?.current);
   const outcomes=Object.fromEntries((input.effectiveCorrections??input.corrections)?.get(id)?.versions?.map(item=>[item.correctionId,item.exclusionReason??(item.adopted?'adopted':item.valid?'eligible':'excluded')])??[]);
-  const signature=displaySignature({content:entry?.current?.content??message.content,parentIds:[],memberIds:[],suppressed:false,correctionIds:[]});
-  return {versionKey:messageReadingKey(version.messageId),outcomes,signature};
+  const signature=displaySignature({content:display?.content??entry?.current?.content??message.content,parentIds:[],memberIds:[],suppressed:false,correctionIds:[]});
+  return {versionKey:bodyVersionKey(version),outcomes,signature};
 }
 
-export const groupedReadingInfluence=(item:ReadingInfluence)=>['selection','agree','disagree','recommend','archive','attention','block','tag','correct','round','round_result','terminate_settlement'].includes(item.type)
+export const groupedReadingInfluence=(item:ReadingInfluence)=>['selection','agree','disagree','recommend','archive','attention','block','tag','round','round_result','terminate_settlement'].includes(item.type)
   ||item.type==='reference'&&(item.key==='referenced'||item.key.endsWith(':referenced'));
 
-export const automaticReadingInfluence=(item:ReadingInfluence)=>['agree','disagree','recommend','archive','attention','block','tag','round','round_result','terminate_settlement'].includes(item.type);
-type ReadingConfirmationOptions={automaticInfluences?:boolean};
+type ReadingConfirmationOptions={automaticInfluences?:boolean;influences?:readonly ReadingInfluence[]};
 
-export function influenceReadingMarks(id:string,items:ReadingInfluence[]):ReadingMark[]{
-  return [...new Map(items.map(item=>[JSON.stringify([item.key,item.eventId,item.resultKey]),{format:3 as const,messageId:id,scope:'influence' as const,key:item.key,eventId:item.eventId??item.messageId,...(item.resultKey?{resultKey:item.resultKey}:{})}])).values()];
+export function influenceReadingMarks(id:string,items:readonly ReadingInfluence[]):ReadingMark[]{
+  return [...new Map(items.map(item=>[JSON.stringify([influenceAcknowledgementId(id,item),item.key,item.eventId,item.resultKey]),{format:3 as const,messageId:influenceAcknowledgementId(id,item),scope:'influence' as const,key:item.key,eventId:item.eventId??item.messageId,...(item.resultKey?{resultKey:item.resultKey}:{})}])).values()];
 }
 
 /** Record shared progress with evidence of the visible body; never read hidden bodies. */
 export function readingMarksFor(input:ReadingInput,id:string,display:DisplaySnapshot,scope:'message'|'corrections'='message',options:ReadingConfirmationOptions={}):ReadingMark[] {
-  const gate=readingPrerequisites(input,id);
-  if(display.correctionIds.length&&!gate.canConfirm)throw new Error(gate.originalRequired?'请先切回原文并确认已阅':'请先阅读全部更正消息');
   return planReadingMarks(input,id,display,scope,options);
 }
 
 /** Preview and saving share one plan, so the UI describes exactly what is confirmed. */
 export function planReadingMarks(input:ReadingInput,id:string,display:DisplaySnapshot,_scope:'message'|'corrections'='message',options:ReadingConfirmationOptions={}):ReadingMark[] {
   void _scope;
-  const message=input.messages.find(item=>item.id===id)!,version=bodyVersion(message.id,display.version?.revision??message.revision??1,display.correctionIds.map(correctionId=>{
+  const message=input.messages.find(item=>item.id===id)!,version=display.version??bodyVersion(message.id,message.revision??1,display.correctionIds.map(correctionId=>{
     const correction=input.messages.find(item=>item.id===correctionId);return {messageId:correctionId,revision:correction?.revision??1,kind:correction?.relationPayload?.correctionKind==='MEANING'?'MEANING':'TEXT'};
   }));
-  const gate=readingPrerequisites(input,id),onlyOriginal=!display.correctionIds.length&&!gate.canConfirm;
-  const signature=onlyOriginal?originalReadingKey(id):messageReadingKey(id),marks:ReadingMark[]=[{format:3,version,messageId:id,scope:onlyOriginal?'original':'message',key:signature,signature:displaySignature(display),bodySignature:signature,state:'READ',selection:readingSelection(input,id,{...display,version})}];
-  // The status window confirms the current message's displayed votes,
-  // annotations and settlement outcomes together, without reading other bodies.
+  const signature=messageReadingKey(id),marks:ReadingMark[]=[{format:3,version,messageId:id,scope:'message',key:signature,signature:displaySignature(display),bodySignature:signature,state:'READ',selection:readingSelection(input,id,{...display,version})}];
+  // The exact listed effects are acknowledged separately from the message.
+  // Their source bodies and the container's members remain independently read.
   // Reading visits can keep their explicitly declared set of influences frozen.
-  if(options.automaticInfluences!==false)marks.push(...influenceReadingMarks(id,(readingInfluences(input).get(id)??[]).filter(automaticReadingInfluence)));
+  if(options.automaticInfluences!==false)marks.push(...influenceReadingMarks(id,options.influences
+    ??deriveReadingProgress({...input,displays:new Map([...(input.displays??[]),[id,display]])}).pendingInfluences.get(id)??[]));
   return marks.map(mark=>mark.scope==='influence'?mark:{...mark,confirmation:{kind:'direct' as const,messageId:id}});
 }

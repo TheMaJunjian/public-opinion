@@ -1,8 +1,9 @@
 import { createPortal } from 'react-dom';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { HTMLAttributes, ReactNode, Ref } from 'react';
 import PopupOverlay from './PopupOverlay';
 import { DIALOG_BACKDROP, dialogStyles } from './dialogStyles';
+import {useWorkbenchPortalTarget} from '../context/WorkbenchPortalContext';
 
 let bodyScrollLockCount = 0;
 let bodyOverflowBeforeLock = '';
@@ -49,6 +50,7 @@ export default function PromptModal({
 }: PromptModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const footerRef = useRef<HTMLDivElement>(null);
+  const portalTarget=useWorkbenchPortalTarget();
   const [offsetY, setOffsetY] = useState(0);
   useLayoutEffect(() => {
     if (!open || !lockScroll) return;
@@ -65,7 +67,7 @@ export default function PromptModal({
     };
   }, [open, lockScroll]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) { setOffsetY(0); return; }
     const timer = setTimeout(() => {
       const footer = footerRef.current;
@@ -157,6 +159,6 @@ export default function PromptModal({
         </div>}
       </div>
     </PopupOverlay>,
-    document.body,
+    portalTarget,
   );
 }

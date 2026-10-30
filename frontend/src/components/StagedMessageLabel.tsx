@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { Suspense,useState } from 'react';
 import type { DemoMessage } from '../utils/modelBridge';
 import { getMessageCardContent, getMessageTypeLabel } from '../utils/messageDisplay';
+import MessageReferenceControl from './MessageReferenceControl';
+import {MessageDisplayMarker} from './LazyMessageDisplayHints';
 
 /** Inspect a collection entry without changing its source/target/candidate selection. */
-export default function StagedMessageLabel({ messageId, message, status, content, ariaLabel }: {
-  messageId: string; message?: DemoMessage; status?: string; content?: string; ariaLabel?: string;
+export default function StagedMessageLabel({ messageId, message, status, content, ariaLabel, onNavigate, wholeMessage=true }: {
+  messageId: string; message?: DemoMessage; status?: string; content?: string; ariaLabel?: string;onNavigate?:(id:string)=>void;wholeMessage?:boolean;
 }) {
   const [selected, setSelected] = useState(false);
   const [copyStatus, setCopyStatus] = useState('');
@@ -16,7 +18,9 @@ export default function StagedMessageLabel({ messageId, message, status, content
       setCopyStatus('复制失败，请重试');
     }
   };
-  return <button type="button" aria-label={ariaLabel ?? `暂存消息 ${messageId}`} aria-pressed={selected}
+  if(onNavigate)return <MessageReferenceControl messageId={messageId} type={getMessageTypeLabel(message)} summary={content??getMessageCardContent(message)}
+    ariaLabel={ariaLabel??`暂存消息 ${messageId}`} status={status} onNavigate={onNavigate} wholeMessage={wholeMessage} style={{flex:1,minWidth:0,padding:'4px 6px',fontSize:12}}/>;
+  return <span style={{display:'inline-flex',alignItems:'center',flex:1,minWidth:0}}><button type="button" aria-label={ariaLabel ?? `暂存消息 ${messageId}`} aria-pressed={selected}
     title={`${selected ? '单击取消选中并显示消息 ID' : '单击选中并显示消息内容'}；双击复制消息 ID`}
     onClick={() => { setSelected(value => !value); setCopyStatus(''); }}
     onDoubleClick={event => { event.preventDefault(); event.stopPropagation(); void copyMessageId(); }}
@@ -30,5 +34,5 @@ export default function StagedMessageLabel({ messageId, message, status, content
     </span>
     {status && <span style={{ color: '#94a3b8' }}> · {status}</span>}
     {copyStatus && <span role="status" style={{ color: '#94a3b8' }}> · {copyStatus}</span>}
-  </button>;
+  </button>{wholeMessage&&<Suspense fallback={null}><MessageDisplayMarker messageId={messageId} compact/></Suspense>}</span>;
 }

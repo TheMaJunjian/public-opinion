@@ -2,6 +2,7 @@ import type {BodyVersion, Message, Part, Reference, ReferenceContext} from './ty
 
 export const messageReadingKey=(id:string)=>`message:3:${id}`;
 export const originalReadingKey=(id:string)=>`original:3:${id}`;
+export const comparisonReadingKey=(version:BodyVersion,signature:string)=>`comparison:3:${bodyVersionKey(version)}:${signature}`;
 export const referenceVersion=(context:ReferenceContext|undefined)=>context&&'version' in context?context.version:undefined;
 
 export function bodyVersion(messageId:string,revision=1,corrections:BodyVersion['corrections']=[]):BodyVersion {

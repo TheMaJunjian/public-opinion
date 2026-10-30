@@ -5,7 +5,7 @@ import type {
   RelationType,
   UnitSelection
 } from "../../../utils/modelBridge";
-import { unitSelectionToTargetRef } from "../../../utils/modelBridge";
+import { unitSelectionToTargetRef,unitSelectionToReference } from "../../../utils/modelBridge";
 import { mergeUnits, nextId } from '../model/selection';
 import type { DraftSendDependencies } from "./sendDraftTypes";
 
@@ -31,13 +31,20 @@ export async function sendNotifyDraft(dependencies: Pick<DraftSendDependencies, 
   return;
 }
 
-export async function sendSelectedTagDraft(dependencies: Pick<DraftSendDependencies, "secondaryRelationType" | "msgMap" | "subType" | "newMessageContent" | "createRel" | "scopeMessageId" | "registerCreatedRelationInCurrentClassify" | "edgesRef" | "showAlert" | "setEdges" | "sendTagRelation" | "setDraftUnits" | "setSourceUnits" | "setTargetUnits" | "setActiveTextSelectId" | "setNewMessageContent" | "setSubType" | "setRelationType" | "setSecondaryRelationType" | "subTypeCustomBufferRef" | "setSubTypeCustomLabel">, { effectiveTargets }: { effectiveTargets: UnitSelection[]; }): Promise<void> {
+export async function sendSelectedTagDraft(dependencies: Pick<DraftSendDependencies, "secondaryRelationType" | "msgMap" | "subType" | "newMessageContent" | "createRel" | "scopeMessageId" | "registerCreatedRelationInCurrentClassify" | "edgesRef" | "showAlert" | "setEdges" | "sendTagRelation" | "setDraftUnits" | "setSourceUnits" | "setTargetUnits" | "setActiveTextSelectId" | "setNewMessageContent" | "setSubType" | "setRelationType" | "setSecondaryRelationType" | "subTypeCustomBufferRef" | "setSubTypeCustomLabel" | "subTypeCustomLabel" | "sourceUnits" | "handleSendMessageOnly">, { effectiveTargets }: { effectiveTargets: UnitSelection[]; }): Promise<void> {
   const { secondaryRelationType, msgMap, subType, newMessageContent, createRel, scopeMessageId, registerCreatedRelationInCurrentClassify, edgesRef, showAlert, setEdges, sendTagRelation, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setNewMessageContent, setSubType, setRelationType, setSecondaryRelationType, subTypeCustomBufferRef, setSubTypeCustomLabel } = dependencies;
   const secType = secondaryRelationType;
   if(secType==='read'||secType==='unread'){showAlert('已阅是个人查看状态，请在消息提示中标记已阅');return;}
   const newEdgesList: DemoEdge[] = [];
+  if(subType==='CUSTOM'&&!dependencies.subTypeCustomLabel.trim()){showAlert('请输入自定义标注原因');return;}
+  let sources=mergeUnits([],dependencies.sourceUnits);
+  if(newMessageContent.trim()){
+    const source=await dependencies.handleSendMessageOnly(newMessageContent.trim());
+    if(!source)return;
+    sources=[...sources,{messageId:source.id,selection:{kind:'whole'}}];
+  }
   if (secType === "recommend" || secType === "archive" || secType === "attention" || secType === "block") {
-    // Create inline badge relation (no source message), one per target
+    // One annotation per target; accompanying text is referenced as its source.
     for (const target of mergeUnits([], effectiveTargets)) {
       const tgtMid = target.messageId;
       const backendTargetRef = unitSelectionToTargetRef(target, msgMap);
@@ -46,30 +53,30 @@ export async function sendSelectedTagDraft(dependencies: Pick<DraftSendDependenc
         if (subType) {
           relPayload.subType = subType;
           if (subType === 'CUSTOM') {
-            const customText = newMessageContent.trim();
+            const customText = dependencies.subTypeCustomLabel.trim();
             if (customText) relPayload.customLabel = customText.slice(0, 20);
           }
         }
-        const backendRel = await createRel(scopeMessageId!, { relationType: secType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef], payload: relPayload });
+        const backendRel = await createRel(scopeMessageId!, { relationType: secType.toUpperCase(), sourceMessageId: sources[0]?.messageId??null,
+          ...(sources.length?{sourceRefs:sources.map(unit=>unitSelectionToReference(unit,msgMap))}:{}),targetRefs: [backendTargetRef], payload: relPayload });
         const relId = backendRel.id;
         await registerCreatedRelationInCurrentClassify(backendRel);
         // Only add edge if not already present for this relation-target pair
         const alreadyHasEdge = edgesRef.current.some(e =>
           e.relationMessageId === relId && e.to.messageId === tgtMid);
         if (!alreadyHasEdge) {
-          const anonSrcId = `anon:${backendRel.id}`;
+          const anonSrcId = sources[0]?.messageId??`anon:${backendRel.id}`;
           newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType: secType as RelationType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: target, relationLabel: relationTypeName(secType) } as DemoEdge);
         }
       } catch (e) { showAlert(`建立关系失败: ${sendErrorMessage(e)}`); }
     }
     setEdges(prev => [...prev, ...newEdgesList]);
   } else {
-    // Existing tag label selected: create TAG relation directly without a source message.
-    // The label text is stored in tagLabel on the relation itself.
+    // Existing tag labels use the same optional accompanying source text.
     const tagLabel = secType;
     const newTagEdges: DemoEdge[] = [];
     for (const target of mergeUnits([], effectiveTargets)) {
-      const edge = await sendTagRelation(target, tagLabel);
+      const edge = await sendTagRelation(target, tagLabel,undefined,undefined,sources);
       if (edge) newTagEdges.push(edge);
     }
     setEdges(prev => [...prev, ...newTagEdges]);

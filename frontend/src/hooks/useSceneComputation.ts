@@ -9,7 +9,13 @@ type Result = ReturnType<typeof computeSceneLayout> | ReturnType<typeof planMess
 const compute = (job: Job): Result => job.kind === 'layout' ? computeSceneLayout(job.input) : planMessageStructures(job.input);
 
 /** One active worker job plus one latest replacement; stale results never reach the scene. */
-export function useSceneComputation<K extends Job['kind']>(job: Extract<Job, { kind: K }> | null, retainPrevious = false, retentionKey?: unknown) {
+export function useSceneComputation<K extends Job['kind']>(inputJob: Extract<Job, { kind: K }> | null, retainPrevious = false, retentionKey?: unknown) {
+  // Worker inputs contain value data. Equal restored projections can reuse
+  // this retained view's completed result even when their references change.
+  const inputKey=useMemo(()=>inputJob?JSON.stringify(inputJob,(_key,value)=>value instanceof Set?{set:[...value].sort()}:value instanceof Map?{map:[...value]}:value):null,[inputJob]);
+  const stableJob=useRef({key:inputKey,job:inputJob});
+  if(stableJob.current.key!==inputKey)stableJob.current={key:inputKey,job:inputJob};
+  const job=stableJob.current.job;
   const startTask = useWorkbenchDrawingTask('projection');
   const workerRef = useRef<Worker | null>(null);
   const latest = useRef<{ job: Job; id: number; finish(result: Result): void; fail(error: unknown): void } | null>(null);
@@ -41,7 +47,7 @@ export function useSceneComputation<K extends Job['kind']>(job: Extract<Job, { k
     return () => { worker.terminate(); workerRef.current = null; active.current = null; };
   }, [workerUnavailable]);
   useLayoutEffect(() => {
-    if (!job || workerUnavailable || !workerRef.current) return;
+    if (!job || workerUnavailable || !workerRef.current || completed?.job === job) return;
     const task = startTask();
     const id = ++revision.current;
     latest.current = { job, id, finish(result) { if (task.active) { setCompleted({ job, result, retentionKey }); task.complete(); } }, fail: task.fail };
@@ -51,7 +57,7 @@ export function useSceneComputation<K extends Job['kind']>(job: Extract<Job, { k
       catch { active.current = null; setWorkerUnavailable(true); }
     }
     return () => { if (latest.current?.id === id) latest.current = null; task.cancel(); };
-  }, [job, workerUnavailable, startTask, retentionKey]);
+  }, [job, workerUnavailable, startTask, retentionKey, completed?.job]);
   const value = fallback ?? completed;
   return (job && value && (value.job === job || retainPrevious && value.retentionKey === retentionKey) ? value.result : null) as (K extends 'layout' ? ReturnType<typeof computeSceneLayout> : ReturnType<typeof planMessageStructures>) | null;
 }

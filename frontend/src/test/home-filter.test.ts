@@ -6,6 +6,7 @@ import { buildTraceProjection } from '../utils/traceProjection';
 import { deriveHomeFilterResult } from '../pages/workbench/projections/homeFilterResult';
 import type { DemoEdge, DemoMessage } from '../utils/modelBridge';
 import {bodyVersion,messageReadingKey} from '@gonglun/core';
+import {readingInfluences,influenceReadingMarks} from '../pages/workbench/model/readingProgress';
 
 const user = { id: 'user-1', username: 'alice', createdAt: '2026-01-01T00:00:00.000Z' };
 const otherUser = { id: 'user-2', username: 'bob', createdAt: '2026-01-01T00:00:00.000Z' };
@@ -29,8 +30,9 @@ describe('correction discovery for the original author', () => {
       targetRefs: [{ kind: 'relation', relationId: correction.id }], createdAt: '2026-10-21', createdBy: user };
     const readStatusByMessageId = getLatestUserReadStatusByMessageId([mark], record => record.createdBy.id === user.id);
     const version=bodyVersion(correction.id),key=messageReadingKey(version.messageId),readingMarks=[{format:3 as const,messageId:correction.id,scope:'message' as const,version,key,bodySignature:key,signature:'seen'}];
-    expect(deriveHomeFilterResult({ ...input, readingMarks,readStatusByMessageId, homeFilterMode: 'unread-related' })!.matchIds).toEqual(new Set([original.id]));
-    const read = deriveHomeFilterResult({ ...input, readingMarks,readStatusByMessageId, homeFilterMode: 'read-related' })!;
+    const confirmed=[...readingMarks,...[...readingInfluences({...input,relations:[],username:user.username})].flatMap(([id,items])=>influenceReadingMarks(id,items.filter(item=>item.messageId===correction.id)))];
+    expect(deriveHomeFilterResult({ ...input, readingMarks:confirmed,readStatusByMessageId, homeFilterMode: 'unread-related' })!.matchIds).toEqual(new Set());
+    const read = deriveHomeFilterResult({ ...input, readingMarks:confirmed,readStatusByMessageId, homeFilterMode: 'read-related' })!;
     expect(read.matchIds.has(correction.id)).toBe(true);
     expect(read.displayIds.has(original.id)).toBe(true);
   });

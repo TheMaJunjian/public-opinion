@@ -3,6 +3,7 @@ import { Z_INDEX } from '../constants/zIndex';
 import { useId, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent, ReactNode, RefObject } from 'react';
 import { getMessageJumpRegions } from '../utils/messageJumpDisplay';
+import {useWorkbenchPortalTarget} from '../context/WorkbenchPortalContext';
 
 const EDGE_ARROW_COUNT = 25;
 const GUIDE_EDGE_INSET = 12;
@@ -16,6 +17,7 @@ export function MessageJumpOverlay({
   targetElement: HTMLElement;
   targetRect: DOMRect;
 }) {
+  const portalTarget=useWorkbenchPortalTarget();
   const maskId = `jump-mask-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const overlayRef = useRef<SVGSVGElement>(null);
   const [geometry, setGeometry] = useState(() => ({
@@ -134,7 +136,7 @@ export function MessageJumpOverlay({
         </g>
       </g>
     </svg>
-  ), document.body);
+  ), portalTarget);
 }
 
 interface PopupOverlayProps {
@@ -156,6 +158,7 @@ export default function PopupOverlay({
   dataPromptModal = false,
   onClick,
 }: PopupOverlayProps) {
+  const portalTarget=useWorkbenchPortalTarget();
   const overlayRef = useRef<HTMLDivElement>(null);
   const [geometry, setGeometry] = useState(() => ({
     left: window.visualViewport?.offsetLeft ?? 0,
@@ -261,5 +264,5 @@ export default function PopupOverlay({
         }
       `}</style>
     </div>
-  ), document.body);
+  ), portalTarget);
 }

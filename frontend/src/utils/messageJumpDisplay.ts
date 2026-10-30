@@ -39,7 +39,6 @@ export function getMessageJumpDisplay(target: HTMLElement, messageId: string, fa
   // curve can span the canvas and must remain under the navigation mask.
   const labels=Array.from(canvas.querySelectorAll('[data-directed-edge-label]'))
     .filter(element=>element.getAttribute('data-directed-edge-label')===messageId);
-  if(target.hasAttribute('data-directed-edge-start'))return {source:canvas,elements:new Set<Element>([target,...labels]),rect:target.getBoundingClientRect()};
   if(labels.length){
     const elements=new Set<Element>(labels),first=labels[0].getBoundingClientRect();
     const rect=labels.slice(1).reduce((bounds,element)=>{const next=element.getBoundingClientRect();
@@ -48,11 +47,15 @@ export function getMessageJumpDisplay(target: HTMLElement, messageId: string, fa
     },first);
     return {source:canvas,elements,rect};
   }
+  if(target.hasAttribute('data-directed-edge-start'))return {source:canvas,elements:new Set<Element>(),rect:fallback};
   const ids = new Set([messageId]);
   // A Set breaks cycles and also visits newly added nested members/dependants.
   for (const id of ids) for (const member of groups?.get(id) ?? []) ids.add(member);
   const elements = new Set<Element>([target]);
   for (const element of canvas.querySelectorAll('[data-msgid], [data-jump-msgids], [data-jump-visual-msgids]')) {
+    // A curve's bounding rectangle also contains unrelated cards and empty
+    // canvas. Only its compact label can open a region in the locator mask.
+    if (element.hasAttribute('data-directed-edge-start') || element.matches('svg g[data-jump-visual-msgids]')) continue;
     const names = [element.getAttribute('data-msgid'), element.getAttribute('data-jump-msgids'), element.getAttribute('data-jump-visual-msgids')];
     if (names.some(value => value?.split(/\s+/).some(id => ids.has(id)))) elements.add(element);
   }

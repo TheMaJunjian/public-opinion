@@ -32,6 +32,7 @@ interface DeriveSingleButtonLabelInput {
   isArrangeType: boolean;
   isTagWithInlineBadge: boolean;
   subType: string;
+  subTypeCustomLabel?:string;
   isTagWithQuickAnnotate: boolean;
 }
 
@@ -134,12 +135,11 @@ export function deriveSingleButtonLabel(input: DeriveSingleButtonLabelInput): st
     const secName = relationTypeName(secondaryRelationType as RelationType);
     if (['attention','block'].includes(secondaryRelationType)) return subType === 'YES' || subType === 'NO'
       ? `建立「${secName}－${subType === 'YES' ? '是' : '否'}」标注`
-      : '请选择标注理由：是或否';
+      : '请选择标注原因：是或否';
     if (subType === 'CUSTOM') {
-      if (newMessageContent.trim().length === 0) return "请输入自定义理由";
-      return `建立「${secName}」关系（自定义理由，用${usingDraft ? "候选" : "目标集合"}作目标）`;
+      if (!input.subTypeCustomLabel?.trim()) return "请输入自定义标注原因";
     }
-    return `建立「${secName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
+    return `${newMessageContent.trim()?'发送文本消息并建立':'建立'}「${secName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标）`;
   }
   // TAG + secondary = none: invalid state prompt
   if (relationType === "tag" && secondaryRelationType === "none") {

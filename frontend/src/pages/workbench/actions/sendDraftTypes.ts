@@ -28,6 +28,7 @@ export interface DraftSendDependencies {
   relStakeAmount: number | "";
   effectiveMinStake: number;
   subType: string;
+  subTypeCustomLabel:string;
   subTypeStakeMap: React.MutableRefObject<Record<string, number>>;
   relationStakeMap: React.MutableRefObject<Record<string, number>>;
   totalConsumption: { groups?:unknown[];contributionError?: string | null; stakeTotal: number; protocolFeeTotal: number; recommendationTotal: number; delegationRewardStake: number; total: number; perStake: number; textStake: number; relCount: number; joinCount: number; hasText: boolean; hasRel: boolean; joinStakeTotal: number; joinFeeTotal: number; refCount: number; refStakeTotal: number; newJoinCount: number; existingJoinAgreeCount: number; } | null;
@@ -59,7 +60,7 @@ export interface DraftSendDependencies {
   scopeMessageId: string;
   registerCreatedRelationInCurrentClassify: (backendRel: Relation) => Promise<string | null>;
   edgesRef: React.MutableRefObject<DemoEdge[]>;
-  sendTagRelation: (target: UnitSelection, tagLabel: string, subType?: string, customLabel?: string) => Promise<DemoEdge | null>;
+  sendTagRelation: (target: UnitSelection, tagLabel: string, subType?: string, customLabel?: string,sources?:UnitSelection[]) => Promise<DemoEdge | null>;
   subTypeCustomBufferRef: React.MutableRefObject<string>;
   setSubTypeCustomLabel: React.Dispatch<React.SetStateAction<string>>;
   setComparisonPopup: React.Dispatch<React.SetStateAction<{ relMsgId: string; x: number; y: number; reversePreview?: { before: string; after: string; target: UnitSelection; mode?: "direct"; label?: string; value?: Json; correctionKind?: 'TEXT' | 'MEANING'; }; } | null>>;

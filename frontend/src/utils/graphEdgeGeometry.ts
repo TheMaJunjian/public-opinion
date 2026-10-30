@@ -43,7 +43,7 @@ export function rectsIntersect(a: Rect, b: Rect) {
 }
 
 export function labelRectApprox(x: number, y: number, text: string) {
-  const w = Math.max(30, text.length * 6.2) + 10, h = 14;
+  const w = Math.max(30, text.length * 6.2) + 18, h = 22;
   return { x:x-w/2, y:y-h/2, width:w, height:h };
 }
 

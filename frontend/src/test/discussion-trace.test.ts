@@ -11,11 +11,11 @@ describe('discussion structure and directed scope',()=>{
     expect(traceRange(messages,edges,['B'],{up:1,down:0}).ids).toEqual(new Set(['B','A']));
     expect(traceRange(messages,edges,['B'],{up:0,down:0}).ids).toEqual(new Set(['B']));
   });
-  it.each(['up','down','both'] as const)('never spends %s distance on shared membership or a multi-target JOIN',direction=>{
-    const group={...messages[0],id:'group',kind:'relation' as const,relationType:'classify' as const};
+  it.each((['classify','summary','merge'] as const).flatMap(type=>(['up','down','both'] as const).map(direction=>({type,direction}))))('never spends $direction distance on $type membership or a multi-target JOIN',({type,direction})=>{
+    const group={...messages[0],id:'group',kind:'relation' as const,relationType:type};
     const join={...messages[0],id:'join',kind:'join' as const,relationType:undefined};
     const nodes=[...messages,group,join],links=[...edges,
-      ...['B','Q'].map(target=>({...edges[0],id:'group-'+target,relationMessageId:'group',relationType:'classify' as const,from:{...edges[0].from,messageId:'anon:group'},to:{...edges[0].to,messageId:target}})),
+      ...['B','Q'].map(target=>({...edges[0],id:'group-'+target,relationMessageId:'group',relationType:type,from:{...edges[0].from,messageId:'anon:group'},to:{...edges[0].to,messageId:target}})),
       ...['B','Q'].map(target=>({...edges[0],id:'join-'+target,relationMessageId:'join',relationType:'reference' as const,from:{...edges[0].from,messageId:'anon:join'},to:{...edges[0].to,messageId:target}}))];
     for(const distance of [0,1,2])expect(traceRange(nodes,links,['B'],distance,direction).ids).toEqual(traceRange(messages,edges,['B'],distance,direction).ids);
     expect(traceRange(nodes,links,['group'],20,direction).ids).toEqual(new Set(['group']));
@@ -54,6 +54,15 @@ describe('discussion structure and directed scope',()=>{
     expect(discussionForest(messages,edges).order).toEqual(expected);
     expect(discussionForest([...messages].reverse(),[...edges].reverse()).order).toEqual(expected);
   });
+  it('reads the same discussion tree level by level in breadth-first order',()=>{
+    const expected=['A','B','C','D','F','E','N','P','Q'];
+    expect(discussionForest(messages,edges).breadthOrder).toEqual(expected);
+    expect(discussionForest([...messages].reverse(),[...edges].reverse()).breadthOrder).toEqual(expected);
+    const cycle=[...edges,{...edges[0],id:'cycle',relationMessageId:'cycle',from:{...edges[0].from,messageId:'A'},to:{...edges[0].to,messageId:'B'}}];
+    const traversal=discussionForest(messages,cycle).breadthOrder;
+    expect(new Set(traversal)).toEqual(new Set(messages.map(message=>message.id)));
+    expect(traversal).toHaveLength(messages.length);
+  });
   it('does not merge the two old reply threads when one new text cites both',()=>{
     const ids=['old','question','answer','reply-1','reply-2','citation'];
     const nodes=ids.map((id,index)=>({...messages[0],id,createdAt:new Date(index*1000).toISOString()}));
@@ -72,10 +81,36 @@ describe('discussion structure and directed scope',()=>{
     expect(new Set(result.order).size).toBe(messages.length);
     expect(traceRange(messages,cycle,['B'],8,'both').ids.size).toBe(messages.length);
   });
-  it('does not expand an ancestor container into unreached siblings',()=>{
+  it.each(['up','down','both'] as const)('counts arrangement peers as one hop while preserving %s reference direction',direction=>{
+    const nodes=['member','peer','before','after','outsider'].map(id=>({...messages[0],id}));
     const group={...messages[0],id:'group',kind:'relation' as const,relationType:'arrange' as const};
     const member=(id:string)=>({...edges[0],id:'group-'+id,relationMessageId:'group',relationType:'arrange' as const,
       from:{...edges[0].from,messageId:'anon:group'},to:{...edges[0].to,messageId:id}});
-    expect(traceRange([...messages,group],[...edges,member('D'),member('Q')],['D'],2,'both').ids.has('Q')).toBe(false);
+    const reference=(from:string,to:string)=>({...edges[0],id:from+to,relationMessageId:from+to,relationType:'reference' as const,
+      from:{...edges[0].from,messageId:from},to:{...edges[0].to,messageId:to}});
+    const links=[member('member'),member('peer'),reference('peer','before'),reference('after','peer')];
+    for(const budget of [0,2,1,0,1]){
+      const range=traceRange([...nodes,group],links,['member'],budget,direction);
+      expect(range.ids.has('peer')).toBe(budget>=1);
+      if(budget>=1)expect(range.distances.get('peer')).toBe(1);
+      expect(range.ids.has('before')).toBe(budget>=2&&direction!=='down');
+      expect(range.ids.has('after')).toBe(budget>=2&&direction!=='up');
+      expect(range.ids.has('outsider')).toBe(false);
+    }
+    expect(traceRange([...nodes,group],links,['member'],{up:1,down:0}).distances.get('peer')).toBe(1);
+    expect(traceRange([...nodes,group],links,['member'],{up:0,down:1}).distances.get('peer')).toBe(1);
+    expect(traceRange([...nodes,group],links,['member'],{up:0,down:0}).ids).toEqual(new Set(['member']));
+  });
+  it('includes legacy arrangement sources and spends another hop on nested arrangements',()=>{
+    const nodes=['member','peer','leaf'].map(id=>({...messages[0],id}));
+    const groups=['outer','inner'].map(id=>({...messages[0],id,kind:'relation' as const,relationType:'arrange' as const}));
+    const link=(owner:string,source:string,target:string)=>({...edges[0],id:owner+target,relationMessageId:owner,relationType:'arrange' as const,
+      from:{...edges[0].from,messageId:source},to:{...edges[0].to,messageId:target}});
+    const links=[link('outer','member','peer'),link('outer','member','inner'),link('inner','anon:inner','leaf')];
+    for(const starts of [['member'],['peer','member']]){
+      const one=traceRange([...nodes,...groups],links,starts,1);
+      expect(one.distances.get('peer')).toBe(starts.includes('peer')?0:1);expect(one.ids.has('leaf')).toBe(false);
+      expect(traceRange([...nodes,...groups],links,starts,2).distances.get('leaf')).toBe(2);
+    }
   });
 });

@@ -76,23 +76,38 @@ export function buildTraceProjection(input: TraceProjectionInput): TraceProjecti
       });
     });
   }
-  const range=traceRange(messages,traceEdges,startIds,input.depths??distance,input.direction??'both');
+  const structuralChildren=new Map<string,Set<string>>();
+  for(const edge of traceEdges)if(getPresentationSpec(edge.relationType).isContainer){
+    const children=structuralChildren.get(edge.relationMessageId)??new Set<string>();children.add(edge.to.messageId);structuralChildren.set(edge.relationMessageId,children);
+  }
+  const expanded=input.expandedContainerIds??new Set<string>();
+  const rangeStarts=new Set(startIds);
+  // A sole, explicitly expanded classification represents its current-layer
+  // messages. Recompute the directional range from these stable seeds, never
+  // from the previous (possibly larger) projection or an ancestor's siblings.
+  if(startIds.length===1&&messageMap.get(startIds[0])?.relationType==='classify'&&expanded.has(startIds[0])){
+    const queue=[...structuralChildren.get(startIds[0])??[]],visited=new Set<string>(startIds);
+    for(let index=0;index<queue.length;index++){
+      const id=queue[index];if(visited.has(id)||!messageMap.has(id))continue;
+      visited.add(id);rangeStarts.add(id);
+      if(['merge','arrange'].includes(messageMap.get(id)?.relationType??''))queue.push(...structuralChildren.get(id)??[]);
+    }
+  }
+  const range=traceRange(messages,traceEdges,[...rangeStarts],input.depths??distance,input.direction??'both');
   const distances=range.distances;
   const visibleIds = new Set<string>(
     [...distances]
-      .filter(([id, value]) => value <= distance && isTraceTextLikeMessage(messageMap.get(id)))
+      .filter(([id, value]) => value <= distance && (isTraceTextLikeMessage(messageMap.get(id))
+        || messageMap.get(id)?.relationType==='arrange'))
       .map(([id]) => id),
   );
   for (const startId of startIds) if (messageMap.has(startId)) visibleIds.add(startId);
   const distanceMessageIds = new Set(visibleIds);
   // Only a selected container may reveal its contents on explicit expansion.
-  // Auto-expanding an ancestor of a traced message never enrolls its siblings.
-  // These bodies are display context and do not start another distance search.
-  const structuralChildren=new Map<string,Set<string>>();
-  for(const edge of traceEdges)if(getPresentationSpec(edge.relationType).isContainer){
-    const children=structuralChildren.get(edge.relationMessageId)??new Set<string>();children.add(edge.to.messageId);structuralChildren.set(edge.relationMessageId,children);
-  }
-  const expanded=input.expandedContainerIds??new Set<string>(),expandedPaths=new Set<string>(),contextQueue=[...startIds];
+  // Auto-expanding an ancestor never enrolls siblings beyond the trace range.
+  // Other frame bodies are display context; the selected classification's
+  // message seeds above are the only exception that starts distance traversal.
+  const expandedPaths=new Set<string>(),contextQueue=[...startIds];
   for(let index=0;index<contextQueue.length;index++){
     const id=contextQueue[index];if(expandedPaths.has(id)||!expanded.has(id)&&!['merge','arrange'].includes(messageMap.get(id)?.relationType??''))continue;
     expandedPaths.add(id);

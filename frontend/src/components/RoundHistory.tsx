@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback } from 'react';
 import { api } from '../api';
 import type { SettlementRoundItem } from '../types';
 
@@ -29,7 +29,7 @@ export default function RoundHistory({ messageId, compact = false }: Props) {
     }
   }, [messageId]);
 
-  useEffect(() => { load(); }, [load]);
+  useLayoutEffect(() => { load(); }, [load]);
 
   function resultLabel(result: string | null): string {
     if (!result) return '—';

@@ -10,17 +10,39 @@ function firstGuide() {
   return { x, y, endX, endY };
 }
 
+it('keeps a dependent edge curve and the unrelated area inside its bounds under the mask when locating its source',()=>{
+  const canvas=document.createElement('div');canvas.dataset.jumpCanvas='true';
+  canvas.innerHTML='<div data-msgid="source">目标消息</div><svg><g data-jump-visual-msgids="reference" data-frame-edge-id="edge"><path d="M 10 10 L 900 500"/></g></svg><div data-directed-edge-start="reference" data-jump-msgids="reference"></div><div data-msgid="reference" data-directed-edge-label="reference">引用</div><div data-msgid="unrelated">无关消息</div>';
+  document.body.append(canvas);
+  const source=canvas.querySelector<HTMLElement>('[data-msgid="source"]')!,label=canvas.querySelector('[data-directed-edge-label]')!;
+  const geometry=vi.spyOn(Element.prototype,'getBoundingClientRect').mockImplementation(function(this:Element){
+    if(this.hasAttribute('data-message-jump-overlay'))return new DOMRect(0,0,window.innerWidth,window.innerHeight);
+    if(this===source)return new DOMRect(30,120,200,80);
+    if(this===label)return new DOMRect(300,180,80,24);
+    return new DOMRect(10,100,900,500);
+  });
+  const unregister=registerMessageJumpGroups(canvas,new Map([['source',new Set(['reference'])]]));
+  const view=render(<MessageJumpOverlay messageId="source" targetElement={source} targetRect={source.getBoundingClientRect()}/>);
+  try{
+    const regions=[...document.querySelectorAll('[data-message-jump-region]')];
+    expect(regions.map(region=>[region.getAttribute('x'),region.getAttribute('y'),region.getAttribute('width'),region.getAttribute('height')])).toEqual([
+      ['30','120','200','80'],['300','180','80','24'],
+    ]);
+  }finally{view.unmount();unregister();geometry.mockRestore();canvas.remove();}
+});
+
 it('unmasks only the directed edge label, leaving its long path and other decorations covered',()=>{
   const canvas=document.createElement('div');canvas.dataset.jumpCanvas='true';
-  canvas.innerHTML='<svg><g data-jump-visual-msgids="reference"><path/><text>引用 → 作者</text></g></svg><div data-msgid="reference" data-directed-edge-label="reference" data-rel-overlay>引用入口</div><div data-msgid="reference" data-jump-msgids="vote" data-rel-overlay>赞同装饰</div>';
+  canvas.innerHTML='<svg><g data-jump-visual-msgids="reference"><path/><text>引用 → 作者</text></g></svg><div data-directed-edge-start="reference" data-jump-msgids="reference"></div><div data-msgid="reference" data-directed-edge-label="reference" data-rel-overlay>引用入口</div><div data-msgid="reference" data-jump-msgids="vote" data-rel-overlay>赞同装饰</div>';
   document.body.append(canvas);
   const label=canvas.querySelector<HTMLElement>('[data-directed-edge-label]')!;
   const geometry=vi.spyOn(Element.prototype,'getBoundingClientRect').mockImplementation(function(this:Element){
     if(this.hasAttribute('data-message-jump-overlay'))return new DOMRect(0,0,window.innerWidth,window.innerHeight);
     return this===label?new DOMRect(220,180,120,28):new DOMRect(10,100,900,500);
   });
-  const display=getMessageJumpDisplay(label,'reference',new DOMRect(10,100,900,500));
-  const view=render(<MessageJumpOverlay messageId="reference" targetElement={label} targetRect={display.rect}/>);
+  const start=canvas.querySelector<HTMLElement>('[data-directed-edge-start]')!;
+  const display=getMessageJumpDisplay(start,'reference',new DOMRect(10,100,900,500));
+  const view=render(<MessageJumpOverlay messageId="reference" targetElement={start} targetRect={display.rect}/>);
   try{
     expect([...display.elements!]).toEqual([label]);expect(display.rect.width).toBe(120);
     const regions=document.querySelectorAll('[data-message-jump-region]');expect(regions).toHaveLength(1);

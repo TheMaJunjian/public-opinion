@@ -19,7 +19,7 @@ it('routes a fragment reference to its cached anchor after its target card has u
     anchorCache: new Map([['target', { obstacles: [{ x: 10, y: 20, width: 180, height: 40 }], fragments: { 'reference::0:2': { x: 20, y: 25, width: 16, height: 14 } } }]]),
   };
   const before = measureGraphOverlays(input)!.positionedEdges[0].fragRectCanvas!;
-  expect(measureGraphOverlays(input)!.positionedEdges[0].edgeLabelText).toBe('引用 ↓');
+  expect(measureGraphOverlays(input)!.positionedEdges[0].edgeLabelText).toBe('引用');
   expect([before.x, before.y, before.width, before.height]).toEqual([320, 1225, 16, 14]);
   const after = measureGraphOverlays({ ...input, layout: { ...input.layout, target: { ...input.layout.target, y: 1800 } } })!.positionedEdges[0].fragRectCanvas!;
   expect([after.x, after.y, after.width, after.height]).toEqual([320, 1825, 16, 14]);

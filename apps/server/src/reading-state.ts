@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import {createHash} from 'node:crypto';
-import {messageReadingKey,originalReadingKey,relations,type ReadingMark} from '@gonglun/core';
+import {messageReadingKey,originalReadingKey,comparisonReadingKey,type ReadingMark} from '@gonglun/core';
 import type { Store } from './db.js';
 import {bodyVersionSchema} from './reference-schema.js';
 
@@ -14,11 +14,12 @@ CREATE TABLE IF NOT EXISTS reading_confirmation_events(position BIGINT GENERATED
 const markSchema = z.object({
   format:z.literal(3),version:bodyVersionSchema.optional(),eventId:z.string().min(1).max(1000).optional(),resultKey:z.string().max(1000).optional(),
   state:z.enum(['READ','UNREAD']).optional(),selection:z.object({versionKey:z.string().max(60000),outcomes:z.record(z.string().max(100)),signature:z.string().max(200)}).strict().optional(),
-  messageId:z.string().min(1).max(200), scope:z.enum(['message','original','influence']),
+  messageId:z.string().min(1).max(200), scope:z.enum(['message','original','influence','comparison']),
   key:z.string().max(60000), signature:z.string().max(200).optional(), bodySignature:z.string().max(60000).optional(),
   confirmation:z.object({kind:z.enum(['direct','included']),messageId:z.string().min(1).max(200)}).strict().optional(),
-}).strict().refine(mark=>(mark.scope==='influence' ? !!mark.key&&!!mark.eventId&&!mark.confirmation : !!mark.version&&mark.key===(mark.scope==='original'?originalReadingKey(mark.messageId):messageReadingKey(mark.messageId))&&!!mark.signature&&(!mark.eventId&&!mark.resultKey))
+}).strict().refine(mark=>(mark.scope==='influence' ? !!mark.key&&!!mark.eventId&&!mark.confirmation : !!mark.version&&mark.key===(mark.scope==='comparison'?comparisonReadingKey(mark.version,mark.signature??''):mark.scope==='original'?originalReadingKey(mark.messageId):messageReadingKey(mark.messageId))&&!!mark.signature&&(!mark.eventId&&!mark.resultKey))
   &&(mark.scope!=='original'||!mark.version?.corrections.length)
+  &&(mark.scope!=='comparison'||!mark.confirmation&&!mark.selection&&!mark.bodySignature)
   &&(!mark.confirmation||(mark.confirmation.kind==='direct')===(mark.confirmation.messageId===mark.messageId)));
 export const readingUpdateSchema=z.object({marks:z.array(markSchema).min(1).max(500)}).strict();
 /** Keep exact version evidence in JSON; PostgreSQL index entries have a size limit. */
@@ -38,22 +39,9 @@ export async function markReading(store:Store,userId:string,marks:ReadingMark[])
   const updatedAt=new Date().toISOString(),result:ReadingMark[]=[];
   for(const mark of marks){
     // Also validate influence targets; private progress cannot create phantom messages.
-    const subject=await store.message(mark.messageId);
+    await store.message(mark.messageId);
     if(mark.version){if(mark.version.messageId!==mark.messageId)throw new DomainError('已阅版本与消息不一致');await validateBodyVersion(store,mark.version);}
     const prior=await store.db.prepare('SELECT body FROM reading_marks WHERE "userId"=$1 AND "messageId"=$2 AND scope=$3 AND key=$4').get<{body:ReadingMark}>(userId,mark.messageId,'message',readingStorageKey({messageId:mark.messageId,scope:'message',key:messageReadingKey(mark.messageId)}));
-    const wasConfirmed=!!prior?.body.firstConfirmedAt||prior?.body.state==='READ'||subject.authorId===userId&&subject.revision===1;
-    if(mark.scope==='message'&&mark.state!=='UNREAD'&&!wasConfirmed){
-      // Establish the first-read boundary against publication of new corrections.
-      // Later confirmations and influence acknowledgments need no public lock.
-      await store.db.prepare("SELECT pg_advisory_xact_lock_shared(hashtext('gonglun'),hashtext(current_database() || ':' || $1))").get(store.db.schema);
-      const original=await store.db.prepare('SELECT body FROM reading_marks WHERE "userId"=$1 AND "messageId"=$2 AND scope=$3 AND key=$4').get<{body:ReadingMark}>(userId,mark.messageId,'original',readingStorageKey({messageId:mark.messageId,scope:'original',key:originalReadingKey(mark.messageId)}));
-      if(mark.version?.corrections.length&&(!original||original.body.state==='UNREAD'||original.body.unknownContext))throw new DomainError('请先确认原文已阅');
-      const candidates=(await store.db.prepare('SELECT body FROM messages WHERE id IN (SELECT "sourceId" FROM refs WHERE "targetId"=$1)').all(mark.messageId)).map(row=>JSON.parse(String(row.body)));
-      const required=candidates.filter(message=>relations(message).some(part=>part.relation==='correct'&&part.roles.target?.some(binding=>binding.reference.messageId===mark.messageId)));
-      const reads=await store.db.prepare(`SELECT "messageId" FROM reading_marks WHERE "userId"=$1 AND "messageId"=ANY($2::text[]) AND scope='message' AND body->>'format'='3' AND body->>'state'='READ' AND body->>'unknownContext' IS DISTINCT FROM 'true'`).all(userId,required.map(message=>message.id));
-      const confirmed=new Set(reads.map(row=>String(row.messageId))),missing=required.filter(message=>!confirmed.has(message.id));
-      if(missing.length)throw new DomainError('请先阅读全部更正消息：'+missing.map(message=>message.id).join('、'));
-    }
     if(mark.scope==='influence'&&mark.eventId&&!mark.eventId.startsWith('selection:')){
       let event:unknown;try{event=JSON.parse(mark.eventId);}catch{throw new DomainError('影响确认缺少明确事件');}
       if(!Array.isArray(event)||typeof event[0]!=='string'||!Number.isInteger(event[1]))throw new DomainError('影响确认事件格式不正确');

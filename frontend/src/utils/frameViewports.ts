@@ -3,6 +3,7 @@ import type {DemoEdge} from './modelBridge';
 import {getPresentationSpec} from '../types';
 
 export type FrameScroll={left:number;top:number};
+export type GraphFrameViewState=Record<string,{sizes:Record<string,FrameViewSize>;scrolls:Record<string,FrameScroll>;full?:Record<string,boolean>}>;
 export const FRAME_SCROLLBAR=14;
 export const intersectFrameRects=(a:Box,b:Box):Box=>{
   const x=Math.max(a.x,b.x),y=Math.max(a.y,b.y);
@@ -110,4 +111,14 @@ export function createFrameClipResolver(views:ReturnType<typeof projectFrameView
     return undefined;
   };
   return (id:string,edgeId?:string)=>resolve(id,edgeId);
+}
+
+/** Cross-frame arrows require both anchors to be visible in their own frames. */
+export function frameConnectionVisible(clipFor:(id:string)=>Box|undefined,edge:DemoEdge,start:{x:number;y:number},end:{x:number;y:number}):boolean{
+  const source=clipFor(edge.from.messageId),target=clipFor(edge.to.messageId);
+  // Connections within a single viewport are clipped together with its cards.
+  if(source&&target&&source.x===target.x&&source.y===target.y&&source.width===target.width&&source.height===target.height)return true;
+  const contains=(clip:Box|undefined,point:{x:number;y:number})=>!clip||clip.width>0&&clip.height>0
+    &&point.x>=clip.x-1&&point.x<=clip.x+clip.width+1&&point.y>=clip.y-1&&point.y<=clip.y+clip.height+1;
+  return contains(source,start)&&contains(target,end);
 }

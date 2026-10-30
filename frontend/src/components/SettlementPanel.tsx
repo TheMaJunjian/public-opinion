@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { api } from '../api';
 import { useAuth, useOptionalAuth } from '../context/AuthContext';
 import type { SettlementRoundItem, MessageStakes } from '../types';
@@ -101,10 +101,10 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
     }
   }, [messageId, filterSettlementType]);
 
-  useEffect(() => { load(); }, [load]);
+  useLayoutEffect(() => { load(); }, [load]);
 
   // Listen for stakes-refresh to reload when new stakes are placed (e.g. via agree/disagree)
-  useEffect(() => {
+  useLayoutEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail as { messageId?: string };
       if (!detail.messageId || detail.messageId === messageId) {
@@ -399,7 +399,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
 
   useEffect(() => { setLocalRound(round); }, [round]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!isWaiting || !localRound.endsAt) return;
     const deadline = new Date(localRound.endsAt).getTime();
     if (!Number.isFinite(deadline)) return;

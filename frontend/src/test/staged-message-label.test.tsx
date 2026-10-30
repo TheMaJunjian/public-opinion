@@ -5,6 +5,15 @@ import StagedMessageLabel from '../components/StagedMessageLabel';
 import type { DemoMessage } from '../utils/modelBridge';
 const message:DemoMessage={id:'message-id',content:'第一行内容\n第二行内容',kind:'normal',author:'tester',createdAt:''};
 
+it('uses independent type and jump controls for staged fragments without changing legacy collections',()=>{
+  const navigate=vi.fn();
+  const view=render(<StagedMessageLabel messageId={message.id} message={message} content="选中的片段" ariaLabel="暂存片段 fragment" onNavigate={navigate}/>);
+  const entry=view.getByRole('group',{name:'暂存片段 fragment'});
+  fireEvent.click(view.getByRole('button',{name:'暂存片段 fragment'}));expect(entry).toHaveTextContent('【文本】 选中的片段');
+  expect(entry).not.toHaveTextContent('第一行内容');expect(navigate).not.toHaveBeenCalled();
+  fireEvent.click(view.getByRole('button',{name:'跳转到暂存片段 fragment'}));expect(navigate).toHaveBeenCalledExactlyOnceWith(message.id);
+});
+
 it.each(['classify', 'summary', 'merge'] as const)('shows the %s card text rather than its target-ID summary', type => {
   const category: DemoMessage = {...message, kind:'relation', relationType:type, relationPayload:{title:'卡片标题\n保留换行'}, content:'分类：卡片标题\n目标：target-id', targetRefs:[{kind:'message',messageId:'target-id'}]};
   const view=render(<StagedMessageLabel messageId={category.id} message={category}/>);

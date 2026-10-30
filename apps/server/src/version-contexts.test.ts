@@ -53,12 +53,12 @@ it('quotes corrected fragments with exact evidence, rejecting forged versions wi
   const invalid=await raw('/relations',withTestCommandContributions('/relations',{relationType:'AGREE',targetRefs:[{kind:'message',messageId:m.id,reference:ref(bodyVersion(m.id,2))}],stakeAmount:8}));
   expect(invalid.status).toBe(400);expect(await app.store.account(session.user.id)).toEqual(before);expect(await app.store.latestSequence()).toBe(sequence);
 });
-it('requires original and every correction, including rejected candidates, only before the first shared read',async()=>{
+it('accepts the exact viewed version without requiring original or rejected correction bodies',async()=>{
   const {app,agent,post,raw,session,m,t,a,correction,version,mark,save}=await setup(true);
   await post('/relations',{relationType:'DISAGREE',targetRefs:[{kind:'message',messageId:a.id}],stakeAmount:1});
-  expect((await raw('/reading-state',{marks:[mark(m.id,version([t.id]))]})).status).toBe(400);
+  expect((await raw('/reading-state',{marks:[mark(m.id,version([t.id]))]})).status).toBe(200);
   await save([mark(m.id,version([]),'original'),mark(t.id)]);
-  expect((await raw('/reading-state',{marks:[mark(m.id,version([t.id]))]})).body.error).toContain(a.id);
+  expect((await raw('/reading-state',{marks:[mark(m.id,version([t.id]))]})).status).toBe(200);
   await save([mark(a.id),mark(m.id,version([t.id]))]);
   const initial=(await agent.get('/api/ui/reading-state')).body.marks.find((item:any)=>item.messageId===m.id&&item.scope==='message');expect(initial.firstConfirmedAt).toBeTruthy();
   const newer=await correction(0,'戊');
@@ -76,11 +76,11 @@ it('retains finite event acknowledgments and keeps later rounds independently co
   for(const event of [first,second])await save([{format:3,messageId:m.id,scope:'influence',key:'agree:',eventId:JSON.stringify([event.id,event.revision,event.sequence])}]);
   expect((await agent.get('/api/ui/reading-state')).body.marks.filter((mark:any)=>mark.scope==='influence')).toHaveLength(2);
 });
-it('also requires WIDTH corrections and rejects native meaning corrections without money changes',async()=>{
+it('does not require WIDTH reads and rejects native meaning corrections without money changes',async()=>{
   const {app,agent,post,raw,session,m,t,a,mark,save}=await setup(true);
   const width=await post('/relations',{relationType:'CORRECT',targetRefs:[{kind:'message',messageId:m.id}],payload:{correctionKind:'WIDTH',correctionWidth:640}});
   await save([mark(m.id,bodyVersion(m.id),'original'),mark(t.id),mark(a.id)]);
-  expect((await raw('/reading-state',{marks:[mark(m.id)]})).body.error).toContain(width.id);
+  expect((await raw('/reading-state',{marks:[mark(m.id)]})).status).toBe(200);
   await save([mark(width.id),mark(m.id)]);
   const before=await financialFingerprint(app.store.db),sequence=await app.store.latestSequence();
   const native=await agent.post('/api/messages').set('x-csrf-token',session.csrf).send({requestId:randomUUID(),recommendation:1,parts:[{id:'r',type:'relation',relation:'correct',roles:{target:[{id:'t',reference:{messageId:m.id,revision:1,partId:'body'}}]}},{id:'data',type:'data',value:{correctionKind:'MEANING'}}]});
@@ -143,7 +143,7 @@ it('supports different votes in consecutive ordinary correction rounds without r
   expect(await app.store.db.prepare('SELECT * FROM bets WHERE "messageId"=$1').all(rootVote.id)).toEqual(rootContract);
   expect((await agent.get('/api/ui/reading-state')).body.marks.find((mark:any)=>mark.messageId===m.id&&mark.scope==='message')).toMatchObject({state:'READ',key:messageReadingKey(m.id)});
 });
-it('checks the first-read boundary against a concurrently committing correction',async()=>{
+it('confirms only the submitted reading snapshot without waiting for or acknowledging a concurrent correction',async()=>{
   const {app,session,raw,m,t,a,mark,save,version}=await setup(true);
   await save([mark(m.id,version([]),'original'),mark(t.id),mark(a.id)]);
   let release!:()=>void,entered!:(id:string)=>void;
@@ -153,10 +153,11 @@ it('checks the first-read boundary against a concurrently committing correction'
     await tx.commit();entered(newer.id);await released;
   });
   const id=await ready,attempt=raw('/reading-state',{marks:[mark(m.id,version([]))]}).then(response=>response);
-  try{expect(await Promise.race([attempt.then(()=>true),new Promise(resolve=>setTimeout(()=>resolve(false),80))])).toBe(false);}
+  try{expect(await Promise.race([attempt.then(()=>true),new Promise(resolve=>setTimeout(()=>resolve(false),1000))])).toBe(true);}
   finally{release();await writer;}
-  const response=await attempt;expect(response.status,response.text).toBe(400);expect(response.body.error).toContain(id);
-  const main=await app.store.db.prepare("SELECT 1 FROM reading_marks WHERE \"userId\"=$1 AND \"messageId\"=$2 AND scope='message'").get(session.user.id,m.id);expect(main).toBeUndefined();
+  const response=await attempt;expect(response.status,response.text).toBe(200);
+  const main=await app.store.db.prepare("SELECT body FROM reading_marks WHERE \"userId\"=$1 AND \"messageId\"=$2 AND scope='message'").get(session.user.id,m.id);expect(main!.body.version).toEqual(version([]));
+  expect((await app.store.db.prepare('SELECT body FROM reading_marks WHERE "userId"=$1').all(session.user.id)).some(row=>row.body.messageId===id||row.body.eventId?.includes(id))).toBe(false);
 });
 it('migrates the latest explicit unread while preserving earlier read evidence and unknown history',async()=>{
   const {app,session,m,t,version}=await setup();

@@ -235,7 +235,9 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
       || getPresentationSpec(targetRelation.relationType).kind === 'inline-badge'
       : ['AGREE', 'DISAGREE', 'CORRECT'].includes(targetEdge?.relationType?.toUpperCase() ?? '');
     const findTargetElement = () => {
-      const candidates = findMessageElements(container, targetId);
+      const mounted = findMessageElements(container, targetId);
+      const measurable=mounted.filter(candidate=>{const rect=candidate.getBoundingClientRect();return rect.width>0&&rect.height>0;});
+      const candidates=measurable.length?measurable:mounted;
       const comparisonPair = container.querySelector('[data-comparison-pair]');
       const comparisonCandidates = candidates.filter(candidate => candidate.closest('[data-comparison-view="agree"]'));
       const overlayCandidates = candidates.filter(candidate => candidate.hasAttribute('data-rel-overlay'));

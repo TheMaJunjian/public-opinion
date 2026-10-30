@@ -23,24 +23,25 @@ interface SendTagRelationDependencies {
   showAlert: (message: string) => void;
 }
 
-export async function sendTagRelation(dependencies: SendTagRelationDependencies, target: UnitSelection, tagLabel: string, subType?: string, customLabel?: string): Promise<DemoEdge | null> {
-  const { scopeMessageId, msgMap, secondaryRelationType, newMessageContent, createRel, registerCreatedRelationInCurrentClassify, showAlert } = dependencies;
+export async function sendTagRelation(dependencies: SendTagRelationDependencies, target: UnitSelection, tagLabel: string, subType?: string, customLabel?: string,sources:UnitSelection[]=[]): Promise<DemoEdge | null> {
+  const { scopeMessageId, msgMap, secondaryRelationType, createRel, registerCreatedRelationInCurrentClassify, showAlert } = dependencies;
   if (!scopeMessageId) return null;
   const backendTargetRef = unitSelectionToTargetRef(target, msgMap);
   try {
     const isReadStatus = secondaryRelationType === 'read' || secondaryRelationType === 'unread';
     const statusType = secondaryRelationType.toUpperCase();
     const payload: Record<string, unknown> = { relationType: isReadStatus ? statusType : 'TAG', ...(isReadStatus ? {} : { label: tagLabel }) };
-    if (subType) { payload.subType = subType; if (subType === 'CUSTOM') { const ct = (customLabel || newMessageContent).trim(); if (ct) payload.customLabel = ct.slice(0, 20); } }
+    if (subType) { payload.subType = subType; if (subType === 'CUSTOM') { const ct = (customLabel??'').trim(); if (ct) payload.customLabel = ct.slice(0, 20); } }
     const backendRel = await createRel(scopeMessageId, {
       relationType: isReadStatus ? statusType : 'TAG',
-      sourceMessageId: null,
+      sourceMessageId: sources[0]?.messageId??null,
+      ...(sources.length?{sourceRefs:mergeUnits([],sources).map(unit=>unitSelectionToReference(unit,msgMap))}:{}),
       targetRefs: [backendTargetRef],
       payload: buildRelationPayload(payload as unknown as Parameters<typeof buildRelationPayload>[0]),
     });
     const relId = backendRel.id;
     await registerCreatedRelationInCurrentClassify(backendRel);
-    const anonSrcId = `anon:${relId}`;
+    const anonSrcId = sources[0]?.messageId??`anon:${relId}`;
     return { id: nextId("edge"), relationMessageId: relId, relationType: isReadStatus ? secondaryRelationType : "tag", from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: target, relationLabel: isReadStatus ? secondaryRelationType : tagLabel } as DemoEdge;
   } catch (e) {
     showAlert(`建立标注关系失败: ${sendErrorMessage(e)}`);
@@ -166,7 +167,7 @@ export async function handleCreateRelationWithSourcesAndTargets(dependencies: Ha
     for (const target of mergeUnits([], targets)) {
       try {
         const payload: Record<string, unknown> = {};
-        if (subType) { payload.subType = subType; if (subType === 'CUSTOM') { const ct = newMessageContent.trim(); if (ct) payload.customLabel = ct.slice(0, 20); } }
+        if (subType) { payload.subType = subType; if (subType === 'CUSTOM') { const ct = subTypeCustomLabel.trim(); if (ct) payload.customLabel = ct.slice(0, 20); } }
         const backendRel = await createRel(scopeMessageId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef(target, msgMap)], payload: Object.keys(payload).length > 0 ? payload : undefined });
         const relId = backendRel.id;
         await registerCreatedRelationInCurrentClassify(backendRel);

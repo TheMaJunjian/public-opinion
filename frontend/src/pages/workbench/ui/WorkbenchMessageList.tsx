@@ -88,6 +88,7 @@ interface Props {
   standaloneMessageIds?:ReadonlySet<string>;
   onCorrectionNavigate: (messageId: string, switchToList: boolean) => void;
   onCorrectionHistory?: (event:React.MouseEvent,messageId:string)=>void;
+  onCorrectionCompare?: (event:React.MouseEvent,messageId:string)=>void;
   renderRelation: (message: DemoMessage) => ReactNode;
   renderContent: (message: DemoMessage) => ReactNode;
 }
@@ -105,7 +106,7 @@ export default function WorkbenchMessageList(props: Props) {
   const standaloneMessageIds = props.standaloneMessageIds;
   const listMessages = useMemo(() => filterMessageListContext(
     messagesToRenderFiltered
-      .filter(msg => !embeddedMessageIds.has(msg.id)),
+      .filter(msg => msg.kind==='join'||!embeddedMessageIds.has(msg.id)),
     messages, edges, standaloneMessageIds,
   ).sort(chronologicalOrder), [messagesToRenderFiltered, messages, edges, embeddedMessageIds, rejectedContainerIds, standaloneMessageIds]);
   const { settlementOpenMsgId, settlementOpenType, settlementEntryHighlight, closeSettlement, openSettlement, onMessageCreated } = props.settlement;
@@ -280,8 +281,8 @@ export default function WorkbenchMessageList(props: Props) {
               ) : undefined}
               headerAfterAuthor={correctionRecords.length > 0 ? (
                 <span><span role="button" tabIndex={0} style={{ color: '#fbbf24', fontWeight: 600, cursor:'pointer' }} title="双击查看更正记录"
-                  onClick={event=>event.stopPropagation()} onDoubleClick={event=>{event.stopPropagation();props.onCorrectionHistory?.(event,correctionRecords[0].relationMessageId);}}
-                  onKeyDown={event=>{if(event.key==='Enter'){event.stopPropagation();props.onCorrectionHistory?.(event as unknown as React.MouseEvent,correctionRecords[0].relationMessageId);}}}>
+                  onClick={event=>{event.stopPropagation();props.onCorrectionCompare?.(event,correctionRecords[0].relationMessageId);}} onDoubleClick={event=>{event.stopPropagation();props.onCorrectionHistory?.(event,correctionRecords[0].relationMessageId);}}
+                  onKeyDown={event=>{if(event.key==='Enter'){event.stopPropagation();props.onCorrectionCompare?.(event as unknown as React.MouseEvent,correctionRecords[0].relationMessageId);}}}>
                   ✏ {correctionRecords.length}
                 </span></span>
               ) : undefined}

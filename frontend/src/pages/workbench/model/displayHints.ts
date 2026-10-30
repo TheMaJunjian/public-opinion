@@ -33,8 +33,9 @@ export function deriveDisplayHints(input: DisplayHintsInput) {
     }
   }
   const displays=new Map(messages.map(message=>[message.id,{...snapshot(message,displayedEffect,displayedParents,(input.displayCorrections??corrections).get(message.id)?.current),width:personalWidths[message.id]??320}]));
-  const reading=deriveReadingProgress({messages,relations,edges,username,readStatus,marks:input.readingMarks,displays,
-    corrections:input.displayCorrections??corrections,effectiveCorrections:corrections,memberships:displayedEffect.memberships});
+  const reading=deriveReadingProgress({messages,relations,edges,username,userId:input.userId,readStatus,marks:input.readingMarks,displays,
+    corrections:input.displayCorrections??corrections,effectiveCorrections:corrections,memberships:displayedEffect.memberships,
+    effectiveJoinIds:displayedEffect.effectiveJoinIds,suppressedIds:displayedEffect.suppressed});
   const pending=reading.pendingBodies;
   const related=new Map([...reading.pendingInfluences].map(([id,items])=>[id,new Set(items.map(item=>item.messageId))]));
   const hints = new Map<string,DisplayHint>();

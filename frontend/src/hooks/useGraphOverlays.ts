@@ -21,6 +21,7 @@ export function useGraphOverlays(input: Omit<GraphOverlayInput, 'labelBboxes'> &
   const { canvasRef, normalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals, headerRefs, contentRefs, edges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, textRefs, actualCanvasWidth, actualCanvasHeight } = input;
   const [overlays, setOverlays] = useState(emptyGraphOverlays);
   const [labelBboxes, setLabelBboxes] = useState<Record<string, LabelBbox>>({});
+  const labelMetrics = useRef(new Map<string, { text:string; x:number; y:number; width:number; height:number }>());
   const anchorCache = useRef<GraphAnchorCache>(new Map());
   // Capture only mounted cards, but retain fragment/collision anchors for their
   // offscreen counterparts. Routing must not depend on the current DOM window.
@@ -64,15 +65,20 @@ export function useGraphOverlays(input: Omit<GraphOverlayInput, 'labelBboxes'> &
       const scaleY = canvasEl.offsetHeight > 0 ? canvasRect.height / canvasEl.offsetHeight : 1;
       const next: Record<string,LabelBbox>={};
       for (const pe of positionedEdges) {
-        const t=textRefs.current[pe.drawId]; if (!t) continue;
-        const r=t.getBoundingClientRect();
-        next[pe.drawId]={
-          x:(r.left-canvasRect.left)/scaleX,
-          y:(r.top-canvasRect.top)/scaleY,
-          width:r.width/scaleX,
-          height:r.height/scaleY,
-        };
+        const t=textRefs.current[pe.drawId];
+        if(t){
+          const r=t.getBoundingClientRect();
+          labelMetrics.current.set(pe.drawId,{text:pe.edgeLabelText,
+            x:(r.left-canvasRect.left)/scaleX-pe.labelX,
+            y:(r.top-canvasRect.top)/scaleY-pe.labelY,width:r.width/scaleX,height:r.height/scaleY});
+        }
+        // Virtual scrolling may remove the label DOM. Retain its metrics and
+        // project them at the routed position so dependent edges stay anchored.
+        const metric=labelMetrics.current.get(pe.drawId);
+        if(metric?.text===pe.edgeLabelText)next[pe.drawId]={x:pe.labelX+metric.x,y:pe.labelY+metric.y,width:metric.width,height:metric.height};
       }
+      const active=new Set(positionedEdges.map(edge=>edge.drawId));
+      for(const id of labelMetrics.current.keys())if(!active.has(id))labelMetrics.current.delete(id);
       // Use a functional update with a stability check to avoid infinite re-render cycles:
       // the overlay measurement depends on labelBboxes, so we must not update state when the
       // values haven't meaningfully changed (within 0.5px).

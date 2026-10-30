@@ -24,6 +24,17 @@ const job = (id: string) => ({ kind: 'structures' as const, input: {
 } });
 afterEach(() => { vi.unstubAllGlobals(); FakeWorker.instances = []; });
 
+it('reuses a completed layout for equal restored inputs and recomputes changed message data',()=>{
+  vi.stubGlobal('Worker',FakeWorker);
+  const original=job('m'),view=renderHook(({input})=>useSceneComputation(input),{initialProps:{input:original}}),worker=FakeWorker.instances[0];
+  act(()=>worker.finish(worker.postMessage.mock.calls[0][0]));const completed=view.result.current;
+  view.rerender({input:structuredClone(original)});
+  expect(worker.postMessage).toHaveBeenCalledOnce();expect(view.result.current).toBe(completed);
+  const next={...original,input:{...original.input,messages:[...original.input.messages,{...original.input.messages[0],id:'new'}]}};
+  view.rerender({input:next});expect(worker.postMessage).toHaveBeenCalledTimes(2);
+  act(()=>worker.finish(worker.postMessage.mock.calls[1][0]));expect(view.result.current?.order).toEqual(['m','new']);
+});
+
 it('keeps version-switch DOM mounted during an asynchronous structure update without reusing another scope',async()=>{
   vi.stubGlobal('Worker',FakeWorker);
   function Window({input,scope}:{input:ReturnType<typeof job>;scope:string}){

@@ -18,6 +18,21 @@ const relationResult: Relation = { id: 'relation-result', relationType: 'AGREE',
 beforeEach(() => vi.clearAllMocks());
 
 describe('addressed send commands', () => {
+  it.each(['recommend','archive'])('sends text with %s and keeps its custom cause separate',async secondaryRelationType=>{
+    const target=message('target'),source=message('new-source'),createRel=vi.fn(async()=>relationResult);
+    const handleSendMessageOnly=vi.fn(async()=>source),showAlert=vi.fn();
+    const deps={secondaryRelationType,msgMap:new Map([[target.id,target]]),subType:'CUSTOM',subTypeCustomLabel:'需要进一步核实',newMessageContent:'正文说明，不是自定义原因',
+      sourceUnits:[],handleSendMessageOnly,createRel,scopeMessageId:'root',registerCreatedRelationInCurrentClassify:vi.fn(async()=>null),edgesRef:{current:[]},showAlert,
+      setEdges:vi.fn(),sendTagRelation:vi.fn(async()=>null),setDraftUnits:vi.fn(),setSourceUnits:vi.fn(),setTargetUnits:vi.fn(),setActiveTextSelectId:vi.fn(),
+      setNewMessageContent:vi.fn(),setSubType:vi.fn(),setRelationType:vi.fn(),setSecondaryRelationType:vi.fn(),subTypeCustomBufferRef:{current:''},setSubTypeCustomLabel:vi.fn()};
+    await sendSelectedTagDraft(deps,{effectiveTargets:[{messageId:target.id,selection:{kind:'whole'}}]});
+    expect(handleSendMessageOnly).toHaveBeenCalledExactlyOnceWith('正文说明，不是自定义原因');
+    expect(createRel).toHaveBeenCalledExactlyOnceWith('root',expect.objectContaining({relationType:secondaryRelationType.toUpperCase(),sourceMessageId:source.id,
+      payload:{subType:'CUSTOM',customLabel:'需要进一步核实'}}));
+    expect(calculateSendCost({relationType:'tag',secondaryRelationType,draftUnits:[{messageId:target.id}],targetUnits:[],newMessageContent:deps.newMessageContent,
+      stakeAmount:1,relStakeAmount:0,recommendationAmount:2},1)).toMatchObject({hasText:true,relCount:1,messageCount:2});
+    expect(showAlert).not.toHaveBeenCalled();
+  });
   it.each(['read', 'unread'])('rejects the retired %s send path without creating or charging a message', async secondaryRelationType => {
     const target = message('target');
     const createRel = vi.fn(async () => ({ ...relationResult, relationType: secondaryRelationType.toUpperCase() as Relation['relationType'] }));
@@ -25,6 +40,7 @@ describe('addressed send commands', () => {
     const setEdges = vi.fn(),showAlert=vi.fn();
     await sendSelectedTagDraft({
       secondaryRelationType, msgMap: new Map([[target.id, target]]), subType: '', newMessageContent: '', createRel, scopeMessageId: 'root',
+      sourceUnits:[],subTypeCustomLabel:'',handleSendMessageOnly:vi.fn(async()=>null),
       registerCreatedRelationInCurrentClassify, edgesRef: { current: [] }, showAlert, setEdges, sendTagRelation,
       setDraftUnits: vi.fn(), setSourceUnits: vi.fn(), setTargetUnits: vi.fn(), setActiveTextSelectId: vi.fn(), setNewMessageContent: vi.fn(),
       setSubType: vi.fn(), setRelationType: vi.fn(), setSecondaryRelationType: vi.fn(), subTypeCustomBufferRef: { current: '' }, setSubTypeCustomLabel: vi.fn(),

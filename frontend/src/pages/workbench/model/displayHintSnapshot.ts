@@ -46,6 +46,7 @@ export type DisplayHintsInput = {
   relations: Relation[];
   edges: DemoEdge[];
   username: string | null;
+  userId?: string;
   readStatus: ReadonlyMap<string, 'READ' | 'UNREAD'>;
   readingMarks?: ReadingMark[];
   personalEffect: ContainerEffect;

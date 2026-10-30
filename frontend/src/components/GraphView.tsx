@@ -1,12 +1,12 @@
 import { useGraphOverlays } from '../hooks/useGraphOverlays';
 import { projectGraphScene } from '../utils/graphProjection';
-import {projectFrameViewports,createFrameClipResolver,type FrameScroll} from '../utils/frameViewports';
+import {projectFrameViewports,createFrameClipResolver,frameConnectionVisible,type FrameScroll,type GraphFrameViewState} from '../utils/frameViewports';
 import {useAvailableFrameWidth} from '../hooks/useAvailableFrameWidth';
 import type {FrameViewSize} from '../utils/frameLayout';
 import {FrameViewportTools,FrameViewportScrollbars,clipFrameScene} from './graph/FrameViewport';
 import { unionLayoutRects, getGroupHeaderHeight, getGroupHeaderRect, getMergeCardHeaderRect, getEdgeDecorationLeft, getDecorationColumnWidth, getAnnotationPlacement, GROUP_HEADER_HEIGHT, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, DEC_ICON_W, EDGE_HINT_W, EDGE_LABEL_HINT_GAP, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_HIT_PAD, TAG_HIT_PAD_X, FRAME_RADIUS, GROUP_FRAME_STROKE, SHOW_SELECTED_ACTUAL_RECTS, INLINE_BADGE_COLOR } from '../utils/graphPresentationGeometry';
 import { unitEquals, selectionIsText, extractTextTargetsForMessage, relationTypeName, buildAnnoTree, renderAnnoNodes } from '../utils/graphTextSelection';
-import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CardWidthContext, CardWidthHandle } from './graph/CardWidthContext';
 import { effectiveCardWidths } from '../utils/cardWidth';
 import JoinEndpointType from './JoinEndpointType';
@@ -54,6 +54,10 @@ export type Rect = { x: number; y: number; width: number; height: number };
 
 
 export interface GraphViewProps {
+  decorationExpansion?: {requestId:number;messageIds:readonly string[]};
+  highlightedMessageIds?: ReadonlySet<string>;
+  frameViewStateRef?: React.MutableRefObject<GraphFrameViewState>;
+  frameViewRestoreKey?: number;
   messages: DemoMessage[];
   visibleMessageIds?: ReadonlySet<string>;
   visibleEdgeIds?: ReadonlySet<string>;
@@ -105,6 +109,7 @@ export interface GraphViewProps {
    * for this group, or shows group details.  Falls back to onMessageDoubleClick if not provided.
    */
   onGroupFrameDoubleClick?: (e: React.MouseEvent, relMsgId: string) => void;
+  onFrameHeaderDoubleClick?: (e: React.MouseEvent, relMsgId: string) => void;
   /**
    * Single-click on an inline badge (RECOMMEND / ARCHIVE) — selects the relation message.
    * Falls back to onMessageClick if not provided.
@@ -191,7 +196,7 @@ function ComparisonGraphPair(props: GraphViewProps) {
   const [contentSize, setContentSize] = useState({ width: 0, height: 0 });
   const [scrollHostSize, setScrollHostSize] = useState({ height: 0, viewportHeight: 0 });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
       const drag = splitDragRef.current;
       const pair = pairRef.current;
@@ -227,7 +232,7 @@ function ComparisonGraphPair(props: GraphViewProps) {
     if (horizontalScrollRef.current) horizontalScrollRef.current.scrollLeft = left;
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const targetId = props.autoCenterMessageId;
     const agreeViewport = agreeViewportRef.current;
     const verticalScroll = verticalScrollRef.current;
@@ -259,7 +264,7 @@ function ComparisonGraphPair(props: GraphViewProps) {
     return () => { cancelAnimationFrame(frame); task.cancel(); };
   }, [props.autoCenterMessageId, props.messages, props.edges, contentSize, startPositioning]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const updateContentSize = () => {
       const task = startMeasurement();
       task.run(() => {
@@ -293,7 +298,7 @@ function ComparisonGraphPair(props: GraphViewProps) {
     };
   }, [props.messages, props.edges, startMeasurement]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const viewports = [agreeViewportRef.current, disagreeViewportRef.current].filter(Boolean) as HTMLDivElement[];
     const scrollHost = pairRef.current?.closest('[data-workbench-left-panel]') as HTMLDivElement | null;
     const verticalScroll = verticalScrollRef.current;
@@ -453,8 +458,20 @@ function GraphViewCanvas(props: GraphViewProps) {
     [props.hideMessageIds,comparisonSuppressedRelIds,rejectedRelationIds,messages]);
 
   const canvasRef = useRef<HTMLDivElement|null>(null);
-  const [frameViewSizes,setFrameViewSizes]=useState<Record<string,FrameViewSize>>({});
-  const [frameScrolls,setFrameScrolls]=useState<Record<string,FrameScroll>>({});
+  const frameViewKey=props.comparisonDisplay??'main';
+  const [frameViewSizes,setFrameViewSizes]=useState<Record<string,FrameViewSize>>(()=>props.frameViewStateRef?.current[frameViewKey]?.sizes??{});
+  const [frameScrolls,setFrameScrolls]=useState<Record<string,FrameScroll>>(()=>props.frameViewStateRef?.current[frameViewKey]?.scrolls??{});
+  const [frameFullOverrides,setFrameFullOverrides]=useState<Record<string,boolean>>(()=>props.frameViewStateRef?.current[frameViewKey]?.full??{});
+  const restoredFrameKey=useRef(props.frameViewRestoreKey);
+  useLayoutEffect(()=>{
+    if(restoredFrameKey.current===props.frameViewRestoreKey)return;
+    restoredFrameKey.current=props.frameViewRestoreKey;
+    const saved=props.frameViewStateRef?.current[frameViewKey];
+    setFrameViewSizes(saved?.sizes??{});setFrameScrolls(saved?.scrolls??{});setFrameFullOverrides(saved?.full??{});
+  },[props.frameViewRestoreKey,props.frameViewStateRef,frameViewKey]);
+  useLayoutEffect(()=>{
+    if(props.frameViewStateRef)props.frameViewStateRef.current[frameViewKey]={sizes:frameViewSizes,scrolls:frameScrolls,full:frameFullOverrides};
+  },[props.frameViewStateRef,frameViewKey,frameViewSizes,frameScrolls,frameFullOverrides]);
   const frameViewsRef=useRef<ReturnType<typeof projectFrameViewports>|null>(null);
   const edgeStartsRef=useRef(new Map<string,{x:number;y:number}>());
   const resizeFrame=useCallback((id:string,value:FrameViewSize|undefined)=>{
@@ -470,10 +487,21 @@ function GraphViewCanvas(props: GraphViewProps) {
   const [revealedFrameIds, setRevealedFrameIds] = useState<string[]>([]);
   const [expandedDecorationIds,setExpandedDecorationIds]=useState<Set<string>>(()=>new Set());
   const [revealedDecorationIds,setRevealedDecorationIds]=useState<Set<string>>(()=>new Set());
-  const visibleDecorationIds=useMemo(()=>new Set([...expandedDecorationIds,...revealedDecorationIds]),[expandedDecorationIds,revealedDecorationIds]);
+  const highlightKey=JSON.stringify([...new Set([...(props.highlightedMessageIds??[]),...props.decorationExpansion?.messageIds??[]])].sort());
+  const expansionKey=JSON.stringify([highlightKey,props.decorationExpansion?.requestId]);
+  const [collapsedAutomatic,setCollapsedAutomatic]=useState(()=>({key:expansionKey,decorations:new Set<string>(),annotations:new Set<string>()}));
+  useLayoutEffect(()=>setCollapsedAutomatic(previous=>previous.key===expansionKey?previous:{key:expansionKey,decorations:new Set(),annotations:new Set()}),[expansionKey]);
+  const automaticDecorations=useMemo(()=>JSON.parse(highlightKey) as string[],[highlightKey]);
+  const visibleDecorationIds=useMemo(()=>new Set([...expandedDecorationIds,...revealedDecorationIds,
+    ...automaticDecorations.filter(id=>collapsedAutomatic.key!==expansionKey||!collapsedAutomatic.decorations.has(id))]),[expandedDecorationIds,revealedDecorationIds,automaticDecorations,collapsedAutomatic,expansionKey]);
   const [expandedAnnotationIds,setExpandedAnnotationIds]=useState<Set<string>>(()=>new Set());
   const [revealedAnnotationIds,setRevealedAnnotationIds]=useState<Set<string>>(()=>new Set());
-  const visibleAnnotationIds=useMemo(()=>new Set([...expandedAnnotationIds,...revealedAnnotationIds]),[expandedAnnotationIds,revealedAnnotationIds]);
+  const visibleAnnotationIds=useMemo(()=>new Set([...expandedAnnotationIds,...revealedAnnotationIds,
+    ...automaticDecorations.filter(id=>collapsedAutomatic.key!==expansionKey||!collapsedAutomatic.annotations.has(id))]),[expandedAnnotationIds,revealedAnnotationIds,automaticDecorations,collapsedAutomatic,expansionKey]);
+  useLayoutEffect(()=>{
+    const retain=(previous:Set<string>)=>automaticDecorations.every(id=>previous.has(id))?previous:new Set([...previous,...automaticDecorations]);
+    setExpandedDecorationIds(retain);setExpandedAnnotationIds(retain);
+  },[expansionKey]);
   const renderDecorationToggle=(ids:string|string[],style?:React.CSSProperties,annotations=false)=>{
     const messageIds=typeof ids==='string'?[ids]:ids;
     const expanded=messageIds.some(id=>(annotations?visibleAnnotationIds:visibleDecorationIds).has(id));
@@ -486,6 +514,11 @@ function GraphViewCanvas(props: GraphViewProps) {
       onKeyDown={event=>event.stopPropagation()} onDoubleClick={event=>event.stopPropagation()}
       onClick={event=>{
         event.stopPropagation();
+        setCollapsedAutomatic(previous=>{
+          const next={key:expansionKey,decorations:new Set(previous.key===expansionKey?previous.decorations:[]),annotations:new Set(previous.key===expansionKey?previous.annotations:[])};
+          for(const id of messageIds){const values=annotations?next.annotations:next.decorations;if(expanded)values.add(id);else values.delete(id);}
+          return next;
+        });
         (annotations?setExpandedAnnotationIds:setExpandedDecorationIds)(previous=>{
           const next=new Set(previous);
           for(const id of messageIds){
@@ -548,11 +581,10 @@ function GraphViewCanvas(props: GraphViewProps) {
         setFrameScrolls(previous=>({...previous,...next}));
       }
     }
-    setRevealedDecorationIds(previous=>previous.size===revealedDecorations.size&&[...previous].every(id=>revealedDecorations.has(id))?previous:revealedDecorations);
-    setRevealedAnnotationIds(previous=>previous.size===revealedAnnotations.size&&[...previous].every(id=>revealedAnnotations.has(id))?previous:revealedAnnotations);
+    setExpandedDecorationIds(previous=>[...revealedDecorations].every(id=>previous.has(id))?previous:new Set([...previous,...revealedDecorations]));
+    setExpandedAnnotationIds(previous=>[...revealedAnnotations].every(id=>previous.has(id))?previous:new Set([...previous,...revealedAnnotations]));
     setRevealedFrameIds(previous => previous.length === frames.length && previous.every((id, index) => id === frames[index]) ? previous : frames);
-    // Mount the temporary card as well as the requested badge, including when
-    // navigation starts outside the viewport. Clearing the pulse collapses it.
+    // Keep jumped-to decorations expanded until the user collapses them.
     return [...new Set([...ids,...revealedDecorations,...revealedAnnotations,...frames])];
   }, [messages, edges]);
 
@@ -633,11 +665,11 @@ function GraphViewCanvas(props: GraphViewProps) {
     () => ({ kind: 'layout' as const, input: {
       normals, colOf: pipelineCol, measuredHeights, measuredWidths,
       maxCol: pipelineMaxCol, correctedTargetIds: hiddenTargetIds,
-      frameBlocks, frameViewSizes, availableFrameWidth, allMessages: messages, edges: layoutEdges, traceMode: isTraceWindow,
+      frameBlocks, frameViewSizes, frameFullOverrides, availableFrameWidth, allMessages: messages, edges: layoutEdges, traceMode: isTraceWindow,
       structureOrder: props.structureOrder,
     } }),
     [normals, pipelineCol, pipelineMaxCol, measuredHeights, measuredWidths,
-      hiddenTargetIds, frameBlocks, frameViewSizes, availableFrameWidth, messages, layoutEdges, isTraceWindow, props.structureOrder],
+      hiddenTargetIds, frameBlocks, frameViewSizes, frameFullOverrides, availableFrameWidth, messages, layoutEdges, isTraceWindow, props.structureOrder],
   );
   const sceneLayout = useSceneComputation(layoutJob, true);
   const naturalScene=sceneLayout??EMPTY_SCENE_LAYOUT;
@@ -647,6 +679,7 @@ function GraphViewCanvas(props: GraphViewProps) {
   const frameViews=useMemo(()=>projectFrameViewports(naturalScene.layout,naturalScene.frameRects,naturalScene.frameContentRects??{},frameBlocks,effectiveFrameSizes,frameScrolls,CANVAS_RIGHT_PAD,manualFrameIds),[naturalScene,frameBlocks,effectiveFrameSizes,frameScrolls,manualFrameIds]);
   frameViewsRef.current=frameViews;
   const {layout,frameRects:finalFrameRects}=frameViews;
+  const frameClipFor=useMemo(()=>createFrameClipResolver(frameViews,edges),[frameViews,edges]);
   const {colOf,canvasHeight}=naturalScene;
   useLayoutEffect(()=>{
     const canvas=canvasRef.current;if(!canvas)return;
@@ -748,7 +781,7 @@ function GraphViewCanvas(props: GraphViewProps) {
   const { positionedEdges, decorationRectsState, tagDecorationsByMsg, arrangeFrames, groupFrames, inlineBadgesByMsg, annotationToggleRects } = useMemo(() => {
     const keep = (id: string, rect: Rect) => overlayRetained.has(id) || virtual.mounted.has(id) || intersectsViewport(rect, virtual.viewport, 100);
     return {
-      positionedEdges: overlays.positionedEdges.filter(edge => keep(edge.edge.relationMessageId, {
+      positionedEdges: overlays.positionedEdges.filter(edge => frameConnectionVisible(frameClipFor,edge.edge,edge.start,edge.end)&&keep(edge.edge.relationMessageId, {
         x: Math.min(edge.start.x, edge.ctrl.x, edge.end.x, edge.labelX), y: Math.min(edge.start.y, edge.ctrl.y, edge.end.y, edge.labelY),
         width: Math.max(edge.start.x, edge.ctrl.x, edge.end.x, edge.labelX) - Math.min(edge.start.x, edge.ctrl.x, edge.end.x, edge.labelX),
         height: Math.max(edge.start.y, edge.ctrl.y, edge.end.y, edge.labelY) - Math.min(edge.start.y, edge.ctrl.y, edge.end.y, edge.labelY) })),
@@ -759,7 +792,7 @@ function GraphViewCanvas(props: GraphViewProps) {
       inlineBadgesByMsg: new Map([...overlays.inlineBadgesByMsg].map(([id, badges]) => [id, badges.filter(badge => keep(id, badge.rect))])),
       annotationToggleRects: Object.fromEntries(Object.entries(overlays.annotationToggleRects).filter(([id, rect])=>keep(id,rect))),
     };
-  }, [overlays, overlayRetained, virtual.mounted, virtual.viewport, finalFrameRects]);
+  }, [overlays, overlayRetained, virtual.mounted, virtual.viewport, finalFrameRects,frameClipFor]);
 
   useLayoutEffect(() => {
     reportWorkbenchDrawingDuration(performance.now() - renderStartedAt);
@@ -936,7 +969,7 @@ function GraphViewCanvas(props: GraphViewProps) {
     const latest = records[records.length - 1];
     const active = records.filter(id => !invalidCorrectionIds?.has(id)).length;
     return <span style={{display:'inline-flex',alignItems:'center'}}><span data-msgid={latest} data-jump-msgids={records.join(' ')} data-rel-overlay="true"
-      title={`更正关系：${latest}；共${records.length}次更正，单击选中，双击查看历史`}
+      title={`更正关系：${latest}；共${records.length}次更正，单击对比原文与当前正文，双击查看历史`}
       onClick={event => { event.stopPropagation(); onInlineBadgeClick?.(event, latest); }}
       onDoubleClick={event => { event.stopPropagation(); onInlineBadgeDoubleClick?.(event, latest); }}
       style={{background:isRelWholeSel(latest)?'#fbbf24':'rgba(170,110,0,0.9)',color:isRelWholeSel(latest)?'#111827':'#fff',
@@ -951,7 +984,6 @@ function GraphViewCanvas(props: GraphViewProps) {
     const role = props.homeContextRoleByMessageId?.get(messageId);
     return role === 'source' ? '来源' : role === 'target' ? '目标' : role === 'source-target' ? '来源/目标' : props.homeReasonByMessageId?.has(messageId) ? '上下文' : null;
   };
-  const frameClipFor=useMemo(()=>createFrameClipResolver(frameViews,edges),[frameViews,edges]);
   const canvas=(
     <div ref={canvasRef} data-jump-canvas="true" style={{position:"relative",width:actualCanvasWidth,height:actualCanvasHeight,zIndex:0}}
       onDoubleClick={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
@@ -1101,7 +1133,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                       data-msgid={correctionBadge.relMsgId} data-jump-msgids={correctionBadgeJumpIds} data-rel-overlay="true"
                       onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,correctionBadge.relMsgId);}}
                       onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,correctionBadge.relMsgId);}}
-                      title={`更正关系：${correctionBadge.relMsgId}；共${correctionCount}次更正，单击选中，双击查看历史`}
+                      title={`更正关系：${correctionBadge.relMsgId}；共${correctionCount}次更正，单击对比原文与当前正文，双击查看历史`}
                       style={{background:isRelWholeSel(correctionBadge.relMsgId)?"#fbbf24":"rgba(170,110,0,0.9)",
                         color:isRelWholeSel(correctionBadge.relMsgId)?"#111827":"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
                         cursor:"pointer",pointerEvents:"auto",
@@ -1129,7 +1161,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                             data-msgid={b.relMsgId} data-jump-msgids={correctionBadgeJumpIds} data-rel-overlay="true"
                             onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,b.relMsgId);}}
                             onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,b.relMsgId);}}
-                            title={`更正关系：${b.relMsgId}；共${correctionCount}次更正，单击选中，双击查看历史`}
+                            title={`更正关系：${b.relMsgId}；共${correctionCount}次更正，单击对比原文与当前正文，双击查看历史`}
                             style={{background:isRelWholeSel(b.relMsgId)?"#fbbf24":"rgba(170,110,0,0.9)",
                               color:isRelWholeSel(b.relMsgId)?"#111827":"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
                               cursor:"pointer",pointerEvents:"auto",
@@ -1418,7 +1450,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                 {!isBlankCorrected&&<path d={`M ${ax1} ${ay1} L ${end.x} ${end.y} L ${ax2} ${ay2}`} fill={color}/>}
                 {/* Text always rendered (opacity 0 when blank) so labelBboxes are stable for badge positioning */}
                 {/* Text with stroke for readability against any background */}
-                <text ref={el=>{textRefs.current[pe.drawId]=el;}} x={labelX} y={labelY} fill={color} opacity={isBlankCorrected?0:labelOpacity} fontSize={10} textAnchor="middle" dominantBaseline="central" style={{paintOrder:"stroke",stroke:labelStroke,strokeWidth:2} as any}>
+                <text ref={el=>{textRefs.current[pe.drawId]=el;}} x={labelX} y={labelY} fill={color} opacity={isBlankCorrected?0:labelOpacity} fontSize={10} textAnchor="middle" dominantBaseline="central" style={{paintOrder:"stroke",stroke:labelStroke,strokeWidth:2,whiteSpace:'pre'} as any}>
                   {edgeLabelText}
                 </text>
               </g>
@@ -1460,7 +1492,6 @@ function GraphViewCanvas(props: GraphViewProps) {
             <div key={`hit-${pe.drawId}`} role="group" tabIndex={0} aria-label={`关系消息 ${relId}`} aria-keyshortcuts="Enter Space Shift+Enter" onKeyDown={activateMessageFromKeyboard} data-msgid={relId} data-jump-msgids={relId} data-directed-edge-label={relId} data-frame-edge-id={pe.edge.id} data-rel-overlay="true" onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
               style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:13,cursor:"pointer",pointerEvents:"auto",background:isWhole||isFrag?"rgba(91,65,0,0.35)":"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(251,191,36,0.95)":"1px solid transparent",boxShadow:isWhole||isFrag?"0 1px 4px rgba(251,191,36,0.35)":"none"}}
               title={`relation=${pe.edge.relationMessageId} edge=${pe.edge.id}`}>
-              <div data-edge-label-underline={relId} style={{position:'absolute',left:extraLeft+padX-2,right:padX-2,bottom:2,borderBottom:`1px solid ${isWhole||isFrag?'rgba(251,191,36,0.95)':'rgba(148,163,184,0.65)'}`,pointerEvents:'none'}}/>
               {showStatisticalStatus&&<div data-edge-label-entry={relId} style={{position:'absolute',left:extraLeft+padX+bb.width+EDGE_LABEL_HINT_GAP,top:'50%',transform:'translateY(-50%)',height:EDGE_HINT_W,display:'flex',alignItems:'center',justifyContent:'center',background:'#101010',borderRadius:3}}>
                 <MessageDisplayMarker messageId={relId} />
               </div>}
@@ -1475,7 +1506,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                   <div key={`corr-edge-${corrRelMsgId}`} data-msgid={corrRelMsgId} data-jump-msgids={corrRelMsgId} data-rel-overlay="true"
                     onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,corrRelMsgId);}}
                     onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,corrRelMsgId);}}
-                    title={`更正关系：${corrRelMsgId}；单击选中，双击查看历史`}
+                    title={`更正关系：${corrRelMsgId}；单击对比原文与当前正文，双击查看历史`}
                     style={{position:"absolute",left:2,top:"50%",transform:"translateY(-50%)",
                       width:CORR_BADGE_W_EDGE-4,background:isCorrSel?"#fbbf24":"rgba(170,110,0,0.9)",
                       color:isCorrSel?"#111827":"#fff",borderRadius:3,fontSize:9,padding:"0 3px",fontWeight:600,
@@ -1531,7 +1562,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                 data-jump-msgids={(kind==='agree'?dec?.agreeRelMsgIds:dec?.disagreeRelMsgIds)?.join(' ')} data-rel-overlay="true"
                 onClick={ev=>{ev.stopPropagation();}}
                 onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,relId,kind);}}
-                title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
+                title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击进入临时分类`}
                 style={{position:"absolute",left:decLeft,top:decTop,width:DEC_W,height:DEC_H,zIndex:14,
                   background:isSelected?"#fbbf24":bgColor,color:isSelected?"#111827":"#fff",borderRadius:4,display:"flex",alignItems:"center",
                   fontSize:11,pointerEvents:"auto",boxShadow:isSelected?"0 2px 6px rgba(0,0,0,0.5)":"0 2px 6px rgba(0,0,0,0.5)",border:isSelected?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.08)",
@@ -1571,7 +1602,7 @@ function GraphViewCanvas(props: GraphViewProps) {
               <div key={`reltag-${relMsgIds[0]}`} data-msgid={relId} data-jump-msgids={[relId, ...relMsgIds].join(' ')} data-rel-overlay="true"
                 onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,relId,tagLabel,relMsgIds);}}
                 onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,relId,tagLabel,relMsgIds);}}
-                title={`标注：${displayLabel}；单击选中，双击展开详情`}
+                title={`标注：${displayLabel}；单击选中，双击进入临时分类`}
                 style={{position:"absolute",left:annotation.x-TAG_HIT_PAD_X,top:decTop-TAG_HIT_PAD,
                   width:tagW+2*TAG_HIT_PAD_X,height:TAG_H+2*TAG_HIT_PAD,
                   zIndex:14,cursor:"pointer",pointerEvents:"auto",background:"transparent",
@@ -1679,7 +1710,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                 <div key={`corr-supp-${ci.corrRelMsgId}`} data-jump-visual-msgids={`${sf.relMsgId} ${ci.corrRelMsgId}`} data-rel-overlay="true"
                   onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,ci.corrRelMsgId);}}
                   onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,ci.corrRelMsgId);}}
-                  title={`更正关系：${ci.corrRelMsgId}；单击选中，双击查看历史`}
+                  title={`更正关系：${ci.corrRelMsgId}；单击对比原文与当前正文，双击查看历史`}
                   style={{position:"absolute",left:x+4,top:y-HH+1,zIndex:5,
                     background:isCorrSel?"#fbbf24":"rgba(170,110,0,0.9)",
                     color:isCorrSel?"#111827":"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
@@ -1708,7 +1739,7 @@ function GraphViewCanvas(props: GraphViewProps) {
         const headerKindColor = isSummaryHeader ? "#34d399" : "#a78bfa";
         const stripBase: React.CSSProperties={position:"absolute",zIndex:gfZ,cursor:"pointer",pointerEvents:"auto",background:"transparent"};
         const title=(gf.relType === "classify" || gf.relType === "summary")
-          ? `${gf.relType === "summary" ? "总结" : "分类"}：${gf.relMsgId}；单击选中${gf.relType==='classify'?'，双击进入分类':''}`
+          ? `${gf.relType === "summary" ? "总结" : "分类"}：${gf.relMsgId}；单击选中，双击展开或收起框架`
           : `${gf.relLabel}关系：${gf.relMsgId}；单击选中，双击展开详情`;
         const gfCorrInfo=correctedRelMsgTargets.get(gf.relMsgId);
         return (
@@ -1732,7 +1763,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                 <div key={`corr-gf-${ci.corrRelMsgId}`} data-jump-visual-msgids={`${gf.relMsgId} ${ci.corrRelMsgId}`} data-rel-overlay="true"
                   onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,ci.corrRelMsgId);}}
                   onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,ci.corrRelMsgId);}}
-                  title={`更正关系：${ci.corrRelMsgId}；单击选中，双击查看历史`}
+                  title={`更正关系：${ci.corrRelMsgId}；单击对比原文与当前正文，双击查看历史`}
                   style={{position:"absolute",left:x+4,top:y-HH+1,zIndex:5,
                     background:isCorrSel?"#fbbf24":"rgba(170,110,0,0.9)",
                     color:isCorrSel?"#111827":"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
@@ -1751,8 +1782,8 @@ function GraphViewCanvas(props: GraphViewProps) {
                 ref={el => { cardRefs.current[gf.relMsgId] = el; }}
                 role="group" tabIndex={0} aria-label={`组织消息 ${gf.relMsgId}`} aria-keyshortcuts="Enter Space Shift+Enter" onKeyDown={activateMessageFromKeyboard}
                 onClick={handleClick}
-                onDoubleClick={handleDblClick}
-                title={title}
+                onDoubleClick={e=>props.onFrameHeaderDoubleClick?props.onFrameHeaderDoubleClick(e,gf.relMsgId):handleDblClick(e)}
+                title={gf.relType==='classify'||gf.relType==='summary'?`${gf.relType==='summary'?'总结':'分类'}：${gf.relMsgId}；单击选中，双击进入临时分类`:title}
                 style={{
                   ...(gf.relType === "merge"
                     ? (() => {
@@ -1804,7 +1835,8 @@ function GraphViewCanvas(props: GraphViewProps) {
                   selectedUnits={draftUnits} activeText={activeTextSelectId === gf.relMsgId} onTextMouseUp={onTextMouseUp}
                   counts={stakeCounts?.[gf.relMsgId]} openMessageId={settlementOpenMsgId} openType={settlementOpenType}
                   onTruth={onSettlementToggleTruth} onValue={onSettlementToggleValue} />
-                {(gf.relType==='classify'||gf.relType==='summary')&&!naturalScene.fullFrameIds.includes(gf.relMsgId)&&<FrameViewportTools id={gf.relMsgId} size={frameViewSizes[gf.relMsgId]}
+                {(gf.relType==='classify'||gf.relType==='summary')&&<FrameViewportTools id={gf.relMsgId} size={frameViewSizes[gf.relMsgId]}
+                  full={naturalScene.fullFrameIds.includes(gf.relMsgId)} onToggleFull={()=>setFrameFullOverrides(previous=>({...previous,[gf.relMsgId]:!naturalScene.fullFrameIds.includes(gf.relMsgId)}))}
                   natural={gf.rect} onChange={size=>resizeFrame(gf.relMsgId,size)}/>}
                 {renderRelatedConnections(gf.relMsgId)}
               </div>
@@ -1852,7 +1884,7 @@ function GraphViewCanvas(props: GraphViewProps) {
               data-jump-msgids={(kind === 'agree' ? sf.relAgreeMsgIds : sf.relDisagreeMsgIds).join(' ')} data-rel-overlay="true"
               onClick={ev=>{ev.stopPropagation();}}
               onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,sf.relMsgId,kind);}}
-              title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
+              title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击进入临时分类`}
               style={{position:"absolute",left:sfDecLeft+EDGE_HINT_W+DEC_GAP,top:sfDecTop,width:DEC_W,height:DEC_H,zIndex:7,
                 background:isSelected?"#fbbf24":bgColor,color:isSelected?"#111827":"#fff",borderRadius:4,display:"flex",alignItems:"center",
                 fontSize:11,pointerEvents:"auto",boxShadow:isSelected?"0 2px 6px rgba(0,0,0,0.5)":"0 2px 6px rgba(0,0,0,0.5)",border:isSelected?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.08)",
@@ -1892,7 +1924,7 @@ function GraphViewCanvas(props: GraphViewProps) {
               data-jump-msgids={(kind==='agree'?gf.relAgreeMsgIds:gf.relDisagreeMsgIds).join(' ')} data-jump-visual-msgids={gf.relMsgId} data-rel-overlay="true"
               onClick={ev=>{ev.stopPropagation();}}
               onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,gf.relMsgId,kind);}}
-              title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
+              title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击进入临时分类`}
               style={{position:"absolute",left:gfDecLeft+EDGE_HINT_W+DEC_GAP,top:gfDecTop,width:DEC_W,height:DEC_H,zIndex:7,
                 background:isSelected?"#fbbf24":bgColor,color:isSelected?"#111827":"#fff",borderRadius:4,display:"flex",alignItems:"center",
                 fontSize:11,pointerEvents:"auto",boxShadow:isSelected?"0 2px 6px rgba(0,0,0,0.5)":"0 2px 6px rgba(0,0,0,0.5)",border:isSelected?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.08)",
@@ -1932,7 +1964,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                 data-msgid={_mid} data-jump-msgids={[_mid, ...group.relMsgIds].join(' ')} data-rel-overlay="true"
                 onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,_mid,group.label,group.relMsgIds);}}
                 onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,_mid,group.label,group.relMsgIds);}}
-                title={`标注：${group.label}（${count}人）；单击选中，双击展开详情`}
+                title={`标注：${group.label}（${count}人）；单击选中，双击进入临时分类`}
                 style={{position:"absolute",left:group.rect.x-TAG_HIT_PAD_X,top:group.rect.y-TAG_HIT_PAD,
                   width:group.rect.width+2*TAG_HIT_PAD_X,height:group.rect.height+2*TAG_HIT_PAD,
                   zIndex:7,cursor:"pointer",pointerEvents:"auto",background:"transparent",
@@ -1955,7 +1987,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                 data-msgid={_mid} data-jump-msgids={[_mid, ...group.relMsgIds].join(' ')} data-rel-overlay="true"
                 onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,_mid,group.label,group.relMsgIds);}}
                 onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,_mid,group.label,group.relMsgIds);}}
-                title={`标注：${group.label}（${count}人）；单击选中，双击展开详情`}
+                title={`标注：${group.label}（${count}人）；单击选中，双击进入临时分类`}
                 style={{position:"absolute",left:group.rect.x-TAG_HIT_PAD_X,top:group.rect.y-TAG_HIT_PAD,
                   width:group.rect.width+2*TAG_HIT_PAD_X,height:group.rect.height+2*TAG_HIT_PAD,
                   zIndex:7,cursor:"pointer",pointerEvents:"auto",background:"transparent",
@@ -1991,7 +2023,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                       data-jump-visual-msgids={[...group.relMsgIds, ...selectedDecorationIds].join(' ')} data-rel-overlay="true"
                       onClick={ev=>{ev.stopPropagation();}}
                       onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,tagIconRelMsgId,kind);}}
-                      title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
+                      title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击进入临时分类`}
                       style={{position:"absolute",left:tagDecLeft,top:top,width:DEC_W,height:DEC_H,zIndex:7,
                         background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
                         fontSize:11,pointerEvents:"auto",boxShadow:isDecorationSel?"0 2px 6px rgba(0,0,0,0.5)":"0 2px 6px rgba(0,0,0,0.5)",border:isDecorationSel?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.08)",
@@ -2056,7 +2088,7 @@ function GraphViewCanvas(props: GraphViewProps) {
             data-rel-overlay="true"
             onClick={ev=>{ev.stopPropagation();}}
             onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,v.messageId,v.kind);}}
-            title={`${v.kind==="agree"?"赞同":"反对"}${isSel?"（已选中）":""}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
+            title={`${v.kind==="agree"?"赞同":"反对"}${isSel?"（已选中）":""}：点击图标快速发送，点击数字区域切换选中，双击进入临时分类`}
             style={{position:"absolute",left:v.rect.x,top:v.rect.y,width:v.rect.width,height:v.rect.height,zIndex:7,
               background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
               fontSize:11,pointerEvents:"auto",boxShadow:shadowStyle,border:borderStyle,
@@ -2141,7 +2173,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                 return <div key={`inline-vote-${id}-${kind}`} data-msgid={id} data-jump-msgids={ids.join(' ')} data-rel-overlay="true"
                   onClick={event=>event.stopPropagation()}
                   onDoubleClick={event=>{event.stopPropagation();onDecorationDoubleClick?.(event,id,kind);}}
-                  title={`${kind==='agree'?'赞同':'反对'}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
+                  title={`${kind==='agree'?'赞同':'反对'}：点击图标快速发送，点击数字区域切换选中，双击进入临时分类`}
                   style={{position:'absolute',left:voteLeft+(firstColumn+index)*(DEC_W+DEC_GAP),top:y,width:DEC_W,height:DEC_H,zIndex:14,
                     background:selected?'#fbbf24':kind==='agree'?'rgba(2,150,80,0.9)':'rgba(200,40,40,0.9)',color:selected?'#111827':'#fff',
                     display:'flex',alignItems:'center',borderRadius:4,fontSize:11,pointerEvents:'auto',overflow:'hidden',

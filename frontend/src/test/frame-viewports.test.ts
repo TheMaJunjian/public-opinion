@@ -1,6 +1,6 @@
 import {describe,expect,it} from 'vitest';
 import {computeSceneLayout,INITIAL_FRAME_MAX_WIDTH,INITIAL_FRAME_MAX_HEIGHT,type FrameBlock} from '../utils/frameLayout';
-import {projectFrameViewports,createFrameClipResolver} from '../utils/frameViewports';
+import {projectFrameViewports,createFrameClipResolver,frameConnectionVisible} from '../utils/frameViewports';
 import type {DemoMessage,DemoEdge} from '../utils/modelBridge';
 import {getGroupHeaderRect} from '../utils/graphPresentationGeometry';
 
@@ -57,6 +57,20 @@ describe('temporary frame viewports',()=>{
     const views=projectFrameViewports(layout,frames,frames,blocks,frames,{});
     const citation:DemoEdge={id:'cross',relationMessageId:'cross',relationType:'reference',relationLabel:'引用',from:{messageId:'source',selection:{kind:'whole'}},to:{messageId:'target',selection:{kind:'whole'}}};
     expect(createFrameClipResolver(views,[citation])('cross','cross')).toEqual(views.viewports.outer);
+  });
+  it('hides an entire cross-frame connection until both anchors are visible',()=>{
+    const frames={group:{x:10,y:100,width:500,height:200}},contents={group:{...frames.group,height:900}};
+    const layout={source:{x:30,y:600,width:320,height:90},outside:{x:700,y:100,width:320,height:90}};
+    const blocks=[frame('group',['source'])],sizes={group:{width:500,height:200}};
+    const link:DemoEdge={id:'cross',relationMessageId:'cross',relationType:'reference',relationLabel:'引用',from:{messageId:'source',selection:{kind:'whole'}},to:{messageId:'outside',selection:{kind:'whole'}}};
+    const before=projectFrameViewports(layout,frames,contents,blocks,sizes,{}),end={x:700,y:140};
+    expect(frameConnectionVisible(createFrameClipResolver(before,[link]),link,{x:350,y:640},end)).toBe(false);
+    const after=projectFrameViewports(layout,frames,contents,blocks,sizes,{group:{left:0,top:500}});
+    expect(frameConnectionVisible(createFrameClipResolver(after,[link]),link,{x:350,y:140},end)).toBe(true);
+    const incoming={...link,from:link.to,to:link.from};
+    expect(frameConnectionVisible(createFrameClipResolver(before,[incoming]),incoming,end,{x:350,y:640})).toBe(false);
+    // Even a partly visible tall card cannot leave an arrow from a hidden anchor.
+    expect(frameConnectionVisible(createFrameClipResolver(before,[link]),link,{x:350,y:310},end)).toBe(false);
   });
   it('reveals the directed start near the bottom of a tall source through nested viewports',()=>{
     const layout={source:{x:800,y:500,width:320,height:1800}},frames={outer:{x:10,y:100,width:400,height:200},inner:{x:40,y:220,width:700,height:500}};

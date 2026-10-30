@@ -48,10 +48,10 @@ describe('correction opposition, retained reading and visible causes',()=>{
     const result=fixture(extra,initialMarks());expect(result.hint.displayed.content).toBe('丙丁');expect(result.hint.unread).toBe(false);
     expect(result.recommended.get('m')?.current?.content).toBe('丙乙');
   });
-  it('restores a previously read combination on re-adoption and keeps each new transition confirmable',()=>{
+  it('restores a previously read combination on re-adoption without repeating its outcome reminder',()=>{
     const marks=initialMarks(),rejected=[opinion('oppose3','a')],after=fixture(rejected,marks),ack=[...marks,...after.confirm()];
     const restored=fixture([...rejected,opinion('approve4','a','AGREE',true)],ack);
-    expect(restored.hint.unread).toBe(false);expect(restored.hint.selectionChanged).toBe(true);
+    expect(restored.hint.unread).toBe(false);expect(restored.hint.selectionChanged).toBe(false);
   });
   it('retains quoted-version evidence and shows its relation across display versions',()=>{
     const target=bodyVersion('m'),reply:Relation={...opinion('reply3','m','REPLY'),targetRefs:[{kind:'message',messageId:'m',reference:{messageId:'m',revision:1,context:{kind:'BODY',version:target}}}]};

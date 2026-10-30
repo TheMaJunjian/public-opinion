@@ -38,6 +38,7 @@ interface DeriveSingleButtonEnabledInput {
   msgMap: Map<string, DemoMessage>;
   isTagWithInlineBadge: boolean;
   subType: string;
+  subTypeCustomLabel?:string;
   isTagWithQuickAnnotate: boolean;
   isAgreeDisagreeType: boolean;
   isArrangeType: boolean;
@@ -103,7 +104,7 @@ export function deriveSingleButtonEnabled(input: DeriveSingleButtonEnabledInput)
   if (isTagWithInlineBadge) {
     if (!hasTargetsAvailable) return false;
     if (['attention','block'].includes(secondaryRelationType) && subType !== 'YES' && subType !== 'NO') return false;
-    if (subType === 'CUSTOM') return newMessageContent.trim().length > 0;
+    if (subType === 'CUSTOM') return !!input.subTypeCustomLabel?.trim();
     return true;
   }
   // TAG with existing tag label (non-recommend/archive): needs only targets, no text

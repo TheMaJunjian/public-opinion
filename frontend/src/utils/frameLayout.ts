@@ -33,6 +33,7 @@ export interface SceneLayoutInput {
   allMessages: DemoMessage[];
   activeTextSelectId?: string | null;
   traceMode?: boolean;
+  frameFullOverrides?: Record<string,boolean>;
   edges?: DemoEdge[];
   /** Keep complete loading units contiguous even when relation records have no card. */
   structureOrder?: string[];
@@ -101,7 +102,7 @@ export function computeSceneLayout(input: SceneLayoutInput) {
   }
   // Resolve both endpoints to siblings in their nearest shared container. The
   // original endpoints remain intact for selection, statistics and arrow routing.
-  const scopeConstraints = new Map<string | undefined, Set<string>>();
+  const scopeConstraints = new Map<string | undefined, ColumnConstraints>();
   const scopeEdges = new Map<string | undefined, DemoEdge[]>();
   const edgesByRelation = new Map<string, DemoEdge[]>();
   for (const edge of input.edges ?? []) {
@@ -119,8 +120,9 @@ export function computeSceneLayout(input: SceneLayoutInput) {
   };
   const classifications=[...messages.values()].filter(message=>message.relationType==='classify');
   const onlyClassification=classifications.length===1?classifications[0].id:undefined;
-  const fullFrameIds=input.traceMode&&onlyClassification&&frames.get(onlyClassification)?.hasGroupHeader
+  const automaticFullFrame=input.traceMode&&onlyClassification&&frames.get(onlyClassification)?.hasGroupHeader
     &&[...cards.keys(),...frames.keys()].every(id=>ancestry(id).includes(onlyClassification))?[onlyClassification]:[];
+  const fullFrameIds=[...frames.values()].filter(frame=>frame.hasGroupHeader&&(input.frameFullOverrides?.[frame.relMsgId]??automaticFullFrame.includes(frame.relMsgId))).map(frame=>frame.relMsgId);
   const fullFrames=new Set(fullFrameIds);
   for (const edge of input.edges ?? []) {
     if (!['annotation', 'reference', 'notify', 'agree', 'disagree', 'reply'].includes(edge.relationType)) continue;
@@ -146,16 +148,15 @@ export function computeSceneLayout(input: SceneLayoutInput) {
       const sourceId = scope ? source[source.indexOf(scope) - 1] : source.at(-1);
       const targetId = scope ? target[target.indexOf(scope) - 1] : target.at(-1);
       if (!sourceId || !targetId || sourceId === targetId) continue;
-      // Content citations belong to the member, not its enclosing container.
-      // Stance sides can still align sibling containers in their common scope.
-      if (sourceId !== edge.from.messageId && edge.relationType !== 'agree' && edge.relationType !== 'disagree') continue;
+      // External relationships move the sibling frame as one immutable block;
+      // only relationships within that frame can change its member positions.
       const relationType = edge.relationType === 'reply' && anchor !== edge.to.messageId ? 'reference' : edge.relationType;
       const localEdges = scopeEdges.get(scope) ?? [];
       localEdges.push({ ...edge, relationType, from: { ...edge.from, messageId: sourceId }, to: { ...edge.to, messageId: targetId } });
       scopeEdges.set(scope, localEdges);
       if (relationType === 'reply' && !frames.has(edge.to.messageId)) continue;
-      const constraints = scopeConstraints.get(scope) ?? new Set<string>();
-      constraints.add(JSON.stringify(relationType === 'agree' ? [sourceId, targetId] : [targetId, sourceId]));
+      const constraints = scopeConstraints.get(scope) ?? [];
+      constraints.push(relationType === 'agree' ? [sourceId, targetId] : [targetId, sourceId]);
       scopeConstraints.set(scope, constraints);
     }
   }
@@ -166,29 +167,41 @@ export function computeSceneLayout(input: SceneLayoutInput) {
   const order = (a: Item, b: Item) => a.time - b.time
     || (messages.get(a.id)?.sequence ?? 0) - (messages.get(b.id)?.sequence ?? 0) || a.id.localeCompare(b.id);
   const discussionPlacement=(items:Item[],scope:string|undefined)=>{
-    if(!input.edges)return {groups:[items],edges:[],parent:new Map<string,string>()};
+    if(!input.edges)return {groups:[items],constraintGroups:[items],edges:[],parent:new Map<string,string>()};
     const byId=new Map(items.map(item=>[item.id,item]));
     const localEdges=scopeEdges.get(scope)??[];
     const forest=discussionForest(items.map(item=>({id:item.id,createdAt:new Date(item.time).toISOString(),sequence:messages.get(item.id)?.sequence})),localEdges,messages);
-    return {groups:forest.groups.map(group=>group.map(id=>byId.get(id)!)),parent:forest.parent,
+    // Reading keeps its primary forest, while every hard constraint can join
+    // placement components and propagate a shift through the affected chain.
+    const component=forest.groups.map((_,index)=>index),groupById=new Map(forest.groups.flatMap((group,index)=>group.map(id=>[id,index] as const)));
+    const root=(index:number):number=>{while(component[index]!==index){component[index]=component[component[index]];index=component[index];}return index;};
+    for(const [left,right] of scopeConstraints.get(scope)??[]){
+      const a=groupById.get(left),b=groupById.get(right);if(a===undefined||b===undefined)continue;
+      const first=root(a),second=root(b);if(first!==second)component[second]=first;
+    }
+    const groups=new Map<number,Item[]>();
+    forest.groups.forEach((group,index)=>{const key=root(index),values=groups.get(key)??[];values.push(...group.map(id=>byId.get(id)!));groups.set(key,values);});
+    return {groups:forest.groups.map(group=>group.map(id=>byId.get(id)!)),constraintGroups:[...groups.values()],parent:forest.parent,
       edges:localEdges.filter(edge=>forest.parent.get(edge.from.messageId)===edge.to.messageId)};
   };
   const positionsForScope = (items: Item[], scope: string | undefined, compact = true, placementEdges?: DemoEdge[]) => {
     if (!input.edges) return siblingColumns(items, [], compact);
     const localIds=new Set(items.map(item=>item.id));
     const localEdges = (placementEdges ?? discussionPlacement(items,scope).edges).filter(edge=>localIds.has(edge.from.messageId)&&localIds.has(edge.to.messageId));
-    const normals = items.map(item => messages.get(item.id) ?? { id: item.id, author: '', createdAt: '', content: '', kind: 'normal' as const });
-    const relIds = new Set<string>();
-    const base = computeMinColumnsForAnnoRefRule1(items.map(item => item.id), localEdges, relIds);
-    const reply = applyReplyLayoutAdjustmentsWithConstraints({ normals, edges: localEdges, baseCol: base.col, baseMaxCol: base.maxCol, relIds });
-    const stance = applyAgreeDisagreeColumnOverride({ normals, edges: localEdges, ...reply });
-    const constraints:ColumnConstraints=[],known=scopeConstraints.get(scope);
-    for(const edge of localEdges){
-      const forward=[edge.from.messageId,edge.to.messageId] as const,reverse=[edge.to.messageId,edge.from.messageId] as const;
-      if(known?.has(JSON.stringify(forward)))constraints.push(forward);
-      if(known?.has(JSON.stringify(reverse)))constraints.push(reverse);
+    // Author/reply lane preferences belong to each primary discussion. A new
+    // bridge adds constraints without importing another discussion's history.
+    const forest=discussionForest(items.map(item=>({id:item.id,createdAt:new Date(item.time).toISOString(),sequence:messages.get(item.id)?.sequence})),localEdges,messages);
+    const columns:Record<string,number>={};
+    for(const group of forest.groups){
+      const ids=new Set(group),groupEdges=localEdges.filter(edge=>ids.has(edge.from.messageId)&&ids.has(edge.to.messageId));
+      const normals=group.map(id=>messages.get(id)??{id,author:'',createdAt:'',content:'',kind:'normal' as const}),relIds=new Set<string>();
+      const base=computeMinColumnsForAnnoRefRule1(group,groupEdges,relIds);
+      const reply=applyReplyLayoutAdjustmentsWithConstraints({normals,edges:groupEdges,baseCol:base.col,baseMaxCol:base.maxCol,relIds});
+      const stance=applyAgreeDisagreeColumnOverride({normals,edges:groupEdges,...reply});
+      Object.assign(columns,stance.col);
     }
-    return siblingColumns(items.map(item => ({ ...item, column: stance.col[item.id] ?? 0 })), constraints, compact);
+    const constraints=(scopeConstraints.get(scope)??[]).filter(([left,right])=>localIds.has(left)&&localIds.has(right));
+    return siblingColumns(items.map(item => ({ ...item, column: columns[item.id] ?? 0 })), constraints, compact);
   };
   const cache = new Map<string, Item>();
   const widthBudgets=new Map<string,number|undefined>();
@@ -225,7 +238,8 @@ export function computeSceneLayout(input: SceneLayoutInput) {
       children.sort((a,b)=>(positions.get(a.id)??Infinity)-(positions.get(b.id)??Infinity)||order(a,b));
     } else children.sort(order);
     const placement=discussionPlacement(children,id);
-    const keepDeclaredOrder=explicitOrder&&(!fullFrames.has(id)||placement.edges.length===0);
+    const frameOrderConstraint=(scopeConstraints.get(id)??[]).some(([left,right])=>frames.has(left)||frames.has(right));
+    const keepDeclaredOrder=explicitOrder&&!frameOrderConstraint&&(!fullFrames.has(id)||placement.edges.length===0);
     const positions = positionsForScope(children, id, true, placement.edges);
     item.column = Math.min(...children.map(child => child.column), item.column);
     item.time = children.length ? Math.min(item.time, ...children.map(child => child.time)) : item.time;
@@ -247,7 +261,7 @@ export function computeSceneLayout(input: SceneLayoutInput) {
     if(responsive){
       // Wrap independent discussions, preserving the source/target columns
       // inside each discussion even when a saved flow lists the source first.
-      const groups=placement.groups;
+      const groups=placement.constraintGroups;
       const available=Math.max(0,availableWidth-GRID_LEFT*2-FRAME_PAD);
       let rowY=top,rowHeight=0,rowColumn=0;
       for(const group of groups){
@@ -269,7 +283,7 @@ export function computeSceneLayout(input: SceneLayoutInput) {
         rowColumn+=Math.max(0,...placed.map(child=>child.column))+1;
       }
     }else for (const child of keepDeclaredOrder?children:placement.groups.flat()) {
-      const horizontal = !frame.isMerge && frame.targetLayout === 'single-row'&&(!fullFrames.has(id)||placement.edges.length===0);
+      const horizontal = !frame.isMerge && !frameOrderConstraint && frame.targetLayout === 'single-row'&&(!fullFrames.has(id)||placement.edges.length===0);
       const vertical = keepDeclaredOrder && frame.targetLayout === 'single-column';
       const x = horizontal ? rowX : vertical ? GRID_LEFT : positions.xById.get(child.id)!;
       let minimum = top;
@@ -344,10 +358,10 @@ export function computeSceneLayout(input: SceneLayoutInput) {
       structureRanks.set(root.id,rootRanks.get(root.id)!);
     }
   }
-  // Secondary connections are routed separately. They must not merge placement
-  // groups, author histories or column widths of previously independent discussions.
+  // Solve all constraints within each affected component. Frame widths remain
+  // atomic, so moving a frame never stretches its internal member layout.
   const xByRoot=new Map<string,number>(),columns=new Map<string,number>();
-  for(const component of rootPlacement.groups){
+  for(const component of rootPlacement.constraintGroups){
     const positions=positionsForScope(component,undefined,!!input.edges,rootPlacement.edges);
     positions.xById.forEach((x,id)=>xByRoot.set(id,x));positions.columns.forEach((column,id)=>columns.set(id,column));
   }

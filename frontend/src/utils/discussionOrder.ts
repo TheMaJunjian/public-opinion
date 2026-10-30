@@ -35,5 +35,7 @@ export function discussionForest(nodes:Node[],edges:DemoEdge[],catalog:ReadonlyM
     while(stack.length){const id=stack.pop()!;group.push(id);const values=children.get(id)??[];for(let i=values.length-1;i>=0;i--)stack.push(values[i].id);}
     groups.push(group);
   }
-  return {parent,groups,order:groups.flat()};
+  const breadthOrder=roots.map(root=>root.id);
+  for(let index=0;index<breadthOrder.length;index++)for(const child of children.get(breadthOrder[index])??[])breadthOrder.push(child.id);
+  return {parent,groups,order:groups.flat(),breadthOrder};
 }

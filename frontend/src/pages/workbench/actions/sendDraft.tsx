@@ -118,7 +118,7 @@ export async function handleQuickSendAndRelateFromDraftTargets(dependencies: Dra
 
   // Scenario: source collection + target collection explicitly committed (no draft candidates).
   // Build the relation directly without creating a new text message.
-  if (relationType !== "merge" && relationType !== "arrange" && draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0 && (relationType !== 'classify' || joinOnlyAction)) {
+  if (!['tag','recommend','archive','attention','block','merge','arrange'].includes(relationType) && draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0 && (relationType !== 'classify' || joinOnlyAction)) {
     const labelDefault = relationTypeName(relationType);
     const label = relationLabel.trim() || labelDefault;
     await handleCreateRelationWithSourcesAndTargets({ sources: sourceUnits, targets: targetUnits, label });
@@ -142,6 +142,9 @@ export async function handleQuickSendAndRelateFromDraftTargets(dependencies: Dra
   if (relationType === "tag" && secondaryRelationType !== "none") {
     await sendSelectedTagDraft(dependencies, { effectiveTargets });
     return;
+  }
+  if(['recommend','archive','attention','block'].includes(relationType)){
+    await sendSelectedTagDraft({...dependencies,secondaryRelationType:relationType},{effectiveTargets});return;
   }
 
   if (relationType === 'correct' && secondaryRelationType === 'width-adjustment') {

@@ -16,7 +16,7 @@ function navigation(panel: HTMLDivElement) {
     findMessageElements, relationsRef: { current: [] }, edgesRef: { current: [] }, showMessagePulse: pulse, cancelScrollRafs: vi.fn() };
 }
 
-it('locates a directed relation at its start instead of its distant label or source card center',()=>{
+it.each([true,false])('prefers a measurable directed start and falls back to its label when the start is unavailable (start=%s)',available=>{
   vi.useFakeTimers();
   const panel=document.createElement('div'),label=document.createElement('div'),start=document.createElement('div');
   label.dataset.msgid='citation';label.dataset.directedEdgeLabel='citation';label.dataset.relOverlay='true';
@@ -25,11 +25,11 @@ it('locates a directed relation at its start instead of its distant label or sou
   dimensions(panel,{clientWidth:400,offsetWidth:400,clientHeight:300,offsetHeight:300,scrollWidth:4000,scrollHeight:5000});
   vi.spyOn(panel,'getBoundingClientRect').mockReturnValue(new DOMRect(0,100,400,300));
   vi.spyOn(label,'getBoundingClientRect').mockImplementation(()=>new DOMRect(1700-panel.scrollLeft,100+2400-panel.scrollTop,80,30));
-  vi.spyOn(start,'getBoundingClientRect').mockImplementation(()=>new DOMRect(800-panel.scrollLeft,100+1200-panel.scrollTop,16,16));
+  vi.spyOn(start,'getBoundingClientRect').mockImplementation(()=>new DOMRect(800-panel.scrollLeft,100+1200-panel.scrollTop,available?16:0,available?16:0));
   const dependencies=navigation(panel),completed=vi.fn();
   scrollMsgToCenter(dependencies,'citation',{onComplete:completed});vi.advanceTimersByTime(100);
-  expect(panel.scrollLeft).toBe(608);expect(panel.scrollTop).toBe(1058);
-  expect(dependencies.showMessagePulse).toHaveBeenCalledWith('citation',start,1,expect.any(Function));
+  expect(panel.scrollLeft).toBe(available?608:1540);expect(panel.scrollTop).toBe(available?1058:2265);
+  expect(dependencies.showMessagePulse).toHaveBeenCalledWith('citation',available?start:label,1,expect.any(Function));
   expect(completed).toHaveBeenCalledExactlyOnceWith(true);
 });
 

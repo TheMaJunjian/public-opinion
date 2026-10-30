@@ -1,14 +1,16 @@
 import {messageReadingKey,type ReadingMark} from '@gonglun/core';
-import {authoredReadingMark,deriveReadingProgress,influenceReadingMarks,type ReadingInput} from './readingProgress';
+import {authoredReadingMark,authoredReadingMessageIds,deriveReadingProgress,influenceAcknowledgementId,influenceReadingMarks,type ReadingInput} from './readingProgress';
 
 const identity=(mark:ReadingMark)=>JSON.stringify([mark.messageId,mark.scope,mark.key,mark.eventId,mark.resultKey]);
 
 /** Restore missing author confirmations without overriding explicit unread choices. */
 export function authoredReadingBackfill(input:ReadingInput,userId:string,signature:(id:string)=>string|undefined,
   progress=deriveReadingProgress(input)):ReadingMark[]{
-  const own=new Set(input.messages.filter(message=>!!message.sequence&&message.sequence>0
-    &&(message.authorId?message.authorId===userId:message.author===input.username)).map(message=>message.id));
+  const authored=authoredReadingMessageIds(input,userId);
+  const own=new Set(input.messages.filter(message=>!!message.sequence&&message.sequence>0&&authored.has(message.id)).map(message=>message.id));
   const existing=new Set((input.marks??[]).filter(mark=>mark.format===3&&(!mark.unknownContext||mark.state==='UNREAD')).map(identity));
+  const observedOutcomes=new Set((input.marks??[]).filter(mark=>mark.format===3&&mark.scope==='influence'&&mark.resultKey&&!mark.unknownContext)
+    .map(mark=>JSON.stringify([mark.messageId,mark.key,mark.eventId])));
   const result=new Map<string,ReadingMark>();
   const add=(mark:ReadingMark)=>{const key=identity(mark);if(!existing.has(key))result.set(key,mark);};
   for(const message of input.messages)if(own.has(message.id)){
@@ -18,7 +20,9 @@ export function authoredReadingBackfill(input:ReadingInput,userId:string,signatu
     if(displayed)add(authoredReadingMark(message,displayed));
   }
   for(const [target,items] of progress.influences){
-    const authored=items.filter(item=>own.has(item.messageId));
+    const authored=items.filter(item=>own.has(item.messageId)&&(!item.resultKey||!observedOutcomes.has(JSON.stringify([influenceAcknowledgementId(target,item),item.key,item.eventId]))));
+    const newStance=authored.some(item=>['agree','disagree'].includes(item.type)&&influenceReadingMarks(target,[item]).some(mark=>!existing.has(identity(mark))));
+    if(newStance)authored.push(...(progress.relationOutcomes.get(target)??[]));
     for(const mark of influenceReadingMarks(target,authored))add(mark);
     const selection=progress.selectionChanges.get(target);
     if(authored.length&&selection?.causes?.length&&selection.causes.every(id=>own.has(id)))

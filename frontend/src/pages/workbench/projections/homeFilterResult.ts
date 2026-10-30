@@ -54,7 +54,7 @@ export function deriveHomeFilterResult(input:DeriveHomeFilterResultInput):{match
       }
     }
   }
-  const reading=deriveReadingProgress({messages:input.messages,edges:input.edges,relations:input.relations??[],username:username??null,
+  const reading=deriveReadingProgress({messages:input.messages,edges:input.edges,relations:input.relations??[],username:username??null,userId:input.displayUser?.id,
     readStatus:input.readStatusByMessageId,marks:input.readingMarks,corrections:input.corrections,memberships:input.traceContainerMemberships});
   const matchIds=new Set(input.messages.filter(message=>isCardMessage(message)||message.relationType==='correct').filter(message=>{
     const id=message.id;

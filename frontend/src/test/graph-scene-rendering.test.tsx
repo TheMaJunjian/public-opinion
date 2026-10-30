@@ -28,6 +28,91 @@ function renderScene(messages: DemoMessage[], edges: DemoEdge[],extra:Partial<Gr
 }
 
 describe('rendered graph scene', () => {
+  it('keeps automatically opened votes and annotations expanded when reading the next message',()=>{
+    const values:DemoMessage[]=[message('m'),message('next'),...(['agree','disagree','tag'] as const).map(type=>({...message(type),kind:'relation' as const,relationType:type,content:'',relationPayload:type==='tag'?{label:'标签'}:undefined}))];
+    const links=(['agree','disagree','tag'] as const).map(type=>relation(type,type,`anon:${type}`,'m'));
+    function Scene({current,requestId=0}:{current:string;requestId?:number}){return <GraphView messages={values} edges={links} highlightedMessageIds={new Set([current])}
+      decorationExpansion={{requestId,messageIds:[current]}}
+      draftUnits={[]} activeTextSelectId={null} lastClickedMessageId={null} onMessageClick={vi.fn()} onMessageDoubleClick={vi.fn()} onTextMouseUp={vi.fn()}
+      onEdgeLabelSingleClick={vi.fn()} onEdgeLabelDoubleClick={vi.fn()} onFragmentAnchorClick={vi.fn()} isFragmentSelected={()=>false}/>;}
+    const view=render(<Scene current="m"/>);
+    expect(view.getByRole('button',{name:'收起装饰 m'})).toHaveAttribute('aria-expanded','true');
+    expect(view.getByRole('button',{name:'收起标注 m'})).toHaveAttribute('aria-expanded','true');
+    expect(view.container.querySelector('[data-jump-msgids~="agree"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-jump-msgids~="tag"]')).not.toBeNull();
+    fireEvent.click(view.getByRole('button',{name:'收起装饰 m'}));
+    expect(view.getByRole('button',{name:'显示装饰 m'})).toHaveAttribute('aria-expanded','false');
+    fireEvent.click(view.getByRole('button',{name:'收起标注 m'}));
+    view.rerender(<Scene current="m" requestId={1}/>);
+    expect(view.getByRole('button',{name:'收起装饰 m'})).toHaveAttribute('aria-expanded','true');
+    expect(view.getByRole('button',{name:'收起标注 m'})).toHaveAttribute('aria-expanded','true');
+    view.rerender(<Scene current="next"/>);
+    expect(view.getByRole('button',{name:'收起装饰 m'})).toHaveAttribute('aria-expanded','true');
+    expect(view.getByRole('button',{name:'收起标注 m'})).toHaveAttribute('aria-expanded','true');
+    expect(view.container.querySelector('[data-jump-msgids~="agree"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-jump-msgids~="tag"]')).not.toBeNull();
+    view.rerender(<Scene current="m"/>);
+    expect(view.getByRole('button',{name:'收起装饰 m'})).toHaveAttribute('aria-expanded','true');
+  });
+
+  it('fully expands a frame and restores its size, scroll and surrounding layout',()=>{
+    const members=Array.from({length:8},(_,index)=>message(`expand-${index}`));
+    const group:DemoMessage={...message('group'),kind:'relation',relationType:'classify'};
+    const selected=vi.fn(),view=renderScene([group,...members,message('outside')],members.map(member=>relation('group','classify','anon:group',member.id)),
+      {traceFrameIds:new Set(['group']),traceExpandedFrameIds:new Set(['group']),onMessageClick:selected});
+    fireEvent.click(view.getByRole('button',{name:'调整框架大小 group'}));
+    fireEvent.change(view.getByRole('spinbutton',{name:'框架宽度 group'}),{target:{value:'480'}});
+    fireEvent.change(view.getByRole('spinbutton',{name:'框架高度 group'}),{target:{value:'180'}});
+    fireEvent.scroll(view.getByLabelText('框架垂直滚动条 group'),{target:{scrollTop:100}});
+    const before=view.container.querySelector<HTMLElement>('[data-msgid="expand-0"]')!.style.top;
+    const header=view.getByRole('group',{name:'组织消息 group'}),width=header.style.width;
+    fireEvent.click(view.getByRole('button',{name:'完全展开框架 group'}));
+    expect(view.getByRole('button',{name:'恢复框架 group'})).toHaveAttribute('aria-pressed','true');
+    expect(view.queryByLabelText('框架垂直滚动条 group')).toBeNull();
+    expect(view.container.querySelector('[data-msgid="expand-0"]')!.closest('[data-frame-clip]')).toBeNull();
+    fireEvent.click(view.getByRole('button',{name:'恢复框架 group'}));
+    expect(view.getByRole('group',{name:'组织消息 group'}).style.width).toBe(width);
+    expect(view.getByRole('spinbutton',{name:'框架宽度 group'})).toHaveValue(480);
+    expect(view.getByRole('spinbutton',{name:'框架高度 group'})).toHaveValue(180);
+    expect(view.getByLabelText('框架垂直滚动条 group').scrollTop).toBe(100);
+    expect(view.container.querySelector<HTMLElement>('[data-msgid="expand-0"]')!.style.top).toBe(before);
+    expect(selected).not.toHaveBeenCalled();
+  });
+
+  it('keeps directed edge lines and arrowheads while rendering labels without arrow symbols',()=>{
+    const view=renderScene([message('a'),message('b')],[relation('ref','reference','a','b')]);
+    expect(view.container.querySelector('[data-edge-label-arrow]')).toBeNull();
+    expect(view.container.querySelector('[data-edge-label-arrow-slot]')).toBeNull();
+    const labels=[...view.container.querySelectorAll('svg text')];
+    expect(labels.some(label=>label.textContent==='引用')).toBe(true);
+    for(const label of labels)expect(label.textContent).not.toMatch(/[→↘↓↙←↖↑↗]/u);
+    expect(view.container.querySelectorAll('svg path').length).toBeGreaterThanOrEqual(2);
+  });
+  it('opens the temporary category from its header and preserves frame size and scroll across remounts',()=>{
+    const members=Array.from({length:8},(_,index)=>message(`member-${index}`));
+    const group:DemoMessage={...message('group'),kind:'relation',relationType:'classify'};
+    const edges=members.map(member=>relation('group','classify','anon:group',member.id));
+    const enter=vi.fn(),border=vi.fn(),state={current:{}} as NonNullable<GraphViewProps['frameViewStateRef']>;
+    const extra:Partial<GraphViewProps>={traceFrameIds:new Set(['group']),traceExpandedFrameIds:new Set(['group']),frameViewStateRef:state,
+      onFrameHeaderDoubleClick:enter,onGroupFrameDoubleClick:border};
+    let view=renderScene([group,...members,message('outside')],edges,extra);
+    fireEvent.click(view.getByRole('button',{name:'调整框架大小 group'}));
+    fireEvent.change(view.getByRole('spinbutton',{name:'框架宽度 group'}),{target:{value:'480'}});
+    fireEvent.change(view.getByRole('spinbutton',{name:'框架高度 group'}),{target:{value:'180'}});
+    fireEvent.scroll(view.getByLabelText('框架垂直滚动条 group'),{target:{scrollTop:100}});
+    const saved=structuredClone(state.current);
+    fireEvent.doubleClick(view.getByRole('group',{name:'组织消息 group'}));
+    expect(enter).toHaveBeenCalledWith(expect.anything(),'group');expect(border).not.toHaveBeenCalled();
+    view.unmount();
+    view=renderScene([group,...members,message('outside')],edges,extra);
+    expect(state.current).toEqual(saved);
+    expect(view.getByLabelText('框架垂直滚动条 group').scrollTop).toBe(saved.main.scrolls.group.top);
+    fireEvent.click(view.getByRole('button',{name:'调整框架大小 group'}));
+    expect(view.getByRole('spinbutton',{name:'框架宽度 group'})).toHaveValue(480);
+    expect(view.getByRole('spinbutton',{name:'框架高度 group'})).toHaveValue(180);
+    view.unmount();
+  });
+
   it('keeps a cross-frame citation visible and reveals its routed start inside the source viewport',async()=>{
     const group=(id:string):DemoMessage=>({...message(id),kind:'relation',relationType:'classify'});
     const members=Array.from({length:8},(_,index)=>message(`member-${index}`));
@@ -39,6 +124,8 @@ describe('rendered graph scene', () => {
     fireEvent.change(view.getByRole('spinbutton',{name:'框架宽度 source-frame'}),{target:{value:'480'}});
     fireEvent.change(view.getByRole('spinbutton',{name:'框架高度 source-frame'}),{target:{value:'220'}});
     await act(async()=>{});
+    expect(view.container.querySelector('[data-directed-edge-label="citation"]')).toBeNull();
+    expect(view.container.querySelector('svg [data-frame-edge-id="citation"]')).toBeNull();
     const canvas=view.container.querySelector('[data-jump-canvas]')!;
     const detail={ids:['citation'],positioningPending:false};
     act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail}));});
@@ -277,9 +364,13 @@ describe('rendered graph scene', () => {
     for(const id of ['recommend','agree','tag']){
       act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[id]}}));});
       expect(findMessageElements(view.container,id)).toHaveLength(1);
-      expect(view.getByRole('button',{name:id==='agree'?'显示标注 target':'显示装饰 target'})).toHaveAttribute('aria-expanded','false');
       act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[]}}));});
+      expect(findMessageElements(view.container,id)).toHaveLength(1);
     }
+    fireEvent.click(view.getByRole('button',{name:'收起装饰 target'}));
+    fireEvent.click(view.getByRole('button',{name:'收起标注 target'}));
+    expect(findMessageElements(view.container,'agree')).toHaveLength(0);
+    expect(findMessageElements(view.container,'tag')).toHaveLength(0);
   });
   it('folds multiple annotations on the first classification and reveals each jump target within the canvas', () => {
     const target:DemoMessage={...message('category'),kind:'relation',relationType:'classify'};
@@ -294,9 +385,8 @@ describe('rendered graph scene', () => {
       expect(badge).toBeDefined();
       expect(parseFloat(badge.style.top)).toBeGreaterThanOrEqual(0);
       act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[]}}));});
-      expect(findMessageElements(view.container,type)).toHaveLength(0);
+      expect(findMessageElements(view.container,type)).toHaveLength(1);
     }
-    fireEvent.click(view.getByRole('button',{name:'显示标注 category'}));
     const badges=types.map(type=>findMessageElements(view.container,type)[0]);
     for(let i=1;i<badges.length;i++)expect(parseFloat(badges[i].style.top)).toBeGreaterThanOrEqual(parseFloat(badges[i-1].style.top)+parseFloat(badges[i-1].style.height));
     act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[]}}));});
@@ -353,6 +443,8 @@ describe('rendered graph scene', () => {
     expect(findMessageElements(view.container,'agree-2')).toHaveLength(1);
     expect(findMessageElements(view.container,'agree-1')).toHaveLength(0);
     act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[]}}));});
+    expect(findMessageElements(view.container,'agree-2')).toHaveLength(1);
+    fireEvent.click(view.getByRole('button',{name:'收起装饰 annotation-1'}));
     expect(findMessageElements(view.container,'agree-2')).toHaveLength(0);
   });
 
@@ -423,6 +515,8 @@ describe('rendered graph scene', () => {
     expect(findMessageElements(view.container, 'agree')).toEqual([view.getByTitle(/^赞同：/)]);
     expect(props.onMessageClick).not.toHaveBeenCalled();
     act(() => { canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } })); });
+    expect(findMessageElements(view.container,'agree')).toHaveLength(1);
+    fireEvent.click(view.getByRole('button',{name:'收起装饰 arrange'}));
     assertCollapsed();
     fireEvent.click(view.getByRole('button', { name: '显示排列消息卡 arrange' }));
     act(() => { canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: ['agree'] } })); });
@@ -591,6 +685,8 @@ describe('rendered graph scene', () => {
     act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[tag.id]}}));});
     expect(graph.getByTitle(/^标注：/)).toBeInTheDocument();
     act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[]}}));});
+    expect(graph.getByTitle(/^标注：/)).toBeInTheDocument();
+    fireEvent.click(graph.getByRole('button',{name:'收起标注 corrected-target'}));
     expect(graph.queryByTitle(/^标注：/)).toBeNull();
     expect(graph.queryByTitle(/^赞同更正：/)).toBeNull();
     expect(graph.queryByRole('button',{name:'显示装饰 correction'})).toBeNull();

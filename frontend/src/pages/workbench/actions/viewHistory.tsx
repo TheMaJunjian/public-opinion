@@ -461,7 +461,7 @@ export function exitClassification(dependencies: ExitClassificationDependencies,
   if (_options?.restoreSnapshot !== false && entry?.snapshot) {
     // Classification navigation changes the current layer within the active
     // trace/comparison view; those surrounding modes keep their own history.
-    restoreSnapshot(entry.snapshot, { restoreScope: false, pulseMessageId: entry.relMsgId });
+    restoreSnapshot(entry.snapshot, { restoreScope: !!entry.frameScopeIds, pulseMessageId: entry.relMsgId });
   }
   if (_options?.preserveViewMode) setViewMode(_options.preserveViewMode);
 }

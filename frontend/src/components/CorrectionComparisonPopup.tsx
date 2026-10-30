@@ -1,16 +1,42 @@
-import { useRef } from 'react';
-import { computeCorrectionVersions, resolveCorrectionContent, type DemoEdge, type DemoMessage, type RelationType } from '../utils/modelBridge';
+import { useContext, useRef, useState, type ReactNode } from 'react';
+import {type BodyVersion} from '@gonglun/core';
+import { computeCorrectionVersions, resolveCorrectionContent, type DemoEdge, type DemoMessage, type RelationType, type CorrectionVersion } from '../utils/modelBridge';
 import { relationTypeName } from '../utils/graphTextSelection';
 import { computeCharDiff, renderDiffParts, type DiffPart } from './CharDiffText';
 import PopupOverlay from './PopupOverlay';
 import PromptModal from './PromptModal';
 import { DIALOG_BACKDROP, dialogStyles } from './dialogStyles';
 import CorrectionTextComparison from './CorrectionTextComparison';
+import {ComparisonReadingContext} from './ComparisonReadingContext';
+import {comparisonReadingMark,isComparisonRead} from '../pages/workbench/model/comparisonReading';
+import {displayedBodyVersion} from '../utils/bodyVersions';
+
+export function CurrentBodyComparison({before,after,version,basis,onClose}:{before:string;after:string;version?:BodyVersion;basis?:string;onClose:()=>void}) {
+  const context=useContext(ComparisonReadingContext),[snapshot]=useState(()=>({before,after,version,basis:basis??(version?context?.basisFor(version.messageId):undefined)??''}));
+  const [busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null),saving=useRef(false);
+  const confirm=async()=>{
+    if(saving.current)return;
+    saving.current=true;setBusy(true);setError(null);
+    try{
+      if(snapshot.version&&context?.onMarkRead&&!isComparisonRead(context.marks,snapshot.version,snapshot.before,snapshot.after,snapshot.basis))
+        await context.onMarkRead([comparisonReadingMark(snapshot.version,snapshot.before,snapshot.after,snapshot.basis)]);
+      onClose();
+    }catch(reason){setError(reason instanceof Error?reason.message:'对比已阅保存失败，请重试');}
+    finally{saving.current=false;setBusy(false);}
+  };
+  return <PromptModal open title="原文与当前版本正文对比" confirmText={busy?'保存中…':'已阅'} confirmDisabled={busy} onConfirm={()=>void confirm()} onCancel={onClose}
+    lockScroll={false} zIndex={10100} dialogProps={{style:{width:'min(700px, 100%)'}}} message={<>
+      <CorrectionTextComparison before={snapshot.before} after={snapshot.after} beforeLabel="原文" afterLabel="当前版本正文"/>
+      <div style={{color:'#94a3b8',fontSize:11,marginTop:8}}>确认本次对比已阅；消息和影响需另行确认。</div>
+      {error&&<div role="alert" style={{color:'#fca5a5',fontSize:11,marginTop:6}}>{error}</div>}
+    </>}/>;
+}
 
 type ComparisonPopupState = {
   relMsgId: string;
   x: number;
   y: number;
+  compareCurrent?:boolean;
 };
 
 type Props = {
@@ -20,6 +46,7 @@ type Props = {
   invalidCorrectionIds?: Set<string>;
   onClose: () => void;
   isSending?: boolean;
+  displayedBodies?:ReadonlyMap<string,{current?:CorrectionVersion}>;
   reversePreview?: {
     correctionKind?: 'TEXT' | 'MEANING';
     before: string;
@@ -28,7 +55,7 @@ type Props = {
   };
 };
 
-export default function CorrectionComparisonPopup({ popup, messages, edges, invalidCorrectionIds = new Set(), onClose, isSending = false, reversePreview }: Props) {
+export default function CorrectionComparisonPopup({ popup, messages, edges, invalidCorrectionIds = new Set(), onClose, isSending = false, reversePreview, displayedBodies }: Props) {
   const contentRef = useRef<HTMLDivElement>(null);
   const msgMap = new Map(messages.map(m => [m.id, m]));
   const relEdges = edges.filter(e => e.relationMessageId === popup.relMsgId);
@@ -37,6 +64,10 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
   const targetMids = Array.from(new Set(relEdges.map(e => e.to.messageId)));
   const targetMsgs = targetMids.map(id => msgMap.get(id)).filter((m): m is DemoMessage => m != null);
   const relType = relEdges[0]?.relationType ?? '';
+
+  if(popup.compareCurrent&&targetMsgs[0])return <CurrentBodyComparison key={popup.relMsgId} onClose={onClose}
+    version={displayedBodyVersion(targetMsgs[0],displayedBodies?.get(targetMsgs[0].id)?.current)}
+    before={targetMsgs[0].content} after={displayedBodies?.get(targetMsgs[0].id)?.current?.content??targetMsgs[0].content}/>;
 
   if (reversePreview) {
     return (
@@ -330,7 +361,7 @@ export function rebuildCorrectionContent(
   return resolveCorrectionContent(originalContent, baseContent, rawCorrectionContent, selection);
 }
 
-function MessageDiffColumn(props: { title: string; message: DemoMessage; isCorrected?: boolean; border: string; background: string; children: React.ReactNode }) {
+function MessageDiffColumn(props: { title: string; message: DemoMessage; isCorrected?: boolean; border: string; background: string; children: ReactNode }) {
   const { title, message, isCorrected, border, background, children } = props;
   return (
     <div style={{ flex: 1, minWidth: 0, borderRadius: 6, border: `1px solid ${border}`, background, padding: 10 }}>

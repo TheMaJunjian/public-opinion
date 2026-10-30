@@ -46,9 +46,9 @@ export default function LeaderboardTable({ columns, widths, onResize, stickyTop 
         {columns.map((column, index) => <col key={column.label} ref={element => { columnRefs.current[index] = element; }} style={{ width: widths[index] }} />)}
       </colgroup>
       <thead>
-        <tr style={{ color: '#94a3b8', textAlign: 'left' }}>
+        <tr style={{ color: 'var(--ink-94a3b8)', textAlign: 'left' }}>
           {columns.map((column, index) => (
-            <th key={column.label} scope="col" aria-label={column.label} title={column.label} style={{ position: 'sticky', top: stickyTop, zIndex: 1, padding: '6px 12px 6px 8px', borderBottom: '1px solid #243041', background: '#101216', verticalAlign: 'top' }}>
+            <th key={column.label} scope="col" aria-label={column.label} title={column.label} style={{ position: 'sticky', top: stickyTop, zIndex: 1, padding: '6px 12px 6px 8px', borderBottom: '1px solid var(--line-243041)', background: 'var(--surface-101216)', verticalAlign: 'top' }}>
               {column.label}
               <span
                 role="separator"
@@ -59,7 +59,7 @@ export default function LeaderboardTable({ columns, widths, onResize, stickyTop 
                 aria-valuenow={widths[index]}
                 tabIndex={0}
                 title="拖动调整列宽，双击恢复；也可用左右方向键调整"
-                style={{ position: 'absolute', top: 0, bottom: 0, right: 0, width: 8, borderRight: '1px solid #334155', cursor: 'col-resize', touchAction: 'none', userSelect: 'none' }}
+                style={{ position: 'absolute', top: 0, bottom: 0, right: 0, width: 8, borderRight: '1px solid var(--line-334155)', cursor: 'col-resize', touchAction: 'none', userSelect: 'none' }}
                 onPointerDown={event => {
                   if (event.button !== 0 || event.isPrimary === false) return;
                   event.preventDefault();

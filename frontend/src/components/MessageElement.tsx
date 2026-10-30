@@ -9,15 +9,20 @@ export default function MessageElement({ reference, label, children, selected = 
   children: ReactNode;
   selected?: boolean;
 }) {
-  if (!reference) return <span {...props}>{children}</span>;
+  const style = { ...props.style,
+    ...(props.style?.fontWeight ? { fontWeight: 'var(--badge-weight)' } : {}),
+    ...(typeof props.style?.fontSize === 'number' ? { fontSize: `max(var(--badge-min-size), ${props.style.fontSize}px)` } : {}),
+  };
+  if (!reference) return <span {...props} style={style}>{children}</span>;
   return <span {...props}
     data-message-reference={JSON.stringify(reference)}
+    data-message-badge={!!props.style?.background || undefined}
     data-gesture-disabled="true"
     role="button"
     tabIndex={0}
     aria-label={`选择${label}`}
     aria-pressed={selected}
-    style={{ ...props.style, ...(selected ? { background: '#fbbf24', color: '#111827', outline: '2px solid #fbbf24' } : {}) }}
+    style={{ ...style, ...(selected ? { background: 'var(--surface-fbbf24)', color: 'var(--ink-111827)', outline: '2px solid var(--line-fbbf24)' } : {}) }}
     title={props.title ?? `单击选择${label}`}
     onClick={event => { event.stopPropagation(); selectMessageElement(reference, label); }}
     onDoubleClick={props.onDoubleClick}

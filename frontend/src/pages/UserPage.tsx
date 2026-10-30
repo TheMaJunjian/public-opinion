@@ -63,8 +63,8 @@ export default function UserPage() {
       .catch((err: unknown) => setError(err instanceof Error ? err.message : '与会者页加载失败'));
   }, [userId]);
 
-  if (error) return <div className="p-6 text-red-600">{error}</div>;
-  if (!user) return <div className="p-6 text-gray-500">加载与会者页...</div>;
+  if (error) return <div className="p-6 text-[color:var(--ink-dc2626)]">{error}</div>;
+  if (!user) return <div className="p-6 text-[color:var(--ink-6b7280)]">加载与会者页...</div>;
 
   const filteredMessages = cleanVisibleIds
     ? messages.filter(message => cleanVisibleIds.visibleTextIds.has(message.id))
@@ -72,7 +72,7 @@ export default function UserPage() {
 
   return (
     <div className="max-w-3xl mx-auto p-6 space-y-5">
-      <header style={{ borderBottom: '1px solid #333', paddingBottom: 8 }}>
+      <header style={{ borderBottom: '1px solid var(--line-333)', paddingBottom: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <CleanFilterPanel
             active={cleanFilters.length > 0}
@@ -96,7 +96,7 @@ export default function UserPage() {
             ctx={{ relType: message.relationType ?? null }}
           />
         ))}
-        {filteredMessages.length === 0 && <div style={{ fontSize: 12, color: '#9ca3af' }}>该与会者尚未发送消息。</div>}
+        {filteredMessages.length === 0 && <div style={{ fontSize: 12, color: 'var(--ink-9ca3af)' }}>该与会者尚未发送消息。</div>}
       </div>
     </div>
   );

@@ -68,6 +68,35 @@ it('restores a complete catalog, reads only changes on refresh, and leaves uncha
   expect(load.mock.calls.every(([q]) => q.after === 10 && !q.mode && !q.cursor)).toBe(true);
 });
 
+it('waits for server reconciliation before publishing a cached catalog with removed messages', async () => {
+  const cache = memoryCache({ snapshot: page(10, ['deleted', 'retained']), boundary: 5, after: 10,
+    nextCursor: null, phase: 'changes', complete: true, pages: 3 });
+  let release!: (value: WorkbenchSnapshot) => void;
+  const { onReady } = start(() => new Promise(resolve => { release = resolve; }), cache);
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  expect(onReady).not.toHaveBeenCalled();
+  release({ ...page(11), removedMessageIds: ['deleted'] });
+  await vi.waitFor(() => expect(onReady).toHaveBeenCalledOnce());
+  expect(onReady.mock.lastCall![0].messages.map((m: { id: string }) => m.id)).toEqual(['retained']);
+});
+
+it('rebuilds the entire catalog after invalidation during an in-flight stale cache check', async () => {
+  const cache = memoryCache({ snapshot: page(10, ['obsolete']), boundary: 5, after: 10,
+    nextCursor: null, phase: 'changes', complete: true, pages: 3 });
+  let release!: (value: WorkbenchSnapshot) => void;
+  const load = vi.fn(async ({ after }: SnapshotQuery) => after === 10
+    ? new Promise<WorkbenchSnapshot>(resolve => { release = resolve; })
+    : after === undefined ? page(11, ['actual']) : page(11));
+  const { sync, onReady } = start(load, cache);
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  sync.reload();
+  release(page(10));
+  await vi.waitFor(() => expect(onReady).toHaveBeenCalledOnce());
+  expect(cache.clear).toHaveBeenCalledOnce();
+  expect(onReady.mock.lastCall![0].messages.map((m: { id: string }) => m.id)).toEqual(['actual']);
+  expect((await cache.load())?.snapshot.messages.map(m => m.id)).toEqual(['actual']);
+});
+
 it('does not complete a failed page, and manual refresh waits through all remaining pages', async () => {
   const cache = memoryCache({ snapshot: page(10, ['old']), boundary: 10, after: 10,
     nextCursor: 'remaining', phase: 'pages', complete: false, pages: 1 });

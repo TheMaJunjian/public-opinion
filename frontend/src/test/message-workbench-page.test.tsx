@@ -221,6 +221,14 @@ async function waitForWorkbenchIdle() {
   } else await waitFor(assertIdle, { timeout: 5000 });
 }
 
+async function jumpToMessageId(id:string) {
+  let input=screen.queryByRole('textbox',{name:'消息 ID'});
+  if(!input){fireEvent.click(await screen.findByRole('button',{name:'跳转'}));input=screen.getByRole('textbox',{name:'消息 ID'});}
+  fireEvent.change(input,{target:{value:id}});
+  const dialog=screen.queryByRole('dialog',{name:'跳转消息'});
+  fireEvent.click(dialog?within(dialog).getByRole('button',{name:'跳转'}):screen.getByRole('button',{name:'确认'}));
+}
+
 describe('rejected child container boundaries and single-side comparison',()=>{
   const latest=()=>mockGraphView.mock.lastCall![0];
   const visibleGraphMessages = () => latest().messages.filter((message: Message) => !latest().visibleMessageIds || latest().visibleMessageIds.has(message.id));
@@ -312,8 +320,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       act(() => catalogHarness.callbacks.onProgress({ ready: false, count: 0, syncing: true }));
       expect(visibleGraphMessages()).toHaveLength(50);
       act(() => catalogHarness.callbacks.onReady(catalogHarness.data));
-      fireEvent.change(screen.getByRole('textbox', { name: '消息 ID' }), { target: { value: 'remote-51' } });
-      fireEvent.click(screen.getByRole('button', { name: '确认' }));
+      await jumpToMessageId('remote-51');
       await waitFor(() => expect(visibleGraphMessages().some((message: Message) => message.id === 'remote-51')).toBe(true));
       expect(mockApi.getWorkbenchSnapshot.mock.calls.some(([query]) => query.ids?.includes('remote-51'))).toBe(false);
       expect(visibleGraphMessages()).toHaveLength(53);
@@ -886,6 +893,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       render(<MessageWorkbenchPage/>);
       const ready=()=>waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
       await waitFor(()=>expect(latest()?.messages.some((message:Message)=>message.id==='A')).toBe(true));
+      await ready();
       expect(screen.getByRole('button',{name:'返回'})).toBeDisabled();
       expect(screen.getByRole('button',{name:'前进'})).toBeDisabled();
       await act(async()=>latest().onMessageDoubleClick(event(),'A'));
@@ -2488,8 +2496,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
       const expected=entry==='first-hint'?'first-correction':'unadopted-correction';
       if(entry==='id'){
-        fireEvent.change(screen.getByRole('textbox',{name:'消息 ID'}),{target:{value:expected}});
-        fireEvent.click(screen.getByRole('button',{name:'确认'}));
+        await jumpToMessageId(expected);
       }else{
         fireEvent.click(screen.getByRole('button',{name:/^显示提示 msg-1：/}));
         expandReadingEffects();fireEvent.click(within(screen.getByRole('tooltip')).getByTitle(`查看更正 ${expected}`));
@@ -3764,7 +3771,8 @@ describe('MessageWorkbenchPage composer refresh', () => {
       expect(right.style.position).toBe('sticky');
       expect(right.style.top).toBe(document.querySelector<HTMLElement>('[data-workbench-view-toolbar]')!.style.top);
       expect(pane.style.top).toBe(right.style.top);
-      expect(pane.style.top).toBe(`${500 + (topControlsFrozen ? 68 : 0)}px`);
+      const relationToolbarHeight=document.querySelector('.workbench-relation-toolbar')?500:0;
+      expect(pane.style.top).toBe(`${relationToolbarHeight + (topControlsFrozen ? 68 : 0)}px`);
       expect(left.style.height).toBe('var(--workbench-viewport-height, auto)');
       expect(parseFloat(left.style.getPropertyValue('--workbench-viewport-height'))).toBeGreaterThan(0);
       expect(left.style.minHeight).toBe('0');
@@ -4796,8 +4804,7 @@ describe('MessageWorkbenchPage nested-classify merge expansion', () => {
       targetRefs: [{ kind: 'relation', relationId: 'rel-merge' }], createdAt: '2024-01-01T00:05:00Z', createdBy: makeUser() });
     render(<MessageWorkbenchPage />);
     await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
-    fireEvent.change(screen.getByPlaceholderText('输入消息 ID'), { target: { value: 'rel-merge' } });
-    fireEvent.click(screen.getByRole('button', { name: '确认' }));
+    await jumpToMessageId('rel-merge');
     await waitFor(() => expect(mockGraphView.mock.lastCall![0].messages.map((message: { id: string }) => message.id))
       .toEqual(expect.arrayContaining(['rel-merge', 'msg-a', 'msg-b'])));
     expect(screen.getByText('内层分类')).toBeInTheDocument();

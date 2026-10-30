@@ -119,8 +119,8 @@ export function MessageJumpOverlay({
       {/* Keep the backdrop, guides, hint and openings in the same painted
           viewport instead of mixing CSS viewport units with an SVG mask. */}
       <g data-message-jump-layer="true" mask={`url(#${maskId})`}>
-        <rect data-message-jump-backdrop="true" width={geometry.width} height={geometry.height} fill="rgba(0,0,0,0.42)" />
-        <path className="popup-guides" fill="none" stroke="rgba(250,204,21,0.5)" strokeWidth="2" strokeDasharray="11 9" strokeLinecap="round"
+        <rect data-message-jump-backdrop="true" width={geometry.width} height={geometry.height} fill="var(--ink-rgba-0-0-0-0-42)" />
+        <path className="popup-guides" fill="none" stroke="var(--ink-rgba-250-204-21-0-5)" strokeWidth="2" strokeDasharray="11 9" strokeLinecap="round"
           d={Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
             const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
             return [
@@ -131,8 +131,8 @@ export function MessageJumpOverlay({
             ].map(([x, y]) => `M${x},${y}L${geometry.centerX},${geometry.centerY}`).join(' ');
           }).join(' ')} />
         <g data-message-jump-hint="true" transform={`translate(${geometry.left + geometry.viewportWidth / 2},${geometry.top + 16})`}>
-          <rect x="-58" width="116" height="30" rx="4" fill="rgba(23,23,23,0.92)" stroke="rgba(250,204,21,0.7)" />
-          <text y="15" textAnchor="middle" dominantBaseline="central" fill="#fde68a" fontSize="13" fontWeight="600">已定位目标消息</text>
+          <rect x="-58" width="116" height="30" rx="4" fill="var(--ink-rgba-23-23-23-0-92)" stroke="var(--ink-rgba-250-204-21-0-7)" />
+          <text y="15" textAnchor="middle" dominantBaseline="central" fill="var(--ink-fde68a)" fontSize="13" fontWeight="600">已定位目标消息</text>
         </g>
       </g>
     </svg>
@@ -233,7 +233,7 @@ export default function PopupOverlay({
       <svg className="popup-backdrop-guides" aria-hidden="true" width={overlayWidth} height={overlayHeight}
         viewBox={`0 0 ${overlayWidth} ${overlayHeight}`} style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0 }}>
         {/* One animated path keeps the inward flow without a separate animation for every ray. */}
-        <path className="popup-backdrop-flow" fill="none" stroke="rgba(250,204,21,0.55)" strokeWidth={1.5}
+        <path className="popup-backdrop-flow" fill="none" stroke="var(--ink-rgba-250-204-21-0-55)" strokeWidth={1.5}
           strokeDasharray="11 9" strokeLinecap="round"
           d={Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
             const ratio = (index + 0.5) / EDGE_ARROW_COUNT;

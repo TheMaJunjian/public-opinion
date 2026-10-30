@@ -12,7 +12,7 @@ function SelfStake({messageId,investment,label}:{messageId:string;investment:Aut
   const title=`${label}累计自押：真假 ${truth} 点／价值 ${value} 点（N/M）`
     +(initial?`；首次 ${initial.truth}/${initial.value}，追加 ${additional!.truth}/${additional!.value}`:'；首次投入未单独记录');
   return <span data-message-self-stake={messageId} title={title} aria-label={title}
-    style={{fontSize:10,color:'#94a3b8',whiteSpace:'nowrap',fontWeight:400}}>自押 {truth}/{value}</span>;
+    style={{fontSize:10,color:'var(--ink-94a3b8)',whiteSpace:'nowrap',fontWeight:400}}>自押 {truth}/{value}</span>;
 }
 
 export function MessageSelfStake({message,fallbackTruth=0}:{message:DemoMessage;fallbackTruth?:number}){
@@ -21,13 +21,13 @@ export function MessageSelfStake({message,fallbackTruth=0}:{message:DemoMessage;
 
 function Contribution({source}:{source:AuthorContribution}){
   const {initial,additional}=source.investment;
-  return <div data-author-contribution={source.message.id} style={{border:'1px solid #475569',borderRadius:4,padding:'7px 9px',marginTop:6,fontSize:12}}>
+  return <div data-author-contribution={source.message.id} style={{border:'1px solid var(--line-475569)',borderRadius:4,padding:'7px 9px',marginTop:6,fontSize:12}}>
     <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-      <span style={{color:'#93c5fd'}}>{source.kind==='original'?'原文':'修正文字'}</span>
-      <span style={{fontFamily:'monospace',color:'#94a3b8',overflowWrap:'anywhere'}}>{source.message.id}</span>
+      <span style={{color:'var(--ink-93c5fd)'}}>{source.kind==='original'?'原文':'修正文字'}</span>
+      <span style={{fontFamily:'monospace',color:'var(--ink-94a3b8)',overflowWrap:'anywhere'}}>{source.message.id}</span>
       <span data-author-investment-details style={{display:'inline-flex',alignItems:'baseline',gap:8,whiteSpace:'nowrap'}}>
         <MessageSelfStake message={{...source.message,authorInvestment:source.investment}}/>
-        <span style={{fontSize:11,color:'#94a3b8'}}>{initial?`首次 ${initial.truth}/${initial.value} · 追加 ${additional!.truth}/${additional!.value}`:'首次投入未单独记录'}</span>
+        <span style={{fontSize:11,color:'var(--ink-94a3b8)'}}>{initial?`首次 ${initial.truth}/${initial.value} · 追加 ${additional!.truth}/${additional!.value}`:'首次投入未单独记录'}</span>
       </span>
     </div>
   </div>;
@@ -62,7 +62,7 @@ export default function MessageAuthors({message,prefix='',showSelfStake=false,st
   const showCount=hasCorrections||authors.length>1;
   const stop=(event:{stopPropagation():void})=>event.stopPropagation();
   const profile=(name:string,children:ReactNode,key:string)=><section key={key} style={{marginBottom:14}}>
-    <div style={{fontWeight:700,color:'#f8fafc',fontSize:13}}>{name}</div>{children}
+    <div style={{fontWeight:700,color:'var(--ink-f8fafc)',fontSize:13}}>{name}</div>{children}
   </section>;
   return <span data-message-authors={message.id} style={{display:'inline-flex',flexDirection:showSelfStake&&stakePlacement==='below'?'column':'row',alignItems:stakePlacement==='inline'?'center':'flex-start',verticalAlign:'middle',minWidth:0,flexShrink:0,gap:stakePlacement==='inline'?6:2}}
     onMouseDown={stop} onMouseUp={stop} onPointerDown={stop} onClick={stop} onDoubleClick={stop} onKeyDown={stop}>
@@ -70,10 +70,10 @@ export default function MessageAuthors({message,prefix='',showSelfStake=false,st
       aria-description={authors.length>1?'滚动切换名称，点击查看全部作者与各自投入':'点击查看作者与投入'}
       aria-haspopup="dialog" aria-expanded={open} onClick={()=>setOpen(true)}
       style={{display:'inline-flex',alignItems:'center',gap:4,border:0,borderRadius:3,padding:showCount?'1px 4px':0,
-        background:showCount?'rgba(148,163,184,0.12)':'transparent',color:'inherit',font:'inherit',cursor:'pointer',whiteSpace:'nowrap',maxWidth:'100%'}}>
+        background:showCount?'var(--surface-rgba-148-163-184-0-12)':'transparent',color:'inherit',font:'inherit',cursor:'pointer',whiteSpace:'nowrap',maxWidth:'100%'}}>
       {prefix}<span style={{display:'inline-grid',minWidth:0}}>{authors.map((author,position)=><span key={author.key} aria-hidden="true"
         style={{gridArea:'1 / 1',visibility:position===index?'visible':'hidden',overflow:'hidden',textOverflow:'ellipsis'}}>{cardAuthor(author.name,message.id)}</span>)}</span>
-      {showCount&&<span aria-hidden="true" style={{fontSize:9,color:'#94a3b8'}}>✎ {authors.length}人</span>}
+      {showCount&&<span aria-hidden="true" style={{fontSize:9,color:'var(--ink-94a3b8)'}}>✎ {authors.length}人</span>}
     </button>
     {showSelfStake&&<SelfStake messageId={message.id} investment={bodyAuthorInvestment(current)}
       label={`当前正文作者 ${current.name}（对应消息 ${[...new Set(current.contributions.map(source=>source.message.id))].join('、')}）`}/>}
@@ -84,7 +84,7 @@ export default function MessageAuthors({message,prefix='',showSelfStake=false,st
         style={{...dialogStyles.panel,width:'min(560px, 100%)',maxHeight:'100%',display:'flex',flexDirection:'column',minHeight:0}}>
         <div style={dialogStyles.header}>当前正文作者 · {authors.length} 人</div>
         <div style={{...dialogStyles.body,overflowY:'auto',minHeight:0}}>
-          <div style={{fontSize:12,color:'#94a3b8',marginBottom:12}}>自押 N/M：该消息发送者的累计真假投入／价值投入。各条消息分别列示。</div>
+          <div style={{fontSize:12,color:'var(--ink-94a3b8)',marginBottom:12}}>自押 N/M：该消息发送者的累计真假投入／价值投入。各条消息分别列示。</div>
           {authors.map(author=>profile(author.name,author.contributions.map(source=><Contribution key={source.message.id} source={source}/>),author.key))}
           {!original.contributes&&profile(`原消息发送者：${original.message.author}（当前正文未保留原文）`,<Contribution source={original}/>,'original-sender')}
         </div>

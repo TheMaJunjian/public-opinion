@@ -1,0 +1,46 @@
+/* Four investment tiers; only the new skins opt in. No value/winner inference. */
+.stake-tier-badge, .stake-skin-ornament, .skin-selection-mark { display: none; }
+.stake-tier-guide { margin-top: 18px; color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.stake-tier-guide p { margin: 10px 0; }
+.stake-tier-examples { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.stake-tier-example { position: relative; display: grid; align-content: center; gap: 5px; min-height: 76px; padding: 10px; border: 1px solid var(--border-default); background: var(--surface-card); color: var(--text-primary); text-align: center; border-radius: 4px; }
+.stake-tier-example span:not(.stake-skin-ornament) { font-size: 11px; }
+
+:root[data-appearance='opus-paper'] { --tier-zero: #a99b80; --tier-one: #78664c; --tier-two: #a17a25; --tier-three: #8c6415; --tier-glow: rgba(151,112,37,.28); }
+:root[data-appearance='gpt-arena'] { --tier-zero: #73849b; --tier-one: #70b9f0; --tier-two: #b89af5; --tier-three: #efc575; --tier-glow: rgba(239,197,117,.35); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-stake-level] {
+  --tier-ink: var(--tier-zero); --tier-line: 1px; --tier-edge: 1px; --tier-corner: 0px;
+}
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-stake-level='1'] { --tier-ink: var(--tier-one); --tier-line: 2px; --tier-edge: 2px; --tier-corner: 7px; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-stake-level='2'] { --tier-ink: var(--tier-two); --tier-line: 3px; --tier-edge: 3px; --tier-corner: 10px; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-stake-level='3'] { --tier-ink: var(--tier-three); --tier-line: 5px; --tier-edge: 5px; --tier-corner: 15px; }
+
+/* Paths, arrowheads and label plates retain the real directed geometry. */
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-stake-level] .relation-edge-path {
+  stroke-width: max(var(--edge-base-width, 1px), var(--tier-edge));
+}
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label:is([data-stake-level='2'], [data-stake-level='3']) .relation-edge-path { filter: drop-shadow(0 1px 0 var(--tier-ink)) drop-shadow(0 -1px 0 var(--tier-ink)); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-stake-level='3'] .relation-edge-arrow { transform-box: fill-box; transform-origin: center; transform: scale(1.5); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-stake-level] .graph-edge-label-plate { stroke: var(--tier-ink); stroke-width: var(--tier-line); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-label-selection='whole'] .graph-edge-label-plate { stroke: var(--skin-selected); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-label-selection='fragment'] .graph-edge-label-plate { stroke: var(--fragment-accent); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-frame-visual][data-stake-level] > rect {
+  stroke-width: var(--tier-line); filter: drop-shadow(1px 1px 0 var(--tier-ink));
+}
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-frame-visual][data-stake-level='3'] > rect { filter: drop-shadow(2px 2px 0 var(--tier-ink)) drop-shadow(-2px -2px 0 var(--tier-ink)); }
+
+/* Insets preserve fixed badge dimensions and separate icon/body click zones. */
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-decoration][data-stake-level],
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-tag][data-stake-level] > span:first-child {
+  box-shadow: inset 0 0 0 var(--tier-line) var(--tier-ink) !important;
+}
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-decoration][data-stake-level='2'],
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-tag][data-stake-level='2'] > span:first-child { box-shadow: inset 0 0 0 1px var(--tier-ink), inset 0 0 0 2px var(--surface-card), inset 0 0 0 3px var(--tier-ink) !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-decoration][data-stake-level='3'],
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-tag][data-stake-level='3'] > span:first-child { box-shadow: inset 0 2px 0 var(--tier-ink), inset 0 -2px 0 var(--tier-ink), inset 4px 0 var(--tier-ink), inset -4px 0 var(--tier-ink), 0 0 8px var(--tier-glow) !important; }
+
+/* Legacy translucent selections must still fully occlude paths when raised. */
+[data-graph-cards] .themed-message[data-whole-selected='true'] { background-color: var(--surface-5b4100) !important; }
+:root[data-appearance='opus-paper'] [data-graph-cards] .themed-message[data-whole-selected='true'] { background-color: var(--selection-bg) !important; }
+:root[data-appearance='gpt-arena'] [data-graph-cards] .themed-message[data-whole-selected='true'] { background-color: var(--selection-bg) !important; }
+:root[data-appearance='gpt'] [data-skin-frame-header][data-skin-selected='true'] { background-color: var(--surface-5b4100) !important; }

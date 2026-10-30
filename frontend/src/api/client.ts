@@ -7,6 +7,8 @@ import { beginRequestOperation, clearWriteRequestIdentity, fetchJsonWithDeadline
 const CORE_URL = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
 const BASE_URL = `${CORE_URL}/ui`;
 let csrf = '';
+// Recover a stale catalog once per account; a repeated failure remains visible.
+const readingRecoveryOwners = new Set<string>();
 const PRIVATE_KEY_PREFIX = 'privateKey:';
 const DEVICE_ID_KEY = 'deviceId';
 
@@ -76,7 +78,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const owner = requestOwner();
   const label = explicitRead ? '加载消息' : path === '/commands' ? '发送消息' : path.endsWith('/close-and-settle') ? '提交截止请求'
     : path.endsWith('/votes') ? '提交投票' : path.endsWith('/rounds') ? '发起仲裁'
-      : path === '/login' ? '登录' : path === '/register' ? '注册' : path === '/logout' ? '退出登录' : '提交操作';
+      : path === '/reading-state' ? '保存阅读状态'
+        : path === '/login' ? '登录' : path === '/register' ? '注册' : path === '/logout' ? '退出登录' : '提交操作';
   const operationKey = JSON.stringify([owner, path, options.method, options.body]);
   const perform = async () => {
     const operation = beginRequestOperation(label, path === '/commands', owner, operationKey);
@@ -84,6 +87,12 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       const result = await requestCore<T>(path, options, owner);
       operation.finish('confirmed', explicitRead ? '消息数据已返回' : undefined); return result;
     } catch (error) {
+      if (path === '/reading-state' && error instanceof ApiError && error.status === 404 && requestOwner() === owner && !readingRecoveryOwners.has(owner)) {
+        readingRecoveryOwners.add(owner);
+        operation.discard();
+        window.dispatchEvent(new Event('gonglun:invalidate-cache'));
+        throw new Error('消息数据已过期，正在重新加载，请稍后重新确认已阅', { cause: error });
+      }
       const cancelled = options.signal?.aborted || (typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError');
       operation.finish(error instanceof UncertainRequestError ? 'uncertain' : cancelled ? 'cancelled' : 'failed', error instanceof Error ? error.message : String(error));
       throw error;

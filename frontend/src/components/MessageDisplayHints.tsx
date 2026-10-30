@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type MouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import {dialogStyles} from './dialogStyles';
 import { correctionRecordHint, deriveDisplayHints, displaySignature, type DisplayHintsInput } from '../pages/workbench/model/displayHints';
 import { deriveContainerEffect, isContainerType } from '../pages/workbench/model/containerEffect';
 import {bodyVersion,bodyVersionKey,messageReadingKey,materializeBodyVersion,textOf,type ReadingMark,type BodyVersion,type Message as CoreMessage} from '@gonglun/core';
@@ -162,7 +163,7 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
   const comparisonStatus=selectionDiffers?'本消息在选择与推荐下的显示不同':'本消息在选择与推荐下的显示相同';
   const lines=[reading,hint.selectionChanged?'本次正文或显示选择变化待确认':'',readComparison,effectiveStatus,recommendedStatus,comparisonStatus,relatedReading,memberReading,otherVersionReading]
     .filter((line):line is string=>!!line),title=lines.join('；');
-  const markerColor=statisticallyActive?'#86efac':'#fca5a5';
+  const markerColor=statisticallyActive?'var(--ink-86efac)':'var(--ink-fca5a5)';
   const readingState=hint.unread?'unread':relatedCount||hint.unreadMemberCount||hint.otherVersionUnreadCount?'related-unread':match.readChanged?'changed':'read';
   const markRead=async(marks:ReadingMark[])=>{
     if(!context.onMarkRead)return;
@@ -193,13 +194,13 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
   const confirmationPending=confirmation.pending;
   const confirmationBlocked=disabled||!!busy||!confirmationPending;
   const confirmationLabel=hint.unread?'标记当前消息已阅':!confirmationPending?'当前消息已阅':originatingVisits.length?'确认本次影响':automaticGroups.length?'确认新影响':'确认当前显示';
-  const actionStyle={border:'1px solid #475569',borderRadius:3,background:'#243448',color:'#bae6fd',fontSize:11,padding:'2px 6px',cursor:'pointer'};
-  const disabledActionStyle={...actionStyle,border:'1px solid #374151',background:'#26303d',color:'#64748b',cursor:'default'};
+  const actionStyle={border:'1px solid var(--line-475569)',borderRadius:3,background:'var(--surface-243448)',color:'var(--ink-bae6fd)',fontSize:11,padding:'2px 6px',cursor:'pointer'};
+  const disabledActionStyle={...actionStyle,border:'1px solid var(--line-374151)',background:'var(--surface-26303d)',color:'var(--ink-64748b)',cursor:'default'};
   const comparisonVersion=hint.displayed.version??bodyVersion(messageId,message?.revision??1);
   const comparisonBasis=comparisonContext?.basisFor(messageId)??'';
   const comparisonRead=isComparisonRead(context.input.readingMarks??[],comparisonVersion,message?.content??'',hint.displayed.content,comparisonBasis);
-  const influenceRowStyle={display:'flex',alignItems:'center',gap:6,padding:'6px 0',borderBottom:'1px solid #334155'} as const;
-  const influenceLinkStyle={flex:1,minWidth:0,border:0,padding:0,background:'transparent',color:'#bae6fd',textAlign:'left',cursor:'pointer',fontSize:11,overflowWrap:'anywhere'} as const;
+  const influenceRowStyle={display:'flex',alignItems:'center',gap:6,padding:'6px 0',borderBottom:'1px solid var(--line-334155)'} as const;
+  const influenceLinkStyle={flex:1,minWidth:0,border:0,padding:0,background:'transparent',color:'var(--ink-bae6fd)',textAlign:'left',cursor:'pointer',fontSize:11,overflowWrap:'anywhere'} as const;
   const influenceHasText=(id:string)=>{
     const messages=context.input.personalEffect.msgMap,record=messages.get(id);
     if(!record||!['agree','disagree','recommend','archive','attention','block','tag'].includes(record.relationType??''))return false;
@@ -227,19 +228,19 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
     if(group.grouped){
       const category=`influence-category:${unread?'unread':'read'}:${group.key}`;
       const ids=[...new Set(group.items.map(item=>item.messageId))],causes=[...new Set(group.items.flatMap(item=>item.causes??[]))];
-      return <section key={group.key} aria-label={`${group.label}影响`} data-influence-category={group.items[0].type} style={{padding:'6px 0',borderBottom:'1px solid #334155'}}>
+      return <section key={group.key} aria-label={`${group.label}影响`} data-influence-category={group.items[0].type} style={{padding:'6px 0',borderBottom:'1px solid var(--line-334155)'}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}}>
-          {sectionHeading(category,`${group.label}（${ids.length} 条）`,unread?'#7dd3fc':'#94a3b8')}
-          {unread&&!sectionOpen(category)&&<span style={{color:'#7dd3fc',fontSize:10,flexShrink:0}}>影响待阅</span>}
+          {sectionHeading(category,`${group.label}（${ids.length} 条）`,unread?'var(--ink-7dd3fc-2)':'var(--ink-94a3b8-2)')}
+          {unread&&!sectionOpen(category)&&<span style={{color:'var(--ink-7dd3fc)',fontSize:10,flexShrink:0}}>影响待阅</span>}
         </div>
         <div hidden={!sectionOpen(category)} style={{paddingLeft:8}}>
           {ids.filter(id=>id!==messageId).map(id=><div key={id} data-influence-message-id={id} style={influenceRowStyle}>
             <div style={{display:'flex',alignItems:'center',gap:6,flex:1,minWidth:0}}>
               <button type="button" title={`查看${label} ${id}`} style={{...influenceLinkStyle,flex:'0 1 auto'}}
                 onClick={event=>{openPinned();rememberScroll();context.onView(id,event,true,messageId);}}>{id}</button>
-              {influenceHasText(id)&&<span style={{color:'#94a3b8',fontSize:10,flexShrink:0}}>有文本</span>}
+              {influenceHasText(id)&&<span style={{color:'var(--ink-94a3b8)',fontSize:10,flexShrink:0}}>有文本</span>}
             </div>
-            <span style={{color:unread?'#7dd3fc':'#86efac',fontSize:10,flexShrink:0}}>{influenceStatus}</span>
+            <span style={{color:unread?'var(--ink-7dd3fc)':'var(--ink-86efac)',fontSize:10,flexShrink:0}}>{influenceStatus}</span>
           </div>)}
           {causes.map(id=><div key={`cause:${id}`} data-influence-message-id={id} style={influenceRowStyle}>
             <button type="button" style={influenceLinkStyle} onClick={event=>{openPinned();rememberScroll();context.onView(id,event,true,messageId);}}>原因 · {id}</button>
@@ -253,12 +254,12 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
     const containerType=containerId?context.input.personalEffect.msgMap.get(containerId)?.relationType:undefined;
     const containerLabel=containerType?relationTypeName(containerType):'容器';
     const description=<>{label} · {id}{currentMessageContainer&&'（当前）'}
-      {containerId&&<span style={{display:'block',color:'#94a3b8'}}>{containerLabel}：{containerId}{currentContainer&&'（当前）'}</span>}</>;
+      {containerId&&<span style={{display:'block',color:'var(--ink-94a3b8)'}}>{containerLabel}：{containerId}{currentContainer&&'（当前）'}</span>}</>;
     const row=<div key={group.key} style={influenceRowStyle}>
-      {currentContainer?<span style={{flex:1,minWidth:0,color:'#cbd5e1',overflowWrap:'anywhere'}}>{description}</span>
+      {currentContainer?<span style={{flex:1,minWidth:0,color:'var(--ink-cbd5e1)',overflowWrap:'anywhere'}}>{description}</span>
         :<button type="button" title={`查看${label} ${id}`} onClick={event=>{openPinned();rememberScroll();context.onView(id,event,true,messageId);}}
           style={influenceLinkStyle}>{description}</button>}
-      <span style={{color:unread?'#7dd3fc':'#86efac',fontSize:10,flexShrink:0}}>{influenceStatus}</span>
+      <span style={{color:unread?'var(--ink-7dd3fc)':'var(--ink-86efac)',fontSize:10,flexShrink:0}}>{influenceStatus}</span>
     </div>;
     return row;
   };
@@ -268,12 +269,12 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
       return <div key={target.id} data-reading-join-target={target.id} style={{display:'grid',gap:2,paddingLeft:8}}>
         <div style={{display:'flex',alignItems:'baseline',gap:6}}>
           <button type="button" aria-label={`查看被加入目标 ${target.id}`} onClick={event=>{openPinned();rememberScroll();context.onView(target.id,event,false);}}
-            style={{flex:1,minWidth:0,border:0,padding:0,background:'transparent',color:'#bae6fd',textAlign:'left',cursor:'pointer',fontSize:11,overflowWrap:'anywhere'}}><JoinEndpointType messageId={target.id} messages={effect.msgMap}/> ID：{target.id}</button>
-          <span data-join-target-location={target.location} data-join-target-adopted={target.adopted?'true':'false'} style={{color:target.location==='outside'?'#fbbf24':target.location==='nested'?'#bfdbfe':'#94a3b8',fontSize:10,fontWeight:target.location==='outside'?600:undefined,flexShrink:0}}>
+            style={{flex:1,minWidth:0,border:0,padding:0,background:'transparent',color:'var(--ink-bae6fd)',textAlign:'left',cursor:'pointer',fontSize:11,overflowWrap:'anywhere'}}><JoinEndpointType messageId={target.id} messages={effect.msgMap}/> ID：{target.id}</button>
+          <span data-join-target-location={target.location} data-join-target-adopted={target.adopted?'true':'false'} style={{color:target.location==='outside'?'var(--ink-fbbf24)':target.location==='nested'?'var(--ink-bfdbfe)':'var(--ink-94a3b8)',fontSize:10,fontWeight:target.location==='outside'?600:undefined,flexShrink:0}}>
             {JOIN_TARGET_LOCATION_LABELS[target.location]}{entry.adopted&&!target.adopted?' · 此目标未采用':''}
           </span>
         </div>
-        <div style={{color:'#94a3b8',fontSize:10}}>{targetHint?(targetHint.unread?'消息待阅':'消息已阅'):'阅读状态待加载'} · {pendingCount?`${pendingCount} 条新影响待确认`:'暂无新影响'}{targetHint?.unreadMemberCount?` · ${targetHint.unreadMemberCount} 条成员消息待阅`:''}</div>
+        <div style={{color:'var(--ink-94a3b8)',fontSize:10}}>{targetHint?(targetHint.unread?'消息待阅':'消息已阅'):'阅读状态待加载'} · {pendingCount?`${pendingCount} 条新影响待确认`:'暂无新影响'}{targetHint?.unreadMemberCount?` · ${targetHint.unreadMemberCount} 条成员消息待阅`:''}</div>
       </div>;
     })}
   </div>;
@@ -281,7 +282,7 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
     const memberHint=context.data.hints.get(id);
     return <div key={id} style={{display:'flex',gap:6,alignItems:'baseline'}}>
     <button type="button" style={actionStyle} onClick={event=>{openPinned();rememberScroll();context.onView(id,event,false);}}>查看成员消息 {id}</button>
-    <span style={{fontSize:10,color:'#94a3b8'}}>{memberHint?(memberHint.unread?'消息待阅':'消息已阅'):'阅读状态待加载'}{memberHint?.pendingInfluences.length?' · 有新影响':''}</span>
+    <span style={{fontSize:10,color:'var(--ink-94a3b8)'}}>{memberHint?(memberHint.unread?'消息待阅':'消息已阅'):'阅读状态待加载'}{memberHint?.pendingInfluences.length?' · 有新影响':''}</span>
     </div>;
   };
   const renderReceivedGroups=()=>{
@@ -291,23 +292,23 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
     const classify=memberContainerType?.toLowerCase()==='classify',memberIds=new Set(hint.displayed.memberIds);
     const placements=new Map<string,JoinRecordEntry>();
     for(const entry of receivedGroups.adopted)for(const target of entry.targets)if(target.adopted&&memberIds.has(target.id))placements.set(target.id,{...entry,targets:[target]});
-    const readGroups=[{key:'read',label:'已阅无新影响',color:'#94a3b8',ids:[] as string[]},
-      {key:'new',label:'已阅有新影响',color:'#7dd3fc',ids:[] as string[]},{key:'unread',label:'未阅',color:'#7dd3fc',ids:[] as string[]}];
+    const readGroups=[{key:'read',label:'已阅无新影响',color:'var(--ink-94a3b8)',ids:[] as string[]},
+      {key:'new',label:'已阅有新影响',color:'var(--ink-7dd3fc)',ids:[] as string[]},{key:'unread',label:'未阅',color:'var(--ink-7dd3fc)',ids:[] as string[]}];
     for(const id of memberIds){
       const memberHint=context.data.hints.get(id),index=!memberHint||memberHint.unread?2:memberHint.pendingInfluences.length||memberHint.selectionChanged?1:0;
       readGroups[index].ids.push(id);
     }
-    return <div data-reading-received-joins style={{borderTop:'1px solid #334155',paddingTop:5,display:'grid',gap:5}}>
-      {count>0&&<><div style={{color:'#7dd3fc'}}>被加入的目标消息</div>
-      <div style={{fontSize:10,color:'#94a3b8'}}>前往目标消息查看加入的影响，并分别确认阅读进度。</div></>}
+    return <div data-reading-received-joins style={{borderTop:'1px solid var(--line-334155)',paddingTop:5,display:'grid',gap:5}}>
+      {count>0&&<><div style={{color:'var(--ink-7dd3fc)'}}>被加入的目标消息</div>
+      <div style={{fontSize:10,color:'var(--ink-94a3b8)'}}>前往目标消息查看加入的影响，并分别确认阅读进度。</div></>}
       {groups.filter(group=>count>0||group.key==='adopted').map(group=><section key={group.key} aria-label={`${group.label}的被加入目标`} data-reading-join-group={group.key}>
-        {sectionHeading(group.key,`${group.label}${count>0?`（${group.entries.length} 条）`:''}`,group.key==='adopted'?'#a7f3d0':'#cbd5e1')}
+        {sectionHeading(group.key,`${group.label}${count>0?`（${group.entries.length} 条）`:''}`,group.key==='adopted'?'var(--ink-a7f3d0-2)':'var(--ink-cbd5e1-2)')}
         <div hidden={!sectionOpen(group.key)}>
-        {group.key==='adopted'&&<div data-display-hint-members style={{color:'#7dd3fc',margin:'3px 0'}}>
+        {group.key==='adopted'&&<div data-display-hint-members style={{color:'var(--ink-7dd3fc)',margin:'3px 0'}}>
           <div>成员消息：共 {memberCount} 条 · {memberReading}</div>
-          {hint.unreadMemberCount>0&&<div style={{color:'#94a3b8',fontSize:10}}>成员消息需逐个已阅。{memberContainerType?.toLowerCase()==='classify'?`双击进入${memberContainerLabel}查看。`:''}</div>}
+          {hint.unreadMemberCount>0&&<div style={{color:'var(--ink-94a3b8)',fontSize:10}}>成员消息需逐个已阅。{memberContainerType?.toLowerCase()==='classify'?`双击进入${memberContainerLabel}查看。`:''}</div>}
           {classify?readGroups.filter(group=>group.ids.length>0).map(group=><section key={group.key} aria-label={`${group.label}的成员消息`} data-member-reading-group={group.key}
-            style={{borderTop:'1px solid #334155',paddingTop:5,marginTop:5,display:'grid',gap:3}}>
+            style={{borderTop:'1px solid var(--line-334155)',paddingTop:5,marginTop:5,display:'grid',gap:3}}>
             {sectionHeading(`members-${group.key}`,`${group.label}（${group.ids.length} 条）`,group.color)}
             <div hidden={!sectionOpen(`members-${group.key}`)} style={{display:sectionOpen(`members-${group.key}`)?'grid':undefined,gap:3}}>
               {group.ids.map(id=><div key={id} data-member-reading-id={id}>{placements.has(id)?renderJoinEntry(placements.get(id)!):renderMember(id)}</div>)}
@@ -315,12 +316,12 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
           </section>):hint.displayed.memberIds.filter(id=>!receivedGroups.adopted.some(entry=>entry.targets.some(target=>target.id===id))).map(renderMember)}
         </div>}
         {group.entries.length?group.entries.map(entry=>classify&&group.key==='adopted'?{...entry,targets:entry.targets.filter(target=>!target.adopted||!memberIds.has(target.id))}:entry)
-          .filter(entry=>entry.targets.length>0).map(renderJoinEntry):count>0?<div style={{fontSize:10,color:'#94a3b8'}}>暂无记录。</div>:null}
+          .filter(entry=>entry.targets.length>0).map(renderJoinEntry):count>0?<div style={{fontSize:10,color:'var(--ink-94a3b8)'}}>暂无记录。</div>:null}
         </div>
       </section>)}
     </div>;
   };
-  const readingDetails=expanded?(<section aria-label="消息与影响" style={{border:'1px solid #36516b',borderRadius:4,padding:6,marginTop:8}}>
+  const readingDetails=expanded?(<section aria-label="消息与影响" style={{border:'1px solid var(--line-36516b)',borderRadius:4,padding:6,marginTop:8}}>
     <section aria-label="消息阅读确认" data-reading-confirmation="message">
       <div style={{display:'flex',alignItems:'center',gap:6}}>
         <span style={{flex:1}}>消息 · 【{getMessageTypeLabel(message)}】 {messageId}{hint.unread?'（待阅）':''}</span>
@@ -334,28 +335,28 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
     </section>
     <div ref={influencesRef} data-display-hint-influences="true" onScroll={rememberScroll} style={{display:'grid',gridTemplateColumns:'minmax(0,1fr)',gap:8,maxHeight:230,overflowY:'auto',overflowX:'hidden',scrollbarGutter:'stable',paddingRight:6,marginTop:6}}>
       {(unreadGroups.length>0||readGroups.length>0||originatingVisits.length>0)&&<section aria-label="相关影响" data-reading-confirmation="automatic" style={{display:'grid',gap:5}}>
-        <div style={{color:'#94a3b8',fontSize:10}}>确认影响不代替阅读对应消息本身。</div>
+        <div style={{color:'var(--ink-94a3b8)',fontSize:10}}>确认影响不代替阅读对应消息本身。</div>
         {(unreadGroups.length>0||originatingVisits.length>0)&&<section aria-label="未阅影响" data-influence-reading-group="unread">
-          {sectionHeading('automatic',`未阅影响（${pendingImpactCount} 条）`,'#7dd3fc')}
+          {sectionHeading('automatic',`未阅影响（${pendingImpactCount} 条）`,'var(--ink-7dd3fc-2)')}
           <div hidden={!sectionOpen('automatic')}>
             {unreadGroups.map(group=>renderInfluence(group,true))}
             {originatingVisits.map(visit=>{
               const current=visit.targetId===context.currentContainerId||context.currentContainers(messageId).has(visit.targetId);
               return <div key={visit.targetId} style={influenceRowStyle}>
-                {current?<span style={{flex:1,color:'#cbd5e1'}}>影响目标 · {visit.targetId}（当前）</span>
+                {current?<span style={{flex:1,color:'var(--ink-cbd5e1)'}}>影响目标 · {visit.targetId}（当前）</span>
                   :<button type="button" style={influenceLinkStyle} onClick={event=>context.onView(visit.targetId,event,false)}>影响目标 · {visit.targetId}</button>}
-                <span style={{color:'#7dd3fc',fontSize:10}}>影响待阅</span>
+                <span style={{color:'var(--ink-7dd3fc)',fontSize:10}}>影响待阅</span>
               </div>;
             })}
           </div>
         </section>}
         {readGroups.length>0&&<section aria-label="已阅影响" data-influence-reading-group="read">
-          {sectionHeading('read-influences',`已阅影响（${readInfluences.length} 条）`,'#94a3b8')}
+          {sectionHeading('read-influences',`已阅影响（${readInfluences.length} 条）`,'var(--ink-94a3b8-2)')}
           <div hidden={!sectionOpen('read-influences')}>{readGroups.map(group=>renderInfluence(group,false))}</div>
         </section>}
       </section>}
-      {hasMemberContent&&<section aria-label="成员消息" data-reading-confirmation="individual" style={{borderTop:'1px solid #475569',paddingTop:6,display:'grid',gap:5}}>
-        {sectionHeading('individual','成员消息','#fbbf24')}
+      {hasMemberContent&&<section aria-label="成员消息" data-reading-confirmation="individual" style={{borderTop:'1px solid var(--line-475569)',paddingTop:6,display:'grid',gap:5}}>
+        {sectionHeading('individual','成员消息','var(--ink-fbbf24-2)')}
         <div hidden={!sectionOpen('individual')} style={{display:sectionOpen('individual')?'grid':undefined,gap:5}}>
         {renderReceivedGroups()}
         </div>
@@ -370,7 +371,7 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
     onMouseDown={event=>event.stopPropagation()} onMouseUp={event=>event.stopPropagation()}
     onKeyDown={event=>event.stopPropagation()} onDoubleClick={event=>event.stopPropagation()}
     onClick={event=>{event.stopPropagation();context.onView(messageId,event,true);}}
-    style={{padding:'0 2px',border:0,borderRadius:3,background:'transparent',color:'#94a3b8',fontSize:9,lineHeight:'16px',cursor:'pointer',userSelect:'none',pointerEvents:'auto'}}>查看</button>}
+    style={{padding:'0 2px',border:0,borderRadius:3,background:'transparent',color:'var(--ink-94a3b8)',fontSize:9,lineHeight:'16px',cursor:'pointer',userSelect:'none',pointerEvents:'auto'}}>查看</button>}
   {showVersions&&!compact&&<MessageReadingVersions messageId={messageId} choices={choices} displayedContent={hint.displayed.content} defaultContent={hint.personal.content} recommendedContent={hint.recommended.content}
     displayedIdentity={correctionVersionIdentity((context.input.displayCorrections??context.input.corrections).get(messageId)?.current,originalVersion)} defaultIdentity={correctionVersionIdentity(context.input.corrections.get(messageId)?.current,originalVersion)} recommendedIdentity={correctionVersionIdentity(context.data.recommendedCorrections.get(messageId)?.current,originalVersion)}
     history={context.versionHistory} windowState={context.windowState} windowScope={context.windowScope}
@@ -395,38 +396,38 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
       minHeight:16,minWidth:16,padding:0,border:0,borderRadius:3,background:'transparent',color:markerColor,lineHeight:'16px',cursor:'pointer',userSelect:'none',pointerEvents:'auto'}}>
     <svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       {statisticallyActive?<circle cx="8" cy="8" r="6.25" />:<rect x="1.75" y="1.75" width="12.5" height="12.5" rx="2" strokeDasharray="2 1.5" />}
-      <path stroke={selectionDiffers?'#7dd3fc':'#94a3b8'} d={`M5 6.5h6M5 9.5h6${selectionDiffers?'M9.5 4.5l-3 7':''}`} />
+      <path stroke={selectionDiffers?'var(--ink-7dd3fc)':'var(--ink-94a3b8)'} d={`M5 6.5h6M5 9.5h6${selectionDiffers?'M9.5 4.5l-3 7':''}`} />
     </svg>
-    {readingState!=='read' && <span aria-hidden="true" style={{position:'absolute',right:0,top:0,width:5,height:5,boxSizing:'border-box',borderRadius:readingState==='changed'?1:'50%',background:readingState==='unread'?'#7dd3fc':readingState==='changed'?'#fbbf24':'#17202e',border:`1px solid ${readingState==='changed'?'#fbbf24':'#7dd3fc'}`}}/>}
-    {relatedCount>0&&<span aria-hidden="true" style={{position:'absolute',right:-7,bottom:-1,fontSize:8,lineHeight:'10px',minWidth:10,borderRadius:5,background:'#17202e',color:'#fbbf24',border:'1px solid #a16207'}}>{relatedCount}</span>}
+    {readingState!=='read' && <span data-reading-dot="true" aria-hidden="true" style={{position:'absolute',right:0,top:0,width:5,height:5,boxSizing:'border-box',borderRadius:readingState==='changed'?1:'50%',background:readingState==='unread'?'var(--surface-7dd3fc)':readingState==='changed'?'var(--surface-fbbf24)':'var(--surface-17202e)',border:`1px solid ${readingState==='changed'?'var(--line-fbbf24)':'var(--line-7dd3fc)'}`}}/>}
+    {relatedCount>0&&<span aria-hidden="true" style={{position:'absolute',right:-7,bottom:-1,fontSize:8,lineHeight:'10px',minWidth:10,borderRadius:5,background:'var(--surface-17202e)',color:'var(--ink-fbbf24)',border:'1px solid var(--line-a16207)'}}>{relatedCount}</span>}
   </button>
   {anchor&&createPortal(<div ref={tooltipRef} id={tooltipId} role="tooltip" data-display-hint-mode={expanded?'details':'summary'}
     data-display-hint-placement={anchor.placement}
     onScroll={rememberScroll}
     onMouseDown={event=>event.stopPropagation()} onMouseUp={event=>event.stopPropagation()}
     onClick={event=>event.stopPropagation()} onDoubleClick={event=>event.stopPropagation()}
-    style={{position:'fixed',left:anchor.left,top:anchor.top,transform:anchor.placement==='above'?'translateY(-100%)':undefined,
-      zIndex:10050,width:anchor.width,maxHeight:anchor.maxHeight,boxSizing:'border-box',overflowY:'auto',padding:'8px 10px',border:'1px solid #475569',borderRadius:4,
-      background:'#17202e',color:'#e2e8f0',fontSize:11,lineHeight:1.6,boxShadow:'0 3px 12px rgba(0,0,0,0.35)',pointerEvents:expanded?'auto':'none'}}>
+    style={{...dialogStyles.panel,position:'fixed',left:anchor.left,top:anchor.top,transform:anchor.placement==='above'?'translateY(-100%)':undefined,
+      zIndex:10050,width:anchor.width,maxHeight:anchor.maxHeight,boxSizing:'border-box',overflowY:'auto',padding:'8px 10px',
+      fontSize:11,lineHeight:1.6,pointerEvents:expanded?'auto':'none'}}>
     {expanded?<>
-    <div data-display-hint-header="true" style={{position:'sticky',top:0,zIndex:5,background:'#17202e',display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,margin:'-8px -10px 6px',padding:'8px 10px 6px',borderBottom:'1px solid #334155'}}>
+    <div data-display-hint-header="true" style={{position:'sticky',top:0,zIndex:5,background:'var(--dialog-surface)',display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,margin:'-8px -10px 6px',padding:'8px 10px 6px',borderBottom:'1px solid var(--dialog-border)'}}>
       <span>消息状态与影响</span>
-      <button type="button" aria-label="关闭消息提示" onClick={closeHint} style={{...actionStyle,fontSize:10}}>关闭</button>
+      <button type="button" className="workbench-popover-close" aria-label="关闭消息提示" onClick={closeHint} style={{...actionStyle,fontSize:10}}>关闭</button>
     </div>
-    <section aria-label="消息信息" style={{display:'grid',gap:5,marginBottom:8,paddingBottom:6,borderBottom:'1px solid #334155'}}>
+    <section aria-label="消息信息" style={{display:'grid',gap:5,marginBottom:8,paddingBottom:6,borderBottom:'1px solid var(--line-334155)'}}>
       {message&&<>
         <MessageAuthors message={message} prefix="作者：" showSelfStake stakePlacement="inline"/>
         <div style={{display:'flex',gap:6,alignItems:'baseline'}}>发送时间：<MessageTime value={message.createdAt}/></div>
       </>}
     </section>
     <section aria-label="消息状态" style={{display:'grid',gap:5}}>
-    {sectionHeading('status','消息状态','#cbd5e1')}
+    {sectionHeading('status','消息状态','var(--ink-cbd5e1-2)')}
     <div hidden={!sectionOpen('status')}>
-    {!!versions.length&&<div style={{color:'#94a3b8',fontSize:10,marginBottom:5}}>正在查看：{versionLabel}</div>}
+    {!!versions.length&&<div style={{color:'var(--ink-94a3b8)',fontSize:10,marginBottom:5}}>正在查看：{versionLabel}</div>}
     <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) auto minmax(0,1fr)',alignItems:'center',columnGap:10,rowGap:4}}>
       <span style={{textAlign:'left'}}>{hint.unread?reading:'消息'}</span>
       <span role="img" aria-label={match.readChanged===undefined?'暂无上次已阅记录可比较':match.readChanged?'当前显示与上次已阅不同':'当前显示与上次已阅一致'}
-        style={{color:match.readChanged===undefined?'#94a3b8':match.readChanged?'#fbbf24':'#86efac',fontSize:16,fontWeight:600}}>
+        style={{color:match.readChanged===undefined?'var(--ink-94a3b8)':match.readChanged?'var(--ink-fbbf24)':'var(--ink-86efac)',fontSize:16,fontWeight:600}}>
         {match.readChanged===undefined?'—':match.readChanged?'≠':'='}
       </span>
       <span>{readComparison}</span>
@@ -434,7 +435,7 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
     <div role="group" aria-label={selectionDiffers?'选择与推荐不一致':'选择与推荐一致'}
       style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) auto minmax(0,1fr)',alignItems:'center',columnGap:10,marginTop:4}}>
       <span style={{textAlign:'left'}}>{effectiveStatus}</span>
-      <span role="img" aria-label={comparisonStatus} style={{color:selectionDiffers?'#7dd3fc':'#94a3b8',fontSize:16,fontWeight:600}}>{selectionDiffers?'≠':'='}</span>
+      <span role="img" aria-label={comparisonStatus} style={{color:selectionDiffers?'var(--ink-7dd3fc)':'var(--ink-94a3b8)',fontSize:16,fontWeight:600}}>{selectionDiffers?'≠':'='}</span>
       <span>{recommendedStatus}</span>
     </div>
     {context.onReadNavigate&&<button type="button" style={{marginTop:6,fontSize:11}} onClick={()=>context.onReadNavigate?.(messageId)}>追溯并阅读此消息</button>}
@@ -442,10 +443,10 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
     </section>
     {readingDetails}
     {!hint.unread&&context.onMarkRead&&<button type="button" style={{...actionStyle,marginTop:6}} disabled={!!busy} onClick={()=>void markUnread()}>将此消息标为未阅</button>}
-    {context.input.readingMarks?.some(mark=>mark.messageId===messageId&&mark.unknownContext)&&<div style={{marginTop:6,color:'#94a3b8'}}>保留有历史确认记录，原版本或确认范围未明确。</div>}
-    {(error||context.readingError)&&<div role="alert" style={{marginTop:6,color:'#fca5a5'}}>{error??context.readingError}</div>}
-    <div style={{marginTop:4,paddingTop:4,borderTop:'1px solid #334155',color:'#94a3b8',fontSize:10}}>
-      {sectionHeading('legend','状态标志说明','#94a3b8')}
+    {context.input.readingMarks?.some(mark=>mark.messageId===messageId&&mark.unknownContext)&&<div style={{marginTop:6,color:'var(--ink-94a3b8)'}}>保留有历史确认记录，原版本或确认范围未明确。</div>}
+    {(error||context.readingError)&&<div role="alert" style={{marginTop:6,color:'var(--ink-fca5a5)'}}>{error??context.readingError}</div>}
+    <div style={{marginTop:4,paddingTop:4,borderTop:'1px solid var(--line-334155)',color:'var(--ink-94a3b8)',fontSize:10}}>
+      {sectionHeading('legend','状态标志说明','var(--ink-94a3b8-2)')}
       <div hidden={!sectionOpen('legend')}>
       <div>内部 = / ≠：本消息在选择与推荐下显示相同／不同</div>
       <div>外框圆形实线／方形虚线：推荐有效／无效</div>
@@ -456,7 +457,7 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
     </>:<>
       <div>{[hint.unread?reading:'消息',relatedReading,memberReading,otherVersionReading].filter(Boolean).join(' · ')}</div>
       <div>{effectiveStatus} · {recommendedStatus}</div>
-      <div style={{marginTop:4,color:'#94a3b8',fontSize:10}}>点击展开详情</div>
+      <div style={{marginTop:4,color:'var(--ink-94a3b8)',fontSize:10}}>点击展开详情</div>
     </>}
   </div>,portalTarget)}
   {comparison&&<CurrentBodyComparison before={comparison.before} after={comparison.after} version={comparison.version} basis={comparison.basis} onClose={()=>setComparison(null)}/>}

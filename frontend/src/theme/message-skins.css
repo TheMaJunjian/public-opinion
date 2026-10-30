@@ -1,0 +1,123 @@
+/* Production skins use existing carriers and hit areas. No preview layout or demo data. */
+.theme-dialog { width: min(580px, 100%) !important; }
+:root[data-theme] .theme-dialog { width: min(580px, 100%) !important; }
+.theme-option-copy { display: grid; gap: 5px; line-height: 1.5; min-width: 0; }
+.theme-option-copy > span { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.theme-option-copy small { color: var(--text-secondary); font-size: 12px; }
+:root[data-theme] .theme-options { gap: 10px; }
+:root[data-theme] .theme-options label { padding: 12px; border: 1px solid var(--border-default); border-radius: 6px; min-height: 64px; background: var(--surface-card); }
+:root[data-theme] .theme-options label[data-selected='true'] { border-color: var(--fragment-accent); box-shadow: inset 3px 0 var(--fragment-accent); }
+:root[data-theme] .theme-option-swatch { display: inline-block; width: 24px; height: 30px; flex: 0 0 24px; border: 1px solid var(--border-default); border-radius: 3px; }
+:root[data-theme] [data-theme-option='gpt'] .theme-option-swatch { background: linear-gradient(135deg, #101010 60%, #e5e7eb 60%); }
+:root[data-theme] [data-theme-option='opus'] .theme-option-swatch { background: linear-gradient(135deg, #f6f3ec 60%, #1f1d1a 60%); }
+:root[data-theme] [data-theme-option='gpt-arena'] .theme-option-swatch { background: #151f30; border: 2px solid #70b9f0; box-shadow: inset 0 0 0 2px #263d56; }
+:root[data-theme] [data-theme-option='opus-paper'] .theme-option-swatch { background: #fffdf8; border: 1px solid #a09278; box-shadow: inset 3px 0 #d8c8a9, 2px 2px #e2d8c7; }
+.reading-help { color: var(--text-secondary); line-height: 1.6; }
+.reading-help > summary { width: fit-content; cursor: pointer; color: var(--text-primary); padding: 3px 0; }
+.reading-help[open] > div { margin-top: 5px; }
+
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) {
+  --recommendation-level: 0;
+  --badge-weight: 500;
+  --read-opacity: 1;
+}
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .themed-message {
+  --skin-type-accent: var(--skin-neutral);
+  color: var(--text-primary);
+  background-color: var(--surface-card) !important;
+  /* Keep recommendation gradient and font size controlled by the existing rule. */
+  border-color: var(--skin-border) !important;
+  border-radius: 4px !important;
+  box-shadow: inset 3px 0 var(--skin-type-accent), var(--recommendation-shadow) !important;
+}
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-type='classify'] { --skin-type-accent: var(--skin-classify); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-type='summary'] { --skin-type-accent: var(--skin-summary); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-type='merge'] { --skin-type-accent: var(--skin-merge); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-type='arrange'] { --skin-type-accent: var(--skin-classify); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-type='correct'] { --skin-type-accent: var(--skin-correction); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-type='governance'] { --skin-type-accent: var(--skin-governance); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .themed-message:is([data-skin-type='classify'], [data-skin-type='arrange']) { border-top-width: 4px !important; border-radius: 9px 3px 3px 3px !important; border-top-color: var(--skin-type-accent) !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .themed-message[data-skin-type='summary'] { border-left: 6px double var(--skin-type-accent) !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .themed-message[data-skin-type='merge'] { border-bottom: 5px double var(--skin-type-accent) !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .themed-message:is([data-skin-type='round'], [data-skin-type='round_result']) { border-bottom-style: dashed !important; border-radius: 0 !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .themed-message:is([data-skin-type='governance'], [data-skin-type='proposal']) { border-top: 3px solid var(--skin-governance) !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .themed-message[data-skin-carrier='record'] { border-radius: 0 !important; box-shadow: inset 3px 0 var(--skin-type-accent) !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .themed-message[data-whole-selected='true'] {
+  background-color: var(--selection-bg) !important;
+  border-color: var(--skin-selected) !important;
+  background-image: var(--recommendation-gradient) !important;
+  box-shadow: inset 3px 0 var(--skin-type-accent), var(--recommendation-shadow) !important;
+  outline: 2px solid var(--skin-selected) !important; outline-offset: 3px;
+}
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .themed-message[data-stance-highlight] {
+  border-color: var(--graph-label-amber) !important;
+  box-shadow: inset 0 3px 0 var(--graph-label-amber), var(--recommendation-shadow) !important;
+}
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .themed-message[data-stance-highlight='target'] { border-width: 2px !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .themed-message[data-active-text='true'] { border-color: var(--fragment-accent) !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .message-card-header { font-size: 12px !important; color: var(--text-secondary); opacity: 1 !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-frame-header] {
+  background-color: var(--surface-card) !important; color: var(--text-primary) !important;
+  border-color: var(--skin-type-accent, var(--skin-border)) !important;
+  box-shadow: inset 3px 0 var(--skin-type-accent, var(--skin-border)); border-radius: 7px 7px 0 0 !important;
+}
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-frame-visual] > rect {
+  fill: var(--skin-frame-fill); stroke: var(--skin-type-accent, var(--skin-border));
+  /* Existing solid/dashed patterns retain their product meaning. */
+}
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-frame-visual][data-whole-selected='true'] > rect { stroke: var(--skin-selected); fill: var(--selection-bg); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-frame-scrollbar] {
+  background: var(--surface-panel) !important;
+  scrollbar-color: var(--skin-border) var(--surface-panel) !important;
+}
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-frame-resize][aria-label^='拖动调整框架大小'] {
+  background: var(--surface-card) !important; color: var(--text-primary) !important; border-color: var(--skin-border) !important;
+}
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label { --edge-label-ink: var(--text-secondary); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-relation-type='reference'] { --edge-label-ink: var(--graph-label-reference); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-relation-type='reply'] { --edge-label-ink: var(--graph-label-reply); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-relation-type='annotation'] { --edge-label-ink: var(--graph-label-amber); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-relation-type='agree'] { --edge-label-ink: var(--skin-agree); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-relation-type='disagree'] { --edge-label-ink: var(--skin-disagree); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-edge-emphasis='evidence'] { --edge-label-ink: var(--graph-label-amber); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .relation-edge-path { stroke: var(--edge-label-ink); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .relation-edge-arrow { fill: var(--edge-label-ink); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label-plate { display: block; fill: var(--surface-card); stroke: var(--edge-label-ink); stroke-width: 1; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label-text { fill: var(--edge-label-ink); stroke: none !important; font-weight: 500; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-label-hidden='false'] .graph-edge-label-text { opacity: 1; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-label-selection='whole'] .graph-edge-label-plate { fill: var(--selection-bg); stroke: var(--skin-selected); stroke-width: 2; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-label-selection='fragment'] .graph-edge-label-plate { fill: var(--fragment-bg); stroke: var(--fragment-accent); stroke-width: 2; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label-hit { background: transparent !important; border-color: transparent !important; box-shadow: none !important; }
+
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-decoration] {
+  --decoration-ink: var(--text-secondary);
+  color: var(--decoration-ink) !important; background-color: var(--surface-card) !important;
+  border-color: var(--skin-border) !important;
+  font-weight: 500 !important; box-shadow: inset 0 0 0 1px var(--skin-decoration-line) !important;
+}
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-decoration='agree'] { --decoration-ink: var(--skin-agree); border-radius: 3px !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-decoration='disagree'] { --decoration-ink: var(--skin-disagree); border-radius: 3px !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-operation='orange'] { --decoration-ink: var(--skin-correction); border-bottom: 2px solid var(--skin-correction) !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-operation='slate'] { --decoration-ink: var(--text-secondary); border-bottom: 2px dashed var(--skin-merge) !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-operation='green'] { --decoration-ink: var(--skin-agree); border-bottom: 2px solid var(--skin-agree) !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-operation='red'] { --decoration-ink: var(--skin-disagree); border-bottom: 2px solid var(--skin-disagree) !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-decoration='correct'] {
+  --decoration-ink: var(--skin-correction);
+  background-image: linear-gradient(225deg, var(--skin-decoration-line) 0 5px, transparent 5px) !important;
+  border-radius: 0 !important; text-decoration: underline; text-underline-offset: 2px;
+}
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-tag] > span:first-child {
+  background: var(--skin-tag-bg) !important; color: var(--text-primary) !important;
+  border: 1px solid var(--skin-border) !important; border-radius: 2px 8px 8px 2px !important;
+  box-shadow: inset 3px 0 var(--skin-decoration-line), 0 1px 0 var(--skin-border) !important; font-weight: 500 !important;
+}
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-decoration][data-skin-selected='true'] {
+  background-color: var(--selection-bg) !important; outline: 2px solid var(--skin-selected); outline-offset: 1px;
+}
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-tag][data-skin-selected='true'] > span:first-child,
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-frame-header][data-skin-selected='true'] {
+  background: var(--selection-bg) !important; outline: 2px solid var(--skin-selected); outline-offset: 2px;
+}
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) :is([data-decoration-toggle], [data-annotation-toggle]) {
+  background: var(--surface-card) !important; color: var(--text-primary) !important; border-color: var(--skin-border) !important;
+}

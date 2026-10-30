@@ -113,7 +113,7 @@ describe('RoundHistory', () => {
     await waitFor(() => {
       const btn = screen.getByText('TRUE');
       expect(btn).toBeInTheDocument();
-      expect(btn.className).toContain('text-green-700');
+      expect(btn.className).toContain('text-[color:var(--ink-utility-green-700)]');
     });
   });
 
@@ -127,7 +127,7 @@ describe('RoundHistory', () => {
     await waitFor(() => {
       const btn = screen.getByText('FALSE');
       expect(btn).toBeInTheDocument();
-      expect(btn.className).toContain('text-red-700');
+      expect(btn.className).toContain('text-[color:var(--ink-utility-red-700)]');
     });
   });
 
@@ -141,7 +141,7 @@ describe('RoundHistory', () => {
     await waitFor(() => {
       const btn = screen.getByText('UNKNOWN');
       expect(btn).toBeInTheDocument();
-      expect(btn.className).toContain('text-amber-700');
+      expect(btn.className).toContain('text-[color:var(--ink-utility-amber-700)]');
     });
   });
 
@@ -200,7 +200,7 @@ describe('RoundHistory', () => {
     await waitFor(() => {
       const votingBtn = screen.getByText('—'); // null result shows '—'
       expect(votingBtn).toBeInTheDocument();
-      expect(votingBtn.className).toContain('text-indigo-600');
+      expect(votingBtn.className).toContain('text-[color:var(--ink-4f46e5)]');
     });
   });
 
@@ -215,7 +215,7 @@ describe('RoundHistory', () => {
       // CANCELLED rounds show ⊘ prefix and gray styling
       const btn = screen.getByTitle('已取消 · —');
       expect(btn).toBeInTheDocument();
-      expect(btn.className).toContain('text-gray-500');
+      expect(btn.className).toContain('text-[color:var(--ink-6b7280-3)]');
       expect(btn.textContent).toContain('⊘');
     });
   });

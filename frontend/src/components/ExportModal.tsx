@@ -67,10 +67,10 @@ export default function ExportModal({ onClose, scopeMessageId, filename, source,
         移除所选文件，改为完整导出
       </button>}
       {busy && <div role="status">{phase === 'preparing' ? status : '正在保存更新文件，请稍候…'}</div>}
-      {result && !busy && <div role="status" style={{ color: '#86efac' }}>
+      {result && !busy && <div role="status" style={{ color: 'var(--ink-86efac)' }}>
         {result.added ? `已补充 ${result.added} 次变更` : '执行记录已是最新'}，现有 {result.messageCount} 条消息。完整性及资金守恒校验通过。
       </div>}
-      {result && !busy && <div style={{ fontSize: 12, color: '#94a3b8' }}>保存时选择原文件即可覆盖更新；部分浏览器会下载一个更新后的文件。</div>}
-      {error && <div role="alert" style={{ color: '#f87171', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{error}</div>}
+      {result && !busy && <div style={{ fontSize: 12, color: 'var(--ink-94a3b8)' }}>保存时选择原文件即可覆盖更新；部分浏览器会下载一个更新后的文件。</div>}
+      {error && <div role="alert" style={{ color: 'var(--ink-f87171)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{error}</div>}
     </div>} />;
 }

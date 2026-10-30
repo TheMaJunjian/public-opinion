@@ -193,7 +193,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
         if (!element) return;
         element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
         highlightedElementRef.current = element;
-        element.style.boxShadow = '0 0 0 3px #facc15, 0 0 22px rgba(250,204,21,0.65)';
+        element.style.boxShadow = 'var(--guide-target-shadow)';
         setBubblePosition(getBubblePosition(element.getBoundingClientRect()));
       };
       locate();
@@ -359,8 +359,8 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
         : highlightedElements;
       currentElements.forEach(element => {
         element.style.boxShadow = guideStage === 'settlement-confirm'
-          ? 'inset 0 0 0 3px #facc15'
-          : '0 0 0 3px #facc15';
+          ? 'inset 0 0 0 var(--guide-target-ring)'
+          : '0 0 0 var(--guide-target-ring)';
       });
       return currentElements;
     };
@@ -491,15 +491,15 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
     setBubblePosition(getBubblePosition(targetRect, measuredHeight));
   }, [open, completed, guideStage, target?.messageId]);
 
-  const guideButtonStyle = { padding: '6px 16px', border: '1px solid #86efac', borderRadius: 5, background: '#14532d', color: '#dcfce7', cursor: 'pointer' as const, fontSize: 12 };
+  const guideButtonStyle = { padding: '6px 16px', border: '1px solid var(--line-86efac)', borderRadius: 5, background: 'var(--surface-14532d)', color: 'var(--ink-dcfce7)', cursor: 'pointer' as const, fontSize: 12 };
 
   if (!open) return null;
 
   if (completed) {
     return <PromptModal open title="与会者引导完成" confirmText="完成" onConfirm={onClose} lockScroll={false} message={
         <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 30, color: '#86efac' }}>✓</div>
-          <p style={{ margin: 0, color: '#d4d4d8', fontSize: 13, lineHeight: 1.7 }}>接下来，请对世界做出重要指示。<br />比如：你认为贡献点能超越比特币吗？</p>
+          <div style={{ fontSize: 30, color: 'var(--ink-86efac)' }}>✓</div>
+          <p style={{ margin: 0, color: 'var(--ink-d4d4d8)', fontSize: 13, lineHeight: 1.7 }}>接下来，请对世界做出重要指示。<br />比如：你认为贡献点能超越比特币吗？</p>
         </div>
       } />;
   }
@@ -507,28 +507,28 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
   return createPortal(
     <div data-guide-overlay="true" style={{ position: 'fixed', inset: 0, zIndex: Z_INDEX.guide, pointerEvents: 'none' }}>
       {guideMaskRect && (
-        <div aria-hidden="true" style={{ position: 'fixed', top: guideMaskRect.top, left: guideMaskRect.left, width: guideMaskRect.width, height: guideMaskRect.height, zIndex: 1, pointerEvents: 'none', boxShadow: '0 0 0 9999px rgba(0,0,0,0.14)' }} />
+        <div aria-hidden="true" style={{ position: 'fixed', top: guideMaskRect.top, left: guideMaskRect.left, width: guideMaskRect.width, height: guideMaskRect.height, zIndex: 1, pointerEvents: 'none', boxShadow: '0 0 0 9999px var(--shadow-rgba-0-0-0-0-14)' }} />
       )}
       {invalidAction && (
-        <div role="status" style={{ position: 'fixed', left: invalidAction.left, top: invalidAction.top, transform: 'translate(-50%, -120%)', zIndex: 5, padding: '5px 9px', borderRadius: 5, background: '#7f1d1d', color: '#fee2e2', fontSize: 12, whiteSpace: 'nowrap', boxShadow: '0 4px 14px rgba(0,0,0,0.35)' }}>
+        <div role="status" style={{ position: 'fixed', left: invalidAction.left, top: invalidAction.top, transform: 'translate(-50%, -120%)', zIndex: 5, padding: '5px 9px', borderRadius: 5, background: 'var(--surface-7f1d1d)', color: 'var(--ink-fee2e2)', fontSize: 12, whiteSpace: 'nowrap', boxShadow: '0 4px 14px var(--shadow-rgba-0-0-0-0-35)' }}>
           当前步骤目标区域外有操作限制
         </div>
       )}
       {bubblePosition?.diagonalTail && (
         <svg aria-hidden="true" width={window.innerWidth} height={window.innerHeight} viewBox={`0 0 ${window.innerWidth} ${window.innerHeight}`} style={{ position: 'fixed', inset: 0, zIndex: 2, overflow: 'visible', pointerEvents: 'none' }}>
-          <rect data-guide-background="true" x={bubblePosition.left} y={bubblePosition.top} width={Math.min(BUBBLE_MAX_WIDTH, window.innerWidth - 32)} height={bubblePosition.height} rx="16" fill="rgba(24,24,27,0.96)" stroke="#facc15" strokeWidth="1" />
-          <path d={bubblePosition.diagonalTail.path} fill="rgba(24,24,27,0.96)" stroke="none" />
-          <path d={bubblePosition.diagonalTail.outlinePath} fill="none" stroke="#facc15" strokeWidth="1" strokeLinecap="butt" />
+          <rect data-guide-background="true" x={bubblePosition.left} y={bubblePosition.top} width={Math.min(BUBBLE_MAX_WIDTH, window.innerWidth - 32)} height={bubblePosition.height} rx="16" fill="var(--guide-surface)" stroke="var(--guide-border)" strokeWidth="1" />
+          <path d={bubblePosition.diagonalTail.path} fill="var(--guide-surface)" stroke="none" />
+          <path d={bubblePosition.diagonalTail.outlinePath} fill="none" stroke="var(--guide-border)" strokeWidth="1" strokeLinecap="butt" />
         </svg>
       )}
       <div key={guideStage} ref={bubbleRef} data-guide-bubble="true" className="guide-bubble" style={{
         position: 'fixed', top: bubblePosition?.top ?? 24, left: bubblePosition?.left ?? 24, zIndex: 3, width: `min(${BUBBLE_MAX_WIDTH}px, calc(100vw - 32px))`, height: 'auto', minHeight: 0, boxSizing: 'border-box',
         padding: '15px 18px 18px', borderRadius: 16,
-        background: 'transparent', color: '#f4f4f5',
+        background: 'transparent', color: 'var(--guide-text)',
         boxShadow: 'none', pointerEvents: 'auto',
       }}>
         <div style={{
-          position: 'absolute', width: 32, height: 24, background: '#facc15', zIndex: 1,
+          position: 'absolute', width: 32, height: 24, background: 'var(--guide-border)', zIndex: 1,
           display: bubblePosition?.tailVisible === false ? 'none' : undefined,
           ...(bubblePosition?.placement === 'left' ? { right: -31, top: (bubblePosition.tailOffset - 12), clipPath: 'polygon(0 0, 0 100%, 100% 34%)' } :
             bubblePosition?.placement === 'top' ? { width: 24, height: 32, left: (bubblePosition.tailOffset - 12), bottom: -31, clipPath: 'polygon(0 0, 100% 0, 68% 100%)' } :
@@ -536,7 +536,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
                 { left: -31, top: ((bubblePosition?.tailOffset ?? 12) - 12), clipPath: 'polygon(100% 0, 100% 100%, 0 66%)' }),
         }}>
           <div style={{
-            position: 'absolute', background: 'rgba(24,24,27,0.96)', zIndex: 1,
+            position: 'absolute', background: 'var(--guide-surface)', zIndex: 1,
             ...(bubblePosition?.placement === 'left' ? { width: 32, height: 20, left: -1, top: 2, clipPath: 'polygon(0 0, 0 100%, 100% 34%)' } :
               bubblePosition?.placement === 'top' ? { width: 20, height: 32, left: 2, top: -1, clipPath: 'polygon(0 0, 100% 0, 68% 100%)' } :
                 bubblePosition?.placement === 'bottom' ? { width: 20, height: 32, left: 2, bottom: -1, clipPath: 'polygon(0 100%, 100% 100%, 32% 0)' } :
@@ -544,22 +544,22 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
           }} />
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
-          <strong style={{ color: '#fde68a' }}>{GUIDE_COPY[guideStage].title}</strong>
-          <button type="button" onClick={onClose} style={{ flex: '0 0 28px', width: 28, height: 28, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', margin: 0, padding: 0, border: 0, borderRadius: 0, background: 'transparent', color: '#d4d4d8', cursor: 'pointer', fontSize: 19, fontWeight: 400, lineHeight: 1 }} aria-label="关闭引导">×</button>
+          <strong className="guide-title" style={{ color: 'var(--guide-title)' }}>{GUIDE_COPY[guideStage].title}</strong>
+          <button type="button" onClick={onClose} style={{ flex: '0 0 28px', width: 28, height: 28, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', margin: 0, padding: 0, border: 0, borderRadius: 0, background: 'transparent', color: 'var(--ink-d4d4d8)', cursor: 'pointer', fontSize: 19, fontWeight: 400, lineHeight: 1 }} aria-label="关闭引导">×</button>
         </div>
-        <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.65 }}>
-          <div style={{ color: '#a1a1aa', fontSize: 11 }}>操作</div>
+        <div className="guide-copy" style={{ marginTop: 12, fontSize: 13, lineHeight: 1.65 }}>
+          <div className="guide-kicker" style={{ color: 'var(--ink-a1a1aa)', fontSize: 11 }}>操作</div>
           <div>{GUIDE_COPY[guideStage].operation}</div>
-          <div style={{ marginTop: 8, color: '#fcd34d', fontSize: 12 }}>提示</div>
+          <div className="guide-kicker" style={{ marginTop: 8, color: 'var(--ink-fcd34d)', fontSize: 12 }}>提示</div>
           <div>{GUIDE_COPY[guideStage].prompt}</div>
-          <div style={{ marginTop: 8, color: '#a1a1aa', fontSize: 12 }}>说明</div>
+          <div className="guide-kicker" style={{ marginTop: 8, color: 'var(--ink-a1a1aa)', fontSize: 12 }}>说明</div>
           <div>{GUIDE_COPY[guideStage].description}</div>
-          {target && <div style={{ marginTop: 8, color: '#a1a1aa', fontSize: 11 }}>目标消息ID：{target.messageId}</div>}
-          {target?.title && <div style={{ marginTop: 4, color: '#d4d4d8', fontSize: 12, lineHeight: 1.5, overflow: 'hidden', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2 }}>目标消息内容：{target.title}</div>}
-          <div style={{ marginTop: 8, color: '#86efac', fontSize: 12 }}>{GUIDE_COPY[guideStage].reminder}</div>
+          {target && <div style={{ marginTop: 8, color: 'var(--ink-a1a1aa)', fontSize: 11 }}>目标消息ID：{target.messageId}</div>}
+          {target?.title && <div style={{ marginTop: 4, color: 'var(--ink-d4d4d8)', fontSize: 12, lineHeight: 1.5, overflow: 'hidden', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2 }}>目标消息内容：{target.title}</div>}
+          <div style={{ marginTop: 8, color: 'var(--ink-86efac)', fontSize: 12 }}>{GUIDE_COPY[guideStage].reminder}</div>
         </div>
         <div data-guide-actions="true" style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
-          {guideStage === 'message-compose' && <button type="button" disabled={!messageDraftReady} onClick={() => { if (!messageDraftReady) return; setGuideStage('message-contribution'); window.dispatchEvent(new Event('guide-clear-visuals')); }} style={{ ...guideButtonStyle, background: messageDraftReady ? '#14532d' : '#27272a', color: messageDraftReady ? '#dcfce7' : '#71717a', cursor: messageDraftReady ? 'pointer' : 'not-allowed' }}>下一步</button>}
+          {guideStage === 'message-compose' && <button type="button" disabled={!messageDraftReady} onClick={() => { if (!messageDraftReady) return; setGuideStage('message-contribution'); window.dispatchEvent(new Event('guide-clear-visuals')); }} style={{ ...guideButtonStyle, background: messageDraftReady ? 'var(--surface-14532d)' : 'var(--surface-27272a)', color: messageDraftReady ? 'var(--ink-dcfce7)' : 'var(--ink-71717a)', cursor: messageDraftReady ? 'pointer' : 'not-allowed' }}>下一步</button>}
           {guideStage === 'message-contribution' && <button type="button" onClick={() => { setGuideStage('message-consumption'); window.dispatchEvent(new Event('guide-clear-visuals')); }} style={guideButtonStyle}>下一步</button>}
           {guideStage === 'message-consumption' && <button type="button" onClick={() => { setGuideStage('message-send'); window.dispatchEvent(new Event('guide-clear-visuals')); }} style={guideButtonStyle}>下一步</button>}
           {guideStage === 'staging' && <button type="button" onClick={() => { setGuideStage('stance'); }} style={guideButtonStyle}>下一步</button>}

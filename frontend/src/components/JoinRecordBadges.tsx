@@ -24,8 +24,8 @@ export default function JoinRecordBadges({ messageId, memberRecords = [], contai
       onMouseDown={event => event.stopPropagation()} onMouseUp={event => event.stopPropagation()}
       onDoubleClick={event => event.stopPropagation()}
       style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4,
-        background: direction === 'incoming' ? 'rgba(59,130,246,0.14)' : 'rgba(16,185,129,0.14)',
-        color: direction === 'incoming' ? '#bfdbfe' : '#a7f3d0', border: '1px solid #475569', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+        background: direction === 'incoming' ? 'var(--surface-rgba-59-130-246-0-14)' : 'var(--surface-rgba-16-185-129-0-14)',
+        color: direction === 'incoming' ? 'var(--ink-bfdbfe)' : 'var(--ink-a7f3d0)', border: '1px solid var(--line-475569)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
       {label}：{records.length}{!compact && <span style={{ fontWeight: 400 }}>（{active} {direction==='outgoing'?'当前采用':'生效'}）</span>}
     </button>;
   };

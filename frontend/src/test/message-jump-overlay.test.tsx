@@ -79,7 +79,7 @@ it('cuts the live message out of the entire prompt, including guides and hint te
     expect(opening).toHaveAttribute('height', '80');
     expect(opening).toHaveAttribute('fill', 'black');
     expect(mask).toHaveStyle({ maskType: 'luminance' });
-    expect(overlay.querySelector('[data-message-jump-backdrop]')).toHaveAttribute('fill', 'rgba(0,0,0,0.42)');
+    expect(overlay.querySelector('[data-message-jump-backdrop]')).toHaveAttribute('fill', 'var(--ink-rgba-0-0-0-0-42)');
     expect(overlay.contains(screen.getByText('已定位目标消息'))).toBe(true);
     expect(overlay.querySelector('[data-message-jump-layer]')?.contains(screen.getByText('已定位目标消息'))).toBe(true);
     expect(overlay.style.maskImage).toBe('');

@@ -1,23 +1,33 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      try {
+        const saved = localStorage.getItem('gonglun.theme');
+        const theme = ['gpt', 'gpt-arena', 'opus-paper'].includes(saved) ? saved : 'opus-paper';
+        document.documentElement.dataset.appearance = theme;
+        document.documentElement.dataset.theme = theme.startsWith('gpt') ? 'gpt' : 'opus';
+      }
+      catch { document.documentElement.dataset.theme = 'opus'; document.documentElement.dataset.appearance = 'opus-paper'; }
+    </script>
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>公论 — 价值证明共识系统</title>
     <link rel="stylesheet" href="/src/index.css" />
+    <link rel="stylesheet" href="/src/theme/index.css" />
   </head>
   <body>
     <div id="root">
       <div role="dialog" aria-label="正在加载" aria-modal="true" data-app-startup="true"
-        style="position:fixed;inset:0;z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px;background:#101010;color:#f3f4f6;font:14px/1.6 system-ui,sans-serif">
+        style="position:fixed;inset:0;z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px;background:var(--surface-page);color:var(--text-primary);font:14px/1.6 system-ui,sans-serif">
         <svg class="popup-backdrop-guides" aria-hidden="true" width="100%" height="100%" viewBox="0 0 1000 1000" preserveAspectRatio="none"
           style="position:absolute;inset:0;pointer-events:none">
-          <path class="popup-backdrop-flow" fill="none" stroke="rgba(250,204,21,0.55)" stroke-width="1.5" stroke-dasharray="11 9" stroke-linecap="round" vector-effect="non-scaling-stroke"
+          <path class="popup-backdrop-flow" fill="none" stroke="var(--guide-border)" stroke-width="1.5" stroke-dasharray="11 9" stroke-linecap="round" vector-effect="non-scaling-stroke"
             d="M20,12L500,500 M20,988L500,500 M12,20L500,500 M988,20L500,500 M60,12L500,500 M60,988L500,500 M12,60L500,500 M988,60L500,500 M100,12L500,500 M100,988L500,500 M12,100L500,500 M988,100L500,500 M140,12L500,500 M140,988L500,500 M12,140L500,500 M988,140L500,500 M180,12L500,500 M180,988L500,500 M12,180L500,500 M988,180L500,500 M220,12L500,500 M220,988L500,500 M12,220L500,500 M988,220L500,500 M260,12L500,500 M260,988L500,500 M12,260L500,500 M988,260L500,500 M300,12L500,500 M300,988L500,500 M12,300L500,500 M988,300L500,500 M340,12L500,500 M340,988L500,500 M12,340L500,500 M988,340L500,500 M380,12L500,500 M380,988L500,500 M12,380L500,500 M988,380L500,500 M420,12L500,500 M420,988L500,500 M12,420L500,500 M988,420L500,500 M460,12L500,500 M460,988L500,500 M12,460L500,500 M988,460L500,500 M500,12L500,500 M500,988L500,500 M12,500L500,500 M988,500L500,500 M540,12L500,500 M540,988L500,500 M12,540L500,500 M988,540L500,500 M580,12L500,500 M580,988L500,500 M12,580L500,500 M988,580L500,500 M620,12L500,500 M620,988L500,500 M12,620L500,500 M988,620L500,500 M660,12L500,500 M660,988L500,500 M12,660L500,500 M988,660L500,500 M700,12L500,500 M700,988L500,500 M12,700L500,500 M988,700L500,500 M740,12L500,500 M740,988L500,500 M12,740L500,500 M988,740L500,500 M780,12L500,500 M780,988L500,500 M12,780L500,500 M988,780L500,500 M820,12L500,500 M820,988L500,500 M12,820L500,500 M988,820L500,500 M860,12L500,500 M860,988L500,500 M12,860L500,500 M988,860L500,500 M900,12L500,500 M900,988L500,500 M12,900L500,500 M988,900L500,500 M940,12L500,500 M940,988L500,500 M12,940L500,500 M988,940L500,500 M980,12L500,500 M980,988L500,500 M12,980L500,500 M988,980L500,500" />
         </svg>
-        <div style="position:relative;width:min(460px,100%);border:1px solid #374151;border-radius:12px;background:#1f2937;box-shadow:0 16px 40px #0007">
-          <div style="padding:14px 16px;border-bottom:1px solid #374151;font-size:15px;font-weight:700">正在加载</div>
+        <div style="position:relative;width:min(460px,100%);border:1px solid var(--border-default);border-radius:12px;background:var(--surface-card);box-shadow:0 16px 40px var(--shadow-rgba-0-0-0-0-45)">
+          <div style="padding:14px 16px;border-bottom:1px solid var(--border-default);font-size:15px;font-weight:700">正在加载</div>
           <div style="padding:16px">正在启动公论，请稍候…</div>
         </div>
       </div>

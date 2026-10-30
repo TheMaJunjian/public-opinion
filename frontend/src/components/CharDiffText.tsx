@@ -57,9 +57,9 @@ export function renderDiffParts(parts: DiffPart[], side: 'orig' | 'next'): React
     const isChanged = (side === 'orig' && p.type === 'del') || (side === 'next' && p.type === 'ins');
     return (
       <span key={idx} style={isChanged ? {
-        background: side === 'orig' ? 'rgba(220,50,50,0.35)' : 'rgba(50,200,80,0.35)',
+        background: side === 'orig' ? 'var(--surface-rgba-220-50-50-0-35)' : 'var(--surface-rgba-50-200-80-0-35)',
         borderRadius: 2,
-        outline: side === 'orig' ? '1px solid rgba(220,50,50,0.6)' : '1px solid rgba(50,200,80,0.6)',
+        outline: side === 'orig' ? '1px solid var(--line-rgba-220-50-50-0-6)' : '1px solid var(--line-rgba-50-200-80-0-6)',
       } : undefined}>{p.text}</span>
     );
   });

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="opus" data-study-theme="a">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>公论 · A / B 风格设计预览</title>
+  <link rel="stylesheet" href="../src/theme/opus.css">
+  <link rel="stylesheet" href="../src/theme/gpt.css">
+  <link rel="stylesheet" href="./opus-paper.css">
+  <link rel="stylesheet" href="./opus-carriers.css">
+  <link rel="stylesheet" href="./decoration-study.css">
+  <link rel="stylesheet" href="./gpt-arena.css">
+</head>
+<body class="frozen scene-skins">
+  <div class="study-bar">
+    <div><span class="study-dot"></span><strong id="study-name">案卷 · 印信</strong><span class="muted">设计预览 / 示例数据</span></div>
+    <div class="study-theme-switch" aria-label="对照风格"><button data-study-switch="a" aria-pressed="true">A · 案卷印信</button><button data-study-switch="b" aria-pressed="false">B · 议事厅卡牌</button></div>
+    <div class="study-modes" aria-label="预览场景">
+      <button data-scene="skins" aria-pressed="true">01 载体与等级</button>
+      <button data-scene="reading" aria-pressed="false">02 普通浏览</button>
+      <button data-scene="combined" aria-pressed="false">03 状态叠加</button>
+      <button data-scene="classification" aria-pressed="false">04 分类框架</button>
+    </div>
+    <label class="motion-control"><input id="reduced-motion" type="checkbox">减少动效</label>
+  </div>
+
+  <header class="app-nav">
+    <a class="brand" href="#"><span class="brand-mark">公论</span><span>一切记录在案</span></a>
+    <nav aria-label="导航"><button data-entry="引导">引导</button><button data-entry="教程">教程</button><button data-entry="福利">福利</button></nav>
+    <div class="nav-account"><button data-entry="风格">风格</button><button data-entry="阅览">阅览</button><button data-entry="积分" class="points">◉ 928</button><button data-entry="账户">林舟</button><button data-entry="退出登录">退出</button><label><input id="freeze-controls" type="checkbox" checked>冻结</label></div>
+  </header>
+
+  <div class="command-bar">
+    <form id="jump-form" class="jump-box"><span aria-hidden="true">⌕</span><input aria-label="跳转消息 ID" placeholder="跳转消息 ID" value="A027"><button type="submit" aria-label="跳转到消息">↵</button><button type="button" id="recent-jumps">最近⌄</button></form>
+    <div class="view-control" aria-label="消息视图"><button data-view="table" aria-pressed="true">消息表</button><button data-view="graph" aria-pressed="false">消息图</button></div>
+    <div class="history"><button id="back" aria-label="返回上一步" disabled>←</button><button id="forward" aria-label="前进一步" disabled>→</button></div>
+    <nav class="breadcrumbs" aria-label="当前位置"><button id="all-messages">全部消息</button><span>›</span><button id="open-classification">城市公共空间</button><span>›</span><span id="breadcrumb-current">开放时间</span></nav>
+    <div class="command-actions"><button data-entry="筛选">筛选 <span class="count">2</span></button><button data-entry="清爽">清爽</button><button data-entry="对比">对比</button><i></i><button data-entry="导出">导出</button><button data-entry="排行榜">排行榜</button></div>
+  </div>
+
+  <main class="workbench">
+    <section class="canvas" aria-label="消息阅读区">
+      <header class="canvas-heading"><div><div class="eyebrow">公论 / 案卷 · 印信</div><h1 id="scope-title">载体有形，等级有别。</h1><p class="muted" id="scope-description">四种载体，四级外观；静止时也能辨认差异。</p></div><button class="trace-link" data-entry="追溯">查看追溯 ↗</button></header>
+
+      <section id="skin-study" aria-label="四种载体与四个等级的视觉对照">
+        <div class="carrier-toolbar"><div class="carrier-tabs"><button data-carrier-page="matrix" aria-pressed="true">16 格等级对照</button><button data-carrier-page="mixed" aria-pressed="false">混合消息图</button><button data-carrier-page="decorations" aria-pressed="false">真实装饰与折叠</button></div><p>L0–L3 手动等级 · 不代表观点正确或获胜</p></div>
+        <div class="carrier-state-controls"><span>叠加检验</span><label><input id="carrier-selection" type="checkbox">整条选中</label><label><input id="carrier-fragment" type="checkbox">片段</label><label><input id="carrier-location" type="checkbox">定位</label><label><input id="carrier-recommend" type="checkbox">推荐投入</label><label><input id="carrier-stance" type="checkbox">正反态势</label><label><input id="carrier-grayscale" type="checkbox">去色检验</label></div>
+        <div id="carrier-matrix-view"><div class="carrier-controls"><label>可阅读内容 <select id="matrix-content-view"><option value="graph">消息图 · 纸片</option><option value="table">消息表 · 行</option></select></label><span class="muted">同一正文横向比较；框架可点击页签折叠。</span></div><div id="carrier-matrix" class="carrier-matrix"></div></div>
+        <div id="carrier-mixed-view" hidden><div class="mixed-inspector"><label>检查对象 <select id="mix-object"></select></label><label>等级 <select id="mix-level"><option value="0">L0 素纸</option><option value="1">L1 压边</option><option value="2">L2 洒金</option><option value="3">L3 鎏金装裱</option></select></label><button id="mix-upgrade">升级 / 重播</button><button id="mix-all-upgrade">四种载体同时升级</button><button id="mixed-expand">展开全部</button><label><input id="mixed-dense" type="checkbox">密集模式 / 静态</label><output id="mix-selection"></output></div><div id="mixed-stage" class="mixed-stage"></div><p class="carrier-note">点选正文、关系标签或附着装饰后可单独切换等级。页签折叠时，外部关系线接到容器边界；实际关系端点保留。装饰 D1 依附 A01。</p></div>
+        <div id="carrier-decorations-view" hidden>
+          <div class="dec-controls"><label>附着对象 <select id="dec-host"><option value="A110">正文消息 A110</option><option value="R130">有向边标签 R130</option><option value="C140">分类框架 C140</option><option value="T150">标注消息 T150</option></select></label><label>装饰等级 <select id="dec-level"><option value="0">L0 素纸</option><option value="1">L1 压边</option><option value="2" selected>L2 洒金</option><option value="3">L3 鎏金装裱</option></select></label><button id="dec-replay">升级 / 重播</button><button id="dec-expand-all">展开全部装饰</button><button id="dec-collapse-all">收起赞反与标注</button><span>更正入口常驻</span></div>
+          <div id="dec-host-scenes"></div>
+          <div class="dec-usage"><p><strong>赞反：</strong>图标演示快速发送；数字区选中；双击或 ↗ 查看记录。</p><p><strong>标注：</strong>单击选中；双击或“记录”进入临时分类。标注自身的赞反独立折叠。</p><p><strong>更正：</strong>单击对比正文；双击看历史。另保留两个直接入口。</p></div>
+          <div class="dec-feedback"><output id="dec-action-feedback" role="status">可操作以上装饰；选中项进入右侧候选暂存区。</output><span>装饰候选 <b id="dec-selected-count">0</b></span></div>
+          <div class="dec-grade-heading"><h2>三类装饰，各有四档</h2><p>相同数量、相同文字，只比较外观</p></div><div id="dec-grade-examples" class="dec-grade-examples"></div>
+        </div>
+        <p class="carrier-note">等级改变外缘材质，推荐改变字号与层次，正反态势另用细线表达。所有数值均为示例，分档与聚合规则未定义。</p>
+      </section>
+
+      <div class="state-tools" id="state-tools" hidden>
+        <div class="state-checks"><label><input id="whole-state" type="checkbox">整条选中</label><label><input id="fragment-state" type="checkbox">片段选中</label><label><input id="location-state" type="checkbox">当前定位</label><label><input id="read-state" type="checkbox">已阅</label></div>
+        <div class="state-sliders"><label>推荐显著性 <select id="priority-level"><option value="0">普通</option><option value="1">一层</option><option value="2">两层</option><option value="3">三层</option></select></label><label>正反示例 <input id="stance-range" type="range" min="0" max="100" value="62" aria-label="赞同比例示例"><output id="stance-ratio">62 : 38</output></label><button id="replay-location">演示定位</button><button id="replay-recommendation">演示推荐增加</button></div>
+      </div>
+
+      <div id="messages" class="message-lane">
+        <article id="A027" class="message paper-message" data-priority="0" aria-label="消息 A027">
+          <div class="stance-track" aria-label="示例赞同 62%，反对 38%" hidden><span></span></div>
+          <div class="selection-outline" aria-hidden="true"></div><div class="fold" aria-hidden="true"></div><div class="location-corners" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+          <header class="message-head"><span class="type-seal">文</span><span class="message-id">A027</span><span class="author"><i class="author-pattern" aria-hidden="true"></i>林舟</span><span class="head-right"><button class="text-button" data-entry="版本与更正">v2 · 已更正</button><span class="reading-status">● 待阅</span><input class="whole-checkbox" type="checkbox" aria-label="选择整条消息 A027"></span></header>
+          <p class="message-copy">我整理了近四周的入馆登记。建议先将<span class="fragment-text">周六闭馆时间从 18 点延至 20 点</span>，试行一个月，再根据到馆人数调整。</p>
+          <div class="fragment-actions" hidden><span>已选片段</span><button data-quick-relation="reference">引用</button><button data-quick-relation="agree">赞同</button><button data-quick-relation="disagree">反对</button><button data-quick-relation="correct">更正</button><button data-quick-relation="classify">分类</button><button id="more-relations">全部关系 ↗</button></div>
+          <footer class="message-footer"><div class="spending-mark" title="投入五格仅为视觉示例，分档规则未定义"><span>投入</span><i></i><i></i><i></i><i></i><i></i></div><span>真假 <b>11</b></span><span>价值 <b>25</b></span><span class="recommendation-label" hidden>推荐 <b>240</b></span><time>10月29日 21:04</time></footer>
+          <div class="message-actions"><button data-entry="赞同记录">赞同 31</button><button data-entry="反对记录">反对 19</button><span></span><button data-entry="结算">结算</button><button class="related-trigger">相关消息 4 ↗</button><button data-entry="收入">收入</button></div>
+        </article>
+
+        <div class="graph-connector" aria-hidden="true" hidden><span>引用</span><i></i></div>
+        <article id="A028" class="message paper-message supporting-message" aria-label="消息 A028">
+          <header class="message-head"><span class="type-seal">文</span><span class="message-id">A028</span><span class="author"><i class="author-pattern second" aria-hidden="true"></i>阮青</span><span class="head-right"><span class="read-seal">阅</span><input type="checkbox" data-select-card="A028" aria-label="选择整条消息 A028"></span></header>
+          <p class="message-copy">可以先从周六试行。延长开放的同时，也应记录每小时到馆人数与值班成本，方便一个月后一起复核。</p>
+          <footer class="message-footer"><div class="spending-mark low"><span>投入</span><i></i><i></i><i></i><i></i><i></i></div><span>真假 <b>6</b></span><span>价值 <b>12</b></span><time>10月29日 21:18</time></footer>
+          <div class="message-actions"><button data-entry="表态记录">赞同 12</button><button data-entry="表态记录">反对 2</button><span></span><button data-entry="结算">结算</button><button class="related-trigger">相关消息 2 ↗</button><button data-entry="收入">收入</button></div>
+        </article>
+
+        <div class="relation-record"><span class="record-seal">引</span><span class="message-id">R031</span><span>A028 <b>引用 →</b> A027 · 片段</span><span class="muted">关系记录</span><button data-entry="关系记录详情">详情 ↗</button></div>
+      </div>
+
+      <section class="classification-study" id="classification-study">
+        <div class="section-caption"><span>分类 · 内容沿层级自然展开</span><button id="expand-all">完全展开</button></div>
+        <details class="folder folder-outer" id="outer-folder" open>
+          <summary><span class="folder-number">Ⅰ</span><span class="folder-name">城市公共空间</span><span class="folder-count">3 条成员 · 1 个子类</span><span class="folder-actions"><button data-enter="城市公共空间">进入 ›</button><button data-entry="分类相关消息">相关消息</button></span></summary>
+          <div class="folder-content">
+            <div class="folder-note"><span class="type-seal">文</span><p>让图书馆、社区活动室与运动场地，更好地服务周边居民。</p><span class="message-id">A021</span></div>
+            <details class="folder folder-inner" id="inner-folder" open>
+              <summary><span class="folder-number">Ⅱ</span><span class="folder-name">开放时间</span><span class="folder-count">2 条成员</span><span class="folder-actions"><button data-enter="开放时间">进入 ›</button><button data-entry="分类相关消息">相关消息</button></span></summary>
+              <div class="folder-content"><div class="folder-note"><span class="type-seal">文</span><p>周六延长开放两小时，试行一个月。</p><span class="message-id">A027</span></div><div class="folder-note"><span class="type-seal double-seal">总</span><p>先试行、记录使用情况，再共同复核。</p><span class="message-id">S040</span></div></div>
+            </details>
+          </div>
+        </details>
+      </section>
+
+      <div class="legend"><span><i class="legend-ink"></i>墨框 / 整条选中</span><span><i class="legend-fragment"></i>靛底 / 片段</span><span><i class="legend-location"></i>四角 / 定位</span><span><i class="legend-gold"></i>叠纸 / 推荐</span><span>正反线只呈现示例比例</span></div>
+    </section>
+
+    <aside class="side-desk" aria-label="操作台">
+      <div class="reading-bar"><button id="previous-message" aria-label="上一条消息">‹</button><button id="next-message" aria-label="下一条消息">›</button><label><span class="sr-only">阅读顺序</span><select id="reading-order"><option>顺序阅读</option><option>倒序阅读</option></select></label><span class="reading-count">1 / 4</span><button id="exit-trace">退出追溯</button><button id="reading-details" aria-expanded="false">详情⌄</button></div>
+      <div class="reading-detail" hidden><strong>阅读详情</strong><div>当前：<span id="reading-current">A027 · 林舟</span></div><div class="detail-controls"><label>向上 <input type="number" min="0" max="8" value="1" aria-label="向上追溯距离"></label><label>向下 <input type="number" min="0" max="8" value="2" aria-label="向下追溯距离"></label></div><button data-entry="阅读记录">查看阅读记录</button></div>
+
+      <section class="desk-section staging"><div class="section-title"><h2><span>01</span>选择暂存区 <small id="draft-count">0</small></h2><button id="clear-drafts" class="text-button" disabled>清空</button></div><div id="draft-list" class="unit-list"><p class="empty">点击消息的选择框，或切换到「状态叠加」。</p></div><div class="stage-actions"><button id="to-source" disabled>加入来源集合</button><button id="to-target" disabled>加入目标集合</button><button id="set-trace" disabled>设为追溯消息</button></div></section>
+
+      <section class="desk-section endpoints"><div class="section-title"><h2><span>02</span>来源 <span class="direction-arrow">⟶</span> 目标</h2></div><div class="endpoint-grid"><div><div class="endpoint-title">来源集合<button data-clear="source" class="text-button" disabled>清空</button></div><div id="source-list" class="unit-list"><p class="empty">暂无来源</p></div></div><div><div class="endpoint-title">目标集合<button data-clear="target" class="text-button" disabled>清空</button></div><div id="target-list" class="unit-list"><p class="empty">暂无目标</p></div></div></div></section>
+
+      <section class="desk-section relation-section" id="relation-section"><div class="section-title"><h2><span>03</span>关系类型</h2><button id="clear-relation" class="text-button" disabled>取消选择</button></div><div id="relation-groups"></div><details class="additional-settings"><summary>附加设置<span id="relation-name">未选择关系</span></summary><div id="relation-setting">选择关系后查看对应设置入口。</div></details></section>
+
+      <section class="desk-section compose-section"><div class="section-title"><h2><span>04</span>正文</h2><span class="muted">新消息</span></div><textarea id="message-body" rows="4" aria-label="消息正文" placeholder="写下观点，也留下依据。"></textarea></section>
+
+      <section class="desk-section investment-section"><div class="section-title"><h2><span>05</span>投入与费用</h2><span class="muted">示例</span></div><div class="investment-inputs"><label>真假<input type="number" id="truth-input" value="3" min="0" aria-label="真假投入示例"></label><label>价值<input type="number" id="value-input" value="2" min="0" aria-label="价值投入示例"></label></div><div class="fee-table"><span>协议费 <b>1</b></span><span>真假 <b id="truth-fee">3</b></span><span>价值 <b id="value-fee">2</b></span><span>合计 <b id="total-fee">6 点</b></span></div></section>
+
+      <div class="send-bar"><div><span>预计 <strong id="send-total">6 点</strong></span><small>可用 928 点</small></div><button id="send-preview" class="primary" disabled>发送</button></div><p class="demo-disclaimer">发送只演示反馈，不会发布消息。费用为单条示例。</p>
+
+      <section class="desk-section record-entries" aria-label="记录入口"><button data-entry="追溯">追溯</button><button data-entry="最近消息">最近消息</button><button data-entry="表态记录">表态</button><button data-entry="审计日志">审计</button><button data-entry="收入">收入</button><button data-entry="操作日志">操作日志</button></section>
+    </aside>
+  </main>
+
+  <dialog id="related-dialog" aria-labelledby="related-title"><header class="dialog-head"><div><span class="eyebrow">RELATED RECORDS</span><h2 id="related-title">相关消息 <span>4</span></h2></div><button class="close-dialog" aria-label="关闭相关消息弹窗">×</button></header><div class="dialog-content"><div class="dialog-source"><span class="type-seal">文</span><span>A027 · 林舟</span><p>周六闭馆时间从 18 点延至 20 点</p></div><div class="related-row"><span class="record-seal">引</span><div><b>A028 → 引用 → A027</b><p>可以先从周六试行，记录到馆人数与值班成本。</p></div><button data-locate="A028">定位 ↗</button></div><div class="related-row"><span class="record-seal">正</span><div><b>A029 · 更正记录</b><p>补充最近四周统计的时间范围。</p></div><button data-entry="更正记录">查看</button></div><div class="related-row"><span class="record-seal">总</span><div><b>S040 · 总结</b><p>先试行、记录使用情况，再共同复核。</p></div><button data-entry="总结详情">查看</button></div><div class="related-row"><span class="record-seal">结</span><div><b>J041 · 结算记录</b><p>相关投入、结果与分配明细。</p></div><button data-entry="结算记录">查看</button></div></div><footer class="dialog-footer">所有数值与消息均为设计示例</footer></dialog>
+  <dialog id="entry-dialog" aria-labelledby="entry-title"><header class="dialog-head"><h2 id="entry-title"></h2><button class="close-dialog" aria-label="关闭入口说明">×</button></header><div class="dialog-content" id="entry-content"></div></dialog>
+  <dialog id="dec-record-dialog" aria-labelledby="dec-dialog-title"><header class="dialog-head"><h2 id="dec-dialog-title">装饰记录</h2><button class="close-dialog" aria-label="关闭装饰记录">×</button></header><div class="dialog-content" id="dec-dialog-content"></div><footer class="dialog-footer">交互样例 · 不会发布消息或扣费</footer></dialog>
+  <div class="toast" id="feedback" role="status" hidden></div>
+  <script type="module" src="./opus-paper.js"></script>
+</body>
+</html>

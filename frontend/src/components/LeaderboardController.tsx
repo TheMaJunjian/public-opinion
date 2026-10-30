@@ -75,8 +75,8 @@ export default forwardRef<LeaderboardHandle, Omit<LeaderboardModalProps, 'open' 
       confirmText={failed ? '关闭' : '取消'} onConfirm={close} zIndex={1600} lockScroll={false}
       dialogProps={{ 'aria-busy': opening }} message={<>
         <div role={failed ? 'alert' : 'status'} aria-live="polite" style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 14 }}>
-          {!failed && <span aria-hidden="true" style={{ display: 'inline-block', width: 22, height: 22, border: '2px solid #334155',
-            borderTopColor: '#38bdf8', borderRadius: '50%', animation: 'leaderboard-opening-spin 0.8s linear infinite', willChange: 'transform' }} />}
+          {!failed && <span aria-hidden="true" style={{ display: 'inline-block', width: 22, height: 22, border: '2px solid var(--line-334155)',
+            borderTopColor: 'var(--line-38bdf8)', borderRadius: '50%', animation: 'leaderboard-opening-spin 0.8s linear infinite', willChange: 'transform' }} />}
           {failed ? '排行榜暂时无法打开，请刷新页面后重试。' : globalReady ? '正在打开排行榜…' : '正在准备全局排行榜…'}
         </div>
         {!globalReady && catalog && <Suspense fallback={null}><CatalogStatus client={catalog} /></Suspense>}

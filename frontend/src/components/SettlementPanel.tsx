@@ -5,6 +5,7 @@ import type { SettlementRoundItem, MessageStakes } from '../types';
 import { operationLog } from '../utils/debugLog';
 import PromptModal from './PromptModal';
 import { useViewedBodyReference } from './MessageDisplayHints';
+import ThemeIcon, { ThemeLabel } from '../theme/ThemeIcon';
 
 interface Props {
   messageId: string;
@@ -172,10 +173,10 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
   }
 
   function resultColor(result: string | null): string {
-    if (!result) return 'text-gray-400';
-    if (result === 'TRUE') return 'text-green-700';
-    if (result === 'FALSE') return 'text-red-700';
-    return 'text-amber-700';
+    if (!result) return 'text-[color:var(--ink-utility-gray-400)]';
+    if (result === 'TRUE') return 'text-[color:var(--ink-utility-green-700)]';
+    if (result === 'FALSE') return 'text-[color:var(--ink-utility-red-700)]';
+    return 'text-[color:var(--ink-utility-amber-700)]';
   }
 
   // Only count stakes from the filtered rounds for the footer
@@ -218,24 +219,24 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
 
   if (loading) {
     return (
-      <div className="border border-gray-200 rounded-lg p-4 bg-white">
-        <div className="text-sm text-gray-500">加载结算数据...</div>
+      <div className="border border-[color:var(--border-default)] rounded-lg p-4 bg-[color:var(--surface-card)]">
+        <div className="text-sm text-[color:var(--text-muted)]">加载结算数据...</div>
       </div>
     );
   }
 
   return (
-    <div className="border border-gray-200 rounded-lg p-4 bg-white space-y-4" onClick={e => e.stopPropagation()}>
+    <div className="settlement-panel border border-[color:var(--border-default)] rounded-lg p-4 bg-[color:var(--surface-card)] space-y-4" onClick={e => e.stopPropagation()}>
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-gray-800 text-sm">
-          {titleLabel}
+        <h3 className="font-semibold text-[color:var(--text-primary)] text-sm">
+          <ThemeLabel text={titleLabel} />
         </h3>
         {!hasCurrentActive && (
           <button
             onClick={handleCreateRound}
             disabled={creatingRound}
-            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white text-xs font-medium rounded transition-colors"
+            className="px-3 py-1.5 bg-[color:var(--surface-4f46e5)] hover:bg-[color:var(--surface-4338ca)] disabled:bg-[color:var(--surface-a5b4fc)] text-[color:var(--ink-fff-2)] text-xs font-medium rounded transition-colors"
           >
             {creatingRound ? '创建中...' : '发起结算'}
           </button>
@@ -244,7 +245,7 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
 
       {/* Error */}
       {error && (
-        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
+        <div className="text-xs text-[color:var(--ink-f87171)] bg-[color:var(--surface-fef2f2)] border border-[color:var(--line-fecaca)] rounded px-3 py-2">
           {error}
         </div>
       )}
@@ -252,21 +253,21 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
       {/* Pool Summary — cumulative stakes */}
       {totalStaked > 0 && (
         <div>
-          <div className="text-xs text-gray-500 mb-1.5">
-            📊 所有已结算轮次累计押注
+          <div className="text-xs text-[color:var(--text-muted)] mb-1.5">
+            <ThemeIcon name="operations" fallback="📊" /> 所有已结算轮次累计押注
           </div>
           <div className="grid grid-cols-2 gap-3 text-xs">
-            <div className="bg-green-50 border border-green-200 rounded px-3 py-2 text-center">
-              <div className="text-green-700 font-semibold text-lg">
+            <div className="bg-[color:var(--surface-f0fdf4)] border border-[color:var(--line-bbf7d0)] rounded px-3 py-2 text-center">
+              <div className="text-[color:var(--ink-4ade80)] font-semibold text-lg">
                 {filteredPro}
               </div>
-              <div className="text-green-800">PRO 押注</div>
+              <div className="text-[color:var(--ink-166534)]">PRO 押注</div>
             </div>
-            <div className="bg-red-50 border border-red-200 rounded px-3 py-2 text-center">
-              <div className="text-red-700 font-semibold text-lg">
+            <div className="bg-[color:var(--surface-fef2f2)] border border-[color:var(--line-fecaca)] rounded px-3 py-2 text-center">
+              <div className="text-[color:var(--ink-f87171)] font-semibold text-lg">
                 {filteredCon}
               </div>
-              <div className="text-red-800">CON 押注</div>
+              <div className="text-[color:var(--ink-991b1b)]">CON 押注</div>
             </div>
           </div>
         </div>
@@ -274,7 +275,7 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
 
       {/* Active Rounds — each TRUTH/VALUE round in its own card */}
       {activeRounds.map(round => <div key={round.id}>
-        <div style={{fontSize:11,color:'#64748b'}}>投票和结算保留本轮原依据，各显示版本共享本消息的投入。</div>
+        <div style={{fontSize:11,color:'var(--ink-64748b)'}}>投票和结算保留本轮原依据，各显示版本共享本消息的投入。</div>
         <ActiveRoundCard
           key={round.id}
           round={round}
@@ -296,8 +297,8 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
       {/* Settled Rounds History */}
       {settledRounds.length > 0 && (
         <div>
-          <div className="text-xs font-semibold text-gray-500 mb-2">结算历史（双击查看详情）</div>
-          <div className="text-xs text-gray-600 bg-indigo-50 border border-indigo-200 rounded px-3 py-2 mb-2">
+          <div className="text-xs font-semibold text-[color:var(--text-muted)] mb-2">结算历史（双击查看详情）</div>
+          <div className="text-xs text-[color:var(--text-secondary)] bg-[color:var(--surface-eef2ff)] border border-[color:var(--line-c7d2fe)] rounded px-3 py-2 mb-2">
             所有轮次总押注 {allRoundStake} 点（PRO {allRoundPro}，CON {allRoundCon}）·{' '}
             {currentUser
               ? `当前与会者投入 ${investedContribution} 点 → ${activeRounds.length > 0 ? '预计结算后' : '当前'}贡献点 ${projectedAfter} 点，${projectedChange >= 0 ? '收益' : '损失'}${Math.abs(projectedChange)} 点`
@@ -308,32 +309,32 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
               <div key={round.id}>
                 <div
                   data-guide-settlement-history={round.id}
-                  className={`bg-gray-50 border rounded px-3 py-2 text-xs cursor-pointer hover:bg-gray-100 transition-colors select-none ${expandedSettledRound === round.id ? 'border-indigo-300' : 'border-gray-200'}`}
+                  className={`bg-[color:var(--surface-panel)] border rounded px-3 py-2 text-xs cursor-pointer hover:bg-[color:var(--surface-f3f4f6)] transition-colors select-none ${expandedSettledRound === round.id ? 'border-[color:var(--line-a5b4fc-2)]' : 'border-[color:var(--border-default)]'}`}
                   onDoubleClick={() => setExpandedSettledRound(expandedSettledRound === round.id ? null : round.id)}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="text-gray-500 font-mono">{round.id.slice(-6)}</span>
+                    <span className="text-[color:var(--text-muted)] font-mono">{round.id.slice(-6)}</span>
                     <span className={resultColor(round.result)}>{resultLabel(round.result)}</span>
                   </div>
                   {round.previousRoundId && round.result !== null && (() => {
                     const previousRound = rounds.find(r => r.id === round.previousRoundId);
                     return previousRound?.result && previousRound.result !== round.result;
                   })() && (
-                    <div className="text-gray-400 mt-1">
+                    <div className="text-[color:var(--text-muted)] mt-1">
                       ↩ 推翻自 {round.previousRoundId.slice(-6)}
                     </div>
                   )}
                   {round.closedAt && (
-                    <div className="text-gray-400 mt-0.5">
+                    <div className="text-[color:var(--text-muted)] mt-0.5">
                       {new Date(round.closedAt).toLocaleString('zh-CN')}
                     </div>
                   )}
-                  <div className="text-gray-500 mt-1">
+                  <div className="text-[color:var(--text-muted)] mt-1">
                     本轮押注 {(round.settlementPro ?? round.weights?.TRUE ?? 0) + (round.settlementCon ?? round.weights?.FALSE ?? 0)} 点 · 收益 {round.result === 'TRUE' ? (round.settlementCon ?? round.weights?.FALSE ?? 0) : round.result === 'FALSE' ? (round.settlementPro ?? round.weights?.TRUE ?? 0) : 0} 点
                   </div>
                 </div>
                 {expandedSettledRound === round.id && (
-                  <div className="mt-1 border border-indigo-200 rounded">
+                  <div className="mt-1 border border-[color:var(--line-c7d2fe)] rounded">
                     <SettledRoundDetail roundId={round.id} messageId={messageId} entryHighlight={entryHighlight} />
                   </div>
                 )}
@@ -345,13 +346,13 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
 
       {/* Summary footer */}
       {!hasAnyActive && totalStaked > 0 && rounds.filter(r => r.status === 'SETTLED').length === 0 && (
-        <div className="text-xs text-gray-500 text-center">
+        <div className="text-xs text-[color:var(--text-muted)] text-center">
           尚无结算记录。点击「发起结算」创建新一轮投票，发送请求需投入价值 1 点并另付协议费。
         </div>
       )}
 
       {totalStaked === 0 && (
-        <div className="text-xs text-gray-500 text-center">
+        <div className="text-xs text-[color:var(--text-muted)] text-center">
           暂无押注。发布消息或赞同/反对即可参与押注。
         </div>
       )}
@@ -596,14 +597,14 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
   const falseLabel = isValue ? '冷藏' : '反对';
 
   return (
-    <div className="border border-indigo-300 bg-indigo-50 rounded-lg p-3 space-y-3">
+    <div className="border border-[color:var(--line-a5b4fc-2)] bg-[color:var(--surface-eef2ff)] rounded-lg p-3 space-y-3">
       <div className="flex items-center justify-between">
         <div>
-          <span className="text-xs font-semibold text-indigo-800">
-            {headerEmoji} {headerLabel} · 轮次 {localRound.id.slice(-6)}
+          <span className="text-xs font-semibold text-[color:var(--ink-3730a3)]">
+            <ThemeIcon name={isValue ? 'value' : 'truth'} fallback={headerEmoji} /> {headerLabel} · 轮次 {localRound.id.slice(-6)}
           </span>
           {previousRound && previousRound.result && previousRound.result !== settlementResult && (
-            <span className="ml-2 text-xs text-amber-700 bg-amber-100 rounded px-1.5 py-0.5">
+            <span className="ml-2 text-xs text-[color:var(--ink-fbbf24)] bg-[color:var(--surface-fef3c7)] rounded px-1.5 py-0.5">
               推翻 {previousRound.result === 'TRUE' ? '✅ TRUE' : previousRound.result === 'FALSE' ? '❌ FALSE' : '⚪ UNKNOWN'} → {settlementResult === 'TRUE' ? '✅ TRUE' : settlementResult === 'FALSE' ? '❌ FALSE' : '⚪ UNKNOWN'}
             </span>
           )}
@@ -612,7 +613,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
           onClick={() => { window.dispatchEvent(new Event('guide-settle-selected')); void handleSettle(); }}
           data-guide-settle="true"
           disabled={totalWeight === 0 || voting || settling || isWaiting}
-          className={`px-2 py-1 text-white text-xs font-medium rounded transition-colors ${totalWeight === 0 || voting || settling || isWaiting ? 'bg-gray-400 cursor-not-allowed' : 'bg-amber-500 hover:bg-amber-600'}`}
+          className={`px-2 py-1 text-[color:var(--ink-fff-2)] text-xs font-medium rounded transition-colors ${totalWeight === 0 || voting || settling || isWaiting ? 'bg-[color:var(--surface-9ca3af)] cursor-not-allowed' : 'bg-[color:var(--surface-f59e0b)] hover:bg-[color:var(--surface-d97706)]'}`}
           title={isWaiting ? '已请求终止，等待截止后结算' : totalWeight === 0 ? '暂无押注，无法结算' : voting ? '投票请求处理中' : settling ? '结算请求处理中' : '结算'}
         >
           {settling ? '结算中...' : isWaiting ? '等待结算' : '结算'}
@@ -621,13 +622,13 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
 
       {/* Settlement error */}
       {(settleNotice || isWaiting) && (
-        <div role="status" className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-2">
+        <div role="status" className="text-xs text-[color:var(--ink-1d4ed8)] bg-[color:var(--surface-eff6ff)] border border-[color:var(--line-bfdbfe)] rounded px-3 py-2">
           {settleNotice || '已请求终止，等待规则规定的截止时间'}
           {localRound.endsAt && `（${new Date(localRound.endsAt).toLocaleString('zh-CN')}）`}
         </div>
       )}
       {settleError && (
-        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
+        <div className="text-xs text-[color:var(--ink-f87171)] bg-[color:var(--surface-fef2f2)] border border-[color:var(--line-fecaca)] rounded px-3 py-2">
           {settleError}
         </div>
       )}
@@ -635,25 +636,25 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
       {/* Weights summary */}
       {totalWeight > 0 && (
         <div>
-          <div className="text-xs text-gray-500 mb-1">本轮投票权重（按投票押注点数计算）</div>
+          <div className="text-xs text-[color:var(--text-muted)] mb-1">本轮投票权重（按投票押注点数计算）</div>
           {weights.TRUE === weights.FALSE && (
-            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-1">
+            <div className="text-xs text-[color:var(--ink-fbbf24)] bg-[color:var(--surface-fffbeb)] border border-[color:var(--line-fde68a)] rounded px-2 py-1 mb-1">
               当前平局，结算结果将为 UNKNOWN
             </div>
           )}
           <div className="flex items-stretch gap-1 text-center text-xs">
-          <div className={`flex-1 bg-white rounded px-2 py-1 border-2 ${weights.TRUE > weights.FALSE ? 'border-green-400' : 'border-gray-200'}`}>
-            <div className="font-semibold text-green-800">{weights.TRUE}</div>
-            <div className="text-green-700">{trueLabel}</div>
+          <div className={`flex-1 bg-[color:var(--surface-card)] rounded px-2 py-1 border-2 ${weights.TRUE > weights.FALSE ? 'border-[color:var(--line-4ade80-2)]' : 'border-[color:var(--border-default)]'}`}>
+            <div className="font-semibold text-[color:var(--ink-166534)]">{weights.TRUE}</div>
+            <div className="text-[color:var(--ink-4ade80)]">{trueLabel}</div>
           </div>
           <div className="flex items-center justify-center px-1">
-            <span className={`text-lg font-bold ${weights.TRUE > weights.FALSE ? 'text-green-600' : weights.FALSE > weights.TRUE ? 'text-red-600' : 'text-amber-600'}`}>
+            <span className={`text-lg font-bold ${weights.TRUE > weights.FALSE ? 'text-[color:var(--ink-4ade80)]' : weights.FALSE > weights.TRUE ? 'text-[color:var(--ink-dc2626)]' : 'text-[color:var(--ink-d97706)]'}`}>
               {weights.TRUE > weights.FALSE ? '>' : weights.FALSE > weights.TRUE ? '<' : '='}
             </span>
           </div>
-          <div className={`flex-1 bg-white rounded px-2 py-1 border-2 ${weights.FALSE > weights.TRUE ? 'border-red-400' : 'border-gray-200'}`}>
-            <div className="font-semibold text-red-800">{weights.FALSE}</div>
-            <div className="text-red-700">{falseLabel}</div>
+          <div className={`flex-1 bg-[color:var(--surface-card)] rounded px-2 py-1 border-2 ${weights.FALSE > weights.TRUE ? 'border-[color:var(--line-f87171-2)]' : 'border-[color:var(--border-default)]'}`}>
+            <div className="font-semibold text-[color:var(--ink-991b1b)]">{weights.FALSE}</div>
+            <div className="text-[color:var(--ink-f87171)]">{falseLabel}</div>
           </div>
           </div>
         </div>
@@ -667,14 +668,16 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
       {/* Vote Form */}
       <div className="flex items-center gap-2">
         <select
+          aria-label="投票方向"
           value={voteDirection}
           onChange={(e) => setVoteDirection(e.target.value as 'TRUE' | 'FALSE')}
-          className="text-xs border border-gray-300 rounded px-2 py-1.5 flex-1 bg-white text-gray-800"
+          className="text-xs border border-[color:var(--line-d1d5db)] rounded px-2 py-1.5 flex-1 bg-[color:var(--surface-card)] text-[color:var(--text-primary)]"
         >
           <option value="TRUE">{trueLabel}（PRO）</option>
           <option value="FALSE">{falseLabel}（CON）</option>
         </select>
         <input
+          aria-label="投票投入点数"
           type="number"
           min={1}
           value={voteAmount}
@@ -682,12 +685,12 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
             const raw = e.target.value;
             setVoteAmount(raw === '' ? '' : Number(raw));
           }}
-          className="w-16 text-xs border border-gray-300 rounded px-2 py-1.5 text-center bg-white text-gray-800"
+          className="w-16 text-xs border border-[color:var(--line-d1d5db)] rounded px-2 py-1.5 text-center bg-[color:var(--surface-card)] text-[color:var(--text-primary)]"
         />
         <button
           onClick={handleVote}
           disabled={voting || settling}
-          className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white text-xs font-medium rounded transition-colors"
+          className="px-3 py-1.5 bg-[color:var(--surface-4f46e5)] hover:bg-[color:var(--surface-4338ca)] disabled:bg-[color:var(--surface-a5b4fc)] text-[color:var(--ink-fff-2)] text-xs font-medium rounded transition-colors"
         >
           {voting ? '投票中...' : '投票'}
         </button>
@@ -696,8 +699,8 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
       {/* Round entries */}
       {entries.length > 0 && (
         <div>
-          <div className="text-xs text-gray-500 mb-1">记录 ({entries.length}):</div>
-          <ul className="divide-y divide-gray-200 max-h-32 overflow-y-auto bg-white rounded">
+          <div className="text-xs text-[color:var(--text-muted)] mb-1">记录 ({entries.length}):</div>
+          <ul className="divide-y divide-[color:var(--border-default)] max-h-32 overflow-y-auto bg-[color:var(--surface-card)] rounded">
             {entries.map(e => {
               const isHighlighted = entryHighlight
                 ? (entryHighlight.stakeId && e.kind === 'stake' && e.entryId === entryHighlight.stakeId) ||
@@ -705,10 +708,10 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
                     (e.kind === 'stake' && entryHighlight.side && e.label === entryHighlight.side && (!entryHighlight.username || entryHighlight.username === e.username))
                   ))
                 : false;
-              const colorClass = e.label === 'PRO' ? 'text-green-700' : 'text-red-700';
+              const colorClass = e.label === 'PRO' ? 'text-[color:var(--ink-utility-green-700)]' : 'text-[color:var(--ink-utility-red-700)]';
               return (
-                <li key={e.id} className={`py-1 flex justify-between px-1.5 rounded text-xs ${isHighlighted ? 'bg-yellow-100 border border-yellow-300' : ''}`}>
-                  <span className="text-gray-700">{e.username}</span>
+                <li key={e.id} className={`py-1 flex justify-between px-1.5 rounded text-xs ${isHighlighted ? 'bg-[color:var(--surface-utility-yellow-100)] border border-[color:var(--line-utility-yellow-300)]' : ''}`}>
+                  <span className="text-[color:var(--text-primary)]">{e.username}</span>
                   <span className={colorClass}>{e.label} {e.amount}点</span>
                 </li>
               );
@@ -766,8 +769,8 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
     }).catch(() => setLoading(false));
   }, [roundId, messageId]);
 
-  if (loading) return <div className="text-xs text-gray-400 p-2">加载中...</div>;
-  if (!detail) return <div className="text-xs text-gray-400 p-2">加载失败</div>;
+  if (loading) return <div className="text-xs text-[color:var(--text-muted)] p-2">加载中...</div>;
+  if (!detail) return <div className="text-xs text-[color:var(--text-muted)] p-2">加载失败</div>;
 
   return <SettledRoundDetailView detail={detail} previousDetail={previousDetail} stakes={stakes} roundId={roundId} entryHighlight={entryHighlight} />;
 }
@@ -798,9 +801,9 @@ function SettledRoundDetailView({ detail, previousDetail, stakes, roundId, entry
   const totalConAtSettlement = detail.totalConAtSettlement ?? null;
 
   return (
-    <div className="p-2 space-y-2 text-xs bg-gray-50 text-gray-700">
-      <div className="flex justify-between text-gray-500">
-        <span className="text-gray-600">发起者: {detail.createdBy?.username}</span>
+    <div className="p-2 space-y-2 text-xs bg-[color:var(--surface-panel)] text-[color:var(--text-primary)]">
+      <div className="flex justify-between text-[color:var(--text-muted)]">
+        <span className="text-[color:var(--text-secondary)]">发起者: {detail.createdBy?.username}</span>
         <span>{new Date(detail.openedAt).toLocaleString('zh-CN')}</span>
       </div>
 
@@ -818,18 +821,18 @@ function SettledRoundDetailView({ detail, previousDetail, stakes, roundId, entry
       )}
 
       {(clawbackPro > 0 || clawbackCon > 0) && (
-        <div className="bg-amber-50 border border-amber-200 rounded px-2 py-1.5 text-xs">
-          <span className="text-amber-700 font-medium">↩ 推翻扣回</span>
-          <span className="text-gray-500 ml-2">
+        <div className="bg-[color:var(--surface-fffbeb)] border border-[color:var(--line-fde68a)] rounded px-2 py-1.5 text-xs">
+          <span className="text-[color:var(--ink-fbbf24)] font-medium">↩ 推翻扣回</span>
+          <span className="text-[color:var(--text-muted)] ml-2">
             PRO {clawbackPro} · CON {clawbackCon} · 合计 {clawbackPro + clawbackCon} 点
           </span>
         </div>
       )}
 
       <div>
-        <div className="font-medium text-gray-600 mb-1">记录 ({entries.length}):</div>
+        <div className="font-medium text-[color:var(--text-secondary)] mb-1">记录 ({entries.length}):</div>
         {entries.length > 0 ? (
-          <ul className="divide-y divide-gray-200 max-h-48 overflow-y-auto">
+          <ul className="divide-y divide-[color:var(--border-default)] max-h-48 overflow-y-auto">
             {entries.map(e => {
               const isHighlighted = entryHighlight
                 ? (entryHighlight.stakeId && e.kind === 'stake' && e.entryId === entryHighlight.stakeId) ||
@@ -837,16 +840,16 @@ function SettledRoundDetailView({ detail, previousDetail, stakes, roundId, entry
                     (e.kind === 'stake' && entryHighlight.side && e.label === entryHighlight.side && (!entryHighlight.username || entryHighlight.username === e.username))
                   ))
                 : false;
-              const colorClass = e.label === 'PRO' ? 'text-green-700' : 'text-red-700';
+              const colorClass = e.label === 'PRO' ? 'text-[color:var(--ink-utility-green-700)]' : 'text-[color:var(--ink-utility-red-700)]';
               return (
-                <li key={e.id} className={`py-1 flex justify-between px-1 rounded ${isHighlighted ? 'bg-yellow-100 border border-yellow-300' : ''}`}>
-                  <span className="text-gray-700">{e.username}</span>
+                <li key={e.id} className={`py-1 flex justify-between px-1 rounded ${isHighlighted ? 'bg-[color:var(--surface-utility-yellow-100)] border border-[color:var(--line-utility-yellow-300)]' : ''}`}>
+                  <span className="text-[color:var(--text-primary)]">{e.username}</span>
                   <span className={colorClass}>{e.label} {e.amount}点</span>
                 </li>
               );
             })}
           </ul>
-        ) : <div className="text-gray-400">无记录</div>}
+        ) : <div className="text-[color:var(--text-muted)]">无记录</div>}
       </div>
     </div>
   );
@@ -857,7 +860,7 @@ function MyStakesInRound({ votes, currentUsername }: { votes: SettlementRoundIte
   if (!votes) return null;
   const myVotes = votes.filter(v => v.user.username === currentUsername);
   if (myVotes.length === 0) {
-    return <div className="text-xs text-gray-400">我的押注：尚未投票</div>;
+    return <div className="text-xs text-[color:var(--text-muted)]">我的押注：尚未投票</div>;
   }
   const trueVotes = myVotes.filter(v => v.vote === 'TRUE');
   const falseVotes = myVotes.filter(v => v.vote === 'FALSE');
@@ -868,7 +871,7 @@ function MyStakesInRound({ votes, currentUsername }: { votes: SettlementRoundIte
   if (falseVotes.length > 0) {
     parts.push(`FALSE ${falseVotes.reduce((s, v) => s + v.amount, 0)} 点`);
   }
-  return <div className="text-xs text-indigo-700">我的押注：{parts.join('  ')}</div>;
+  return <div className="text-xs text-[color:var(--ink-4338ca)]">我的押注：{parts.join('  ')}</div>;
 }
 
 /** 结算结果摘要 — 纯展示：公开资金流向 + 个人收益 */
@@ -892,18 +895,18 @@ function SettlementSummary({ weights, result, previousResult, totalProAtSettleme
 
   if (result === 'UNKNOWN') {
     return (
-      <div className="bg-white rounded border border-gray-200 px-3 py-2 space-y-1 text-xs">
-        <div className="text-gray-600">本轮本金 {totalStake} 点：PRO 方 {weights.TRUE} 点，CON 方 {weights.FALSE} 点。</div>
-        <div className="text-gray-600">结算累计总计 {cumulativeTotal} 点：PRO 方 {cumulativeWeights.TRUE} 点，CON 方 {cumulativeWeights.FALSE} 点。</div>
+      <div className="bg-[color:var(--surface-card)] rounded border border-[color:var(--border-default)] px-3 py-2 space-y-1 text-xs">
+        <div className="text-[color:var(--text-secondary)]">本轮本金 {totalStake} 点：PRO 方 {weights.TRUE} 点，CON 方 {weights.FALSE} 点。</div>
+        <div className="text-[color:var(--text-secondary)]">结算累计总计 {cumulativeTotal} 点：PRO 方 {cumulativeWeights.TRUE} 点，CON 方 {cumulativeWeights.FALSE} 点。</div>
         {totalAtSettlement !== null && (
-          <div className="text-gray-600">本次结算完成时总押注 {totalAtSettlement} 点：PRO 方 {totalProAtSettlement} 点，CON 方 {totalConAtSettlement} 点。</div>
+          <div className="text-[color:var(--text-secondary)]">本次结算完成时总押注 {totalAtSettlement} 点：PRO 方 {totalProAtSettlement} 点，CON 方 {totalConAtSettlement} 点。</div>
         )}
-        <div className="text-amber-700">本次结算结果：{resultLabel}。</div>
+        <div className="text-[color:var(--ink-fbbf24)]">本次结算结果：{resultLabel}。</div>
         {resultChanged && previousResult && (
-          <div className="text-amber-700">上轮结果：{previousResult}；本轮结果不同，构成推翻，双方所有贡献点返还。</div>
+          <div className="text-[color:var(--ink-fbbf24)]">上轮结果：{previousResult}；本轮结果不同，构成推翻，双方所有贡献点返还。</div>
         )}
         {showPersonal && personalSettlement && (
-          <div className="text-gray-500 border-t border-gray-100 pt-1 mt-1">
+          <div className="text-[color:var(--text-muted)] border-t border-[color:var(--border-default)] pt-1 mt-1">
             截至本轮累计投入贡献 {personalSettlement.principal} 点（押注{personalSettlement.stakePrincipal}点，协议费{personalSettlement.protocolFee}点）
             {personalSettlement.previousAfter !== undefined && ` → 上一轮结算为 ${personalSettlement.previousAfter} 点`}
             {` → 本轮结算后贡献点为 ${personalSettlement.after} 点；本轮贡献点变化：${personalSettlement.change >= 0 ? '收益' : '损失'}${Math.abs(personalSettlement.change)} 点。`}
@@ -918,28 +921,28 @@ function SettlementSummary({ weights, result, previousResult, totalProAtSettleme
   const rate = winnerTotal > 0 ? Math.round((loserTotal / winnerTotal) * 100) / 100 : 0;
 
   return (
-    <div className="bg-white rounded border border-gray-200 px-3 py-2 space-y-1 text-xs">
+    <div className="bg-[color:var(--surface-card)] rounded border border-[color:var(--border-default)] px-3 py-2 space-y-1 text-xs">
       {/* Public */}
-      <div className="text-gray-600">
+      <div className="text-[color:var(--text-secondary)]">
         本轮本金 {totalStake} 点：PRO 方 {weights.TRUE} 点，CON 方 {weights.FALSE} 点。
       </div>
-      <div className="text-gray-600">
+      <div className="text-[color:var(--text-secondary)]">
         结算累计总计 {cumulativeTotal} 点：PRO 方 {cumulativeWeights.TRUE} 点，CON 方 {cumulativeWeights.FALSE} 点。
       </div>
       {totalAtSettlement !== null && (
-        <div className="text-gray-600">
+        <div className="text-[color:var(--text-secondary)]">
           本次结算完成时总押注 {totalAtSettlement} 点：PRO 方 {totalProAtSettlement} 点，CON 方 {totalConAtSettlement} 点。
         </div>
       )}
-      <div className="text-gray-600">
+      <div className="text-[color:var(--text-secondary)]">
         本次结算结果：{resultLabel}。累计收益池 {loserTotal} 点；胜方每点押注收益 {rate} 点，胜方贡献本金返还后按权重分配收益。
       </div>
       {resultChanged && previousResult && (
-        <div className="text-amber-700">上轮结果：{previousResult}；本轮结果不同，构成推翻，重新分配贡献点。</div>
+        <div className="text-[color:var(--ink-fbbf24)]">上轮结果：{previousResult}；本轮结果不同，构成推翻，重新分配贡献点。</div>
       )}
       {/* Personal */}
       {showPersonal && personalSettlement && (
-        <div className="text-gray-500 border-t border-gray-100 pt-1 mt-1">
+        <div className="text-[color:var(--text-muted)] border-t border-[color:var(--border-default)] pt-1 mt-1">
           <span>截至本轮累计投入贡献 {personalSettlement.principal} 点（押注{personalSettlement.stakePrincipal}点，协议费{personalSettlement.protocolFee}点）</span>
           {personalSettlement.previousAfter !== undefined && <span> → 上一轮结算为 {personalSettlement.previousAfter} 点</span>}
           <span> → 本轮结算后贡献点为 {personalSettlement.after} 点；本轮贡献点变化：{personalSettlement.change >= 0 ? '收益' : '损失'}{Math.abs(personalSettlement.change)} 点</span>

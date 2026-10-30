@@ -129,7 +129,7 @@ export default function WorkbenchMessageList(props: Props) {
           const isOrganizationMessage = isClassification || isSummary || isMerge;
           const govKind = msg.backendKind;
           const isGovernanceMsg = !isOrganizationMessage && msg.kind !== "relation" && (govKind === "GOVERNANCE" || govKind === "CODE" || govKind === "OPERATIONS");
-          const governanceColor = govKind === "GOVERNANCE" ? "#f59e0b" : govKind === "CODE" ? "#3b82f6" : "#10b981";
+          const governanceColor = govKind === "GOVERNANCE" ? "var(--ink-f59e0b)" : govKind === "CODE" ? "var(--ink-3b82f6-2)" : "var(--ink-10b981)";
           const memberCount = isOrganizationMessage
             ? (props.catalog.containerOwnership?.owned(msg.id)??collectOwnedByRelation(msg.id, relationById)).textIds.size
             : 0;
@@ -228,6 +228,7 @@ export default function WorkbenchMessageList(props: Props) {
                 <CrossCanvasRelatedMessages groups={props.crossCanvasRelations?.get(msg.id)} messages={msgMap} selectedUnits={draftUnits} onView={props.onRelatedRelationView??handleNavigateToMessage}/></>}
               selectedUnits={draftUnits}
               key={msg.id} msg={msg} ctx={ctx}
+              stakeCounts={sc}
               onClick={cardHandlers.onClick}
               onDoubleClick={cardHandlers.onDoubleClick}
               onMouseDown={cardHandlers.onMouseDown}
@@ -236,12 +237,12 @@ export default function WorkbenchMessageList(props: Props) {
               headerBetweenIdAuthor={
                 <>
                   {activeStanceInfo && activeStanceInfo.targetRelId === comparisonTargetId && comparisonReviewed && (
-                    <span style={{ color: recommendationMatchesUser ? '#86efac' : '#fbbf24', fontWeight: 600 }}>
+                    <span style={{ color: recommendationMatchesUser ? 'var(--ink-86efac)' : 'var(--ink-fbbf24)', fontWeight: 600 }}>
                       当前统计结果：{comparisonRecommendedDisplay === 'disagree' ? '反对' : '赞同'} · {recommendationMatchesUser ? '与你相同' : '与你不同'}
                     </span>
                   )}
                   {!activeStanceInfo && isCurrentComparisonTarget && activeTargetStanceInfo && (
-                    <span style={{ color: recommendationMatchesUser ? '#86efac' : '#fbbf24', fontWeight: 600 }}>
+                    <span style={{ color: recommendationMatchesUser ? 'var(--ink-86efac)' : 'var(--ink-fbbf24)', fontWeight: 600 }}>
                       当前统计结果：{comparisonRecommendedDisplay === 'disagree' ? '反对' : '赞同'} · {recommendationMatchesUser ? '与你相同' : '与你不同'}
                     </span>
                   )}
@@ -250,9 +251,9 @@ export default function WorkbenchMessageList(props: Props) {
                 </>
               }
               headerLabel={msg.kind === 'join' ? (
-                <span style={{ color: '#93c5fd', fontFamily: 'monospace', fontWeight: 600 }}>{msg.id}</span>
+                <span style={{ color: 'var(--ink-93c5fd)', fontFamily: 'monospace', fontWeight: 600 }}>{msg.id}</span>
               ) : correctionFilterTargetId !== null && msg.relationType === 'correct' ? (
-                <span style={{ color: '#fbbf24', fontWeight: 600 }}>
+                <span style={{ color: 'var(--ink-fbbf24)', fontWeight: 600 }}>
                   <span
                     role="link"
                     tabIndex={0}
@@ -272,7 +273,7 @@ export default function WorkbenchMessageList(props: Props) {
                   <MessageDisplayMarker messageId={msg.id} viewTag />
                   <span style={{
                     marginLeft: 5,
-                    color: correctionVersion?.valid && !correctionVersion.conflicted ? '#4ade80' : '#f87171',
+                    color: correctionVersion?.valid && !correctionVersion.conflicted ? 'var(--ink-4ade80)' : 'var(--ink-f87171)',
                     textDecoration: 'none',
                   }}>
                     {correctionVersion?.valid && !correctionVersion.conflicted ? '（有效）' : '（无效）'}
@@ -280,7 +281,7 @@ export default function WorkbenchMessageList(props: Props) {
                 </span>
               ) : undefined}
               headerAfterAuthor={correctionRecords.length > 0 ? (
-                <span><span role="button" tabIndex={0} style={{ color: '#fbbf24', fontWeight: 600, cursor:'pointer' }} title="双击查看更正记录"
+                <span><span role="button" tabIndex={0} style={{ color: 'var(--ink-fbbf24)', fontWeight: 600, cursor:'pointer' }} title="双击查看更正记录"
                   onClick={event=>{event.stopPropagation();props.onCorrectionCompare?.(event,correctionRecords[0].relationMessageId);}} onDoubleClick={event=>{event.stopPropagation();props.onCorrectionHistory?.(event,correctionRecords[0].relationMessageId);}}
                   onKeyDown={event=>{if(event.key==='Enter'){event.stopPropagation();props.onCorrectionCompare?.(event as unknown as React.MouseEvent,correctionRecords[0].relationMessageId);}}}>
                   ✏ {correctionRecords.length}
@@ -300,7 +301,7 @@ export default function WorkbenchMessageList(props: Props) {
                 <>
                   {msg.kind === "join" && joinRelation && (
                     <div style={{ marginBottom: ctx.isRelationRecord ? 0 : 4, order: 1, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                      <span title={joinPresentation.hint} style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: joinIsEffective ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.16)", color: joinIsEffective ? "#86efac" : "#fca5a5", border: `1px solid ${joinIsEffective ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.35)'}` }}>
+                      <span title={joinPresentation.hint} style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: joinIsEffective ? "var(--surface-rgba-34-197-94-0-15)" : "var(--surface-rgba-239-68-68-0-16)", color: joinIsEffective ? "var(--ink-86efac)" : "var(--ink-fca5a5)", border: `1px solid ${joinIsEffective ? 'var(--line-rgba-34-197-94-0-3)' : 'var(--line-rgba-239-68-68-0-35)'}` }}>
                         {joinPresentation.label}
                       </span>
                     </div>
@@ -315,7 +316,7 @@ export default function WorkbenchMessageList(props: Props) {
                         return notifyUsers.length > 0 ? (
                           <span
                             title="通知关系标签"
-                            style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(59,130,246,0.18)", color: "#93c5fd", border: "1px solid rgba(59,130,246,0.45)", display: "inline-flex", alignItems: "center", gap: 3 }}
+                            style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "var(--surface-rgba-59-130-246-0-18)", color: "var(--ink-93c5fd)", border: "1px solid var(--line-rgba-59-130-246-0-45)", display: "inline-flex", alignItems: "center", gap: 3 }}
                           >
                             {notifyUsers.map((notifyUser, index) => (
                               <React.Fragment key={notifyUser.id}>
@@ -331,7 +332,7 @@ export default function WorkbenchMessageList(props: Props) {
                                       navigate(`${messageScopePath(scopeMessageId)}?sender=${encodeURIComponent(notifyUser.username)}`);
                                     }
                                   }}
-                                  style={{ color: "#bfdbfe", cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2, fontFamily: "monospace" }}
+                                  style={{ color: "var(--ink-bfdbfe)", cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2, fontFamily: "monospace" }}
                                   title={`在清爽视图中查看 ${notifyUser.username} 的消息`}
                                 >
                                   {notifyUser.id}
@@ -342,14 +343,14 @@ export default function WorkbenchMessageList(props: Props) {
                           </span>
                         ) : null;
                       })()}
-                      {suppressedRelIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(239,68,68,0.2)", color: "#fca5a5", border: "1px solid rgba(239,68,68,0.35)" }}>你已反对 · 点赞同恢复</span>}
-                      {rejectedContainerIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(251,191,36,0.15)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.3)" }} title="社区反对多于赞同，该分类已暂时解散">社区已反对 · 双击预览</span>}
-                      {overriddenStanceRelIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(255,255,255,0.04)", color: "#6b7280", border: "1px solid rgba(255,255,255,0.1)" }}>已失效</span>}
+                      {suppressedRelIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "var(--surface-rgba-239-68-68-0-2)", color: "var(--ink-fca5a5)", border: "1px solid var(--line-rgba-239-68-68-0-35)" }}>你已反对 · 点赞同恢复</span>}
+                      {rejectedContainerIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "var(--surface-rgba-251-191-36-0-15)", color: "var(--ink-fbbf24)", border: "1px solid var(--line-rgba-251-191-36-0-3)" }} title="社区反对多于赞同，该分类已暂时解散">社区已反对 · 双击预览</span>}
+                      {overriddenStanceRelIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "var(--surface-rgba-255-255-255-0-04)", color: "var(--ink-6b7280-2)", border: "1px solid var(--line-rgba-255-255-255-0-1)" }}>已失效</span>}
                     </div>
                   )}
                   {summaryCoverages.length > 0 && (
                     <div style={{ marginBottom: ctx.isRelationRecord ? 0 : 6, order: 1, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      {summaryCoverages.map(item => <span key={item.summaryId} style={{ minWidth: 0, maxWidth: "100%", fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(245,158,11,0.14)", color: "#fcd34d", border: "1px solid rgba(245,158,11,0.28)", overflowWrap: 'anywhere' }}>非线性视图由总结「{item.title}」覆盖</span>)}
+                      {summaryCoverages.map(item => <span key={item.summaryId} style={{ minWidth: 0, maxWidth: "100%", fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "var(--surface-rgba-245-158-11-0-14)", color: "var(--ink-fcd34d)", border: "1px solid var(--line-rgba-245-158-11-0-28)", overflowWrap: 'anywhere' }}>非线性视图由总结「{item.title}」覆盖</span>)}
                     </div>
                   )}
                 </>
@@ -362,7 +363,7 @@ export default function WorkbenchMessageList(props: Props) {
               ) : undefined}
             >
               {msg.kind === 'join' ? (
-                <div style={{ color: '#cbd5e1', fontSize: 12, lineHeight: 1.7, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', order: 1, minWidth: 0 }}>
+                <div style={{ color: 'var(--ink-cbd5e1)', fontSize: 12, lineHeight: 1.7, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', order: 1, minWidth: 0 }}>
                   <span>目标 ID：</span>
                   {(msg.joinInfo?.targetIds ?? []).length > 0 ? msg.joinInfo!.targetIds.map(targetId => {
                     const target=joinEntry?.targets.find(target=>target.id===targetId);
@@ -371,13 +372,13 @@ export default function WorkbenchMessageList(props: Props) {
                     <button
                       type="button"
                       onClick={event => { event.stopPropagation(); handleNavigateToMessage(targetId); }}
-                      style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, border: '1px solid rgba(59,130,246,0.45)', background: 'rgba(59,130,246,0.16)', color: '#93c5fd', cursor: 'pointer', fontFamily: 'monospace' }}
+                      style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, border: '1px solid var(--line-rgba-59-130-246-0-45)', background: 'var(--surface-rgba-59-130-246-0-16)', color: 'var(--ink-93c5fd)', cursor: 'pointer', fontFamily: 'monospace' }}
                       title={`跳转到目标消息 ${targetId}`}
                     >{targetId}</button>
-                    {targetId===props.display.joinFilterTargetId&&<span data-join-target-self={targetId} style={{fontSize:10,color:'#9ca3af',whiteSpace:'nowrap'}}>（自身）</span>}
+                    {targetId===props.display.joinFilterTargetId&&<span data-join-target-self={targetId} style={{fontSize:10,color:'var(--ink-9ca3af)',whiteSpace:'nowrap'}}>（自身）</span>}
                     {target&&<span data-join-target-location={target.location} data-join-target-adopted={target.adopted?'true':'false'}
-                      style={{fontSize:10,padding:'0 5px',borderRadius:3,background:target.location==='outside'?'rgba(245,158,11,0.14)':target.location==='nested'?'rgba(59,130,246,0.14)':'rgba(148,163,184,0.12)',
-                        color:target.location==='outside'?'#fbbf24':target.location==='nested'?'#bfdbfe':'#94a3b8',fontWeight:target.location==='outside'?600:undefined}}>
+                      style={{fontSize:10,padding:'0 5px',borderRadius:3,background:target.location==='outside'?'var(--surface-rgba-245-158-11-0-14)':target.location==='nested'?'var(--surface-rgba-59-130-246-0-14)':'var(--surface-rgba-148-163-184-0-12)',
+                        color:target.location==='outside'?'var(--ink-fbbf24)':target.location==='nested'?'var(--ink-bfdbfe)':'var(--ink-94a3b8)',fontWeight:target.location==='outside'?600:undefined}}>
                       {JOIN_TARGET_LOCATION_LABELS[target.location]}{joinEntry?.adopted&&!target.adopted?' · 此目标未采用':''}
                     </span>}
                     </span>;
@@ -386,30 +387,30 @@ export default function WorkbenchMessageList(props: Props) {
                     <><JoinEndpointType messageId={msg.joinInfo.containerId} messages={msgMap} containerType={msg.joinInfo.containerType} containerLabel/><button
                       type="button"
                       onClick={event => { event.stopPropagation(); handleNavigateToMessage(msg.joinInfo!.containerId); }}
-                      style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, border: '1px solid rgba(16,185,129,0.45)', background: 'rgba(16,185,129,0.16)', color: '#a7f3d0', cursor: 'pointer', fontFamily: 'monospace' }}
+                      style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, border: '1px solid var(--line-rgba-16-185-129-0-45)', background: 'var(--surface-rgba-16-185-129-0-16)', color: 'var(--ink-a7f3d0)', cursor: 'pointer', fontFamily: 'monospace' }}
                       title={`跳转到容器消息 ${msg.joinInfo.containerId}`}
                     >{msg.joinInfo.containerId}</button></>
                   ) : <span>无</span>}
                 </div>
               ) : msg.relationType === 'correct' ? (
                 <div style={{ display: 'contents' }}>
-                  <div style={{ fontSize: 12, color: '#fbbf24', order: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
+                  <div style={{ fontSize: 12, color: 'var(--ink-fbbf24)', order: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
                     目标：
                     {correctionTarget && (
                       <button
                         type="button"
                         onClick={event => { event.stopPropagation(); handleNavigateFromCorrectionTemporaryCategory(correctionTarget.id, false); }}
-                        style={{ marginLeft: 6, padding: '2px 7px', borderRadius: 999, border: '1px solid rgba(96,165,250,0.5)', background: 'rgba(59,130,246,0.16)', color: '#93c5fd', cursor: 'pointer', fontSize: 11, maxWidth: '100%', overflowWrap: 'anywhere' }}
+                        style={{ marginLeft: 6, padding: '2px 7px', borderRadius: 999, border: '1px solid var(--line-rgba-96-165-250-0-5)', background: 'var(--surface-rgba-59-130-246-0-16)', color: 'var(--ink-93c5fd)', cursor: 'pointer', fontSize: 11, maxWidth: '100%', overflowWrap: 'anywhere' }}
                         title={`跳转到目标消息 ${correctionTarget.id}`}
                       >
                         {correctionTarget.id}
                       </button>
                     )}
                   </div>
-                  <div style={{ borderLeft: '3px solid #0d9488', background: 'rgba(13,148,136,0.12)', padding: '6px 8px', order: 3, flexBasis: '100%', minWidth: 0, fontSize: 12 }}>
-                    {msg.relationPayload?.correctionKind === 'WIDTH' ? <div style={{color:'#5eead4'}}>宽度调整 · {msg.relationPayload.correctionWidth} px</div> : <>
-                    <div style={{ fontSize: 11, color: '#5eead4', marginBottom: 3 }}>{'修正文字'} · start={correctionRange.start} len={correctionRange.len}</div>
-                    <div style={{ whiteSpace: 'pre-wrap', color: '#fca5a5' }}>
+                  <div style={{ borderLeft: '3px solid var(--line-0d9488)', background: 'var(--surface-rgba-13-148-136-0-12)', padding: '6px 8px', order: 3, flexBasis: '100%', minWidth: 0, fontSize: 12 }}>
+                    {msg.relationPayload?.correctionKind === 'WIDTH' ? <div style={{color:'var(--ink-5eead4)'}}>宽度调整 · {msg.relationPayload.correctionWidth} px</div> : <>
+                    <div style={{ fontSize: 11, color: 'var(--ink-5eead4)', marginBottom: 3 }}>{'修正文字'} · start={correctionRange.start} len={correctionRange.len}</div>
+                    <div style={{ whiteSpace: 'pre-wrap', color: 'var(--ink-fca5a5)' }}>
                       {correctionReplacement.length === 0
                         ? `删除${correctionTargetLabel}`
                         : correctionTargetText.length === 0 ? `在所选位置插入「${correctionReplacement}」`
@@ -427,9 +428,9 @@ export default function WorkbenchMessageList(props: Props) {
   if(joinGroups)return <div data-container-join-records={props.joinRecordContext!.containerId} style={{display:'grid',gap:16}}>
     {([{key:'adopted',label:'当前采用',entries:joinGroups.adopted},{key:'unadopted',label:'未采用',entries:joinGroups.unadopted}] as const).map(group=><section key={group.key}
       aria-label={`${group.label}的被加入记录`} data-join-record-group={group.key}>
-      <h3 style={{fontSize:13,fontWeight:600,margin:'0 0 8px',padding:'5px 8px',borderLeft:`3px solid ${group.key==='adopted'?'#34d399':'#94a3b8'}`,color:group.key==='adopted'?'#a7f3d0':'#cbd5e1',background:'#1b2430'}}>{group.label}（{group.entries.length} 条）</h3>
+      <h3 style={{fontSize:13,fontWeight:600,margin:'0 0 8px',padding:'5px 8px',borderLeft:`3px solid ${group.key==='adopted'?'var(--line-34d399)':'var(--line-94a3b8)'}`,color:group.key==='adopted'?'var(--ink-a7f3d0)':'var(--ink-cbd5e1)',background:'var(--surface-1b2430)'}}>{group.label}（{group.entries.length} 条）</h3>
       {group.entries.length?<VirtualMessageList ids={group.entries.map(entry=>entry.id)} pinned={pins}>{renderMessage}</VirtualMessageList>
-        :<div style={{padding:'4px 8px',fontSize:12,color:'#94a3b8'}}>暂无{group.label}的被加入记录。</div>}
+        :<div style={{padding:'4px 8px',fontSize:12,color:'var(--ink-94a3b8)'}}>暂无{group.label}的被加入记录。</div>}
     </section>)}
   </div>;
   return <VirtualMessageList ids={rowIds} pinned={pins}>{renderMessage}</VirtualMessageList>;

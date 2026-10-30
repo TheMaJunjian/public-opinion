@@ -114,7 +114,7 @@ function ReadingController(p:Props&{context:NonNullable<ReturnType<typeof useRea
     finally{if(activeOperation.current===operation){activeOperation.current=null;setBusy(false);}}
   };
   return <>
-    {!!p.incoming.length&&<details role="note" style={{fontSize:11,color:'#94a3b8',overflowWrap:'anywhere'}}><summary>本次阅读来源 · {p.incoming.length} 项</summary>
+    {!!p.incoming.length&&<details role="note" style={{fontSize:11,color:'var(--ink-94a3b8)',overflowWrap:'anywhere'}}><summary>本次阅读来源 · {p.incoming.length} 项</summary>
       <ReadingConfirmationGroups groups={readingConfirmations(p.incoming,messageTypes)} focusId={p.focusId} messageTypes={messageTypes} getMessageSummary={getMessageSummary} disabled={busy||!p.ready} onNavigate={id=>void visit(id,tasks.filter(task=>task.destinationId===id))}/><div>来源提示不扩展当前追溯范围。</div></details>}
     <TraceReadingPanel messageTypes={messageTypes} getMessageSummary={getMessageSummary} ready={p.ready} focusLocated={p.focusLocated} order={p.order} onOrder={p.onOrder} {...queue} focusIds={readingIds} confirmations={readingConfirmations(currentTasks,messageTypes)} statistics={{bodies:tasks.filter(task=>task.kind==='body'&&task.location==='inside').length,
       influences:tasks.filter(task=>task.kind==='influence'&&task.location!=='filtered').length,outsideInfluences:tasks.filter(task=>task.kind==='influence'&&task.location==='outside').length}} busy={busy||!p.ready||queue.focusId!==p.focusId} canRead={!!context.onMarkRead} isWorking={busy} error={error} notice={notice}

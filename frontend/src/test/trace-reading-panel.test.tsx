@@ -70,5 +70,14 @@ it('explains automatic tracing without a redundant continue action',()=>{
     canGoBack={false} canGoForward={false} onForward={vi.fn()} onBackward={vi.fn()} onRead={vi.fn()} onNew={vi.fn()} onSetReading={vi.fn()}
     confirmations={[]} statistics={{bodies:0,influences:0,outsideInfluences:0}} onVisit={vi.fn()} onBack={vi.fn()} path={ [['a','b']] } messageTypes={new Map()}/>);
   expect(view.queryByRole('button',{name:/继续追溯(?:本组|当前)消息/})).toBeNull();
+  const help=view.container.querySelector<HTMLDetailsElement>('details[data-reading-help]')!;
+  expect(help).not.toHaveAttribute('open');
+  expect(view.getByText(/指定阅读消息时自动以它为追溯起点/)).not.toBeVisible();
+  expect(view.getByRole('button',{name:'阅读前进'})).toBeVisible();
+  fireEvent.click(within(help).getByText('阅读操作说明'));
+  expect(help).toHaveAttribute('open');
+  expect(view.getByText(/指定阅读消息时自动以它为追溯起点/)).toBeVisible();
   expect(view.getByText(/指定阅读消息时自动以它为追溯起点/)).toHaveTextContent('默认向上 1 层、向下 2 层');
+  fireEvent.click(within(help).getByText('阅读操作说明'));
+  expect(help).not.toHaveAttribute('open');
 });

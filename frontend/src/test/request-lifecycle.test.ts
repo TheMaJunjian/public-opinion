@@ -31,6 +31,23 @@ it('saves private viewing state with CSRF but without signing keys or a public c
   expect(committed).not.toHaveBeenCalled();expect(signPayloadWithPrivateJwk).not.toHaveBeenCalled();
 });
 
+it('rebuilds stale message caches once after a reading 404 and keeps a repeated failure visible', async () => {
+  const marks = [{ messageId: 'removed-message', scope: 'message' as const, key: 'body', signature: 'display' }];
+  const invalidated = vi.fn(); window.addEventListener('gonglun:invalidate-cache', invalidated);
+  const fetcher = vi.fn(async () => new Response(JSON.stringify({ error: '消息或版本不存在' }), { status: 404 }));
+  vi.stubGlobal('fetch', fetcher);
+  try {
+    await expect(api.markReading(marks)).rejects.toThrow('消息数据已过期，正在重新加载');
+    expect(invalidated).toHaveBeenCalledOnce();
+    expect(getOperations()).toEqual([]);
+    // Do not keep rebuilding or hide an actual server integrity problem.
+    await expect(api.markReading(marks)).rejects.toMatchObject({ status: 404, path: '/reading-state' });
+    expect(invalidated).toHaveBeenCalledOnce();
+    expect(getOperations()).toMatchObject([{ label: '保存阅读状态', state: 'failed', message: '消息或版本不存在' }]);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  } finally { window.removeEventListener('gonglun:invalidate-cache', invalidated); }
+});
+
 it('bounds a response body that never completes, even after the headers arrived', async () => {
   const json = vi.fn(() => new Promise(() => {}));
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json })));

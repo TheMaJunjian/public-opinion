@@ -7,6 +7,7 @@ import { LABEL_BBOX_STABILITY_THRESHOLD } from '../utils/graphPresentationGeomet
 import { reportWorkbenchDrawingDuration } from '../utils/workbenchActivity';
 import { useWorkbenchDrawingTask } from '../context/WorkbenchDrawingContext';
 import type { GraphAnchorCache } from '../utils/graphAnchorCache';
+import { useTheme } from '../theme/theme';
 type LabelBbox = Rect;
 
 export function useGraphOverlays(input: Omit<GraphOverlayInput, 'labelBboxes'> & {
@@ -18,6 +19,7 @@ export function useGraphOverlays(input: Omit<GraphOverlayInput, 'labelBboxes'> &
   pendingMeasurements?: boolean;
 }) {
   const startOverlays = useWorkbenchDrawingTask('overlays');
+  const theme = useTheme();
   const { canvasRef, normalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals, headerRefs, contentRefs, edges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, textRefs, actualCanvasWidth, actualCanvasHeight } = input;
   const [overlays, setOverlays] = useState(emptyGraphOverlays);
   const [labelBboxes, setLabelBboxes] = useState<Record<string, LabelBbox>>({});
@@ -96,6 +98,6 @@ export function useGraphOverlays(input: Omit<GraphOverlayInput, 'labelBboxes'> &
     });
   // Virtual reveal/scroll can mount labels without changing their routed paths.
   // Measure that new DOM as well, so its hit areas and decorations appear.
-  }, [positionedEdges, actualCanvasWidth, actualCanvasHeight, input.labelViewport, input.labelRetainedIds]);
+  }, [positionedEdges, actualCanvasWidth, actualCanvasHeight, input.labelViewport, input.labelRetainedIds, theme]);
   return { ...overlays, labelBboxes };
 }

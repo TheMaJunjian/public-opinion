@@ -32,20 +32,20 @@ export default function LoginPage() {
   return (
     <PromptModal open title={redirectReason ? '请先登录' : '登录公论'} hideActions onConfirm={() => {}}
       dialogProps={{ style: { width: 'min(400px, 100%)', colorScheme: 'dark' } }} message={<div style={{ whiteSpace: 'normal' }}>
-        <p className="text-center text-gray-300 text-sm mb-6">登录您的与会者账户，参与公论</p>
+        <p className="text-center text-[color:var(--ink-d1d5db)] text-sm mb-6">登录您的与会者账户，参与公论</p>
         {redirectReason && (
-          <div role="status" className="bg-amber-950 border border-amber-800 text-amber-200 rounded-lg px-3 py-2 text-sm mb-4">
+          <div role="status" className="bg-[color:var(--surface-451a03)] border border-[color:var(--line-92400e)] text-[color:var(--ink-fde68a-2)] rounded-lg px-3 py-2 text-sm mb-4">
             {redirectReason}
           </div>
         )}
         {error && (
-          <div role="alert" className="bg-red-950 border border-red-800 text-red-200 rounded-lg px-3 py-2 text-sm mb-4">
+          <div role="alert" className="bg-[color:var(--surface-450a0a)] border border-[color:var(--line-991b1b)] text-[color:var(--ink-fecaca-2)] rounded-lg px-3 py-2 text-sm mb-4">
             {error}
           </div>
         )}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label htmlFor="login-username" className="block text-sm font-medium text-gray-200 mb-1">与会者名</label>
+            <label htmlFor="login-username" className="block text-sm font-medium text-[color:var(--ink-e5e7eb-2)] mb-1">与会者名</label>
             <input
               id="login-username"
               type="text"
@@ -54,11 +54,11 @@ export default function LoginPage() {
               value={username}
               onChange={e => setUsername(e.target.value)}
               placeholder="请输入与会者名"
-              className="w-full bg-gray-900 text-gray-100 border border-gray-600 rounded-lg px-3 py-2 text-sm placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400"
+              className="w-full bg-[color:var(--surface-111827)] text-[color:var(--ink-f3f4f6-2)] border border-[color:var(--line-4b5563)] rounded-lg px-3 py-2 text-sm placeholder:text-[color:var(--ink-6b7280)] focus:outline-none focus:ring-2 focus:ring-[color:var(--fragment-accent)]"
             />
           </div>
           <div>
-            <label htmlFor="login-password" className="block text-sm font-medium text-gray-200 mb-1">密码</label>
+            <label htmlFor="login-password" className="block text-sm font-medium text-[color:var(--ink-e5e7eb-2)] mb-1">密码</label>
             <input
               id="login-password"
               type="password"
@@ -67,7 +67,7 @@ export default function LoginPage() {
               value={password}
               onChange={e => setPassword(e.target.value)}
               placeholder="请输入密码"
-              className="w-full bg-gray-900 text-gray-100 border border-gray-600 rounded-lg px-3 py-2 text-sm placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400"
+              className="w-full bg-[color:var(--surface-111827)] text-[color:var(--ink-f3f4f6-2)] border border-[color:var(--line-4b5563)] rounded-lg px-3 py-2 text-sm placeholder:text-[color:var(--ink-6b7280)] focus:outline-none focus:ring-2 focus:ring-[color:var(--fragment-accent)]"
             />
           </div>
           <button
@@ -79,9 +79,9 @@ export default function LoginPage() {
             {loading ? '登录中…' : '登录'}
           </button>
         </form>
-        <p className="mt-4 text-center text-sm text-gray-400">
+        <p className="mt-4 text-center text-sm text-[color:var(--ink-9ca3af)]">
           还没有账户？{' '}
-          <Link to="/register" className="text-blue-400 hover:underline font-medium">
+          <Link to="/register" className="text-[color:var(--ink-60a5fa-2)] hover:underline font-medium">
             立即注册
           </Link>
         </p>

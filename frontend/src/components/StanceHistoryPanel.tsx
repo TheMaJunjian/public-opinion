@@ -78,15 +78,15 @@ export default function StanceHistoryPanel({ userId, scopeMessageId }: Props) {
 
   useEffect(() => { load(); }, [load]);
 
-  if (loading) return <div className="text-sm text-gray-500 p-4">加载中...</div>;
-  if (error) return <div className="text-sm text-red-600 p-4">{error}</div>;
+  if (loading) return <div className="text-sm text-[color:var(--ink-6b7280)] p-4">加载中...</div>;
+  if (error) return <div className="text-sm text-[color:var(--ink-dc2626)] p-4">{error}</div>;
 
   const totalCount = relations.length + stakes.length + tags.length;
   if (totalCount === 0) {
     return (
-      <div className="text-sm text-gray-500 p-4 space-y-2">
+      <div className="text-sm text-[color:var(--ink-6b7280)] p-4 space-y-2">
         <div>暂无记录</div>
-        <div className="text-xs text-gray-400">赞同/反对记录在「站队」中，标注记录在「表态」中，其他消息消耗的贡献点记录在「立场」中。</div>
+        <div className="text-xs text-[color:var(--ink-9ca3af)]">赞同/反对记录在「站队」中，标注记录在「表态」中，其他消息消耗的贡献点记录在「立场」中。</div>
       </div>
     );
   }
@@ -108,11 +108,11 @@ export default function StanceHistoryPanel({ userId, scopeMessageId }: Props) {
 
   return (
     <div className="space-y-3">
-      <div className="flex gap-1 border-b border-gray-200">
+      <div className="flex gap-1 border-b border-[color:var(--line-e5e7eb)]">
         {TABS.map(tab => (
           <button key={tab.key} onClick={() => setActiveTab(tab.key)}
             className={`px-3 py-1.5 text-xs font-medium border-b-2 transition-colors ${
-              activeTab === tab.key ? 'border-indigo-500 text-indigo-700' : 'border-transparent text-gray-500 hover:text-gray-700'
+              activeTab === tab.key ? 'border-[color:var(--line-6366f1-2)] text-[color:var(--ink-4338ca)]' : 'border-transparent text-[color:var(--ink-6b7280)] hover:text-[color:var(--ink-374151)]'
             }`}
           >
             {tab.label} ({tab.count})
@@ -195,7 +195,7 @@ function StanceCard({
 }) {
   return (
     <div
-      className={`border rounded-lg px-3 py-2 cursor-pointer hover:shadow-sm transition-shadow bg-white ${highlight ? 'border-amber-300 bg-amber-50' : 'border-gray-200'}`}
+      className={`border rounded-lg px-3 py-2 cursor-pointer hover:shadow-sm transition-shadow bg-[color:var(--surface-fff)] ${highlight ? 'border-[color:var(--line-fcd34d)] bg-[color:var(--surface-fffbeb)]' : 'border-[color:var(--line-e5e7eb)]'}`}
       onDoubleClick={onDoubleClick}
       title="双击跳转到对应消息"
     >
@@ -203,11 +203,11 @@ function StanceCard({
         <div className="flex items-center gap-2">
           <span className="text-base">{icon}</span>
           <div>
-            <div className="text-xs font-medium text-gray-800">{title}</div>
-            {subtitle && <div className="text-xs text-gray-500">{subtitle}</div>}
+            <div className="text-xs font-medium text-[color:var(--ink-1f2937)]">{title}</div>
+            {subtitle && <div className="text-xs text-[color:var(--ink-6b7280)]">{subtitle}</div>}
           </div>
         </div>
-        <span className="text-xs text-gray-400">
+        <span className="text-xs text-[color:var(--ink-9ca3af)]">
           {new Date(time).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
         </span>
       </div>

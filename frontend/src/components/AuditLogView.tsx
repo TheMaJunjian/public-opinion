@@ -20,19 +20,19 @@ const ACTION_LABELS: Record<string, string> = {
 };
 
 const ACTION_COLORS: Record<string, string> = {
-  SETTLE: 'bg-amber-100 text-amber-700',
-  CLAW: 'bg-red-100 text-red-700',
-  STAKE: 'bg-green-100 text-green-700',
-  VOTE: 'bg-purple-100 text-purple-700',
-  ROUND: 'bg-orange-100 text-orange-700',
-  MINT: 'bg-emerald-100 text-emerald-700',
+  SETTLE: 'bg-[color:var(--surface-utility-amber-100)] text-[color:var(--ink-utility-amber-700)]',
+  CLAW: 'bg-[color:var(--surface-utility-red-100)] text-[color:var(--ink-utility-red-700)]',
+  STAKE: 'bg-[color:var(--surface-utility-green-100)] text-[color:var(--ink-utility-green-700)]',
+  VOTE: 'bg-[color:var(--surface-utility-purple-100)] text-[color:var(--ink-utility-purple-700)]',
+  ROUND: 'bg-[color:var(--surface-utility-orange-100)] text-[color:var(--ink-utility-orange-700)]',
+  MINT: 'bg-[color:var(--surface-utility-emerald-100)] text-[color:var(--ink-utility-emerald-700)]',
 };
 
 function actionColor(action: string): string {
   for (const [key, cls] of Object.entries(ACTION_COLORS)) {
     if (action.includes(key)) return cls;
   }
-  return 'bg-blue-100 text-blue-700';
+  return 'bg-[color:var(--surface-utility-blue-100)] text-[color:var(--ink-utility-blue-700)]';
 }
 
 /** 生成可跳转链接的描述文字 */
@@ -100,13 +100,13 @@ export default function AuditLogView({ scopeMessageId }: { scopeMessageId?: stri
   }, [scopeMessageId, page, filterAction]);
 
   return (
-    <div className="border border-gray-200 rounded-lg p-4 bg-white">
+    <div className="border border-[color:var(--line-e5e7eb)] rounded-lg p-4 bg-[color:var(--surface-fff)]">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="font-semibold text-gray-800 text-sm">📋 审计日志</h3>
+        <h3 className="font-semibold text-[color:var(--ink-1f2937)] text-sm">📋 审计日志</h3>
         <select
           value={filterAction}
           onChange={e => { setFilterAction(e.target.value); setPage(1); }}
-          className="text-xs border border-gray-300 rounded px-2 py-0.5 bg-white"
+          className="text-xs border border-[color:var(--line-d1d5db)] rounded px-2 py-0.5 bg-[color:var(--surface-fff)]"
         >
           <option value="">全部操作</option>
           {Object.entries(ACTION_LABELS).map(([key, label]) => (
@@ -115,27 +115,27 @@ export default function AuditLogView({ scopeMessageId }: { scopeMessageId?: stri
         </select>
       </div>
       {loading ? (
-        <div className="text-sm text-gray-500">加载中...</div>
+        <div className="text-sm text-[color:var(--ink-6b7280)]">加载中...</div>
       ) : entries.length === 0 ? (
         <div>
-          <div className="text-sm text-gray-400">暂无记录</div>
-          <div className="text-xs text-gray-500 mt-1">系统尚无操作记录。当你或他人进行发消息、押注、发起结算、投票等操作后，所有记录会在此透明展示，任何人都可查阅。</div>
+          <div className="text-sm text-[color:var(--ink-9ca3af)]">暂无记录</div>
+          <div className="text-xs text-[color:var(--ink-6b7280)] mt-1">系统尚无操作记录。当你或他人进行发消息、押注、发起结算、投票等操作后，所有记录会在此透明展示，任何人都可查阅。</div>
         </div>
       ) : (
         <div className="space-y-1 max-h-96 overflow-y-auto text-xs">
           {entries.map(e => (
             <div key={e.id}>
               <div
-                className="flex items-center gap-2 py-1 border-b border-gray-100 cursor-pointer hover:bg-gray-50"
+                className="flex items-center gap-2 py-1 border-b border-[color:var(--line-f3f4f6)] cursor-pointer hover:bg-[color:var(--surface-f9fafb)]"
                 onClick={() => setExpandedId(expandedId === e.id ? null : e.id)}
               >
-                <span className="text-gray-400 w-20 flex-shrink-0">
+                <span className="text-[color:var(--ink-9ca3af)] w-20 flex-shrink-0">
                   {new Date(e.createdAt).toLocaleTimeString('zh-CN')}
                 </span>
                 <span className={`px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${actionColor(e.action)}`}>
                   {ACTION_LABELS[e.action] ?? e.action}
                 </span>
-                <span className="text-gray-600 truncate flex-1">
+                <span className="text-[color:var(--ink-4b5563)] truncate flex-1">
                   {e.data?.summary ?? e.actor?.username ?? '系统'}
                 </span>
                 {e.entityId && (
@@ -145,17 +145,17 @@ export default function AuditLogView({ scopeMessageId }: { scopeMessageId?: stri
                       const url = resolveNavUrl(e);
                       if (url) navigate(url);
                     }}
-                    className="text-blue-500 hover:text-blue-700 flex-shrink-0 text-xs font-medium"
+                    className="text-[color:var(--ink-3b82f6)] hover:text-[color:var(--ink-1d4ed8)] flex-shrink-0 text-xs font-medium"
                     title="查看对应消息"
                   >查看 →</button>
                 )}
               </div>
               {expandedId === e.id && (
-                <div className="ml-24 mb-1 p-2 bg-gray-50 rounded text-xs text-gray-600">
+                <div className="ml-24 mb-1 p-2 bg-[color:var(--surface-f9fafb)] rounded text-xs text-[color:var(--ink-4b5563)]">
                   <div className="flex items-center gap-3 mb-1">
-                    <span className="text-gray-400">{e.actor?.username ?? '系统'}</span>
+                    <span className="text-[color:var(--ink-9ca3af)]">{e.actor?.username ?? '系统'}</span>
                     {e.entityType && e.entityId && (
-                      <span className="text-gray-500">
+                      <span className="text-[color:var(--ink-6b7280)]">
                         {entityLinkLabel(e.entityType, e.entityId)}
                       </span>
                     )}
@@ -165,14 +165,14 @@ export default function AuditLogView({ scopeMessageId }: { scopeMessageId?: stri
                           const url = resolveNavUrl(e);
                           if (url) navigate(url);
                         }}
-                        className="text-blue-500 hover:text-blue-700"
+                        className="text-[color:var(--ink-3b82f6)] hover:text-[color:var(--ink-1d4ed8)]"
                       >
                         查看 →
                       </button>
                     )}
                   </div>
                   {e.data?.details && Object.keys(e.data.details).length > 0 && (
-                    <pre className="mt-1 text-gray-500 overflow-x-auto max-h-32">
+                    <pre className="mt-1 text-[color:var(--ink-6b7280)] overflow-x-auto max-h-32">
                       {JSON.stringify(e.data.details, null, 2)}
                     </pre>
                   )}

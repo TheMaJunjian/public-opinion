@@ -205,18 +205,18 @@ export interface PaginatedResponse<T> {
 export function getConnectorColorClass(relationType: string): string {
   const spec = getPresentationSpec(relationType);
   const COLOR_BORDER: Record<string, string> = {
-    blue:   'border-blue-400',
-    indigo: 'border-indigo-400',
-    green:  'border-green-400',
-    red:    'border-red-400',
-    yellow: 'border-yellow-400',
-    purple: 'border-purple-400',
-    orange: 'border-orange-400',
-    amber:  'border-amber-400',
-    gray:   'border-gray-300',
-    slate:  'border-slate-300',
+    blue:   'border-[color:var(--line-utility-blue-400)]',
+    indigo: 'border-[color:var(--line-utility-indigo-400)]',
+    green:  'border-[color:var(--line-utility-green-400)]',
+    red:    'border-[color:var(--line-utility-red-400)]',
+    yellow: 'border-[color:var(--line-utility-yellow-400)]',
+    purple: 'border-[color:var(--line-utility-purple-400)]',
+    orange: 'border-[color:var(--line-utility-orange-400)]',
+    amber:  'border-[color:var(--line-utility-amber-400)]',
+    gray:   'border-[color:var(--line-utility-gray-300)]',
+    slate:  'border-[color:var(--line-utility-slate-300)]',
   };
-  return COLOR_BORDER[spec.color] ?? 'border-gray-300';
+  return COLOR_BORDER[spec.color] ?? 'border-[color:var(--line-utility-gray-300)]';
 }
 
 // ============================================================

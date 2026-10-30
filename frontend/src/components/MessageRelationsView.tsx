@@ -36,10 +36,10 @@ function notifyUserLinks(edge: DemoEdge, messages: DemoMessage[], navigate: (to:
         alignItems: 'center',
         gap: 4,
         padding: '2px 7px',
-        border: '1px solid #60a5fa',
+        border: '1px solid var(--line-60a5fa)',
         borderRadius: 4,
-        background: '#dbeafe',
-        color: '#1e3a8a',
+        background: 'var(--surface-dbeafe)',
+        color: 'var(--ink-1e3a8a)',
         fontWeight: 700,
         lineHeight: 1.5,
         whiteSpace: 'nowrap',
@@ -60,7 +60,7 @@ function notifyUserLinks(edge: DemoEdge, messages: DemoMessage[], navigate: (to:
               }
             }}
             title={`在清爽视图中查看 ${notifyUser.username} 的消息`}
-            style={{ color: '#1d4ed8', textDecoration: 'underline' }}
+            style={{ color: 'var(--ink-1d4ed8-2)', textDecoration: 'underline' }}
           >
             {notifyUser.id}
           </span>
@@ -98,7 +98,7 @@ function IncomingOutgoingList(props: { focusIds: string[]; edges: DemoEdge[]; ki
                     {e.relationType.toLowerCase() === 'notify' ? (
                       <>
                         {notifyUserLinks(e, messages, navigate, scopeMessageId) ?? (
-                          <span style={{ display: 'inline-flex', padding: '2px 7px', border: '1px solid #60a5fa', borderRadius: 4, background: '#dbeafe', color: '#1e3a8a', fontWeight: 700 }}>
+                          <span style={{ display: 'inline-flex', padding: '2px 7px', border: '1px solid var(--line-60a5fa)', borderRadius: 4, background: 'var(--surface-dbeafe)', color: 'var(--ink-1e3a8a)', fontWeight: 700 }}>
                             {notifyLabel(e, messages)}：通知
                           </span>
                         )}
@@ -111,7 +111,7 @@ function IncomingOutgoingList(props: { focusIds: string[]; edges: DemoEdge[]; ki
                             type="button"
                             onClick={event => { event.stopPropagation(); onNavigateToMessage(e.relationMessageId); }}
                             title={`跳转到${relationTypeName(e.relationType)}消息 ${e.relationMessageId}`}
-                            style={{ padding: 0, border: 0, background: 'transparent', color: '#93c5fd', cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2, font: 'inherit' }}
+                            style={{ padding: 0, border: 0, background: 'transparent', color: 'var(--ink-93c5fd)', cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2, font: 'inherit' }}
                           >{relationTypeName(e.relationType)}：{e.relationMessageId}</button>
                         ) : `${relationTypeName(e.relationType)}：${e.relationMessageId}`}
                         {`：${fmtSel(e.from)} → ${fmtSel(e.to)}`}
@@ -134,14 +134,14 @@ export default function MessageRelationsView(props: { traceIds: string[]; messag
   const msgMap = new Map(messages.map(m => [m.id, m]));
   if (!traceIds || traceIds.length === 0) {
     return (
-      <div style={{ border: '1px solid #444', borderRadius: 6, padding: 8 }}>
+      <div style={{ border: '1px solid var(--line-444)', borderRadius: 6, padding: 8 }}>
         <div style={{ fontWeight: 600, marginBottom: 4 }}>结构视图（全局模式·简化）</div>
         <div style={{ fontSize: 12, opacity: 0.7 }}>（进入追溯后显示：左侧指向我 / 右侧我指向）</div>
       </div>
     );
   }
   return (
-    <div style={{ border: '1px solid #444', borderRadius: 6, padding: 8 }}>
+    <div style={{ border: '1px solid var(--line-444)', borderRadius: 6, padding: 8 }}>
       <div style={{ fontWeight: 600, marginBottom: 6 }}>结构视图（追溯模式 · 多消息）</div>
       <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 8 }}>
         当前追溯消息：
@@ -151,11 +151,11 @@ export default function MessageRelationsView(props: { traceIds: string[]; messag
         })}
       </div>
       <div style={{ display: 'flex', gap: 8 }}>
-        <div style={{ flex: 1, border: '1px solid #333', borderRadius: 6, padding: 6, minWidth: 0 }}>
+        <div style={{ flex: 1, border: '1px solid var(--line-333)', borderRadius: 6, padding: 6, minWidth: 0 }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>左侧（Incoming：指向追溯集合）</div>
           <IncomingOutgoingList focusIds={traceIds} edges={edges} kind="in" messages={messages} navigate={navigate} scopeMessageId={scopeMessageId} onNavigateToMessage={onNavigateToMessage} />
         </div>
-        <div style={{ flex: 1, border: '1px solid #333', borderRadius: 6, padding: 6, minWidth: 0 }}>
+        <div style={{ flex: 1, border: '1px solid var(--line-333)', borderRadius: 6, padding: 6, minWidth: 0 }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>右侧（Outgoing：追溯集合指向）</div>
           <IncomingOutgoingList focusIds={traceIds} edges={edges} kind="out" messages={messages} navigate={navigate} scopeMessageId={scopeMessageId} onNavigateToMessage={onNavigateToMessage} />
         </div>

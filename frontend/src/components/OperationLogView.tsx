@@ -31,14 +31,14 @@ export default function OperationLogView() {
   }, []);
 
   return (
-    <div style={{ border: '1px solid #444', borderRadius: 6, padding: 8, marginTop: 8 }}>
+    <div style={{ border: '1px solid var(--line-444)', borderRadius: 6, padding: 8, marginTop: 8 }}>
       <div style={{ fontWeight: 600, marginBottom: 4 }}>操作日志</div>
       {entries.length === 0 ? (
         <div style={{ fontSize: 12, opacity: 0.65 }}>暂无操作</div>
       ) : (
         <div style={{ fontSize: 12, maxHeight: 180, overflow: 'auto' }}>
           {entries.slice().reverse().map((entry, index) => (
-            <div key={`${entry.time}-${index}`} style={{ borderBottom: '1px solid #333', padding: '3px 0', wordBreak: 'break-all' }}>
+            <div key={`${entry.time}-${index}`} style={{ borderBottom: '1px solid var(--line-333)', padding: '3px 0', wordBreak: 'break-all' }}>
               <span style={{ opacity: 0.6, marginRight: 6 }}>{entry.time}</span>
               <strong>{entry.action}</strong>{entry.details ? ` ${entry.details}` : ''}
             </div>

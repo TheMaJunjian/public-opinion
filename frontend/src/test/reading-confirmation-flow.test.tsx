@@ -168,7 +168,7 @@ describe('one reading confirmation with separate message and influence records',
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(save.mock.calls[0][0]).toEqual([expect.objectContaining({scope:'comparison',messageId:'m'})]);
     expect(screen.getByRole('button',{name:'对比'})).toHaveAttribute('data-comparison-reading','read');
-    expect(screen.getByRole('button',{name:'对比'})).toHaveStyle({color:'#64748b'});
+    expect(screen.getByRole('button',{name:'对比'})).toHaveStyle({color:'var(--ink-64748b)'});
     expect(screen.getByRole('button',{name:'标记当前消息已阅'})).toBeEnabled();
     expect(screen.getByRole('region',{name:'未阅影响'})).toHaveTextContent('未阅影响（1 条）');
     const saved=save.mock.calls[0][0];view.unmount();
@@ -190,7 +190,7 @@ describe('one reading confirmation with separate message and influence records',
     const later=fixture([...input.relations,{...relation('later','CORRECT'),createdAt:'2026-01-03'}]);
     restored.rerender(<Harness source={later} initialMarks={saved}/>);
     expect(screen.getByRole('button',{name:'对比'})).toHaveAttribute('data-comparison-reading','unread');
-    expect(screen.getByRole('button',{name:'对比'})).toHaveStyle({color:'#bae6fd'});
+    expect(screen.getByRole('button',{name:'对比'})).toHaveStyle({color:'var(--ink-bae6fd)'});
   });
   it('remembers both effective and ineffective comparison results and recognizes returning to either one',async()=>{
     const input=fixture([relation('correction','CORRECT')]),save=vi.fn<(marks:ReadingMark[])=>Promise<void>>(async()=>{});

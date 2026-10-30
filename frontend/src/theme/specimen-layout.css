@@ -1,0 +1,58 @@
+.desk-section-number, .desk-section-title, .desk-fee-breakdown, .desk-send-balance, .desk-new-title { display: none; }
+.desk-submit-bar { display: contents; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-legacy-title,
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-legacy-fees { display: none; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-new-title { display: inline; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .workbench-operation-panel { padding: 18px !important; gap: 18px !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) :is(.desk-staging, .desk-endpoints, .desk-relations, .workbench-composer-section) { padding: 0 0 18px !important; border: 0 !important; border-bottom: 1px solid var(--skin-border) !important; border-radius: 0 !important; box-shadow: none !important; background: transparent !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-section-number { display: inline-block; margin-right: 8px; font: 12px/1.5 ui-monospace, monospace; color: var(--text-secondary); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-section-title { display: flex; align-items: center; width: 100%; font-weight: 600; font-size: 14px; margin-bottom: 12px; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-endpoints > div:not(.desk-section-title) { border: 0 !important; border-radius: 0 !important; padding: 4px 8px !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-endpoints > div:last-child { border-left: 1px solid var(--skin-border) !important; }
+.desk-relation-group { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; align-items: baseline; margin: 7px 0; font-size: 12px; }
+.desk-relation-group > span { color: var(--text-secondary); }
+.desk-relation-group > div { display: flex; gap: 6px; flex-wrap: wrap; }
+.desk-relation-group button { min-height: 28px; padding: 4px 9px !important; font-size: 12px; border: 1px solid var(--skin-border) !important; color: var(--text-primary) !important; background: var(--surface-card) !important; }
+.desk-relation-group button[aria-pressed='true'] { background: var(--button-primary-bg) !important; color: var(--button-primary-text) !important; border-color: var(--button-primary-bg) !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .workbench-composer-section textarea[data-guide-message-input] { min-height: 112px !important; padding: 12px !important; line-height: 1.8; font-family: var(--font-reading); background: var(--surface-card) !important; border-color: var(--skin-border) !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-send-controls { display: flex; flex-direction: column; align-items: stretch !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-send-controls [data-contribution-type] { padding: 8px !important; flex-wrap: wrap; border-color: var(--skin-border) !important; background: var(--surface-card); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-send-controls [data-contribution-type] > span:first-child { flex-basis: 100%; color: var(--text-secondary); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-send-controls input { min-height: 28px; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-fee-breakdown { display: grid; gap: 8px; padding: 12px 0; margin: 0; font-size: 12px; color: var(--text-secondary); }
+.desk-fee-breakdown > div { display: flex; justify-content: space-between; gap: 16px; }
+.desk-fee-breakdown dd { margin: 0; font-family: ui-monospace, monospace; }
+.desk-fee-breakdown > div:last-child { border-top: 1px solid var(--skin-border); padding-top: 8px; color: var(--text-primary); font-size: 14px; font-weight: 600; }
+.desk-fee-breakdown > div[data-over-budget='true'] { color: var(--ink-f87171); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-submit-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; position: sticky; bottom: 0; z-index: 2; background: var(--surface-panel); border-top: 1px solid var(--skin-border); padding: 12px 0 6px; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-send-balance { display: block; margin-right: auto; font-size: 12px; color: var(--text-primary); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-guide-send] { min-width: 88px; min-height: 34px; background: var(--button-primary-bg) !important; color: var(--button-primary-text) !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-guide-send]:disabled { background: var(--button-disabled-bg) !important; color: var(--button-disabled-text) !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-send-hint { flex-basis: 100%; color: var(--text-secondary) !important; font-size: 12px !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .workbench-relation-toolbar { padding-block: 5px !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .workbench-relation-types { padding-left: 0 !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .workbench-jump-controls > div { background: var(--surface-panel) !important; border-color: var(--skin-border) !important; box-shadow: none !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .workbench-jump-controls input { background: var(--surface-card) !important; color: var(--text-primary) !important; border-color: var(--skin-border) !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .workbench-jump-controls button { background: var(--button-primary-bg) !important; color: var(--button-primary-text) !important; border-color: var(--button-primary-bg) !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-relations[data-controls-frozen='true'] { position: sticky; top: 0; z-index: 5; background: var(--surface-panel) !important; padding-top: 8px !important; }
+
+/* Preview uses the same ornaments and SVG components as the live carriers. */
+:root[data-theme] .theme-dialog { width: min(900px, 100%) !important; }
+.theme-options { display: grid !important; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.theme-carrier-tabs { display: flex; gap: 8px; margin: 12px 0 18px; }
+.theme-carrier-tabs button { border: 1px solid var(--border-default); border-radius: 4px; background: var(--surface-card); color: var(--text-primary); padding: 4px 12px; }
+.theme-carrier-tabs button[aria-pressed='true'] { color: var(--button-primary-text); background: var(--button-primary-bg); border-color: var(--button-primary-bg); }
+.theme-carrier-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 22px; padding: 0 4px 12px; }
+.theme-carrier-heading { font-size: 13px; margin-bottom: 16px; color: var(--text-primary); }
+.theme-carrier-heading b { font: 18px ui-monospace, monospace; margin-right: 5px; }
+.theme-carrier-heading small { display: block; font-size: 11px; margin-top: 5px; color: var(--text-secondary); }
+.theme-carrier-grid .stake-tier-example { min-height: 155px; text-align: left; }
+.theme-carrier-grid .stake-tier-example p { margin: 8px 0 0; font: 13px/1.8 var(--font-reading); }
+.theme-edge-example { width: 100%; overflow: visible; }
+.theme-decoration-example { display: flex; flex-wrap: wrap; align-items: start; gap: 18px 10px; padding: 8px 0; }
+.theme-decoration-example > [data-skin-decoration], .theme-decoration-example > [data-skin-tag] > span { display: inline-block; position: relative; border: 1px solid var(--border-default); padding: 6px 9px; font-size: 12px; }
+.theme-frame-example { position: relative; }
+.theme-frame-example svg { width: 100%; overflow: visible; }
+.theme-frame-caption { position: absolute; inset: 22px 24px; color: var(--text-primary); font-size: 12px; }
+.theme-frame-caption div { border-top: 1px solid var(--border-default); margin-top: 10px; padding-top: 8px; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .popup-backdrop-flow { display: none; }

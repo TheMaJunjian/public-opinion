@@ -28,6 +28,7 @@ interface DraftGroup {
 }
 
 interface WorkbenchPanelProps {
+  relationChoices?: React.ReactNode;
   contributionGroups:Array<{type:string;label:string;count:number;truth:number|'';value:number|'';total:number}>;
   onContributionChange:(type:string,field:'truth'|'value',value:number|'')=>void;
   // Layout
@@ -249,13 +250,14 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
 
   const renderSendControls = () => (
     <>
-      {showContributionControls && <div data-contribution-policy="true" style={{display:'flex',alignItems:'baseline',gap:8,fontSize:11,color:'#94a3b8',whiteSpace:'nowrap'}}>
+      <div className="desk-section-title"><span className="desk-section-number">05</span>投入与费用</div>
+      {showContributionControls && <div data-contribution-policy="true" style={{display:'flex',alignItems:'baseline',gap:8,fontSize:11,color:'var(--ink-94a3b8)',whiteSpace:'nowrap'}}>
         <span style={{flexShrink:0}}>协议费 {p.stakeFeeAmountRef.current} 点/条</span>
         <span>每条消息的真假、价值至少一项大于 0</span>
       </div>}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+      <div className="desk-send-controls" data-guide-contribution-consumption={p.totalConsumption ? 'true' : undefined} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         {showContributionControls && <>
-          {p.contributionGroups.map(group=><div key={group.type} data-contribution-type={group.type} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 6px',border:'1px solid #444',borderRadius:4}}>
+          {p.contributionGroups.map(group=><div key={group.type} data-contribution-type={group.type} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 6px',border:'1px solid var(--line-444)',borderRadius:4}}>
             <span style={{fontSize:11}}>{group.label}消息 × {group.count}</span>
             {(['truth','value'] as const).map(field=><label key={field} style={{fontSize:11}}>{field==='truth'?'真假':'价值'}
               <input aria-label={`${group.type==='TEXT'?'':group.label}${field==='truth'?'真假':'价值'}投入`} type="number" min={0} max={Math.max(0,p.availablePoints)} value={group[field]}
@@ -263,25 +265,35 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                 title={targetInvestmentDimension(group.type)===(field==='truth'?'VALUE':'TRUTH')?'此项固定为 0，投入计入目标消息的另一维度':undefined}
                 data-guide-contribution-stake={field==='truth'?'true':undefined}
                 onChange={event=>p.onContributionChange(group.type,field,event.target.value===''?'':Math.max(0,Math.min(Number(event.target.value),Math.max(0,p.availablePoints))))}
-                style={{width:54,marginLeft:4,padding:'2px 4px',background:'#1a1a1a',color:targetInvestmentDimension(group.type)===(field==='truth'?'VALUE':'TRUTH')?'#666':'#eee',border:'1px solid #555',borderRadius:4}}/>
+                style={{width:54,marginLeft:4,padding:'2px 4px',background:'var(--surface-1a1a1a)',color:targetInvestmentDimension(group.type)===(field==='truth'?'VALUE':'TRUTH')?'var(--ink-666)':'var(--ink-eee)',border:'1px solid var(--line-555)',borderRadius:4}}/>
             </label>)}
-            <span style={{fontSize:11,color:'#94a3b8'}}>每条同额，小计 {group.total} 点</span>
+            <span style={{fontSize:11,color:'var(--ink-94a3b8)'}}>每条同额，小计 {group.total} 点</span>
           </div>)}
-          <span style={{ fontSize: 11, color: '#94a3b8' }}>可用 {p.availablePoints} 点</span>
-          {p.totalConsumption && <span data-guide-contribution-consumption="true" style={{ fontSize: 11, color: p.totalConsumption.total > p.availablePoints ? '#f87171' : '#f59e0b' }}>
+          <span className="desk-legacy-fees" style={{ fontSize: 11, color: 'var(--ink-94a3b8)' }}>可用 {p.availablePoints} 点</span>
+          {p.totalConsumption && <span className="desk-legacy-fees" style={{ fontSize: 11, color: p.totalConsumption.total > p.availablePoints ? 'var(--ink-f87171)' : 'var(--ink-f59e0b)' }}>
             本次 {p.totalConsumption.messageCount} 条消息，预计 {p.totalConsumption.total} 点（协议费 {p.totalConsumption.protocolFeeTotal} + 真假 {p.totalConsumption.stakeTotal} + 价值 {p.totalConsumption.recommendationTotal}{p.totalConsumption.delegationRewardStake > 0 ? ` + 委托报酬 ${p.totalConsumption.delegationRewardStake}` : ''}）
           </span>}
+          {p.totalConsumption && <dl className="desk-fee-breakdown" aria-label="费用明细">
+            <div><dt>协议费</dt><dd>{p.totalConsumption.protocolFeeTotal} 点</dd></div>
+            <div><dt>真假投入</dt><dd>{p.totalConsumption.stakeTotal} 点</dd></div>
+            <div><dt>价值投入</dt><dd>{p.totalConsumption.recommendationTotal} 点</dd></div>
+            {p.totalConsumption.delegationRewardStake > 0 && <div><dt>委托报酬</dt><dd>{p.totalConsumption.delegationRewardStake} 点</dd></div>}
+            <div data-over-budget={p.totalConsumption.total > p.availablePoints || undefined}><dt>合计 · {p.totalConsumption.messageCount} 条消息</dt><dd>{p.totalConsumption.total} 点</dd></div>
+          </dl>}
         </>}
+        <div className="desk-submit-bar">
+        <span className="desk-send-balance">预计 {p.totalConsumption?.total ?? '—'} 点 · 可用 {p.availablePoints} 点</span>
         <button data-guide-send="true" data-guide-text-message-send="true" onClick={() => { window.dispatchEvent(new Event('guide-send-selected')); p.handleQuickSendAndRelateFromDraftTargets(); }} disabled={p.isPreviewMode || !p.singleButtonEnabled}
-          style={{ padding: "4px 14px", borderRadius: 4, border: "1px solid #666", background: (p.singleButtonEnabled && !p.isPreviewMode) ? "#0b84ff" : "#333", color: (p.singleButtonEnabled && !p.isPreviewMode) ? "#fff" : "#777", cursor: (p.singleButtonEnabled && !p.isPreviewMode) ? "pointer" : "default", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
+          style={{ padding: "4px 14px", borderRadius: 4, border: "1px solid var(--line-666)", background: (p.singleButtonEnabled && !p.isPreviewMode) ? "var(--surface-0b84ff)" : "var(--surface-333)", color: (p.singleButtonEnabled && !p.isPreviewMode) ? "var(--ink-fff)" : "var(--ink-777)", cursor: (p.singleButtonEnabled && !p.isPreviewMode) ? "pointer" : "default", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
           发送
         </button>
-        <span style={{ fontSize: 11, color: "#fff" }}>{p.singleButtonLabel}</span>
+        <span className="desk-send-hint" data-duplicates-validation={p.singleButtonLabel === p.sendValidationLabel || undefined} style={{ fontSize: 11, color: "var(--ink-fff)" }}>{p.singleButtonLabel}</span>
+        </div>
       </div>
       {p.sendValidationLabel
-        ? <div style={{ color: "#fbbf24", fontSize: 11, marginTop: 4 }}>{p.sendValidationLabel}</div>
-        : p.sendError && <div style={{ color: "#f87171", fontSize: 11, marginTop: 4 }}>{p.sendError}</div>}
-      {p.sendWarning && <div style={{ color: "#fbbf24", fontSize: 11, marginTop: 4 }}>⚠️ {p.sendWarning}</div>}
+        ? <div style={{ color: "var(--ink-fbbf24)", fontSize: 11, marginTop: 4 }}>{p.sendValidationLabel}</div>
+        : p.sendError && <div style={{ color: "var(--ink-f87171)", fontSize: 11, marginTop: 4 }}>{p.sendError}</div>}
+      {p.sendWarning && <div style={{ color: "var(--ink-fbbf24)", fontSize: 11, marginTop: 4 }}>⚠️ {p.sendWarning}</div>}
       <StanceReadingReminder relationType={p.relationType} secondaryRelationType={p.secondaryRelationType} targetIds={(p.draftUnits.length?p.draftUnits:p.targetUnits).map(unit=>unit.messageId)}/>
     </>
   );
@@ -292,19 +304,19 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
   const comparisonTarget = p.messages.find(message => message.id === (p.comparisonTargetId ?? comparisonDraft?.messageId ?? null));
   const comparisonCanReview = Boolean(comparisonDraft && comparisonTarget);
   const renderComparisonHeader = () => isComparison && (
-    <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+    <div style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ fontWeight: 600 }}>对比审阅</div>
       <div style={{ fontSize: 12, opacity: 0.8 }}>{comparisonTarget ? `当前目标：${comparisonTarget.author} · ${comparisonTarget.content || comparisonTarget.id}` : "请在左侧选择目标消息"}</div>
-      {!p.comparisonReviewed && <button disabled={!comparisonCanReview} onClick={p.onComparisonReview} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #38bdf8", background: "#123047", color: "#7dd3fc", cursor: comparisonCanReview ? "pointer" : "default", opacity: comparisonCanReview ? 1 : 0.5 }}>
+      {!p.comparisonReviewed && <button disabled={!comparisonCanReview} onClick={p.onComparisonReview} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid var(--line-38bdf8)", background: "var(--surface-123047)", color: "var(--ink-7dd3fc)", cursor: comparisonCanReview ? "pointer" : "default", opacity: comparisonCanReview ? 1 : 0.5 }}>
         审阅
       </button>}
-      {p.comparisonReviewed && p.isViewerMode && <div style={{ padding: "6px 8px", border: "1px solid #475569", borderRadius: 4, background: "#111827", color: "#cbd5e1", fontSize: 12 }}>
+      {p.comparisonReviewed && p.isViewerMode && <div style={{ padding: "6px 8px", border: "1px solid var(--line-475569)", borderRadius: 4, background: "var(--surface-111827)", color: "var(--ink-cbd5e1)", fontSize: 12 }}>
         当前为只读对比审阅状态，可查看赞同后与反对后的结构，不支持发送关系或消息。
       </div>}
-      {p.comparisonReviewed && <button onClick={p.onReturnToComparisonCategory} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #38bdf8", background: "#123047", color: "#7dd3fc", cursor: "pointer" }}>
+      {p.comparisonReviewed && <button onClick={p.onReturnToComparisonCategory} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid var(--line-38bdf8)", background: "var(--surface-123047)", color: "var(--ink-7dd3fc)", cursor: "pointer" }}>
         返回对比消息
       </button>}
-      <button onClick={p.onExitComparison} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>
+      <button onClick={p.onExitComparison} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-eee)", cursor: "pointer" }}>
         退出对比
       </button>
     </div>
@@ -312,8 +324,8 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
 
   return (
     <WorkbenchScrollViewport ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="workbench-right-panel" role="region" aria-label="发言与关系操作" tabIndex={-1} onTouchStart={handlePanelTouchStart} onTouchMove={handlePanelTouchMove} onTouchEnd={handlePanelTouchEnd} onTouchCancel={handlePanelTouchEnd} data-guide-right-panel="true" data-workbench-scroll-panel="true" data-workbench-panel-surface="true" style={viewportStyle}>
-    <div data-workbench-panel-content="true" style={panelStyle}>
-      {p.singleSideReview && <div role="region" aria-label="单侧对比" style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+    <div className="workbench-operation-panel" data-workbench-panel-content="true" style={panelStyle}>
+      {p.singleSideReview && <div role="region" aria-label="单侧对比" style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ fontWeight: 600 }}>{p.singleSideReview.kind==='correction'?'更正查看':p.singleSideReview.kind==='relation'?'消息效果查看':'容器查看'}</div>
         <div style={{ fontSize: 12, opacity: 0.8 }}>当前目标：{p.singleSideReview.title}</div>
       </div>}
@@ -321,44 +333,44 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
         {p.traceReadingControls}
       </RecentWorkbenchViews>
       {(p.singleSideReview || p.canExitTrace) && <button onClick={p.canExitTrace ? p.exitAllTrace : p.singleSideReview?.onExit}
-        style={{ padding: '5px 8px', borderRadius: 4, border: '1px solid #666', background: '#333', color: '#eee', cursor: 'pointer' }}
+        style={{ padding: '5px 8px', borderRadius: 4, border: '1px solid var(--line-666)', background: 'var(--surface-333)', color: 'var(--ink-eee)', cursor: 'pointer' }}
         title={p.canExitTrace ? '退出全部追溯并恢复进入第一次追溯前的现场' : '退出当前查看'}>{p.singleSideReview || p.isRelatedView ? '退出查看' : '退出追溯'}</button>}
-      {p.isViewerMode && <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+      {p.isViewerMode && <div style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span style={{ fontWeight: 600 }}>阅览操作</span>
-          <label style={{ display: "flex", alignItems: "center", gap: 6, color: "#cbd5e1", fontSize: 12 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ink-cbd5e1)", fontSize: 12 }}>
             当前用户
             <input
               list="viewer-user-options"
               placeholder="输入用户名"
               value={p.viewerUsername ?? ""}
               onChange={event => p.onViewerUsernameChange?.(event.target.value)}
-              style={{ flex: 1, minWidth: 120, padding: "5px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#eee", fontSize: 12 }}
+              style={{ flex: 1, minWidth: 120, padding: "5px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-222)", color: "var(--ink-eee)", fontSize: 12 }}
             />
             <datalist id="viewer-user-options">
               {(p.viewerUsers ?? []).map(viewer => <option key={viewer.id} value={viewer.username} />)}
             </datalist>
           </label>
         </div>
-        <button onClick={p.onExitViewer} style={{ width: "100%", boxSizing: "border-box", padding: "5px 12px", borderRadius: 4, border: "1px solid #f59e0b", background: "#2a1a00", color: "#f59e0b", fontSize: 12, cursor: "pointer" }}>退出阅览</button>
+        <button onClick={p.onExitViewer} style={{ width: "100%", boxSizing: "border-box", padding: "5px 12px", borderRadius: 4, border: "1px solid var(--line-f59e0b)", background: "var(--surface-2a1a00)", color: "var(--ink-f59e0b)", fontSize: 12, cursor: "pointer" }}>退出阅览</button>
       </div>}
       {renderComparisonHeader()}
       {p.isPreviewMode && !p.singleSideReview && (
-        <div style={{ border: "1px solid #856404", borderRadius: 6, padding: "8px 12px", background: "#3d3200", color: "#ffc107", fontSize: 13, fontWeight: 600 }}>
+        <div style={{ border: "1px solid var(--line-856404)", borderRadius: 6, padding: "8px 12px", background: "var(--surface-3d3200)", color: "var(--ink-ffc107)", fontSize: 13, fontWeight: 600 }}>
           {p.previewNotice ?? '⚠ 预览模式 — 该分类已被反对，无法发送消息或修改'}
         </div>
       )}
-      <div data-guide-selection-staging="true" style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
+      <div data-guide-selection-staging="true" className="desk-staging" data-empty={p.draftUnits.length === 0 && !p.activeTextSelectId} style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8 }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, alignItems: "center" }}>
-          <div style={{ fontWeight: 600 }}>选择暂存区</div>
+          <div style={{ fontWeight: 600 }}><span className="desk-section-number">01</span>选择暂存区</div>
           <div style={{ display: "flex", gap: 8, fontSize: 12 }}>
             <button onClick={p.clearDraftAll} disabled={p.draftUnits.length === 0 && !p.activeTextSelectId}
-              style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.draftUnits.length === 0 && !p.activeTextSelectId ? "#333" : "#444", color: p.draftUnits.length === 0 && !p.activeTextSelectId ? "#777" : "#fff", cursor: p.draftUnits.length === 0 && !p.activeTextSelectId ? "default" : "pointer" }}>
+              style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.draftUnits.length === 0 && !p.activeTextSelectId ? "var(--surface-333)" : "var(--surface-444)", color: p.draftUnits.length === 0 && !p.activeTextSelectId ? "var(--ink-777)" : "var(--ink-fff)", cursor: p.draftUnits.length === 0 && !p.activeTextSelectId ? "default" : "pointer" }}>
               清空
             </button>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <button onClick={() => { const selWhole = p.getSelectedWholeMessageIds(); if (selWhole.length > 0) p.enterTraceMultiple(selWhole, { replace: false }); else if (p.lastClickedMessageId) p.enterTrace(p.lastClickedMessageId, { replace: false }); }} disabled={!p.canSetTrace}
-                style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.canSetTrace ? "#444" : "#333", color: p.canSetTrace ? "#fff" : "#777", cursor: p.canSetTrace ? "pointer" : "default" }}>
+                style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.canSetTrace ? "var(--surface-444)" : "var(--surface-333)", color: p.canSetTrace ? "var(--ink-fff)" : "var(--ink-777)", cursor: p.canSetTrace ? "pointer" : "default" }}>
                 设为追溯消息
               </button>
             </div>
@@ -371,21 +383,21 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
               {name}（{side==='up'?'前因／依据':'后续／影响'}）
               <button type="button" aria-label={`减少${name}追溯距离`} disabled={value===0} onClick={()=>p.onTraceDepthChange?.(side,value-1)}>−</button>
               <input type="number" aria-label={`${name}追溯距离`} min={0} max={8} value={value} onChange={event=>p.onTraceDepthChange?.(side,Number(event.target.value))}
-                style={{width:45,padding:'3px 4px',background:'#222',color:'#fff',border:'1px solid #666',borderRadius:4}}/>
+                style={{width:45,padding:'3px 4px',background:'var(--surface-222)',color:'var(--ink-fff)',border:'1px solid var(--line-666)',borderRadius:4}}/>
               <button type="button" aria-label={`增加${name}追溯距离`} disabled={value===8} onClick={()=>p.onTraceDepthChange?.(side,value+1)}>+</button>
             </label>;})}
-          <span style={{fontSize:11,color:'#94a3b8'}}>0 为关闭该方向，最大 8</span>
+          <span style={{fontSize:11,color:'var(--ink-94a3b8)'}}>0 为关闭该方向，最大 8</span>
         </div>}
 
         {p.draftGroups.length === 0 ? (
-          <div style={{ fontSize: 12, opacity: 0.6, marginTop: 8 }}>当前未选择任何候选。</div>
+          <div className="desk-empty-hint" style={{ fontSize: 12, opacity: 0.6, marginTop: 8 }}>当前未选择任何候选。</div>
         ) : (
           <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, maxHeight: 220, overflow: "auto", fontSize: 12, marginTop: 8 }}>
             {p.draftGroups.map(g => (
-              <li key={`DG-${g.messageId}`} style={{ borderBottom: "1px solid #333", paddingBottom: 6, marginBottom: 6 }}>
+              <li key={`DG-${g.messageId}`} style={{ borderBottom: "1px solid var(--line-333)", paddingBottom: 6, marginBottom: 6 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                   <StagedMessageLabel messageId={g.messageId} message={messageMap.get(g.messageId)} onNavigate={p.onNavigateToMessage} wholeMessage={g.wholeSelected} status={g.wholeSelected ? '已选择整条' : `已选择 ${g.fragments.length} 处`} />
-                  {g.wholeSelected && <button onClick={() => g.wholeUnits.forEach(p.removeUnitFromDraft)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>删除整条</button>}
+                  {g.wholeSelected && <button onClick={() => g.wholeUnits.forEach(p.removeUnitFromDraft)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-eee)", cursor: "pointer" }}>删除整条</button>}
                 </div>
                 {g.fragments.length > 0 && (
                   <ul style={{ listStyle: "disc", marginLeft: 18, marginTop: 2, marginBottom: 0 }}>
@@ -396,7 +408,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                           <StagedMessageLabel messageId={u.messageId} message={messageMap.get(u.messageId)} wholeMessage={false}
                             content={u.selection.kind === 'text' ? u.selection.text : label}
                             ariaLabel={`暂存片段 ${p.selKey(u)}`} onNavigate={p.onNavigateToMessage} status={u.selection.kind === 'text' ? '已选择片段' : '已选择消息部件'} />
-                          <button onClick={() => p.removeUnitFromDraft(u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer", flex: "0 0 auto" }}>删除片段</button>
+                          <button onClick={() => p.removeUnitFromDraft(u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-eee)", cursor: "pointer", flex: "0 0 auto" }}>删除片段</button>
                         </li>
                       );
                     })}
@@ -407,42 +419,43 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           </ul>
         )}
 
-        {!p.isViewerMode && <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 8 }}>
-          <button onClick={() => p.commitDraftTo("source")} disabled={p.draftUnits.length === 0} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.draftUnits.length === 0 ? "#333" : "#444", color: p.draftUnits.length === 0 ? "#777" : "#fff", cursor: p.draftUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>加入来源集合</button>
-          <button onClick={() => p.commitDraftTo("target")} disabled={p.draftUnits.length === 0} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.draftUnits.length === 0 ? "#333" : "#444", color: p.draftUnits.length === 0 ? "#777" : "#fff", cursor: p.draftUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>加入目标集合</button>
+        {!p.isViewerMode && <div className="desk-staging-actions" style={{ marginTop: 6, display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 8 }}>
+          <button onClick={() => p.commitDraftTo("source")} disabled={p.draftUnits.length === 0} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.draftUnits.length === 0 ? "var(--surface-333)" : "var(--surface-444)", color: p.draftUnits.length === 0 ? "var(--ink-777)" : "var(--ink-fff)", cursor: p.draftUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>加入来源集合</button>
+          <button onClick={() => p.commitDraftTo("target")} disabled={p.draftUnits.length === 0} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.draftUnits.length === 0 ? "var(--surface-333)" : "var(--surface-444)", color: p.draftUnits.length === 0 ? "var(--ink-777)" : "var(--ink-fff)", cursor: p.draftUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>加入目标集合</button>
         </div>}
       </div>
 
-      {!p.isViewerMode && <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
+      {!p.isViewerMode && <div className="desk-endpoints" data-empty={p.sourceUnits.length === 0 && p.targetUnits.length === 0} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div className="desk-section-title"><span className="desk-section-number">02</span>来源 ⟶ 目标</div>
+        <div style={{ flex: 1, border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, minWidth: 0 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600, marginBottom: 4 }}>
             <span>来源集合</span>
             <span style={{ fontSize: 11, opacity: 0.65 }}>{p.sourceUnits.length} 项</span>
           </div>
-          {p.sourceUnits.length === 0 ? <div style={{ fontSize: 12, opacity: 0.6 }}>暂无。</div> : (
+          {p.sourceUnits.length === 0 ? <div className="desk-empty-hint" style={{ fontSize: 12, opacity: 0.6 }}>暂无。</div> : (
             <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, maxHeight: 120, overflow: "auto", fontSize: 12 }}>
               {p.sourceUnits.map(u => (
                 <li key={p.selKey(u)} style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
                   <StagedMessageLabel messageId={u.messageId} message={messageMap.get(u.messageId)} ariaLabel={`来源消息 ${p.selKey(u)}`} wholeMessage={isWholeMessageSelection(u,u.messageId)}
                     content={collectionContent(u)} />
-                  <button onClick={() => p.removeUnitFrom("source", u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>删除</button>
+                  <button onClick={() => p.removeUnitFrom("source", u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-eee)", cursor: "pointer" }}>删除</button>
                 </li>
               ))}
             </ul>
           )}
         </div>
-        <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
+        <div style={{ flex: 1, border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, minWidth: 0 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600, marginBottom: 4 }}>
             <span>目标集合</span>
             <span style={{ fontSize: 11, opacity: 0.65 }}>{p.targetUnits.length} 项</span>
           </div>
-          {p.targetUnits.length === 0 ? <div style={{ fontSize: 12, opacity: 0.6 }}>暂无。</div> : (
+          {p.targetUnits.length === 0 ? <div className="desk-empty-hint" style={{ fontSize: 12, opacity: 0.6 }}>暂无。</div> : (
             <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, maxHeight: 120, overflow: "auto", fontSize: 12 }}>
               {p.targetUnits.map(u => (
                 <li key={p.selKey(u)} style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
                   <StagedMessageLabel messageId={u.messageId} message={messageMap.get(u.messageId)} ariaLabel={`目标消息 ${p.selKey(u)}`} wholeMessage={isWholeMessageSelection(u,u.messageId)}
                     content={collectionContent(u)} />
-                  <button onClick={() => p.removeUnitFrom("target", u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>删除</button>
+                  <button onClick={() => p.removeUnitFrom("target", u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-eee)", cursor: "pointer" }}>删除</button>
                 </li>
               ))}
             </ul>
@@ -450,14 +463,15 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
         </div>
       </div>}
       {!p.isViewerMode && p.draftUnits.length > 0 && p.targetUnits.length > 0 && (
-        <div style={{ border: "1px solid #b45309", borderRadius: 4, padding: "6px 8px", background: "#3b2708", color: "#fbbf24", fontSize: 12 }}>
+        <div style={{ border: "1px solid var(--line-b45309)", borderRadius: 4, padding: "6px 8px", background: "var(--surface-3b2708)", color: "var(--ink-fbbf24)", fontSize: 12 }}>
           候选区和目标集合同时有内容。发送前请将候选区移入目标集合，或清空其中一方。
         </div>
       )}
 
       {!p.isViewerMode && <>
-        <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ fontWeight: 600 }}>输入框（消息与关系设置）</div>
+        {p.relationChoices}
+        <div className="workbench-composer-section" style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+          <div className="workbench-section-heading" style={{ fontWeight: 600 }}><span className="desk-section-number">04</span><span className="desk-new-title">正文与附加设置</span><span className="desk-legacy-title">输入框（消息与关系设置）</span></div>
           {p.hasSecondaryRelationSelector && (() => {
             const opts = p.relationType === "reply"
               ? ["none", "question", "answer"]
@@ -479,7 +493,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                   <button key={t} aria-pressed={p.secondaryRelationType === t} onClick={() => {
                     p.setSecondaryRelationType(prev => p.relationType === 'correct' ? t : (prev === t && t !== "none") ? "none" : t);
                   }}
-                    style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.secondaryRelationType === t ? "#0b84ff" : "#222", color: p.secondaryRelationType === t ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
+                    style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.secondaryRelationType === t ? "var(--surface-0b84ff)" : "var(--surface-222)", color: p.secondaryRelationType === t ? "var(--ink-fff)" : "var(--ink-rgba-255-255-255-0-7)", cursor: "pointer" }}>
                     {p.secondaryRelationLabel(t)}
                   </button>
                 ))}
@@ -488,7 +502,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           })()}
           {p.relationType === 'correct' && p.secondaryRelationType === 'width-adjustment' && <CardWidthEditor
             width={p.correctionWidth ?? 320} onChange={width => p.setCorrectionWidth?.(width)} />}
-          {p.relationType === 'correct' && <div style={{ fontSize: 11, color: '#9ca3af' }}>
+          {p.relationType === 'correct' && <div style={{ fontSize: 11, color: 'var(--ink-9ca3af)' }}>
             {p.secondaryRelationType === 'width-adjustment' ? '宽度按本人立场优先、公共统计其次显示有效更正，不改变正文。' : '正文按本人立场优先、公共统计其次显示有效更正。选字可基于显示内容，更正始终以原文为准。'}
           </div>}
           {/* SubType selector */}
@@ -499,19 +513,19 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                 <button key={st || 'none'} aria-pressed={p.subType === st} onClick={() => {
                   p.setSubType(st);
                 }}
-                  style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.subType === st ? (p.secondaryRelationType === "recommend" ? "#f59e0b" : "#64748b") : "#222", color: p.subType === st ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
+                  style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.subType === st ? (p.secondaryRelationType === "recommend" ? "var(--surface-f59e0b-2)" : "var(--surface-64748b)") : "var(--surface-222)", color: p.subType === st ? "var(--ink-fff)" : "var(--ink-rgba-255-255-255-0-7)", cursor: "pointer" }}>
                   {st ? p.subTypeLabel(st) : '无'}
                 </button>
               ))}
               {p.subType === 'CUSTOM' && <input type="text" aria-label="自定义标注原因" placeholder="输入自定义原因（最长20字）" maxLength={20}
                 value={p.subTypeCustomLabel} onChange={event=>p.setSubTypeCustomLabel(event.target.value)}
-                style={{flex:'1 1 160px',minWidth:120,padding:'3px 6px',borderRadius:4,border:'1px solid #555',background:'#222',color:'#eee'}}/>}
+                style={{flex:'1 1 160px',minWidth:120,padding:'3px 6px',borderRadius:4,border:'1px solid var(--line-555)',background:'var(--surface-222)',color:'var(--ink-eee)'}}/>}
             </div>
           )}
           {/* Label input */}
           {p.relationType === "reply" && (
           <input
-            style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid #555", background: "#1a1a1a", color: "#999", fontSize: 12 }}
+            style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid var(--line-555)", background: "var(--surface-1a1a1a)", color: "var(--ink-999)", fontSize: 12 }}
             placeholder="回复标签由附加关系决定"
             value={p.replyAdditionalLabel(p.secondaryRelationType)}
             readOnly
@@ -519,7 +533,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           )}
           {p.relationType === "reference" && p.secondaryRelationType === "custom" && (
           <input
-            style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid #555", background: "#222", color: "#eee", fontSize: 12 }}
+            style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid var(--line-555)", background: "var(--surface-222)", color: "var(--ink-eee)", fontSize: 12 }}
             placeholder="输入自定义引用标签"
             value={p.relationLabel}
             onChange={e => p.setRelationLabel(e.target.value)}
@@ -551,7 +565,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
             return (
               <textarea
                 data-guide-message-input="true"
-                style={{ width: "100%", minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: textAreaDisabled ? "#1a1a1a" : "#222", color: textAreaDisabled ? "#666" : "#eee", fontSize: 13, resize: "vertical" }}
+                style={{ width: "100%", minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid var(--line-555)", background: textAreaDisabled ? "var(--surface-1a1a1a)" : "var(--surface-222)", color: textAreaDisabled ? "var(--ink-666)" : "var(--ink-eee)", fontSize: 13, resize: "vertical" }}
                 placeholder={placeholderText}
                 value={p.joinOnlyAction ? '' : p.newMessageContent}
                 readOnly={textAreaDisabled}
@@ -564,7 +578,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
         </div>
       </>}
 
-      {!p.comparisonReviewed && <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
+      {!p.comparisonReviewed && <div style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8 }}>
         <div style={{ fontWeight: 600 }}>追溯</div>
         <div style={{ fontSize: 12, opacity: 0.75 }}>{p.isInsideClassify ? "当前模式：分类" : "当前模式：追溯"}</div>
         <div style={{ fontSize: 12, opacity: 0.8 }}>当前追溯消息：{p.currentTraceIds ? p.currentTraceIds.join(", ") : "（无）"}</div>
@@ -575,13 +589,13 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
       </RecentWorkbenchViews>
 
       {!p.isViewerMode && <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
+        <div style={{ flex: 1, border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, minWidth: 0 }}>
           <div title="独立文本消息；带正文的回复、提案等仍属于关系消息。" style={{ fontWeight: 600, marginBottom: 4 }}>最近文本消息</div>
           <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, fontSize: 12, maxHeight: 200, overflow: "auto" }}>
             {p.recentTexts.map(m => <li key={m.id} style={{ marginBottom: 2, wordBreak: "break-all" }}>{m.id}：{m.content}</li>)}
           </ul>
         </div>
-        <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
+        <div style={{ flex: 1, border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, minWidth: 0 }}>
           <div title="包含回复、引用、赞同、分类、提案、加入、发起结算和结算结果等关系消息，可带正文。" style={{ fontWeight: 600, marginBottom: 4 }}>最近关系消息</div>
           <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, fontSize: 12, maxHeight: 200, overflow: "auto" }}>
             {p.recentRelations.map(m => {
@@ -597,7 +611,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                     <span>（通知与会者：{notifyUsers.map((notifyUser, index) => (
                       <span key={notifyUser.id}>
                         {index > 0 && '、'}
-                        <span onClick={() => navigate(`${messageScopePath(p.scopeMessageId)}?sender=${encodeURIComponent(notifyUser.username)}`)} style={{ color: '#a5f3fc', textDecoration: 'underline', cursor: 'pointer' }}>
+                        <span onClick={() => navigate(`${messageScopePath(p.scopeMessageId)}?sender=${encodeURIComponent(notifyUser.username)}`)} style={{ color: 'var(--ink-a5f3fc)', textDecoration: 'underline', cursor: 'pointer' }}>
                           {notifyUser.username}
                         </span>
                       </span>
@@ -612,11 +626,11 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
 
       {!p.isViewerMode && <>
       {/* Stance History */}
-      <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>
+      <div style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, marginTop: 8 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ fontWeight: 600 }}>📋 站队 · 立场 · 表态</div>
           <button onClick={() => p.setShowStanceHistory(!p.showStanceHistory)}
-            style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.showStanceHistory ? "#0b84ff" : "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}>
+            style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.showStanceHistory ? "var(--surface-0b84ff)" : "var(--surface-333)", color: "var(--ink-fff)", cursor: "pointer", fontSize: 12 }}>
             {p.showStanceHistory ? '收起' : '展开'}
           </button>
         </div>
@@ -626,11 +640,11 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
       </div>
 
       {/* Audit Log */}
-      <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>
+      <div style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, marginTop: 8 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ fontWeight: 600 }}>📋 审计日志</div>
           <button onClick={() => p.setShowAuditLog(!p.showAuditLog)}
-            style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.showAuditLog ? "#0b84ff" : "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}>
+            style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.showAuditLog ? "var(--surface-0b84ff)" : "var(--surface-333)", color: "var(--ink-fff)", cursor: "pointer", fontSize: 12 }}>
             {p.showAuditLog ? '收起' : '展开'}
           </button>
         </div>
@@ -640,11 +654,11 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
       </div>
 
       {/* Revenue */}
-      <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>
+      <div style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, marginTop: 8 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ fontWeight: 600 }}>💰 收入</div>
           <button onClick={() => p.setShowRevenue(!p.showRevenue)}
-            style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.showRevenue ? "#0b84ff" : "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}>
+            style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.showRevenue ? "var(--surface-0b84ff)" : "var(--surface-333)", color: "var(--ink-fff)", cursor: "pointer", fontSize: 12 }}>
             {p.showRevenue ? '收起' : '展开'}
           </button>
         </div>

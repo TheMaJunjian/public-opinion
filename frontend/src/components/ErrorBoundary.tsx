@@ -52,19 +52,19 @@ export default class ErrorBoundary extends React.Component<Props, State> {
       return (
         <div style={{
           padding: 24,
-          background: '#101010',
-          color: '#eee',
+          background: 'var(--surface-101010)',
+          color: 'var(--ink-eee)',
           height: '100%',
           fontFamily: 'system-ui, sans-serif',
         }}>
-          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 12, color: '#ff6b6b' }}>
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 12, color: 'var(--ink-ff6b6b)' }}>
             渲染错误
           </div>
           <pre style={{
             whiteSpace: 'pre-wrap',
-            color: '#ff8080',
+            color: 'var(--ink-ff8080)',
             fontSize: 13,
-            background: '#1a1a1a',
+            background: 'var(--surface-1a1a1a)',
             padding: 12,
             borderRadius: 6,
             maxHeight: 400,
@@ -78,9 +78,9 @@ export default class ErrorBoundary extends React.Component<Props, State> {
               marginTop: 12,
               padding: '6px 16px',
               borderRadius: 4,
-              border: '1px solid #666',
-              background: '#333',
-              color: '#fff',
+              border: '1px solid var(--line-666)',
+              background: 'var(--surface-333)',
+              color: 'var(--ink-fff)',
               cursor: 'pointer',
               fontSize: 13,
             }}

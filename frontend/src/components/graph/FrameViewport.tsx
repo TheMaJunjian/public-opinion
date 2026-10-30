@@ -13,7 +13,7 @@ function FrameSizeGrip({id,size,mode,direction=1,onSize,label,style,children}:{i
     onPointerMove={event=>{const start=drag.current;if(!start)return;onSize({width:mode==='height'?start.width:Math.max(240,start.width+direction*(event.clientX-start.x)/start.scaleX),height:mode==='width'?start.height:Math.max(120,start.height+direction*(event.clientY-start.y)/start.scaleY)});}}
     onPointerUp={()=>{drag.current=null;}} onPointerCancel={()=>{drag.current=null;}}
     onKeyDown={event=>{event.stopPropagation();const delta={ArrowLeft:[-20,0],ArrowRight:[20,0],ArrowUp:[0,-20],ArrowDown:[0,20]}[event.key];if(!delta)return;event.preventDefault();onSize({width:Math.max(240,size.width+direction*(mode==='height'?0:delta[0])),height:Math.max(120,size.height+direction*(mode==='width'?0:delta[1]))});}}
-    style={{padding:0,border:'1px solid #64748b',borderRadius:2,color:'#cbd5e1',background:'#18212e',fontSize:12,lineHeight:1,touchAction:'none',pointerEvents:'auto',...style}}>{children}</button>;
+    style={{padding:0,border:'1px solid var(--line-64748b)',borderRadius:2,color:'var(--ink-cbd5e1)',background:'var(--surface-18212e)',fontSize:12,lineHeight:1,touchAction:'none',pointerEvents:'auto',...style}}>{children}</button>;
 }
 function FrameDimension({label,value,min,onChange}:{label:string;value:number;min:number;onChange:(value:number)=>void}){
   const [draft,setDraft]=useState<string|null>(null);
@@ -21,11 +21,11 @@ function FrameDimension({label,value,min,onChange}:{label:string;value:number;mi
   return <input type="number" aria-label={label} min={min} step={20} value={draft??Math.round(value)}
     onChange={event=>{setDraft(event.currentTarget.value);const next=event.currentTarget.valueAsNumber;if(Number.isFinite(next)&&next>=min)onChange(next);}}
     onBlur={event=>{const next=event.currentTarget.valueAsNumber;if(Number.isFinite(next))onChange(Math.max(min,next));setDraft(null);}}
-    style={{width:66,padding:'2px 3px',border:'1px solid #475569',borderRadius:3,background:'#111827',color:'#e2e8f0'}}/>;
+    style={{width:66,padding:'2px 3px',border:'1px solid var(--line-475569)',borderRadius:3,background:'var(--surface-111827)',color:'var(--ink-e2e8f0)'}}/>;
 }
 export function FrameViewportTools({id,size,natural,onChange,full=false,onToggleFull}:{id:string;size?:FrameViewSize;natural:FrameViewSize;onChange:(value:FrameViewSize|undefined)=>void;full?:boolean;onToggleFull?:()=>void}){
   const [open,setOpen]=useState(false),value=size??natural;
-  return <div data-frame-size-controls={id} onClick={stop} onDoubleClick={stop} onMouseDown={stop} onMouseUp={stop} onKeyDown={stop} style={{fontSize:10,color:'#cbd5e1',cursor:'default',display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+  return <div data-frame-size-controls={id} onClick={stop} onDoubleClick={stop} onMouseDown={stop} onMouseUp={stop} onKeyDown={stop} style={{fontSize:10,color:'var(--ink-cbd5e1)',cursor:'default',display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
     {onToggleFull&&<button type="button" aria-label={`${full?'恢复':'完全展开'}框架 ${id}`} aria-pressed={full} onClick={onToggleFull}>{full?'恢复框架':'完全展开'}</button>}
     {!full&&<button type="button" aria-label={`调整框架大小 ${id}`} aria-expanded={open} onClick={()=>setOpen(!open)}>调整大小</button>}
     {!full&&open&&<><label>宽 <FrameDimension label={`框架宽度 ${id}`} min={240} value={value.width} onChange={width=>onChange({...value,width})}/></label>
@@ -37,7 +37,7 @@ export function FrameViewportTools({id,size,natural,onChange,full=false,onToggle
 export function FrameViewportScrollbars({id,rect,content,scroll,onScroll,onSize,resized}:{id:string;rect:Box;content:FrameViewSize;scroll:FrameScroll;onScroll:(scroll:FrameScroll)=>void;onSize:(size:FrameViewSize)=>void;resized:boolean}){
   const horizontal=useRef<HTMLDivElement>(null),vertical=useRef<HTMLDivElement>(null);
   useLayoutEffect(()=>{if(horizontal.current)horizontal.current.scrollLeft=scroll.left;if(vertical.current)vertical.current.scrollTop=scroll.top;},[scroll.left,scroll.top,rect.width,rect.height]);
-  const common:React.CSSProperties={position:'absolute',zIndex:20,pointerEvents:'auto',background:'#18212e',overscrollBehavior:'contain',scrollbarColor:'#64748b #18212e'};
+  const common:React.CSSProperties={position:'absolute',zIndex:20,pointerEvents:'auto',background:'var(--surface-18212e)',overscrollBehavior:'contain',scrollbarColor:'var(--ink-64748b) var(--ink-18212e)'};
   return <>
     {resized&&<><div ref={horizontal} data-frame-scrollbar={id} aria-label={`框架水平滚动条 ${id}`} tabIndex={0}
       onScroll={event=>onScroll({...scroll,left:event.currentTarget.scrollLeft})}

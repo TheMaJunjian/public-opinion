@@ -8,6 +8,7 @@ import OperationFeedback from './components/OperationFeedback';
 import ErrorBoundary from './components/ErrorBoundary';
 import WorkbenchStartup, { PageLoadingPrompt } from './components/WorkbenchStartup';
 import GestureShortcutManager from './components/GestureShortcutManager';
+import { useSkinMotion } from './theme/useSkinMotion';
 import { GestureDirection, ShortcutSymbol } from './utils/gestureShortcut';
 
 const LoginPage = lazy(() => import('./pages/LoginPage'));
@@ -20,6 +21,7 @@ const WelfareModal = lazy(() => import('./components/WelfareModal'));
 const GuideOverlay = lazy(() => import('./components/GuideOverlay'));
 
 function AppContent() {
+  useSkinMotion();
   const [viewerOpen, setViewerOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const [welfareOpen, setWelfareOpen] = useState(false);
@@ -106,7 +108,7 @@ function AppContent() {
       <InterfaceZoomContext.Provider value={interfaceZoom}>
         <div
           ref={appRootRef}
-          className="app-shell min-h-screen min-w-0 flex flex-col bg-[#101010]"
+          className="app-shell min-h-screen min-w-0 flex flex-col bg-[color:var(--surface-101010)]"
           style={{
             transform: interfaceZoom === 1 ? 'none' : `scale(${interfaceZoom})`,
             transformOrigin: 'top left',
@@ -179,7 +181,7 @@ export default function App() {
     <AuthProvider>
       <AppUpdateNotice />
       <OperationFeedback />
-      <ErrorBoundary fallback={<div role="alert" style={{ padding: 24, color: '#eee' }}>
+      <ErrorBoundary fallback={<div role="alert" style={{ padding: 24, color: 'var(--ink-eee)' }}>
         <p>页面加载失败，请检查网络后刷新页面。</p>
         <button onClick={() => window.location.reload()}>刷新页面</button>
       </div>}>

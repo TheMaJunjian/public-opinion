@@ -47,8 +47,8 @@ export default function GovernancePanel({ scopeMessageId }: { scopeMessageId: st
   }
 
   return (
-    <div className="border border-gray-200 rounded-lg p-4 bg-white space-y-4">
-      <h3 className="font-semibold text-gray-800 text-sm">🏛️ 治理提案</h3>
+    <div className="border border-[color:var(--line-e5e7eb)] rounded-lg p-4 bg-[color:var(--surface-fff)] space-y-4">
+      <h3 className="font-semibold text-[color:var(--ink-1f2937)] text-sm">🏛️ 治理提案</h3>
 
       {/* New proposal form */}
       <div className="space-y-2">
@@ -56,14 +56,14 @@ export default function GovernancePanel({ scopeMessageId }: { scopeMessageId: st
           value={content}
           onChange={e => setContent(e.target.value)}
           placeholder="输入治理提案内容..."
-          className="w-full border border-gray-300 rounded p-2 text-sm min-h-[60px] resize-y"
+          className="w-full border border-[color:var(--line-d1d5db)] rounded p-2 text-sm min-h-[60px] resize-y"
           rows={3}
         />
-        {error && <div className="text-red-500 text-xs">{error}</div>}
+        {error && <div className="text-[color:var(--ink-ef4444)] text-xs">{error}</div>}
         <button
           onClick={handleSubmit}
           disabled={submitting || !content.trim()}
-          className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded transition-colors disabled:opacity-50"
+          className="px-3 py-1.5 bg-[color:var(--surface-4f46e5)] hover:bg-[color:var(--surface-4338ca)] text-[color:var(--ink-fff-2)] text-xs font-medium rounded transition-colors disabled:opacity-50"
         >
           {submitting ? '提交中...' : '发起提案'}
         </button>
@@ -71,18 +71,18 @@ export default function GovernancePanel({ scopeMessageId }: { scopeMessageId: st
 
       {/* Existing proposals */}
       {loading ? (
-        <div className="text-sm text-gray-500">加载中...</div>
+        <div className="text-sm text-[color:var(--ink-6b7280)]">加载中...</div>
       ) : proposals.length === 0 ? (
         <div>
-          <div className="text-sm text-gray-400">暂无治理提案</div>
-          <div className="text-xs text-gray-500 mt-1">治理提案用于修改系统规则或参数。任何人都可以发起提案，经过社区讨论、投票（赞同/反对）、结算后决定是否采纳。通过后的提案由运营者执行并公告。</div>
+          <div className="text-sm text-[color:var(--ink-9ca3af)]">暂无治理提案</div>
+          <div className="text-xs text-[color:var(--ink-6b7280)] mt-1">治理提案用于修改系统规则或参数。任何人都可以发起提案，经过社区讨论、投票（赞同/反对）、结算后决定是否采纳。通过后的提案由运营者执行并公告。</div>
         </div>
       ) : (
         <div className="space-y-2 max-h-64 overflow-y-auto">
           {proposals.map(p => (
-            <div key={p.id} className="border border-gray-100 rounded p-2 text-xs">
-              <div className="text-gray-800 whitespace-pre-wrap line-clamp-3">{p.content}</div>
-              <div className="flex justify-between mt-1 text-gray-400">
+            <div key={p.id} className="border border-[color:var(--line-f3f4f6)] rounded p-2 text-xs">
+              <div className="text-[color:var(--ink-1f2937)] whitespace-pre-wrap line-clamp-3">{p.content}</div>
+              <div className="flex justify-between mt-1 text-[color:var(--ink-9ca3af)]">
                 <span>{p.createdBy?.username}</span>
                 <span>{new Date(p.createdAt).toLocaleDateString('zh-CN')}</span>
               </div>

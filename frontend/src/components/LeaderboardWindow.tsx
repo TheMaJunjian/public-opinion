@@ -135,16 +135,16 @@ export default function LeaderboardWindow({ size, contentWidth, onSizeChange, on
               margin: 'auto',
               display: 'flex', flexDirection: 'column',
             }}>
-            <div ref={headerRef} style={{ position: 'sticky', top: 0, left: 0, zIndex: 5, flexShrink: 0, width: '100%', maxWidth: Math.max(280, viewportWidth - 32), background: dialogStyles.panel.background, borderRadius: '12px 12px 0 0' }}>
+            <div ref={headerRef} style={{ position: 'sticky', top: 0, left: 0, zIndex: 5, flexShrink: 0, width: '100%', maxWidth: Math.max(280, viewportWidth - 32), background: dialogStyles.panel.background, borderRadius: 'var(--dialog-radius) var(--dialog-radius) 0 0' }}>
               {header}
             </div>
             {children}
-            <div style={{ position: 'sticky', bottom: 0, left: 0, zIndex: 5, flexShrink: 0, width: '100%', maxWidth: Math.max(280, viewportWidth - 32), background: dialogStyles.panel.background, borderRadius: '0 0 12px 12px' }}>
+            <div style={{ position: 'sticky', bottom: 0, left: 0, zIndex: 5, flexShrink: 0, width: '100%', maxWidth: Math.max(280, viewportWidth - 32), background: dialogStyles.panel.background, borderRadius: '0 0 var(--dialog-radius) var(--dialog-radius)' }}>
               {footer}
             </div>
             <span role="separator" aria-label="调整排行榜宽高" aria-orientation="horizontal" tabIndex={0}
               title="拖动调整宽高，松开后居中；方向键也可调整，双击恢复自适应"
-              style={{ position: 'absolute', right: 0, bottom: 0, width: 20, height: 20, zIndex: 6, cursor: 'nwse-resize', touchAction: 'none', userSelect: 'none', background: 'repeating-linear-gradient(135deg, transparent 0 3px, #64748b 3px 4px)', clipPath: 'polygon(100% 0, 100% 100%, 0 100%)' }}
+              style={{ position: 'absolute', right: 0, bottom: 0, width: 20, height: 20, zIndex: 6, cursor: 'nwse-resize', touchAction: 'none', userSelect: 'none', background: 'repeating-linear-gradient(135deg, transparent 0 3px, var(--surface-64748b) 3px 4px)', clipPath: 'polygon(100% 0, 100% 100%, 0 100%)' }}
               onPointerDown={startResize}
               onPointerMove={event => {
                 const drag = dragRef.current;

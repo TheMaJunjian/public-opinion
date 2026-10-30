@@ -11,6 +11,7 @@ import { findMessageElements } from '../pages/workbench/actions/scrollNavigation
 import { REVEAL_VIRTUAL_MESSAGE } from '../hooks/useVirtualMessageMounts';
 import {useRef} from 'react';
 import {useViewedMessageHighlight} from '../hooks/useViewedMessageHighlight';
+import { setTheme, THEME_STORAGE_KEY } from '../theme/theme';
 
 const message = (id: string): DemoMessage => ({ id, author: 'tester', content: id, kind: 'normal', createdAt: '2026-01-01T00:00:00Z' });
 const relation = (id: string, type: DemoEdge['relationType'], source: string, target: string): DemoEdge => ({
@@ -28,6 +29,61 @@ function renderScene(messages: DemoMessage[], edges: DemoEdge[],extra:Partial<Gr
 }
 
 describe('rendered graph scene', () => {
+  it.each(['normal','classify'] as const)('raises a selected %s card above directed paths without raising all cards, then restores it', kind => {
+    const a:DemoMessage={...message('layer-a'),...(kind==='classify'?{kind:'relation' as const,relationType:'classify'}:{})};
+    const values=[a,message('layer-b')],links=[relation('layer-ref','reference','layer-a','layer-b')];
+    const click=vi.fn();
+    function Scene({selected}:{selected:boolean}) { return <GraphView messages={values} edges={links}
+      draftUnits={selected?[{messageId:a.id,selection:{kind:'whole'}}]:[]} activeTextSelectId={null} lastClickedMessageId={null}
+      onMessageClick={click} onMessageDoubleClick={vi.fn()} onTextMouseUp={vi.fn()} onEdgeLabelSingleClick={vi.fn()}
+      onEdgeLabelDoubleClick={vi.fn()} onFragmentAnchorClick={vi.fn()} isFragmentSelected={()=>false}/>; }
+    const view=render(<Scene selected={false}/>);
+    const card=()=>view.container.querySelector<HTMLElement>('.themed-message[data-msgid="layer-a"]')!;
+    const peer=()=>view.container.querySelector<HTMLElement>('.themed-message[data-msgid="layer-b"]')!;
+    const edge=()=>view.container.querySelector('.relation-edge-path')!.closest('svg')!;
+    expect(Number(card().style.zIndex)).toBeLessThan(Number(edge().style.zIndex));
+    view.rerender(<Scene selected/>);
+    expect(Number(card().style.zIndex)).toBeGreaterThan(Number(edge().style.zIndex));
+    expect(Number(peer().style.zIndex)).toBeLessThan(Number(edge().style.zIndex));
+    expect(view.container.querySelector<HTMLElement>('[data-graph-cards]')!.style.zIndex).toBe('');
+    fireEvent.click(card());expect(click).toHaveBeenCalledWith(expect.anything(),'layer-a');
+    view.rerender(<Scene selected={false}/>);
+    expect(Number(card().style.zIndex)).toBeLessThan(Number(edge().style.zIndex));
+  });
+
+  it('remeasures label plates and hit areas on a theme change without losing relation interactions', () => {
+    const previousTheme = document.documentElement.dataset.theme;
+    const previousPreference = localStorage.getItem(THEME_STORAGE_KEY);
+    const geometry = vi.spyOn(SVGElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: SVGElement) {
+      const width = document.documentElement.dataset.theme === 'gpt' ? 20 : 26;
+      return new DOMRect(Number(this.getAttribute('x')) - width / 2, Number(this.getAttribute('y')) - 7, width, 14);
+    });
+    setTheme('gpt');
+    const click = vi.fn();
+    const view = renderScene([message('plate-a'), message('plate-b')], [relation('plate-ref', 'reference', 'plate-a', 'plate-b')], { onEdgeLabelSingleClick: click });
+    try {
+      const plate = () => view.container.querySelector('.graph-edge-label-plate')!;
+      const hit = () => view.container.querySelector<HTMLElement>('[data-directed-edge-label="plate-ref"]')!;
+      expect(plate()).toHaveAttribute('width', '32');
+      const beforeWidth = Number.parseFloat(hit().style.width);
+      act(() => setTheme('opus'));
+      expect(plate()).toHaveAttribute('width', '38');
+      expect(Number.parseFloat(hit().style.width)).toBe(beforeWidth + 6);
+      fireEvent.click(hit());
+      expect(click).toHaveBeenCalledWith(expect.anything(), 'plate-ref', 'plate-ref');
+      expect(view.container.querySelector('.graph-edge-label')?.querySelectorAll(':scope > .relation-edge-path, :scope > .relation-edge-arrow')).toHaveLength(2);
+      expect(view.container.querySelector('.skin-edge-art')).toHaveAttribute('aria-hidden', 'true');
+      expect(view.container.querySelector('.skin-edge-art')).toHaveAttribute('pointer-events', 'none');
+    } finally {
+      view.unmount();
+      geometry.mockRestore();
+      if (previousTheme) document.documentElement.dataset.theme = previousTheme;
+      else delete document.documentElement.dataset.theme;
+      if (previousPreference) localStorage.setItem(THEME_STORAGE_KEY, previousPreference);
+      else localStorage.removeItem(THEME_STORAGE_KEY);
+    }
+  });
+
   it('keeps automatically opened votes and annotations expanded when reading the next message',()=>{
     const values:DemoMessage[]=[message('m'),message('next'),...(['agree','disagree','tag'] as const).map(type=>({...message(type),kind:'relation' as const,relationType:type,content:'',relationPayload:type==='tag'?{label:'标签'}:undefined}))];
     const links=(['agree','disagree','tag'] as const).map(type=>relation(type,type,`anon:${type}`,'m'));

@@ -13,7 +13,7 @@ export default function StanceReadingReminder({relationType,secondaryRelationTyp
     return hint.unread||hint.pendingInfluences.length||corrections.length?[{id,hint,corrections,correctionMessage}]:[];
   });
   if(!pending.length)return null;
-  return <aside role="note" aria-label="站队表态前阅读提示" style={{fontSize:11,color:'#fbbf24',border:'1px solid #66552b',borderRadius:4,padding:6,marginTop:5}}>
+  return <aside role="note" aria-label="站队表态前阅读提示" style={{fontSize:11,color:'var(--ink-fbbf24)',border:'1px solid var(--line-66552b)',borderRadius:4,padding:6,marginTop:5}}>
     <div>请先阅读目标消息。{pending.some(item=>(context.input.corrections.get(item.id)?.versions.length??0)>0)&&'有更正时，请查看原文和不同更正，确认更正未改变原意；针对原文的站队表态不变，若某条更正改变了原意，请前往该更正消息表达反对。'}</div>
     {pending.map(({id,hint,corrections,correctionMessage})=><div key={id} style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'baseline',marginTop:3}}>
       <button type="button" onClick={event=>context.onView(id,event,false)} style={{fontSize:11}}>查看消息 {id}</button>

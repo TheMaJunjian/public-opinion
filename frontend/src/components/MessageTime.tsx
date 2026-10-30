@@ -3,5 +3,5 @@ const timeFormat=new Intl.DateTimeFormat('zh-CN',{year:'numeric',month:'2-digit'
 export default function MessageTime({value}:{value:string}) {
   const date=new Date(value);
   if(!Number.isFinite(date.getTime()))return null;
-  return <time dateTime={date.toISOString()} title={`发送时间：${date.toLocaleString('zh-CN',{hour12:false})}`} style={{fontSize:10,color:'#94a3b8',whiteSpace:'nowrap'}}>{timeFormat.format(date)}</time>;
+  return <time dateTime={date.toISOString()} title={`发送时间：${date.toLocaleString('zh-CN',{hour12:false})}`} style={{fontSize:10,color:'var(--ink-94a3b8)',whiteSpace:'nowrap'}}>{timeFormat.format(date)}</time>;
 }

@@ -2,6 +2,8 @@
 // 提供开关来屏蔽/显示结算消息和加入消息
 
 import { useState, useRef, useEffect } from 'react';
+import {dialogStyles} from './dialogStyles';
+import ThemeIcon from '../theme/ThemeIcon';
 
 export interface MessageFilterSettings {
   /** 是否屏蔽结算消息 (round / round_result) */
@@ -47,14 +49,15 @@ export default function MessageFilterPanel({
     <div ref={panelRef} style={{ position: 'relative', flexShrink: 0 }}>
       {/* Toggle 按钮 */}
       <button
+        className="workbench-clean-toggle"
         onClick={() => setOpen(prev => !prev)}
         title="清爽视图：快速屏蔽结算/加入消息"
         style={{
           padding: '4px 10px',
           borderRadius: 4,
-          border: hasActive ? '1px solid #a78bfa' : '1px solid #555',
-          background: hasActive ? '#6d28d9' : '#333',
-          color: '#eee',
+          border: hasActive ? '1px solid var(--line-a78bfa)' : '1px solid var(--line-555)',
+          background: hasActive ? 'var(--surface-6d28d9)' : 'var(--surface-333)',
+          color: 'var(--ink-eee)',
           cursor: 'pointer',
           fontSize: 12,
           fontWeight: hasActive ? 600 : 400,
@@ -62,7 +65,7 @@ export default function MessageFilterPanel({
         aria-pressed={hasActive}
         aria-expanded={open}
       >
-        {hasActive ? '🧹 清爽' : '清爽视图'}
+        {hasActive ? <><ThemeIcon name="clean" fallback="🧹" /> 清爽</> : '清爽视图'}
       </button>
 
       {/* 下拉面板 */}
@@ -74,16 +77,13 @@ export default function MessageFilterPanel({
             right: 0,
             marginTop: 4,
             width: 240,
-            background: '#1a1a2e',
-            border: '1px solid #334155',
-            borderRadius: 8,
+            ...dialogStyles.panel,
             padding: 12,
             zIndex: 100,
-            boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
           }}
         >
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, color: '#e2e8f0' }}>
-            🧹 清爽视图
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, color: 'var(--ink-e2e8f0)' }}>
+            <ThemeIcon name="clean" fallback="🧹" /> 清爽视图
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -96,17 +96,17 @@ export default function MessageFilterPanel({
                 cursor: 'pointer',
                 padding: '6px 8px',
                 borderRadius: 4,
-                background: settings.hideSettlement ? 'rgba(167,139,250,0.1)' : 'transparent',
-                border: settings.hideSettlement ? '1px solid rgba(167,139,250,0.3)' : '1px solid transparent',
+                background: settings.hideSettlement ? 'var(--surface-rgba-167-139-250-0-1)' : 'transparent',
+                border: settings.hideSettlement ? '1px solid var(--line-rgba-167-139-250-0-3)' : '1px solid transparent',
                 fontSize: 13,
-                color: '#e2e8f0',
+                color: 'var(--ink-e2e8f0)',
               }}
             >
               <input
                 type="checkbox"
                 checked={settings.hideSettlement}
                 onChange={() => toggleFilter('hideSettlement')}
-                style={{ accentColor: '#a78bfa' }}
+                style={{ accentColor: 'var(--ink-a78bfa)' }}
               />
               <span>屏蔽结算消息</span>
             </label>
@@ -120,24 +120,24 @@ export default function MessageFilterPanel({
                 cursor: 'pointer',
                 padding: '6px 8px',
                 borderRadius: 4,
-                background: settings.hideJoin ? 'rgba(167,139,250,0.1)' : 'transparent',
-                border: settings.hideJoin ? '1px solid rgba(167,139,250,0.3)' : '1px solid transparent',
+                background: settings.hideJoin ? 'var(--surface-rgba-167-139-250-0-1)' : 'transparent',
+                border: settings.hideJoin ? '1px solid var(--line-rgba-167-139-250-0-3)' : '1px solid transparent',
                 fontSize: 13,
-                color: '#e2e8f0',
+                color: 'var(--ink-e2e8f0)',
               }}
             >
               <input
                 type="checkbox"
                 checked={settings.hideJoin}
                 onChange={() => toggleFilter('hideJoin')}
-                style={{ accentColor: '#a78bfa' }}
+                style={{ accentColor: 'var(--ink-a78bfa)' }}
               />
               <span>屏蔽加入消息</span>
             </label>
           </div>
 
           {!hasActive && (
-            <div style={{ fontSize: 11, color: '#64748b', marginTop: 8 }}>
+            <div style={{ fontSize: 11, color: 'var(--ink-64748b)', marginTop: 8 }}>
               未启用任何过滤
             </div>
           )}

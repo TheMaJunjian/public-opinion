@@ -17,7 +17,7 @@ export function CardWidthHandle({ messageId }: { messageId: string }) {
     aria-valuemin={CARD_W} aria-valuemax={MAX_CARD_WIDTH} aria-valuenow={editing.width} tabIndex={0}
     data-card-width-handle="true" data-rel-overlay="true" data-gesture-ignore="true"
     title="拖动调整宽度，左右方向键微调，双击恢复默认；发送更正后保存"
-    style={{ position: 'absolute', right: -5, top: 0, bottom: 0, width: 10, cursor: 'ew-resize', touchAction: 'none', zIndex: 20, borderRight: '2px solid #38bdf8' }}
+    style={{ position: 'absolute', right: -5, top: 0, bottom: 0, width: 10, cursor: 'ew-resize', touchAction: 'none', zIndex: 20, borderRight: '2px solid var(--line-38bdf8)' }}
     onClick={event => event.stopPropagation()} onDoubleClick={event => { event.stopPropagation(); editing.onChange(CARD_W); }}
     onMouseDown={event => event.stopPropagation()} onMouseUp={event => event.stopPropagation()}
     onKeyDown={event => {

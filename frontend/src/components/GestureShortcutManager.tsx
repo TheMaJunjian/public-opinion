@@ -1,4 +1,5 @@
 import { createPortal } from 'react-dom';
+import {dialogStyles} from './dialogStyles';
 import { Z_INDEX } from '../constants/zIndex';
 import { useEffect, useRef, useState } from 'react';
 import { GestureDirection, GesturePoint, GestureSide, ShortcutSymbol, recognizeGesture } from '../utils/gestureShortcut';
@@ -168,7 +169,7 @@ function ShortcutSymbolImage({
         const lines = getSymbolLines(symbol, direction, currentSide);
         return (
           <svg key={currentSide} aria-hidden="true" width={width} height={height} viewBox="0 0 96 64">
-            <g fill="none" stroke="#facc15" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round">
+            <g fill="none" stroke="var(--ink-facc15)" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round">
               {lines.map(line => <line key={`${line.x1}-${line.y1}-${line.x2}-${line.y2}`} {...line} />)}
             </g>
           </svg>
@@ -555,14 +556,14 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
               <>
                 <polyline
                   points={inputPoints.map(point => `${point.x},${point.y}`).join(' ')}
-                  fill="none" stroke="#ffffff" strokeWidth="11" opacity="0.95"
+                  fill="none" stroke="var(--ink-ffffff)" strokeWidth="11" opacity="0.95"
                   strokeLinecap="round" strokeLinejoin="round"
                 />
                 <polyline
                   points={inputPoints.map(point => `${point.x},${point.y}`).join(' ')}
-                  fill="none" stroke="#22d3ee" strokeWidth="6"
+                  fill="none" stroke="var(--ink-22d3ee)" strokeWidth="6"
                   strokeLinecap="round" strokeLinejoin="round"
-                  style={{ filter: 'drop-shadow(0 0 5px rgba(34,211,238,0.95))' }}
+                  style={{ filter: 'drop-shadow(0 0 5px var(--ink-rgba-34-211-238-0-95))' }}
                 />
               </>
             )}
@@ -572,10 +573,9 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
           data-shortcut-input-mask="true"
           style={{
             width: 'min(360px, calc(100vw - 32px))', minHeight: 220,
-            padding: '18px 20px', boxSizing: 'border-box',
+            padding: '18px 20px',
             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8,
-            background: 'rgba(20, 20, 20, 0.94)', border: '1px solid #facc15', borderRadius: 10,
-            color: '#fff', boxShadow: '0 12px 40px rgba(0,0,0,0.5)', pointerEvents: 'auto',
+            ...dialogStyles.panel, pointerEvents: 'auto',
             touchAction: 'none', userSelect: 'none', position: 'absolute',
             left: shortcutInputPosition?.x ?? window.innerWidth / 2,
             top: shortcutInputPosition?.y ?? window.innerHeight / 2,
@@ -584,7 +584,7 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
           }}
         >
           <div style={{ fontSize: 16, fontWeight: 600 }}>快捷符输入</div>
-          <div style={{ color: '#cbd5e1', fontSize: 13, textAlign: 'center' }}>
+          <div style={{ color: 'var(--ink-cbd5e1)', fontSize: 13, textAlign: 'center' }}>
             按住鼠标左键或手指滑动绘制快捷符
           </div>
           <div
@@ -592,7 +592,7 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
             style={{
               width: '100%', marginTop: 8, padding: 8, boxSizing: 'border-box',
               display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6,
-              borderTop: '1px solid #333', color: '#cbd5e1', fontSize: 11,
+              borderTop: '1px solid var(--line-333)', color: 'var(--ink-cbd5e1)', fontSize: 11,
             }}
           >
             {shortcutGuide.map(symbol => (
@@ -613,16 +613,16 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
             style={{
               position: 'fixed', left: pendingPosition.x, top: pendingPosition.y,
               transform: 'translate(-50%, -50%)', zIndex: Z_INDEX.shortcutStatus, pointerEvents: 'none',
-              padding: '8px 14px', borderRadius: 6, background: 'rgba(20, 20, 20, 0.96)',
-              border: '1px solid #666', color: '#fff', fontSize: 13,
-              boxShadow: '0 4px 18px rgba(0,0,0,0.5)',
+              padding: '8px 14px', borderRadius: 6, background: 'var(--surface-rgba-20-20-20-0-96)',
+              border: '1px solid var(--line-666)', color: 'var(--ink-fff)', fontSize: 13,
+              boxShadow: '0 4px 18px var(--shadow-rgba-0-0-0-0-5)',
             }}
           >
             <div>识别结果：</div>
             <ShortcutSymbolImage symbol={pendingSymbol} side={pendingSide} width={96} height={64} />
             <div>快捷操作：{shortcutActions[pendingSymbol]}</div>
-            <div style={{ marginTop: 2, color: '#cbd5e1' }}>无操作将执行</div>
-            <div style={{ color: '#fca5a5' }}>其他操作将取消</div>
+            <div style={{ marginTop: 2, color: 'var(--ink-cbd5e1)' }}>无操作将执行</div>
+            <div style={{ color: 'var(--ink-fca5a5)' }}>其他操作将取消</div>
           </div>
         )}
         {cancelledPosition && !pendingDirection && (
@@ -632,9 +632,9 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
             style={{
               position: 'fixed', left: cancelledPosition.x, top: cancelledPosition.y,
               transform: 'translate(-50%, -50%)', zIndex: Z_INDEX.shortcutCancelled, pointerEvents: 'none',
-              padding: '8px 14px', borderRadius: 6, background: 'rgba(20, 20, 20, 0.96)',
-              border: '1px solid #f87171', color: '#fecaca', fontSize: 13,
-              boxShadow: '0 4px 18px rgba(0,0,0,0.5)',
+              padding: '8px 14px', borderRadius: 6, background: 'var(--surface-rgba-20-20-20-0-96)',
+              border: '1px solid var(--line-f87171)', color: 'var(--ink-fecaca)', fontSize: 13,
+              boxShadow: '0 4px 18px var(--shadow-rgba-0-0-0-0-5)',
             }}
           >
             快捷操作已取消
@@ -647,9 +647,9 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
             style={{
               position: 'fixed', left: shortcutFailurePosition.x, top: shortcutFailurePosition.y,
               transform: 'translate(-50%, -50%)', zIndex: Z_INDEX.shortcutFailure, pointerEvents: 'none',
-              padding: '8px 14px', borderRadius: 6, background: 'rgba(20, 20, 20, 0.96)',
-              border: '1px solid #f87171', color: '#fecaca', fontSize: 13,
-              boxShadow: '0 4px 18px rgba(0,0,0,0.5)',
+              padding: '8px 14px', borderRadius: 6, background: 'var(--surface-rgba-20-20-20-0-96)',
+              border: '1px solid var(--line-f87171)', color: 'var(--ink-fecaca)', fontSize: 13,
+              boxShadow: '0 4px 18px var(--shadow-rgba-0-0-0-0-5)',
             }}
           >
             快捷符识别失败
@@ -669,9 +669,8 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
         style={{
           position: 'fixed', left: statusPosition.x, top: statusPosition.y,
           transform: 'translate(-50%, -50%)',
-          zIndex: Z_INDEX.shortcutTransient, pointerEvents: 'none', padding: '8px 14px', borderRadius: 6,
-          background: 'rgba(20, 20, 20, 0.94)', border: '1px solid #f87171', color: '#fecaca',
-          fontSize: 13, boxShadow: '0 4px 18px rgba(0,0,0,0.35)',
+          zIndex: Z_INDEX.shortcutTransient, pointerEvents: 'none', padding: '8px 14px',
+          ...dialogStyles.panel, borderColor: 'var(--ink-f87171)', color: 'var(--ink-fecaca)', fontSize: 13,
         }}
       >
         {shortcutFailurePosition ? '快捷符识别失败' : '快捷符操作已取消'}
@@ -685,16 +684,15 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
       style={{
         position: 'fixed', left: pendingPosition.x, top: pendingPosition.y,
         transform: 'translate(-50%, -50%)',
-        zIndex: Z_INDEX.shortcutTransient, pointerEvents: 'none', padding: '8px 14px', borderRadius: 6,
-        background: 'rgba(20, 20, 20, 0.94)', border: '1px solid #666', color: '#fff',
-        fontSize: 13, boxShadow: '0 4px 18px rgba(0,0,0,0.35)',
+        zIndex: Z_INDEX.shortcutTransient, pointerEvents: 'none', padding: '8px 14px',
+        ...dialogStyles.panel, fontSize: 13,
       }}
     >
       <div>识别结果：</div>
       <ShortcutSymbolImage symbol={pendingSymbol} side={pendingSide} width={96} height={64} />
       <div>快捷操作：{shortcutActions[pendingSymbol]}</div>
-      <div style={{ marginTop: 2, color: '#cbd5e1' }}>无操作将执行</div>
-      <div style={{ color: '#fca5a5' }}>其他操作将取消</div>
+      <div style={{ marginTop: 2, color: 'var(--ink-cbd5e1)' }}>无操作将执行</div>
+      <div style={{ color: 'var(--ink-fca5a5)' }}>其他操作将取消</div>
     </div>
   ), document.body);
 }

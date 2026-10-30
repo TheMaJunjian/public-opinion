@@ -9,6 +9,9 @@ import { MessageDisplayMarker } from './MessageDisplayHints';
 import { isMessageElementSelected, messageMembersReference, messageTypeReference } from '../utils/messageElementSelection';
 import { getMessageProminence } from '../utils/messageDisplay';
 import { activateMessageFromKeyboard } from '../utils/messageKeyboard';
+import { stakeAppearanceAttributes, type StakeAmounts } from '../utils/stakeAppearance';
+import StakeTierBadge, { SkinOrnament } from '../theme/StakeTierBadge';
+import ThemeIcon, { ThemeLabel } from '../theme/ThemeIcon';
 
 export interface MessageCardContext {
   isRelationRecord?: boolean;
@@ -34,6 +37,7 @@ export interface MessageCardContext {
 }
 
 export interface MessageCardProps {
+  stakeCounts?: StakeAmounts;
   msg: DemoMessage;
   ctx: MessageCardContext;
   selectedUnits?: readonly UnitSelection[];
@@ -83,6 +87,7 @@ export default function MessageCard({
   children,
   onContentMouseUp,
   relatedMessages,
+  stakeCounts,
 }: MessageCardProps) {
   const {
     isWholeSelected, isActiveText, isOrganizationMessage, isRelationRecord,
@@ -101,9 +106,9 @@ export default function MessageCard({
   const bk = (msg as any).backendKind as string | undefined;
   const prominence = getMessageProminence(msg);
   const isDelegationMsg = msg.kind === 'relation' && msg.relationType === 'delegation';
-  const delegationColor = '#f97316';
-  const govColor = governanceColor ?? (bk === 'GOVERNANCE' ? '#f59e0b' : bk === 'CODE' ? '#3b82f6' : '#10b981');
-  const organizationBackground = isSummary ? '#14352a' : isMerge ? '#1e293b' : '#1f1f1f';
+  const delegationColor = 'var(--ink-f97316)';
+  const govColor = governanceColor ?? (bk === 'GOVERNANCE' ? 'var(--ink-f59e0b)' : bk === 'CODE' ? 'var(--ink-3b82f6-2)' : 'var(--ink-10b981)');
+  const organizationBackground = isSummary ? 'var(--surface-14352a)' : isMerge ? 'var(--surface-1e293b)' : 'var(--surface-1f1f1f)';
   const specificMessageLabel = getRelationMessageLabel(msg);
   const messageTypeLabel = isRelationRecord && msg.kind === 'relation'
     ? getPresentationSpec(relType ?? msg.relationType ?? 'relation').label
@@ -132,15 +137,19 @@ export default function MessageCard({
             : bk === 'OPERATIONS' ? msg.id
               : msg.id;
 
-  const cardBorder = isWholeSelected ? '2px solid #fbbf24'
-    : isRelationRecord ? isActiveText ? '2px dashed #0b84ff' : '1px dashed #32363d'
-    : isOrganizationMessage ? isSummary ? '1px solid rgba(52,211,153,0.7)' : isMerge ? '1px solid rgba(148,163,184,0.75)' : '1px solid #444'
-      : isDelegationMsg ? `1px solid ${delegationColor}66` : isGovernanceMsg ? `1px solid ${govColor}44` : isActiveText ? '2px dashed #0b84ff' : '1px solid #444';
+  const cardBorder = isWholeSelected ? '2px solid var(--line-fbbf24)'
+    : isRelationRecord ? isActiveText ? '2px dashed var(--line-0b84ff)' : '1px dashed var(--line-32363d)'
+    : isOrganizationMessage ? isSummary ? '1px solid var(--line-rgba-52-211-153-0-7)' : isMerge ? '1px solid var(--line-rgba-148-163-184-0-75)' : '1px solid var(--line-444)'
+      : isDelegationMsg ? `1px solid color-mix(in srgb, ${delegationColor} 40%, transparent)` : isGovernanceMsg ? `1px solid color-mix(in srgb, ${govColor} 26.67%, transparent)` : isActiveText ? '2px dashed var(--line-0b84ff)' : '1px solid var(--line-444)';
 
   return (
     <div
       key={msg.id}
       data-msgid={msg.id}
+      className="themed-message"
+      {...stakeAppearanceAttributes(stakeCounts)}
+      data-message-kind={msg.kind} data-skin-type={msg.relationType ?? msg.kind} data-skin-carrier={isOrganizationMessage ? "organization" : isRelationRecord ? "record" : "content"} data-active-text={isActiveText || undefined}
+      data-whole-selected={isWholeSelected || undefined}
       data-relation-record={isRelationRecord || undefined}
       role="group"
       tabIndex={0}
@@ -155,49 +164,50 @@ export default function MessageCard({
         position: 'relative',
         borderRadius: isRelationRecord ? 3 : isOrganizationMessage ? 8 : 6,
         borderTop: cardBorder,
+        ...prominence.variables,
         borderRight: cardBorder,
         borderBottom: cardBorder,
         borderLeft: isWholeSelected
-          ? '4px solid #fbbf24'
-          : isRelationRecord ? isActiveText ? '3px solid #0b84ff' : '2px solid #4b5563'
-          : isOrganizationMessage ? `4px solid ${isSummary ? '#34d399' : isMerge ? '#94a3b8' : '#6366f1'}`
+          ? '4px solid var(--line-fbbf24)'
+          : isRelationRecord ? isActiveText ? '3px solid var(--line-0b84ff)' : '2px solid var(--line-4b5563)'
+          : isOrganizationMessage ? `4px solid ${isSummary ? 'var(--line-34d399)' : isMerge ? 'var(--line-94a3b8)' : 'var(--line-6366f1)'}`
           : isDelegationMsg ? `3px solid ${delegationColor}` : isGovernanceMsg ? `3px solid ${govColor}` : cardBorder,
         backgroundColor: isWholeSelected
-          ? 'rgba(91,65,0,0.55)'
-          : isRelationRecord ? '#15171a'
-          : isDelegationMsg ? 'rgba(249,115,22,0.1)' : isOrganizationMessage ? organizationBackground
-          : isGovernanceMsg ? '#1a1f2e' : '#1f1f1f',
+          ? 'var(--surface-rgba-91-65-0-0-55)'
+          : isRelationRecord ? 'var(--surface-15171a)'
+          : isDelegationMsg ? 'var(--surface-rgba-249-115-22-0-1)' : isOrganizationMessage ? organizationBackground
+          : isGovernanceMsg ? 'var(--surface-1a1f2e)' : 'var(--surface-1f1f1f)',
         padding: isRelationRecord ? '4px 10px' : isOrganizationMessage ? '10px 12px' : '10px 14px',
         cursor: 'pointer',
-        fontSize: isRelationRecord ? 12 : prominence.fontSize,
-        backgroundImage: isWholeSelected || isRelationRecord ? undefined : prominence.backgroundImage,
-        boxShadow: isWholeSelected
-          ? '0 4px 18px rgba(251,191,36,0.45)'
-          : isRelationRecord ? undefined
-          : prominence.boxShadow ?? (isOrganizationMessage ? '0 2px 8px rgba(0,0,0,0.15)' : undefined),
-        outline: isWholeSelected ? 'none' : lastClickedMsgId === msg.id ? '1px dashed #0b84ff' : 'none',
+        fontSize: isRelationRecord ? 12 : prominence.cssFontSize,
+        backgroundImage: isRelationRecord ? undefined : prominence.backgroundImage,
+        boxShadow: isRelationRecord ? undefined : prominence.boxShadow,
+        outline: isWholeSelected ? 'none' : lastClickedMsgId === msg.id ? '1px dashed var(--line-0b84ff)' : 'none',
         userSelect: isActiveText ? 'text' : 'auto',
-        opacity: readStatus === 'READ' ? 0.72 : 1,
+        opacity: readStatus === 'READ' ? 'var(--read-opacity)' : 1,
       }}
     >
       {/* Header */}
-      <div style={{
+      <SkinOrnament />
+      <div className="message-card-header" style={{
         fontSize: 11,
         opacity: isOrganizationMessage && !isRelationRecord ? 0.65 : 0.8,
         marginBottom: inlineRelationContent ? 0 : 4,
         display: 'flex',
         flexDirection: 'column',
-        color: isOrganizationMessage && !isRelationRecord ? '#94a3b8' : undefined,
+        color: isOrganizationMessage && !isRelationRecord ? 'var(--ink-94a3b8)' : undefined,
       }}>
         <div style={{ display: 'flex', justifyContent: isRelationRecord ? 'flex-start' : 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '4px 8px' }}>
         <span style={{ minWidth: 0, maxWidth:'100%', overflowWrap: 'anywhere' }}>
           {headerLeading}
-          <MessageElement reference={messageTypeReference(msg)} selected={isMessageElementSelected(selectedUnits, messageTypeReference(msg))} label={typeBadgeLabel} style={{ marginRight: 6, padding: '2px 6px', borderRadius: 4, background: isWholeSelected ? '#fbbf24' : 'rgba(148,163,184,0.16)', color: isWholeSelected ? '#111827' : '#cbd5e1', border: isWholeSelected ? '1px solid #fbbf24' : '1px solid rgba(148,163,184,0.35)', fontWeight: 700, opacity: 1 }}>
-            {typeBadgeLabel}
+          <StakeTierBadge counts={stakeCounts} />
+          <MessageElement reference={messageTypeReference(msg)} selected={isMessageElementSelected(selectedUnits, messageTypeReference(msg))} label={typeBadgeLabel} style={{ marginRight: 6, padding: '2px 6px', borderRadius: 4, background: isWholeSelected ? 'var(--surface-fbbf24)' : 'var(--surface-rgba-148-163-184-0-16)', color: isWholeSelected ? 'var(--ink-111827)' : 'var(--ink-cbd5e1)', border: isWholeSelected ? '1px solid var(--line-fbbf24)' : '1px solid var(--line-rgba-148-163-184-0-35)', fontWeight: 700, opacity: 1 }}>
+            <ThemeLabel text={typeBadgeLabel} />
           </MessageElement>
           {' '}
           <HomeFilterBadge label={homeMatch?'命中':homeContextRole==='source'?'来源':homeContextRole==='target'?'目标':homeContextRole==='source-target'?'来源/目标':homeReason?'上下文':null} reason={homeReason}/>
           {headerLabel ?? defaultHeaderLabel}
+          {readStatus === 'READ' && <span className="message-read-stamp">已阅</span>}
           {headerLeading === undefined && <MessageDisplayMarker messageId={msg.id} />}
           {headerBetweenIdAuthor && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 6, verticalAlign: 'middle', maxWidth: '100%', flexWrap: 'wrap' }}>{headerBetweenIdAuthor}</span>}
         </span>
@@ -219,7 +229,7 @@ export default function MessageCard({
           gap: 8, marginBottom: 6,
         }}>
           <div style={{
-            fontWeight: isRelationRecord ? 500 : 600, color: isRelationRecord ? '#cbd5e1' : '#f1f5f9',
+            fontWeight: isRelationRecord ? 500 : 600, color: isRelationRecord ? 'var(--ink-cbd5e1)' : 'var(--ink-f1f5f9)',
             flex: 1, minWidth: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
             userSelect: isActiveText ? 'text' : 'auto',
             cursor: isActiveText ? 'text' : 'inherit',
@@ -235,7 +245,7 @@ export default function MessageCard({
           </MessageTextPart></div>
           {isClassification&&<span style={{
             fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 999,
-            background: 'rgba(2,150,80,0.2)', color: '#86efac',
+            background: 'var(--surface-rgba-2-150-80-0-2)', color: 'var(--ink-86efac)',
           }}>
             双击进入分类
           </span>}
@@ -244,7 +254,7 @@ export default function MessageCard({
 
       {/* Text selection mode indicator */}
       {isActiveText && (isContentKind(msg.kind) || isOrganizationMessage) && (
-        <div style={{ fontSize: 11, color: '#0b84ff', marginBottom: 4 }}>
+        <div style={{ fontSize: 11, color: 'var(--ink-0b84ff)', marginBottom: 4 }}>
           拖选文字即可选择片段，或点击已有高亮片段
         </div>
       )}
@@ -257,7 +267,7 @@ export default function MessageCard({
           ))}
         </div>
       ) : !isOrganizationMessage && !inlineRelationContent && (
-        <div style={{ fontSize: isRelationRecord ? 12 : prominence.fontSize, color: isRelationRecord ? '#9ca3af' : '#f5f5f5' }} onMouseUp={e => onContentMouseUp?.(e, msg.id)}>
+        <div className="message-card-body" style={{ fontSize: isRelationRecord ? 12 : prominence.cssFontSize, color: isRelationRecord ? 'var(--ink-9ca3af)' : 'var(--ink-f5f5f5)' }} onMouseUp={e => onContentMouseUp?.(e, msg.id)}>
           {children != null ? children : (
             isContentKind(msg.kind) && (msg.kind === 'round' || msg.kind === 'round_result') ? (() => {
             const sid = settlementTargetId ?? (msg as any).settlementTargetId as string | undefined;
@@ -266,8 +276,8 @@ export default function MessageCard({
             const isVal = isValueSettlement ?? (msg as any).roundPayload?.settlementType === 'VALUE';
             const isRound = msg.kind === 'round';
             const tc = isVal
-              ? (isRound ? '#fcd34d' : '#f59e0b')
-              : (isRound ? '#a5b4fc' : '#818cf8');
+              ? (isRound ? 'var(--ink-fcd34d-2)' : 'var(--ink-f59e0b-2)')
+              : (isRound ? 'var(--ink-a5b4fc-2)' : 'var(--ink-818cf8-2)');
             const lines = (msg.content ?? '').split('\n');
             return (
               <div>
@@ -278,7 +288,7 @@ export default function MessageCard({
                       onClick={e => { e.stopPropagation(); onSettlementTargetClick?.(e, sid); }}
                       style={{
                         fontSize: 11, fontWeight: 500, padding: '1px 6px', borderRadius: 4,
-                        background: `${tc}12`, color: tc, border: `1px solid ${tc}35`,
+                        background: `color-mix(in srgb, ${tc} 7.06%, transparent)`, color: tc, border: `1px solid color-mix(in srgb, ${tc} 20.78%, transparent)`,
                         cursor: onSettlementTargetClick ? 'pointer' : 'default',
                         maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                       }}
@@ -298,15 +308,15 @@ export default function MessageCard({
           })() : isContentKind(msg.kind) ? (
             <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
           ) : (
-            <div style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: '#d1d5db' }}>{msg.content}</div>
+            <div style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: 'var(--ink-d1d5db)' }}>{msg.content}</div>
           ))}
         </div>
       )}
 
       {/* Organization membership */}
       {isOrganizationMessage && (
-        <div style={{ fontSize: 12, color: '#94a3b8', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <MessageElement reference={messageMembersReference(msg)} selected={isMessageElementSelected(selectedUnits, messageMembersReference(msg))} label="所含消息">💬 {memberCount ?? 0} 条观点</MessageElement>
+        <div style={{ fontSize: 12, color: 'var(--ink-94a3b8)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <MessageElement reference={messageMembersReference(msg)} selected={isMessageElementSelected(selectedUnits, messageMembersReference(msg))} label="所含消息"><ThemeIcon name="message" fallback="💬" /> {memberCount ?? 0} 条观点</MessageElement>
         </div>
       )}
 

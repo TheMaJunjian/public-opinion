@@ -208,6 +208,11 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
       });
       syncRef.current = sync;
       const reload = () => { sync.reload(); catalogRef.current?.catchUp(); };
+      const invalidateCache = () => {
+        setLoading(true); setLoadError(null);
+        catalogReadyRef.current = false; setCatalogReady(false);
+        sync.reload(); catalogRef.current?.reload();
+      };
       const catchUp = () => { sync.catchUp(); catalogRef.current?.catchUp(); };
       const committed = (event: Event) => {
         const pages = (event as CustomEvent<import('../../data/workbench').WorkbenchSnapshot[]>).detail;
@@ -215,6 +220,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
         if (!pages.some(page => sync.applyCommitted(page))) sync.reload();
       };
       window.addEventListener('gonglun:reload', reload);
+      window.addEventListener('gonglun:invalidate-cache', invalidateCache);
       window.addEventListener('gonglun:catch-up', catchUp);
       window.addEventListener('gonglun:committed', committed);
       const resume = () => { if (!document.hidden) catchUp(); };
@@ -223,6 +229,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
       window.addEventListener('focus', resume);
       stop = () => {
         window.removeEventListener('gonglun:reload', reload);
+        window.removeEventListener('gonglun:invalidate-cache', invalidateCache);
         window.removeEventListener('gonglun:catch-up', catchUp);
         window.removeEventListener('gonglun:committed', committed);
         document.removeEventListener('visibilitychange', resume);

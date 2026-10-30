@@ -1,7 +1,7 @@
 import React from "react";
 import { buildAnnoTree, extractTextTargetsForMessage, renderAnnoNodes } from '../../../utils/graphTextSelection';
 import { getPresentationSpec } from '../../../types';
-import { getMessageTypeLabel } from '../../../utils/messageDisplay';
+import { getMessageTypeLabel, getMessageProminence } from '../../../utils/messageDisplay';
 import { getRelationRecordContentLabel } from '../../../utils/attachedRelationLabels';
 import {
   isCardMessage,
@@ -35,10 +35,10 @@ export function renderAlertMessage(dependencies: RenderAlertMessageDependencies,
           display: 'inline-block',
           margin: '0 3px',
           padding: '1px 6px',
-          border: '1px solid #60a5fa',
+          border: '1px solid var(--line-60a5fa)',
           borderRadius: 4,
-          background: '#1e3a5f',
-          color: '#bfdbfe',
+          background: 'var(--surface-1e3a5f)',
+          color: 'var(--ink-bfdbfe)',
           cursor: 'pointer',
           fontSize: 13,
         }}
@@ -71,13 +71,18 @@ export function renderMessageContentWithAnchorsForList(dependencies: RenderMessa
   const targets = extractTextTargetsForMessage(message.id, edges);
   const parts = readableParts(message);
   const text = parts.length ? parts.map(partText).join('\n') : message.content;
-  if (targets.length === 0) return <pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{text}</pre>;
+  const readingStyle: React.CSSProperties = {
+    margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 'var(--message-leading)',
+    fontFamily: parts.some(part => part.type === 'code') ? "Menlo, Monaco, Consolas, monospace" : 'var(--font-reading)',
+    fontSize: getMessageProminence(message).cssFontSize,
+  };
+  if (targets.length === 0) return <pre style={readingStyle}>{text}</pre>;
   const validItems = targets
     .filter(t => t.start >= 0 && t.start + t.len <= text.length && t.len > 0)
     .map(t => ({ start: t.start, end: t.start + t.len, relationType: t.relationType, edgeId: t.edgeId }));
   const tree = buildAnnoTree(validItems);
   const nodes = renderAnnoNodes(text, tree, 0, text.length, 0, message.id, isFragmentSelected, handleFragmentAnchorClick);
-  return <pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{nodes}</pre>;
+  return <pre style={readingStyle}>{nodes}</pre>;
 }
 
 interface RenderRelationContentWithTargetsDependencies {
@@ -101,8 +106,8 @@ export function renderSettlementContentWithTarget({ handleNavigateToMessage }: R
       <span>目标</span>
       <button type="button" title={`跳转到目标消息 ${targetId}`}
         onClick={event => { event.stopPropagation(); handleNavigateToMessage(targetId); }}
-        style={{ padding: '1px 5px', border: '1px solid #374151', borderRadius: 3, background: 'rgba(148,163,184,0.05)', color: '#93c5fd', cursor: 'pointer', fontFamily: 'monospace', fontSize: 12, minWidth: 0, overflowWrap: 'anywhere' }}>{targetId}</button>
-    </div> : <span title="这条结算记录没有保存目标消息引用" style={{ order: 1, fontSize: 11, color: '#9ca3af' }}>目标未记录</span>}
+        style={{ padding: '1px 5px', border: '1px solid var(--line-374151)', borderRadius: 3, background: 'var(--surface-rgba-148-163-184-0-05)', color: 'var(--ink-93c5fd)', cursor: 'pointer', fontFamily: 'monospace', fontSize: 12, minWidth: 0, overflowWrap: 'anywhere' }}>{targetId}</button>
+    </div> : <span title="这条结算记录没有保存目标消息引用" style={{ order: 1, fontSize: 11, color: 'var(--ink-9ca3af)' }}>目标未记录</span>}
     {details.trim() && <div style={{ order: 1, minWidth: 0, fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{details.trim()}</div>}
   </div>;
 }
@@ -130,7 +135,7 @@ export function renderRelationContentWithTargets(dependencies: RenderRelationCon
           return <React.Fragment key={`${target.kind}:${targetId}:${index}`}>
             {index > 0 && ', '}
             <button type="button" onClick={event => { event.stopPropagation(); handleNavigateToMessage(targetId); }}
-              style={{ padding: 0, border: 0, background: 'transparent', color: '#93c5fd', cursor: 'pointer', fontFamily: 'monospace', fontSize: 12, textDecoration: 'underline', textUnderlineOffset: 2 }}
+              style={{ padding: 0, border: 0, background: 'transparent', color: 'var(--ink-93c5fd)', cursor: 'pointer', fontFamily: 'monospace', fontSize: 12, textDecoration: 'underline', textUnderlineOffset: 2 }}
               title={`跳转到目标消息 ${targetId}`}>{targetId}</button>
           </React.Fragment>;
         })}
@@ -178,7 +183,7 @@ export function renderRelationContentWithTargets(dependencies: RenderRelationCon
       <span>{label}</span>
       {ids.map(id => <button key={id} type="button"
         onClick={event => { event.stopPropagation(); handleNavigateToMessage(id); }}
-        style={{ padding: '1px 5px', border: '1px solid #374151', borderRadius: 3, background: 'rgba(148,163,184,0.05)', color: '#93c5fd', cursor: 'pointer', fontFamily: 'monospace', fontSize: 12, maxWidth: '100%', overflowWrap: 'anywhere' }}
+        style={{ padding: '1px 5px', border: '1px solid var(--line-374151)', borderRadius: 3, background: 'var(--surface-rgba-148-163-184-0-05)', color: 'var(--ink-93c5fd)', cursor: 'pointer', fontFamily: 'monospace', fontSize: 12, maxWidth: '100%', overflowWrap: 'anywhere' }}
         title={`跳转到${label}消息 ${id}`}>{id}</button>)}
     </div>
   );

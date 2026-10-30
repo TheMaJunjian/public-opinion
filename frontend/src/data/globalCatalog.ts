@@ -31,6 +31,7 @@ export function syncGlobalCatalog(options: {
   let store = new WorkbenchStore();
   let checkpoint: CatalogCheckpoint | null = null;
   let initialized = false, stopped = false, running = false, queued = false, ready = false;
+  let resetRequested = false;
   let publishedAfter = -1, failures = 0;
   let lastError: string | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -46,7 +47,7 @@ export function syncGlobalCatalog(options: {
     await options.cache.save(checkpoint);
   };
   const publish = () => {
-    if (!checkpoint || stopped) return;
+    if (!checkpoint || stopped || resetRequested) return;
     if (!ready || publishedAfter !== checkpoint.after) {
       publishedAfter = checkpoint.after;
       ready = true;
@@ -63,6 +64,12 @@ export function syncGlobalCatalog(options: {
     const waiting = [...waiters];
     const before = publishedAfter;
     try {
+      if (resetRequested) {
+        resetRequested = false;
+        await options.cache.clear();
+        if (stopped) return;
+        store = new WorkbenchStore(); checkpoint = null; ready = false; publishedAfter = -1; initialized = true;
+      }
       if (!initialized) {
         checkpoint = await options.cache.load();
         if (checkpoint && options.regionId && checkpoint.snapshot.regionId !== options.regionId) {
@@ -73,12 +80,13 @@ export function syncGlobalCatalog(options: {
           // An incomplete cache may contain pages newer than the replay boundary.
           // Replaying from that boundary, rather than snapshot.sequence, closes pagination races.
           store.apply({ ...checkpoint.snapshot, sequence: checkpoint.complete ? checkpoint.after : 0 }, true);
-          if (checkpoint.complete) publish();
+          // Confirm cached records against server changes before enabling automatic writes.
         }
       }
       if (!checkpoint) {
         await options.idle(abort.signal);
         const page = await request({ limit: 200, batch: 1 });
+        if (stopped || resetRequested) return;
         store.apply(page);
         checkpoint = { snapshot: store.snapshot(), boundary: page.sequence, after: page.sequence,
           nextCursor: page.nextCursor ?? null, phase: 'pages', complete: false, pages: 1 };
@@ -87,6 +95,7 @@ export function syncGlobalCatalog(options: {
       while (checkpoint.phase === 'pages' && checkpoint.nextCursor) {
         await options.idle(abort.signal);
         const page = await request({ cursor: checkpoint.nextCursor, regionId: checkpoint.snapshot.regionId, limit: 200, batch: 1 });
+        if (stopped || resetRequested) return;
         store.apply(page);
         checkpoint.pages++;
         checkpoint.nextCursor = page.nextCursor ?? null;
@@ -100,6 +109,7 @@ export function syncGlobalCatalog(options: {
       do {
         await options.idle(abort.signal);
         const page = await request({ after: checkpoint.after, regionId: checkpoint.snapshot.regionId });
+        if (stopped || resetRequested) return;
         if (page.sequence < checkpoint.after || (page.hasMore && page.sequence === checkpoint.after)) throw new Error('全局消息同步进度无效');
         const unchanged = checkpoint.complete && page.sequence === checkpoint.after && !page.messages.length
           && !page.relations.length && !page.removedMessageIds?.length;
@@ -110,7 +120,7 @@ export function syncGlobalCatalog(options: {
         if (!unchanged) await save();
         report();
       } while (more && !stopped);
-      if (stopped) return;
+      if (stopped || resetRequested) return;
       publish(); failures = 0; lastError = undefined;
       for (const waiter of waiting) { waiters.delete(waiter); waiter.resolve(before !== publishedAfter); }
     } catch (error) {
@@ -135,6 +145,12 @@ export function syncGlobalCatalog(options: {
   }
   schedule();
   return {
+    reload() {
+      if (stopped) return;
+      resetRequested = true; ready = false; failures = 0; lastError = undefined;
+      if (timer) { clearTimeout(timer); timer = undefined; }
+      schedule(); report();
+    },
     catchUp: () => schedule(),
     applyCommitted(page: WorkbenchSnapshot) {
       if (stopped || !ready || !checkpoint || (page.scope.messageId ?? 'root') !== options.parent) return;

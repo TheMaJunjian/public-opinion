@@ -2,6 +2,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Z_INDEX } from '../constants/zIndex';
+import ThemeSwitcher from '../theme/ThemeSwitcher';
+import ThemeIcon from '../theme/ThemeIcon';
 import PointsBadge from './PointsBadge';
 import { useInterfaceZoom } from '../context/InterfaceZoomContext';
 
@@ -66,11 +68,11 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
   }
 
   return (
-    <nav ref={navRef} className="app-navbar relative bg-indigo-700 text-white pl-6 pr-4 py-3 flex items-center shadow-md" style={topControlsFrozen ? { position: 'sticky', top: 0, zIndex: Z_INDEX.freezeButton } : undefined}>
+    <nav ref={navRef} className="app-navbar relative bg-[color:var(--surface-4338ca)] text-[color:var(--ink-fff-2)] pl-6 pr-4 py-3 flex items-center shadow-md" style={topControlsFrozen ? { position: 'sticky', top: 0, zIndex: Z_INDEX.freezeButton } : undefined}>
       <div ref={leftControlsRef} className="app-navbar-primary relative flex shrink-0 items-center gap-4">
         <Link to="/" className="flex flex-col leading-tight hover:opacity-90 transition-opacity">
           <span className="text-xl font-bold tracking-widest">公论</span>
-          <span className="text-xs text-indigo-300 tracking-wide">一切记录在案，是非自有公论</span>
+          <span className="text-xs text-[color:var(--ink-a5b4fc-3)] tracking-wide">一切记录在案，是非自有公论</span>
         </Link>
         <button
           type="button"
@@ -78,14 +80,14 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
           onClick={guideEnabled ? onOpenGuide : undefined}
           disabled={!guideEnabled}
           aria-disabled={!guideEnabled}
-          className={`ml-8 text-sm font-medium transition-colors ${guideEnabled ? 'text-amber-200 hover:text-white' : 'cursor-not-allowed text-indigo-300/50'}`}
+          className={`ml-8 text-sm font-medium transition-colors ${guideEnabled ? 'text-[color:var(--ink-fde68a-2)] hover:text-[color:var(--ink-fff-2)]' : 'cursor-not-allowed text-[color:color-mix(in_srgb,var(--ink-a5b4fc-3)_50%,transparent)]'}`}
           title="开始入门引导"
         >
           引导
         </button>
         <button
           onClick={onOpenTutorial}
-          className="text-indigo-200 hover:text-white text-sm font-medium transition-colors"
+          className="text-[color:var(--ink-c7d2fe)] hover:text-[color:var(--ink-fff-2)] text-sm font-medium transition-colors"
           title="打开教程"
         >
           教程
@@ -93,7 +95,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
         <button
           type="button"
           onClick={onOpenWelfare}
-          className="text-indigo-200 hover:text-white text-sm font-medium transition-colors"
+          className="text-[color:var(--ink-c7d2fe)] hover:text-[color:var(--ink-fff-2)] text-sm font-medium transition-colors"
           title="打开福利"
         >
           福利
@@ -104,38 +106,39 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
           aria-label={topControlsFrozen ? '解冻顶部控件' : '冻结顶部控件'}
           aria-pressed={topControlsFrozen}
           title={topControlsFrozen ? '解冻教程、退出和关系类型控件' : '冻结教程、退出和关系类型控件'}
-          className="absolute left-[calc(100%+8px)] top-full flex h-6 w-6 items-center justify-center rounded-full text-xs shadow-md"
+          className="app-navbar-freeze absolute left-[calc(100%+8px)] top-full flex h-6 w-6 items-center justify-center rounded-full text-xs shadow-md"
           style={{
             background: 'transparent',
-            color: 'rgba(255,255,255,0.7)',
+            color: 'var(--ink-rgba-255-255-255-0-7)',
             zIndex: Z_INDEX.freezeButton,
           }}
         >
-          {topControlsFrozen ? (
-            <span aria-hidden="true" className="relative inline-block h-4 w-4 translate-y-0.5 rounded-full border-2 border-red-500">
-              <span className="absolute left-1/2 top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-red-500" />
+          <ThemeIcon name="pin" fallback={topControlsFrozen ? (
+            <span aria-hidden="true" className="relative inline-block h-4 w-4 translate-y-0.5 rounded-full border-2 border-[color:var(--line-ef4444)]">
+              <span className="absolute left-1/2 top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[color:var(--surface-ef4444)]" />
             </span>
-          ) : '📌'}
+          ) : '📌'} />
         </button>
       </div>
       <div aria-hidden="true" className="min-w-0 flex-1" />
-      <div ref={rightControlsRef} className="app-navbar-account sticky flex shrink-0 items-center gap-4 bg-indigo-700 pl-2" style={{ right: `${rightControlsRightOffset}px`, zIndex: Z_INDEX.popup }}>
+      <div ref={rightControlsRef} className="app-navbar-account sticky flex shrink-0 items-center gap-4 bg-[color:var(--surface-4338ca)] pl-2" style={{ right: `${rightControlsRightOffset}px`, zIndex: Z_INDEX.popup }}>
+        <ThemeSwitcher />
         {user ? (
           <>
             <button
               onClick={onOpenViewer}
-              className="text-indigo-200 hover:text-white text-sm font-medium transition-colors"
+              className="text-[color:var(--ink-c7d2fe)] hover:text-[color:var(--ink-fff-2)] text-sm font-medium transition-colors"
               title="阅览导出的消息文本"
             >
               阅览
             </button>
             <PointsBadge />
-            <span className="text-indigo-200 text-sm">
+            <span className="text-[color:var(--ink-c7d2fe)] text-sm">
               {user.username}
             </span>
             <button
               onClick={handleLogout}
-              className="bg-indigo-500 hover:bg-indigo-400 px-4 py-1.5 rounded text-sm font-medium transition-colors"
+              className="bg-[color:var(--surface-6366f1)] hover:bg-[color:var(--surface-818cf8)] px-4 py-1.5 rounded text-sm font-medium transition-colors"
             >
               退出登录
             </button>
@@ -144,17 +147,17 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
           <>
             <button
               onClick={onOpenViewer}
-              className="text-indigo-200 hover:text-white text-sm font-medium transition-colors"
+              className="text-[color:var(--ink-c7d2fe)] hover:text-[color:var(--ink-fff-2)] text-sm font-medium transition-colors"
               title="阅览导出的消息文本"
             >
               阅览
             </button>
-            <Link to="/login" className="hover:text-indigo-200 text-sm font-medium transition-colors">
+            <Link to="/login" className="hover:text-[color:var(--ink-c7d2fe)] text-sm font-medium transition-colors">
               登录
             </Link>
             <Link
               to="/register"
-              className="bg-indigo-500 hover:bg-indigo-400 px-4 py-1.5 rounded text-sm font-medium transition-colors"
+              className="bg-[color:var(--surface-6366f1)] hover:bg-[color:var(--surface-818cf8)] px-4 py-1.5 rounded text-sm font-medium transition-colors"
             >
               注册
             </Link>

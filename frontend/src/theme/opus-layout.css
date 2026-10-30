@@ -1,0 +1,211 @@
+/* Paper surfaces are shared by the live workbench, its graph and popovers. */
+
+:root[data-theme='opus'], :root[data-theme='opus'] body, :root[data-theme='opus'] #root { background: var(--surface-page); color: var(--text-primary); }
+:root[data-theme='opus'] body { font-family: 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif; }
+:root[data-theme='opus'] button, :root[data-theme='opus'] input, :root[data-theme='opus'] textarea, :root[data-theme='opus'] select { color-scheme: light; }
+:root[data-theme='opus'] button:enabled:active, :root[data-theme='opus'] [role='button']:active { filter: brightness(.97); }
+:root[data-theme='opus'] ::selection { background: #d9e1f2; color: var(--fragment-accent); }
+:root[data-theme='opus'] :is(button, input, textarea, select, summary, [tabindex]):focus-visible {
+  outline-color: var(--fragment-accent) !important;
+}
+
+:root[data-theme='opus'] .app-navbar {
+  background: var(--surface-card);
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-default);
+  box-shadow: none;
+}
+:root[data-theme='opus'] .app-navbar-account { background: var(--surface-card); }
+:root[data-theme='opus'] .app-navbar-primary > a > span:first-child {
+  font-family: var(--font-reading);
+  font-size: 24px;
+  color: var(--text-primary);
+}
+:root[data-theme='opus'] .app-navbar-primary > a > span:last-child { color: var(--text-muted); }
+:root[data-theme='opus'] .app-navbar button:not(:disabled), :root[data-theme='opus'] .app-navbar a { transition: opacity 120ms; }
+:root[data-theme='opus'] .app-navbar button:not(:disabled):hover, :root[data-theme='opus'] .app-navbar a:hover { color: var(--fragment-accent); }
+:root[data-theme='opus'] .app-navbar-account > button:last-child { border: 1px solid var(--border-default); background: var(--surface-panel); }
+:root[data-theme='opus'] .app-navbar [aria-pressed='true'] { color: var(--selection-accent); }
+
+:root[data-theme='opus'] .workbench-shell { font-family: 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif !important; }
+:root[data-theme='opus'] .workbench-history-button, :root[data-theme='opus'] .workbench-trace-select, :root[data-theme='opus'] .trace-reading-panel button {
+  background: var(--surface-card); color: var(--text-secondary); border-color: var(--border-default);
+}
+:root[data-theme='opus'] .workbench-history-button:enabled:hover { background: var(--surface-hover); border-color: #b9af9d; }
+:root[data-theme='opus'] .workbench-history-button:disabled, :root[data-theme='opus'] .trace-reading-panel button:disabled { color: var(--text-muted); border-color: var(--border-default); }
+:root[data-theme='opus'] .workbench-view-toggle {
+  background: var(--text-primary); color: var(--surface-card); border-color: var(--text-primary);
+  box-shadow: none; font-weight: 500; padding: 5px 12px;
+}
+:root[data-theme='opus'] .workbench-view-toggle:hover, :root[data-theme='opus'] .workbench-view-toggle:focus-visible {
+  background: #39342c; border-color: #39342c; box-shadow: none; transform: none;
+}
+:root[data-theme='opus'] .workbench-view-toggle::after { display: none; }
+:root[data-theme='opus'] .workbench-view-toggle-content { animation: none; }
+:root[data-theme='opus'] .workbench-relation-toolbar { background: var(--surface-panel) !important; }
+:root[data-theme='opus'] .workbench-relation-toolbar button { min-height: 28px; }
+:root[data-theme='opus'] .workbench-relation-types { background: var(--surface-panel) !important; }
+:root[data-theme='opus'] .workbench-relation-types button[aria-pressed='false'] {
+  background: transparent !important; color: var(--text-secondary) !important;
+}
+:root[data-theme='opus'] .workbench-relation-types button[aria-pressed='false']:hover { background: var(--surface-card) !important; }
+:root[data-theme='opus'] .workbench-relation-toolbar button[aria-pressed='true'] {
+  background: var(--text-primary) !important; border-color: var(--text-primary) !important; color: var(--surface-card) !important;
+}
+:root[data-theme='opus'] [data-workbench-view-toolbar] { background: var(--surface-page) !important; }
+:root[data-theme='opus'] [data-workbench-view-toolbar] button { min-height: 28px; }
+
+:root[data-theme='opus'] .workbench-right-panel { background: var(--surface-panel); border-left: 1px solid var(--border-default); }
+:root[data-theme='opus'] .workbench-operation-panel { padding: 12px !important; gap: 12px !important; }
+:root[data-theme='opus'] .workbench-operation-panel > [data-guide-selection-staging], :root[data-theme='opus'] .workbench-composer-section {
+  background: var(--surface-card); border-top: 2px solid #b9af9d !important; padding: 12px !important;
+}
+:root[data-theme='opus'] .workbench-section-heading { color: var(--text-primary); font-family: var(--font-reading); font-size: 16px; }
+:root[data-theme='opus'] .workbench-operation-panel textarea { background: var(--surface-card) !important; color: var(--text-primary) !important; font: 15px/1.75 var(--font-reading) !important; padding: 10px !important; }
+:root[data-theme='opus'] .workbench-operation-panel [data-contribution-type] { background: var(--surface-panel); padding: 7px 8px !important; }
+:root[data-theme='opus'] .workbench-operation-panel [data-contribution-type] input { background: var(--surface-card) !important; }
+:root[data-theme='opus'] .workbench-operation-panel [data-contribution-policy] { color: var(--text-muted) !important; white-space: normal !important; }
+:root[data-theme='opus'] .workbench-operation-panel [data-guide-send='true']:enabled {
+  background: var(--text-primary) !important; border-color: var(--text-primary) !important; color: var(--surface-card) !important;
+}
+:root[data-theme='opus'] .workbench-operation-panel [data-guide-send='true'] { min-height: 34px; }
+
+:root[data-theme='opus'] .themed-message { color: var(--text-primary); }
+:root[data-theme='opus'] .themed-message[data-whole-selected='true'] {
+  background-color: var(--selection-bg) !important;
+  border-color: var(--selection-accent) !important;
+}
+:root[data-theme='opus'] .message-card-body { font-family: var(--font-reading); line-height: 1.75; }
+:root[data-theme='opus'] .message-card-body pre, :root[data-theme='opus'] .message-card-body code { font-family: Menlo, Monaco, Consolas, monospace; }
+:root[data-theme='opus'] .message-card-header { color: var(--text-secondary); opacity: 1 !important; }
+:root[data-theme='opus'] .message-read-stamp {
+  display: inline-block; margin-left: 6px; padding: 0 3px;
+  border: 1px solid #aaa193; border-radius: 2px; color: var(--text-muted);
+  font: 11px/1.5 var(--font-reading); vertical-align: middle;
+}
+
+:root[data-theme='opus'] * { scrollbar-color: #b9af9d var(--surface-panel); }
+:root[data-theme='opus'] *::-webkit-scrollbar-track, :root[data-theme='opus'] *::-webkit-scrollbar-corner, :root[data-theme='opus'] .workbench-left-panel::-webkit-scrollbar-track { background: var(--surface-panel); }
+:root[data-theme='opus'] *::-webkit-scrollbar-thumb, :root[data-theme='opus'] .workbench-left-panel::-webkit-scrollbar-thumb { background: #b9af9d; border-color: var(--surface-panel); }
+:root[data-theme='opus'] *::-webkit-scrollbar-thumb:hover { background: #958a78; }
+:root[data-theme='opus'] .workbench-splitter { background: #e4ddcf; }
+:root[data-theme='opus'] .workbench-splitter[data-active='true'] { background: var(--fragment-accent); }
+:root[data-theme='opus'] .workbench-splitter-grip i { background: #978c7b; }
+@media (hover: hover) and (pointer: fine) { :root[data-theme='opus'] .workbench-splitter[data-active='false']:hover { background: #d3c9b7; } }
+:root[data-theme='opus'] [data-view-target='true']:not(svg *)::after { --corner-color: var(--location-accent); }
+:root[data-theme='opus'] .view-target-corners { stroke: var(--location-accent); }
+:root[data-theme='opus'] [data-reading-position~='current'] > .reading-position-marks[data-position='current'] { stroke: var(--location-accent); }
+:root[data-theme='opus'] [data-reading-position~='previous'] > .reading-position-marks[data-position='previous'] { stroke: var(--text-muted); }
+:root[data-theme='opus'] [data-reading-position~='next'] > .reading-position-marks[data-position='next'] { stroke: var(--fragment-accent); }
+:root[data-theme='opus'] [data-reading-position~='continue'] > .reading-position-marks[data-position='continue'] { stroke: var(--recommendation-accent); }
+
+/* Guide surfaces and their highlighted targets have separate emphasis. */
+:root[data-theme='opus'] .guide-bubble {
+  background: var(--guide-surface) !important;
+  border-left: 3px solid var(--guide-border);
+  border-radius: 8px !important;
+  box-shadow: var(--guide-shadow) !important;
+}
+:root[data-theme='opus'] [data-guide-background] { rx: 8px; stroke: var(--border-default); }
+:root[data-theme='opus'] .guide-title { font: 600 16px/1.5 var(--font-reading); }
+:root[data-theme='opus'] .guide-copy { color: var(--text-secondary); line-height: 1.6 !important; }
+:root[data-theme='opus'] .guide-kicker { color: var(--recommendation-accent) !important; font-size: 12px !important; font-weight: 600; }
+:root[data-theme='opus'] .popup-guides {
+  stroke: var(--recommendation-accent); stroke-width: 1.5px; opacity: .7; animation: none;
+}
+:root[data-theme='opus'] .popup-backdrop-flow {
+  stroke: var(--button-secondary-border); stroke-width: 1px; opacity: .18; animation: none;
+}
+
+/* Only enabled actions get the strong treatment; business conditions still control disabled. */
+:root[data-theme='opus'] [data-guide-actions] button:enabled,
+:root[data-theme='opus'] [data-guide-send='true']:enabled {
+  background: var(--button-primary-bg) !important; color: var(--button-primary-text) !important;
+  border: 1px solid transparent !important; border-radius: var(--button-radius) !important;
+  font-size: 13px !important; font-weight: 600; min-height: var(--button-min-height);
+}
+:root[data-theme='opus'] .workbench-shell button:disabled,
+:root[data-theme='opus'] [data-popup-overlay] button:disabled,
+:root[data-theme='opus'] .guide-bubble button:disabled {
+  background: var(--button-disabled-bg) !important; color: var(--button-disabled-text) !important;
+  border-color: transparent !important; box-shadow: none !important; opacity: 1 !important;
+  cursor: not-allowed;
+}
+:root[data-theme='opus'] [data-guide-actions] button { min-height: 32px; border-radius: 6px !important; }
+
+/* Compact popovers still need room around their close labels. */
+:root[data-theme='opus'] .workbench-popover-close {
+  flex-shrink: 0; min-width: 48px; min-height: 28px; padding: 4px 10px !important;
+  font-size: 12px !important; line-height: 1.5; white-space: nowrap;
+  background: var(--button-secondary-bg) !important; color: var(--button-secondary-text) !important;
+  border-color: var(--button-secondary-border) !important; border-radius: var(--button-radius) !important;
+}
+:root[data-theme='opus'] .workbench-popover-close:hover { background: var(--surface-hover) !important; }
+
+/* Plates follow measured text, leaving arrow paths and their hit regions intact. */
+:root[data-theme='opus'] .graph-edge-label { --edge-label-ink: var(--text-secondary); }
+:root[data-theme='opus'] .graph-edge-label[data-relation-type='reference'] { --edge-label-ink: var(--graph-label-reference); }
+:root[data-theme='opus'] .graph-edge-label:is([data-relation-type='reply'], [data-relation-type='agree']) { --edge-label-ink: var(--graph-label-reply); }
+:root[data-theme='opus'] .graph-edge-label[data-relation-type='annotation'] { --edge-label-ink: var(--graph-label-amber); }
+:root[data-theme='opus'] .graph-edge-label[data-relation-type='disagree'] { --edge-label-ink: var(--ink-fca5a5); }
+:root[data-theme='opus'] .graph-edge-label[data-edge-emphasis='evidence'] { --edge-label-ink: var(--graph-label-amber); }
+:root[data-theme='opus'] .graph-edge-label-plate {
+  display: inline; fill: var(--surface-card);
+  stroke: color-mix(in srgb, var(--edge-label-ink) 40%, transparent); stroke-width: 1px;
+  pointer-events: none;
+}
+:root[data-theme='opus'] .graph-edge-label-text { fill: var(--edge-label-ink); stroke: none !important; font-weight: 400; }
+:root[data-theme='opus'] .graph-edge-label[data-label-hidden='false'] .graph-edge-label-text { opacity: 1; }
+:root[data-theme='opus'] .graph-edge-label[data-label-selection='whole'] .graph-edge-label-plate { fill: var(--selection-bg); stroke: var(--selection-accent); }
+:root[data-theme='opus'] .graph-edge-label[data-label-selection='fragment'] .graph-edge-label-plate { fill: var(--fragment-bg); stroke: var(--fragment-accent); }
+:root[data-theme='opus'] .graph-edge-label-hit { background: transparent !important; border-color: transparent !important; box-shadow: none !important; }
+:root[data-theme='opus'] [data-edge-label-entry] { margin-left: 4px; }
+:root[data-theme='opus'] [data-message-badge='true'] {
+  background: color-mix(in srgb, currentColor 7%, var(--surface-card)) !important;
+  border-color: color-mix(in srgb, currentColor 35%, transparent) !important;
+  opacity: 1 !important;
+}
+:root[data-theme='opus'] [data-message-badge='true'][aria-pressed='true'] { background: var(--selection-bg) !important; }
+
+/* State refinements keep type borders, nested fragments and investment prominence. */
+:root[data-theme='opus'] .themed-message[data-message-kind='normal']:not([data-whole-selected='true']) { background-color: var(--surface-card) !important; }
+@media (hover: hover) {
+  :root[data-theme='opus'] .themed-message[data-message-kind='normal']:not([data-whole-selected='true']):hover {
+    background-color: var(--surface-hover) !important;
+  }
+  :root[data-theme='opus'] .themed-message[data-message-kind='normal']:not([data-whole-selected='true']):not([data-active-text='true']):hover {
+    border-top-color: var(--button-secondary-border) !important;
+    border-right-color: var(--button-secondary-border) !important;
+    border-bottom-color: var(--button-secondary-border) !important;
+  }
+}
+:root[data-theme='opus'] .themed-message[data-whole-selected='true'] { border-left-width: 4px !important; }
+:root[data-theme='opus'] [data-fragment-selected='true'] {
+  background-color: var(--fragment-bg) !important;
+  text-decoration: underline 2px var(--fragment-accent); text-underline-offset: 3px;
+}
+:root[data-theme='opus'] [data-display-reading='unread'] > [data-reading-dot] {
+  width: 6px !important; height: 6px !important;
+  background: var(--fragment-accent) !important; border-color: var(--surface-card) !important;
+}
+
+/* The navigation entry stays text-only. Swatches belong inside its dialog. */
+:root[data-theme='opus'] .theme-trigger { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+:root[data-theme='opus'] .theme-trigger[aria-expanded='true'] { text-decoration: underline 2px var(--text-primary); text-underline-offset: 6px; }
+:root[data-theme='opus'] .theme-dialog { width: min(360px, 100%) !important; }
+:root[data-theme='opus'] .theme-dialog > :first-child { font: 600 17px/1.5 var(--font-reading) !important; }
+:root[data-theme='opus'] .theme-options { gap: 10px; }
+:root[data-theme='opus'] .theme-options label {
+  min-height: 56px; padding: 10px 12px; border: 1.5px solid var(--border-default); border-radius: 6px;
+  background: var(--surface-card); color: var(--text-primary);
+}
+:root[data-theme='opus'] .theme-options label[data-selected='true'] { border-color: var(--text-primary); }
+:root[data-theme='opus'] .theme-options label[data-selected='true']::after { content: '✓'; margin-left: auto; }
+:root[data-theme='opus'] .theme-options input { accent-color: var(--text-primary); }
+:root[data-theme='opus'] .theme-option-swatch { display: inline-block; width: 22px; height: 22px; flex: 0 0 auto; border-radius: 3px; border: 1px solid var(--border-default); }
+:root[data-theme='opus'] [data-theme-option='gpt'] .theme-option-swatch { background: linear-gradient(135deg, #101010 50%, #e5e7eb 50%); }
+:root[data-theme='opus'] [data-theme-option='opus'] .theme-option-swatch { background: linear-gradient(135deg, #f6f3ec 50%, #1f1d1a 50%); }
+:root[data-theme='opus'] .theme-close {
+  background: var(--button-secondary-bg) !important; color: var(--button-secondary-text) !important;
+  border: 1px solid var(--button-secondary-border) !important; font-weight: 500 !important;
+}

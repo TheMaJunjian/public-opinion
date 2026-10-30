@@ -1,10 +1,14 @@
+import { stakeAppearanceAttributes, groupStakeAppearanceAttributes } from '../utils/stakeAppearance';
+import StakeTierBadge, { SkinOrnament } from '../theme/StakeTierBadge';
+import { ThemeLabel } from '../theme/ThemeIcon';
+import { EdgeSkin, EdgeLabelSkin, FrameSkin } from '../theme/GraphSkin';
 import { useGraphOverlays } from '../hooks/useGraphOverlays';
 import { projectGraphScene } from '../utils/graphProjection';
 import {projectFrameViewports,createFrameClipResolver,frameConnectionVisible,type FrameScroll,type GraphFrameViewState} from '../utils/frameViewports';
 import {useAvailableFrameWidth} from '../hooks/useAvailableFrameWidth';
 import type {FrameViewSize} from '../utils/frameLayout';
 import {FrameViewportTools,FrameViewportScrollbars,clipFrameScene} from './graph/FrameViewport';
-import { unionLayoutRects, getGroupHeaderHeight, getGroupHeaderRect, getMergeCardHeaderRect, getEdgeDecorationLeft, getDecorationColumnWidth, getAnnotationPlacement, GROUP_HEADER_HEIGHT, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, DEC_ICON_W, EDGE_HINT_W, EDGE_LABEL_HINT_GAP, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_HIT_PAD, TAG_HIT_PAD_X, FRAME_RADIUS, GROUP_FRAME_STROKE, SHOW_SELECTED_ACTUAL_RECTS, INLINE_BADGE_COLOR } from '../utils/graphPresentationGeometry';
+import { GRAPH_CARD_LAYER, GRAPH_SELECTED_CARD_LAYER, unionLayoutRects, getGroupHeaderHeight, getGroupHeaderRect, getMergeCardHeaderRect, getEdgeDecorationLeft, getDecorationColumnWidth, getAnnotationPlacement, GROUP_HEADER_HEIGHT, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, DEC_ICON_W, EDGE_HINT_W, EDGE_LABEL_HINT_GAP, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_HIT_PAD, TAG_HIT_PAD_X, FRAME_RADIUS, GROUP_FRAME_STROKE, SHOW_SELECTED_ACTUAL_RECTS, INLINE_BADGE_COLOR } from '../utils/graphPresentationGeometry';
 import { unitEquals, selectionIsText, extractTextTargetsForMessage, relationTypeName, buildAnnoTree, renderAnnoNodes } from '../utils/graphTextSelection';
 import React, { useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CardWidthContext, CardWidthHandle } from './graph/CardWidthContext';
@@ -380,11 +384,11 @@ function ComparisonGraphPair(props: GraphViewProps) {
           <GraphView {...props} {...props.comparisonAgreeContext} messages={props.comparisonAgreeMessages ?? props.messages} edges={props.comparisonAgreeEdges ?? props.edges} hideMessageIds={props.comparisonAgreeMessages ? props.comparisonAgreeHideMessageIds : props.hideMessageIds} comparisonPair={false} comparisonSingle={false} comparisonDisplay="agree" comparisonSuppressedRelIds={props.comparisonAgreeSuppressedRelIds} autoCenterMessageId={null} />
         </div>
       </ComparisonPane>
-      <div data-comparison-divider="true" style={{ minHeight: 0, marginTop: COMPARISON_HEADER_HEIGHT, display: 'grid', gridTemplateColumns: '14px minmax(0, 1fr)', gap: 4, position: 'sticky', top: 0, alignSelf: 'start', height: Math.max(scrollHostSize.viewportHeight, 1), overflow: 'hidden', background: '#2a2a2a', borderRadius: 4 }}>
+      <div data-comparison-divider="true" style={{ minHeight: 0, marginTop: COMPARISON_HEADER_HEIGHT, display: 'grid', gridTemplateColumns: '14px minmax(0, 1fr)', gap: 4, position: 'sticky', top: 0, alignSelf: 'start', height: Math.max(scrollHostSize.viewportHeight, 1), overflow: 'hidden', background: 'var(--surface-2a2a2a)', borderRadius: 4 }}>
         <div ref={verticalScrollRef} data-comparison-scroll-vertical="true" aria-label="对比视图垂直滚动条" style={{ minHeight: 0, minWidth: 0, height: '100%', overflowY: 'scroll', overflowX: 'hidden', scrollbarGutter: 'stable', borderRadius: 4 }}>
           <div style={{ height: Math.max(scrollHostSize.height, contentSize.height, 1), width: 1 }} />
         </div>
-        <div onPointerDown={handleSplitPointerDown} role="separator" aria-label="调整对比视图宽度" style={{ minWidth: 0, cursor: 'col-resize', background: '#3a3a3a', borderRadius: 4, touchAction: 'none', userSelect: 'none' }} />
+        <div onPointerDown={handleSplitPointerDown} role="separator" aria-label="调整对比视图宽度" style={{ minWidth: 0, cursor: 'col-resize', background: 'var(--surface-3a3a3a)', borderRadius: 4, touchAction: 'none', userSelect: 'none' }} />
       </div>
       <ComparisonPane side="disagree" recommended={props.comparisonRecommendedDisplay === 'disagree'}>
         {props.comparisonScopeHeader}
@@ -530,7 +534,7 @@ function GraphViewCanvas(props: GraphViewProps) {
         if(expanded)(annotations?setRevealedAnnotationIds:setRevealedDecorationIds)(previous=>new Set([...previous].filter(id=>!messageIds.includes(id))));
       }}
       style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:EDGE_HINT_W,height:EDGE_HINT_W,
-        padding:0,border:'1px solid #444',borderRadius:3,background:'#1f1f1f',color:'#cbd5e1',fontSize:10,
+        padding:0,border:'1px solid var(--line-444)',borderRadius:3,background:'var(--surface-1f1f1f)',color:'var(--ink-cbd5e1)',fontSize:10,
         lineHeight:1,flexShrink:0,cursor:'pointer',pointerEvents:'auto',...style}}>{expanded?'▾':'▸'}</button>;
   };
   const cardFrameIds = useMemo(() => new Set([...expandedFrameIds, ...revealedFrameIds,
@@ -922,6 +926,8 @@ function GraphViewCanvas(props: GraphViewProps) {
   function isEdgeLabelFragSel(relId:string,edgeId:string) {
     return draftUnits.some(x=>unitEquals(x,{messageId:relId,selection:{kind:"edge",edgeId}}));
   }
+  function skinForMessage(id:string) { return stakeAppearanceAttributes(stakeCounts?.[id]); }
+  function skinForGroup(ids:readonly string[] = []) { return groupStakeAppearanceAttributes(ids, stakeCounts); }
   function isRelWholeSel(relId:string) {
     return draftUnits.some(unit => isWholeMessageSelection(unit, relId));
   }
@@ -933,11 +939,11 @@ function GraphViewCanvas(props: GraphViewProps) {
   }
 
   function renderContent(message: DemoMessage, partId?: string) {
-    const fontSize = getMessageProminence(message).fontSize;
+    const fontSize = getMessageProminence(message).cssFontSize;
     const part = message.parts?.find(candidate => candidate.id === partId);
     const text = part?.type === 'text' ? part.text : part?.type === 'web' ? part.excerpt : part?.type === 'code' ? part.source : message.content;
     const targets = extractTextTargetsForMessage(message.id, edges, partId, message.revision);
-    if (!targets.length) return <pre style={{margin:0,whiteSpace:"pre-wrap",overflowWrap:"anywhere",fontFamily:"Menlo,Monaco,Consolas,'Courier New',monospace",fontSize}}>{text}</pre>;
+    if (!targets.length) return <pre style={{margin:0,whiteSpace:"pre-wrap",overflowWrap:"anywhere",fontFamily:part?.type==="code"?"Menlo, Monaco, Consolas, monospace":"var(--font-reading)",lineHeight: 'var(--message-leading)',fontSize}}>{text}</pre>;
     const validItems = targets
       .filter(t => t.start >= 0 && t.start + t.len <= text.length && t.len > 0)
       .map(t => ({ start: t.start, end: t.start + t.len, relationType: t.relationType, edgeId: t.edgeId }));
@@ -960,7 +966,7 @@ function GraphViewCanvas(props: GraphViewProps) {
       (_id, start, len, relationType) => targets.some(target => target.start === start && target.len === len
         && target.relationType === relationType && annotationTargetFragmentHints.has(target.edgeId))
     );
-    return <pre style={{margin:0,whiteSpace:"pre-wrap",overflowWrap:"anywhere",fontFamily:"Menlo,Monaco,Consolas,'Courier New',monospace",fontSize}}>{nodes}</pre>;
+    return <pre style={{margin:0,whiteSpace:"pre-wrap",overflowWrap:"anywhere",fontFamily:part?.type==="code"?"Menlo, Monaco, Consolas, monospace":"var(--font-reading)",lineHeight: 'var(--message-leading)',fontSize}}>{nodes}</pre>;
   }
 
   function renderCorrectionRecords(messageId: string) {
@@ -968,11 +974,11 @@ function GraphViewCanvas(props: GraphViewProps) {
     if (!records.length) return null;
     const latest = records[records.length - 1];
     const active = records.filter(id => !invalidCorrectionIds?.has(id)).length;
-    return <span style={{display:'inline-flex',alignItems:'center'}}><span data-msgid={latest} data-jump-msgids={records.join(' ')} data-rel-overlay="true"
-      title={`更正关系：${latest}；共${records.length}次更正，单击对比原文与当前正文，双击查看历史`}
+    return <span style={{display:'inline-flex',alignItems:'center'}}><span data-skin-selected={isRelWholeSel(latest)} {...skinForMessage(latest)} data-msgid={latest} data-jump-msgids={records.join(' ')} data-rel-overlay="true"
+      data-skin-decoration="correct" title={`更正关系：${latest}；共${records.length}次更正，单击对比原文与当前正文，双击查看历史`}
       onClick={event => { event.stopPropagation(); onInlineBadgeClick?.(event, latest); }}
       onDoubleClick={event => { event.stopPropagation(); onInlineBadgeDoubleClick?.(event, latest); }}
-      style={{background:isRelWholeSel(latest)?'#fbbf24':'rgba(170,110,0,0.9)',color:isRelWholeSel(latest)?'#111827':'#fff',
+      style={{background:isRelWholeSel(latest)?'var(--surface-fbbf24)':'var(--surface-rgba-170-110-0-0-9)',color:isRelWholeSel(latest)?'var(--ink-111827)':'var(--ink-fff)',
         borderRadius:3,fontSize:9,padding:'0 4px',fontWeight:600,cursor:'pointer',pointerEvents:'auto',
         whiteSpace:'nowrap',userSelect:'none',opacity:active ? 1 : 0.45}}>
       ✏更正 {active}/{records.length}
@@ -988,7 +994,7 @@ function GraphViewCanvas(props: GraphViewProps) {
     <div ref={canvasRef} data-jump-canvas="true" style={{position:"relative",width:actualCanvasWidth,height:actualCanvasHeight,zIndex:0}}
       onDoubleClick={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
       {props.visibleMessageIds && <div data-message-window-boundary="true" aria-hidden="true" style={{ position: 'absolute', top: visibleBottom, left: 0, height: 1, width: 1 }} />}
-      <div style={{position:"absolute",left:0,top:0,width:actualCanvasWidth,height:actualCanvasHeight,zIndex:1}}>
+      <div data-graph-cards="true" style={{position:"absolute",left:0,top:0,width:actualCanvasWidth,height:actualCanvasHeight}}>
         {mountedNormals.map(msg=><div key={msg.id} aria-hidden={!virtual.isOnscreen(msg.id) || undefined}
           style={{ visibility: virtual.isOnscreen(msg.id) ? undefined : 'hidden', pointerEvents: virtual.isOnscreen(msg.id) ? undefined : 'none' }}>{(() => {
           const box=layout[msg.id]; if(!box) return null;
@@ -1065,87 +1071,89 @@ function GraphViewCanvas(props: GraphViewProps) {
           const isStanceTarget = stanceHighlight?.stanceMsgId === msg.id;
           const isStanceEvidence = stanceHighlight?.evidenceMsgIds.includes(msg.id) ?? false;
           const stanceBorder = isStanceTarget
-            ? '2px solid #f59e0b'
+            ? '2px solid var(--line-f59e0b)'
             : isStanceEvidence
-              ? '1px solid rgba(245,158,11,0.6)'
+              ? '1px solid var(--line-rgba-245-158-11-0-6)'
               : undefined;
           const stanceShadow = isStanceTarget
-            ? '0 0 16px rgba(245,158,11,0.35), 0 4px 10px rgba(0,0,0,0.5)'
+            ? '0 0 16px var(--shadow-rgba-245-158-11-0-35), 0 4px 10px var(--shadow-rgba-0-0-0-0-5)'
             : isStanceEvidence
-              ? '0 0 8px rgba(245,158,11,0.18), 0 4px 10px rgba(0,0,0,0.5)'
+              ? '0 0 8px var(--shadow-rgba-245-158-11-0-18), 0 4px 10px var(--shadow-rgba-0-0-0-0-5)'
               : undefined;
           const stanceBg = isStanceTarget
-            ? '#2a2410'
+            ? 'var(--surface-2a2410)'
             : isStanceEvidence
-              ? '#242015'
+              ? 'var(--surface-242015)'
               : undefined;
 
           // Kind-based styling for governance / code / settlement messages
           const kindMeta = (() => {
-            if (msg.kind === 'join') return { color: '#a78bfa', label: '加入', bg: 'rgba(167,139,250,0.08)' };
-            if (msg.kind === 'governance') return { color: '#f59e0b', label: getRelationMessageLabel(msg) ?? '提案', bg: 'rgba(245,158,11,0.08)' };
-            if (msg.kind === 'code')        return { color: '#14b8a6', label: '代码', bg: 'rgba(20,184,166,0.08)' };
-            if (msg.kind === 'operations')  return { color: '#06b6d4', label: '📊 运营', bg: 'rgba(6,182,212,0.08)' };
+            if (msg.kind === 'join') return { color: 'var(--ink-a78bfa)', label: '加入', bg: 'var(--surface-rgba-167-139-250-0-08)' };
+            if (msg.kind === 'governance') return { color: 'var(--ink-f59e0b)', label: getRelationMessageLabel(msg) ?? '提案', bg: 'var(--surface-rgba-245-158-11-0-08)' };
+            if (msg.kind === 'code')        return { color: 'var(--ink-14b8a6)', label: '代码', bg: 'var(--surface-rgba-20-184-166-0-08)' };
+            if (msg.kind === 'operations')  return { color: 'var(--ink-06b6d4)', label: '📊 运营', bg: 'var(--surface-rgba-6-182-212-0-08)' };
             if (msg.kind === 'relation' && msg.relationType === 'delegation') {
               const isFulfill = msg.relationPayload?.delegationKind === 'FULFILL';
-              return { color: '#f97316', label: isFulfill ? '完成委托' : '创建委托', bg: 'rgba(249,115,22,0.1)' };
+              return { color: 'var(--ink-f97316)', label: isFulfill ? '完成委托' : '创建委托', bg: 'var(--surface-rgba-249-115-22-0-1)' };
             }
             if (msg.kind === 'round') {
               const isValue = (msg as any).roundPayload?.settlementType === 'VALUE';
               return isValue
-                ? { color: '#fcd34d', label: '💎 结算中', bg: 'rgba(252,211,77,0.08)' }
-                : { color: '#a5b4fc', label: '⚖️ 结算中', bg: 'rgba(165,180,252,0.08)' };
+                ? { color: 'var(--ink-fcd34d)', label: '💎 结算中', bg: 'var(--surface-rgba-252-211-77-0-08)' }
+                : { color: 'var(--ink-a5b4fc)', label: '⚖️ 结算中', bg: 'var(--surface-rgba-165-180-252-0-08)' };
             }
             if (msg.kind === 'round_result') {
               const isValue = (msg as any).roundPayload?.settlementType === 'VALUE';
               return isValue
-                ? { color: '#f59e0b', label: '💎 已结算', bg: 'rgba(245,158,11,0.12)' }
-                : { color: '#818cf8', label: '⚖️ 已结算', bg: 'rgba(129,140,248,0.12)' };
+                ? { color: 'var(--ink-f59e0b)', label: '💎 已结算', bg: 'var(--surface-rgba-245-158-11-0-12)' }
+                : { color: 'var(--ink-818cf8)', label: '⚖️ 已结算', bg: 'var(--surface-rgba-129-140-248-0-12)' };
             }
-            if (msg.kind === 'relation' && msg.relationType === 'summary') return { color: '#34d399', label: '总结', bg: 'rgba(52,211,153,0.08)' };
-            if (msg.kind === 'relation') return { color: '#c4b5fd', label: getRelationMessageLabel(msg) ?? relationTypeName(msg.relationType ?? 'relation'), bg: 'rgba(196,181,253,0.08)' };
-            if (msg.kind === 'normal') return { color: '#94a3b8', label: '文本', bg: 'rgba(148,163,184,0.08)' };
+            if (msg.kind === 'relation' && msg.relationType === 'summary') return { color: 'var(--ink-34d399)', label: '总结', bg: 'var(--surface-rgba-52-211-153-0-08)' };
+            if (msg.kind === 'relation') return { color: 'var(--ink-c4b5fd)', label: getRelationMessageLabel(msg) ?? relationTypeName(msg.relationType ?? 'relation'), bg: 'var(--surface-rgba-196-181-253-0-08)' };
+            if (msg.kind === 'normal') return { color: 'var(--ink-94a3b8)', label: '文本', bg: 'var(--surface-rgba-148-163-184-0-08)' };
             return null;
           })();
           const kindBorder = kindMeta ? `3px solid ${kindMeta.color}` : undefined;
           const kindBg = kindMeta ? kindMeta.bg : undefined;
           const isRelationCard = msg.kind !== 'normal';
-          const surfaceBorder = isRelationCard ? `1px dashed ${kindMeta?.color ?? '#a78bfa'}88` : '1px solid #444';
+          const surfaceBorder = isRelationCard ? `1px dashed color-mix(in srgb, ${kindMeta?.color ?? 'var(--line-a78bfa)'} 53.33%, transparent)` : '1px solid var(--line-444)';
           const joinStatus = joinStatusByMessage?.get(msg.id);
           const joinPresentation = joinStatus ? getJoinStatusPresentation(joinStatus, props.joinEffectSourcesByMessage?.get(msg.id)) : undefined;
           const joinIsInvalid = !!joinStatus && joinStatus !== 'valid';
 
           return (
-            <div key={msg.id} data-msgid={msg.id} data-message-presentation={isRelationCard ? 'relation' : 'text'} ref={el=>{cardRefs.current[msg.id]=el;}}
+            <div key={msg.id} data-msgid={msg.id} className="themed-message" {...skinForMessage(msg.id)} data-skin-type={msg.relationType ?? msg.kind} data-skin-carrier="content" data-stance-highlight={isStanceTarget ? "target" : isStanceEvidence ? "evidence" : undefined} data-message-kind={msg.kind} data-active-text={isText || undefined} data-whole-selected={isWhole || undefined} data-message-presentation={isRelationCard ? 'relation' : 'text'} ref={el=>{cardRefs.current[msg.id]=el;}}
               role="group" tabIndex={0} aria-label={`消息 ${msg.id}，${isWhole ? '已选中' : '未选中'}`}
               aria-keyshortcuts="Enter Space Shift+Enter" onKeyDown={activateMessageFromKeyboard}
               onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
               onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
-              style={{position:"absolute",left:box.x,top:box.y,width:box.width,boxSizing:"border-box",backgroundColor:isWhole?"#5b4100":stanceBg||kindBg||"#1f1f1f",backgroundImage:isWhole?undefined:prominence.backgroundImage,borderRadius:isRelationCard?3:8,borderTop:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":surfaceBorder),borderRight:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":surfaceBorder),borderBottom:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":surfaceBorder),borderLeft:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":kindBorder??surfaceBorder),padding:isRelationCard?"9px 12px":"12px 16px",boxShadow:stanceShadow||(isText?"0 6px 18px rgba(11,132,255,0.06)":isWhole?"0 4px 18px rgba(251,191,36,0.45)":prominence.boxShadow||"0 4px 10px rgba(0,0,0,0.5)"),display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:isWhole?"none":lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
+              style={{position:"absolute",zIndex:isWhole||isText?GRAPH_SELECTED_CARD_LAYER:GRAPH_CARD_LAYER,left:box.x,top:box.y,width:box.width,boxSizing:"border-box",backgroundColor:isWhole?"var(--surface-5b4100)":stanceBg||kindBg||"var(--surface-1f1f1f)",backgroundImage:prominence.backgroundImage,...prominence.variables,borderRadius:isRelationCard?3:8,borderTop:stanceBorder||(isText?"2px dashed var(--line-0b84ff)":isWhole?"2px solid var(--line-fbbf24)":surfaceBorder),borderRight:stanceBorder||(isText?"2px dashed var(--line-0b84ff)":isWhole?"2px solid var(--line-fbbf24)":surfaceBorder),borderBottom:stanceBorder||(isText?"2px dashed var(--line-0b84ff)":isWhole?"2px solid var(--line-fbbf24)":surfaceBorder),borderLeft:stanceBorder||(isText?"2px dashed var(--line-0b84ff)":isWhole?"2px solid var(--line-fbbf24)":kindBorder??surfaceBorder),padding:isRelationCard?"9px 12px":"12px 16px",boxShadow:stanceShadow||(isText?"0 6px 18px var(--shadow-rgba-11-132-255-0-06)":isWhole?prominence.boxShadow:prominence.boxShadow||"none"),display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:isWhole?"none":lastClickedMessageId===msg.id?"1px dashed var(--line-0b84ff)":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
+              <SkinOrnament />
               {/* Correction badges: for text messages, shown centered in the same header row as author/msgId */}
               <CardWidthHandle messageId={msg.id} />
-              <div data-card-header="true" ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85}}>
+              <div className="message-card-header" data-card-header="true" ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85}}>
               <div data-card-header-content="true" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,width:'max-content',minWidth:'100%',whiteSpace:'nowrap'}}>
                 <div style={{flexShrink:0,display:"flex",alignItems:"center",gap:4}}>
                   {/* For non-text (relation) messages, keep badges left-aligned in header */}
                   {msg.kind!=="normal" && correctionBadge && (
                     <div key={`corr-hdr-${correctionBadge.relMsgId}`}
-                      data-msgid={correctionBadge.relMsgId} data-jump-msgids={correctionBadgeJumpIds} data-rel-overlay="true"
+                      data-skin-selected={isRelWholeSel(correctionBadge.relMsgId)} {...skinForMessage(correctionBadge.relMsgId)} data-msgid={correctionBadge.relMsgId} data-jump-msgids={correctionBadgeJumpIds} data-rel-overlay="true"
                       onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,correctionBadge.relMsgId);}}
                       onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,correctionBadge.relMsgId);}}
-                      title={`更正关系：${correctionBadge.relMsgId}；共${correctionCount}次更正，单击对比原文与当前正文，双击查看历史`}
-                      style={{background:isRelWholeSel(correctionBadge.relMsgId)?"#fbbf24":"rgba(170,110,0,0.9)",
-                        color:isRelWholeSel(correctionBadge.relMsgId)?"#111827":"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
+                      data-skin-decoration="correct" title={`更正关系：${correctionBadge.relMsgId}；共${correctionCount}次更正，单击对比原文与当前正文，双击查看历史`}
+                      style={{background:isRelWholeSel(correctionBadge.relMsgId)?"var(--surface-fbbf24)":"var(--surface-rgba-170-110-0-0-9)",
+                        color:isRelWholeSel(correctionBadge.relMsgId)?"var(--ink-111827)":"var(--ink-fff)",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
                         cursor:"pointer",pointerEvents:"auto",
-                        border:isRelWholeSel(correctionBadge.relMsgId)?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.15)",
-                        boxShadow:isRelWholeSel(correctionBadge.relMsgId)?"0 1px 4px rgba(251,191,36,0.35)":"none",
+                        border:isRelWholeSel(correctionBadge.relMsgId)?"2px solid var(--line-fbbf24)":"1px solid var(--line-rgba-255-255-255-0-15)",
+                        boxShadow:isRelWholeSel(correctionBadge.relMsgId)?"0 1px 4px var(--shadow-rgba-251-191-36-0-35)":"none",
                         whiteSpace:"nowrap",userSelect:"none",flexShrink:0,opacity:correctionBadgeOpacity}}>
                       {correctionBadgeLabel}
                     </div>
                   )}
+                  <StakeTierBadge counts={stakeCounts?.[msg.id]} />
                   {kindMeta && (
-                    <MessageElement reference={messageTypeReference(msg)} selected={isMessageElementSelected(draftUnits, messageTypeReference(msg))} label={kindMeta.label} style={{fontSize:10,fontWeight:700,padding:"2px 6px",borderRadius:4,background:isWhole?"#fbbf24":`${kindMeta.color}22`,color:isWhole?"#111827":kindMeta.color,lineHeight:"16px",border:isWhole?"1px solid #fbbf24":`1px solid ${kindMeta.color}44`}}>
-                      {kindMeta.label}
+                    <MessageElement reference={messageTypeReference(msg)} selected={isMessageElementSelected(draftUnits, messageTypeReference(msg))} label={kindMeta.label} style={{fontSize:10,fontWeight:700,padding:"2px 6px",borderRadius:4,background:isWhole?"var(--surface-fbbf24)":`color-mix(in srgb, ${kindMeta.color} 13.33%, transparent)`,color:isWhole?"var(--ink-111827)":kindMeta.color,lineHeight:"16px",border:isWhole?"1px solid var(--line-fbbf24)":`1px solid color-mix(in srgb, ${kindMeta.color} 26.67%, transparent)`}}>
+                      <ThemeLabel text={kindMeta.label} />
                     </MessageElement>
                   )}
                   <HomeFilterBadge label={homeRoleLabel(msg.id)} reason={props.homeReasonByMessageId?.get(msg.id)}/>
@@ -1158,15 +1166,15 @@ function GraphViewCanvas(props: GraphViewProps) {
                       return (
                         <div key={`corr-hdr-${b.relMsgId}`} style={{display:'inline-flex',alignItems:'center',gap:4,flexShrink:0,whiteSpace:'nowrap'}}>
                           <div
-                            data-msgid={b.relMsgId} data-jump-msgids={correctionBadgeJumpIds} data-rel-overlay="true"
+                            data-skin-selected={isRelWholeSel(b.relMsgId)} {...skinForMessage(b.relMsgId)} data-msgid={b.relMsgId} data-jump-msgids={correctionBadgeJumpIds} data-rel-overlay="true"
                             onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,b.relMsgId);}}
                             onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,b.relMsgId);}}
-                            title={`更正关系：${b.relMsgId}；共${correctionCount}次更正，单击对比原文与当前正文，双击查看历史`}
-                            style={{background:isRelWholeSel(b.relMsgId)?"#fbbf24":"rgba(170,110,0,0.9)",
-                              color:isRelWholeSel(b.relMsgId)?"#111827":"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
+                            data-skin-decoration="correct" title={`更正关系：${b.relMsgId}；共${correctionCount}次更正，单击对比原文与当前正文，双击查看历史`}
+                            style={{background:isRelWholeSel(b.relMsgId)?"var(--surface-fbbf24)":"var(--surface-rgba-170-110-0-0-9)",
+                              color:isRelWholeSel(b.relMsgId)?"var(--ink-111827)":"var(--ink-fff)",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
                               cursor:"pointer",pointerEvents:"auto",
-                              border:isRelWholeSel(b.relMsgId)?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.15)",
-                              boxShadow:isRelWholeSel(b.relMsgId)?"0 1px 4px rgba(251,191,36,0.35)":"none",
+                              border:isRelWholeSel(b.relMsgId)?"2px solid var(--line-fbbf24)":"1px solid var(--line-rgba-255-255-255-0-15)",
+                              boxShadow:isRelWholeSel(b.relMsgId)?"0 1px 4px var(--shadow-rgba-251-191-36-0-35)":"none",
                               whiteSpace:"nowrap",userSelect:"none",flexShrink:0,opacity:correctionBadgeOpacity}}>
                             {correctionBadgeLabel}
                           </div>
@@ -1181,7 +1189,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                     <span
                       data-rel-overlay="true"
                       onClick={e => { e.stopPropagation(); onNavigateToMessage(msg.id); }}
-                      style={{opacity:0.95,fontFamily:"monospace",fontSize:10,color:"#93c5fd",cursor:"pointer",padding:"1px 4px",borderRadius:3,background:"rgba(59,130,246,0.15)",textDecoration:"underline",textUnderlineOffset:2}}
+                      style={{opacity:0.95,fontFamily:"monospace",fontSize:10,color:"var(--ink-93c5fd)",cursor:"pointer",padding:"1px 4px",borderRadius:3,background:"var(--surface-rgba-59-130-246-0-15)",textDecoration:"underline",textUnderlineOffset:2}}
                       title={`跳转到加入消息 ${msg.id} 的当前实际位置`}
                     >{msg.id}</span>
                   ) : (
@@ -1196,23 +1204,23 @@ function GraphViewCanvas(props: GraphViewProps) {
               </div>
               </div>
               {msg.state?.suppressed && ['summary', 'merge', 'arrange', 'classify'].includes(msg.relationType ?? '') && (
-                <div style={{ fontSize: 11, color: '#fcd34d' }}>{msg.relationType === 'summary' ? '覆盖已取消' : '显示组织已取消'} · 原消息已恢复，仍可查看和表态</div>
+                <div style={{ fontSize: 11, color: 'var(--ink-fcd34d)' }}>{msg.relationType === 'summary' ? '覆盖已取消' : '显示组织已取消'} · 原消息已恢复，仍可查看和表态</div>
               )}
-              {isRejectedRelation(msg,rejectedRelationIds)&&<div style={{fontSize:11,color:'#fcd34d',display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+              {isRejectedRelation(msg,rejectedRelationIds)&&<div style={{fontSize:11,color:'var(--ink-fcd34d)',display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                 <span>显示效果已取消 · 记录与表态保留</span>
                 {props.onRelatedMessageNavigate&&<button onClick={event=>{event.stopPropagation();props.onRelatedMessageNavigate?.(msg.id);}}>查看有效时的效果</button>}
               </div>}
               {joinStatus && (
-                <div title={joinPresentation?.hint} style={{ fontSize: 10, fontWeight: 600, color: joinIsInvalid ? '#fca5a5' : '#86efac', alignSelf: 'flex-start', padding: '1px 6px', borderRadius: 4, background: joinIsInvalid ? 'rgba(239,68,68,0.16)' : 'rgba(34,197,94,0.15)', border: `1px solid ${joinIsInvalid ? 'rgba(239,68,68,0.35)' : 'rgba(34,197,94,0.3)'}` }}>
+                <div title={joinPresentation?.hint} style={{ fontSize: 10, fontWeight: 600, color: joinIsInvalid ? 'var(--ink-fca5a5)' : 'var(--ink-86efac)', alignSelf: 'flex-start', padding: '1px 6px', borderRadius: 4, background: joinIsInvalid ? 'var(--surface-rgba-239-68-68-0-16)' : 'var(--surface-rgba-34-197-94-0-15)', border: `1px solid ${joinIsInvalid ? 'var(--line-rgba-239-68-68-0-35)' : 'var(--line-rgba-34-197-94-0-3)'}` }}>
                   {joinPresentation?.label}
                 </div>
               )}
               {msg.executedStance && needsSeparateStanceCard(msg, msgMap) && (
-                <div style={{ fontSize: 11, color: msg.executedStance.side === 'pro' ? '#86efac' : '#fca5a5', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                <div style={{ fontSize: 11, color: msg.executedStance.side === 'pro' ? 'var(--ink-86efac)' : 'var(--ink-fca5a5)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
                   {msg.executedStance.side === 'pro' ? '赞同' : '反对'}：{describeUnit({ messageId: msg.executedStance.target.messageId, reference: msg.executedStance.target, selection: { kind: 'whole' } }, msgMap.get(msg.executedStance.target.messageId))}
                 </div>
               )}
-              {isText&&<div style={{fontSize:11,color:"#0b84ff",marginBottom:4}}>拖选文字即可选择片段，或点击已有高亮片段</div>}
+              {isText&&<div style={{fontSize:11,color:"var(--ink-0b84ff)",marginBottom:4}}>拖选文字即可选择片段，或点击已有高亮片段</div>}
               {/* Settlement: content with inline target tag on first line */}
               {(msg.kind === 'round' || msg.kind === 'round_result') ? (() => {
                 const settleTargetId = (msg as any).settlementTargetId as string | undefined;
@@ -1224,13 +1232,13 @@ function GraphViewCanvas(props: GraphViewProps) {
                 const isValue = (msg as any).roundPayload?.settlementType === 'VALUE';
                 const isRound = msg.kind === 'round';
                 const tagColor = isValue
-                  ? (isRound ? '#fcd34d' : '#f59e0b')
-                  : (isRound ? '#a5b4fc' : '#818cf8');
+                  ? (isRound ? 'var(--ink-fcd34d)' : 'var(--ink-f59e0b)')
+                  : (isRound ? 'var(--ink-a5b4fc)' : 'var(--ink-818cf8)');
                 const lines = (msg.content ?? '').split('\n');
                 const firstLine = lines[0];
                 const restLines = lines.slice(1).join('\n');
                 return (
-                  <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"#f5f5f5"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
+                  <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"var(--ink-f5f5f5)"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
                     <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexWrap: "wrap" }}>
                       <span style={{ whiteSpace: "pre-wrap", fontFamily: "Menlo,Monaco,Consolas,'Courier New',monospace", fontSize: 13 }}>{firstLine}</span>
                       {settleTargetId && (
@@ -1239,7 +1247,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                             onClick={(e) => { e.stopPropagation(); onNavigateToMessage(settleTargetId); }}
                             style={{
                               fontSize: 10, fontWeight: 500, padding: "1px 6px", borderRadius: 4,
-                              background: `${tagColor}15`, color: tagColor, border: `1px solid ${tagColor}40`,
+                              background: `color-mix(in srgb, ${tagColor} 8.24%, transparent)`, color: tagColor, border: `1px solid color-mix(in srgb, ${tagColor} 25.1%, transparent)`,
                               cursor: "pointer", maxWidth: 240, overflow: "hidden",
                               textOverflow: "ellipsis", whiteSpace: "nowrap",
                             }}
@@ -1248,7 +1256,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                             → {settleTargetId.slice(-6)}{targetPreview ? `「${targetPreview}」` : ''}
                           </span>
                         ) : (
-                          <span style={{ fontSize: 10, color: "#6b7280", padding: "1px 4px", borderRadius: 3, background: "rgba(107,114,128,0.1)" }}>
+                          <span style={{ fontSize: 10, color: "var(--ink-6b7280-2)", padding: "1px 4px", borderRadius: 3, background: "var(--surface-rgba-107-114-128-0-1)" }}>
                             {settleTargetId.slice(-6)}
                           </span>
                         )
@@ -1260,7 +1268,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                   </div>
                 );
               })() : !msg.joinInfo && (
-              <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"#f5f5f5"}}>
+              <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"var(--ink-f5f5f5)"}}>
                 {msg.parts?.some(part => ['text', 'web', 'code'].includes(part.type))
                   ? msg.parts.filter(part => ['text', 'web', 'code'].includes(part.type)).map(part =>
                     <MessageTextPart key={part.id} message={msg} partId={part.id} activeText={activeTextSelectId === msg.id} onMouseUp={onTextMouseUp}>{renderContent(msg, part.id)}</MessageTextPart>)
@@ -1271,13 +1279,13 @@ function GraphViewCanvas(props: GraphViewProps) {
               {renderRelatedConnections(msg.id)}
               {renderJoinRecords(msg.id, ['classify','summary','merge','arrange'].includes(msg.relationType ?? ''))}
               {(notifyUsersByRelationMsg.get(msg.id)?.length ?? 0) > 0 && (
-                <div style={{ marginTop: 6, fontSize: 11, color: '#67e8f9' }}>
+                <div style={{ marginTop: 6, fontSize: 11, color: 'var(--ink-67e8f9)' }}>
                   通知与会者：
                   {notifyUsersByRelationMsg.get(msg.id)!.map((notifyUser, index) => (
                     <React.Fragment key={notifyUser.id}>
                       {index > 0 && '、'}
                       <span
-                        style={{ color: '#a5f3fc' }}
+                        style={{ color: 'var(--ink-a5f3fc)' }}
                         title={`通知与会者 ${notifyUser.username}`}
                       >
                         {notifyUser.username}
@@ -1296,16 +1304,16 @@ function GraphViewCanvas(props: GraphViewProps) {
                       {onNavigateToMessage ? (
                         <span
                             onClick={(e) => { e.stopPropagation(); onNavigateToMessage(containerId); }}
-                          style={{ fontSize: 10, fontFamily: "monospace", color: "#93c5fd", cursor: "pointer", padding: "1px 4px", borderRadius: 3, background: "rgba(59,130,246,0.15)", textDecoration: "underline", textUnderlineOffset: 2 }}
+                          style={{ fontSize: 10, fontFamily: "monospace", color: "var(--ink-93c5fd)", cursor: "pointer", padding: "1px 4px", borderRadius: 3, background: "var(--surface-rgba-59-130-246-0-15)", textDecoration: "underline", textUnderlineOffset: 2 }}
                           title={`跳转到容器消息 ${containerId}`}
                         >{containerId}</span>
                       ) : (
-                        <span style={{ fontSize: 10, fontFamily: "monospace", color: "#6b7280", padding: "1px 4px", borderRadius: 3, background: "rgba(107,114,128,0.1)" }}>{containerId}</span>
+                        <span style={{ fontSize: 10, fontFamily: "monospace", color: "var(--ink-6b7280-2)", padding: "1px 4px", borderRadius: 3, background: "var(--surface-rgba-107-114-128-0-1)" }}>{containerId}</span>
                       )}
                     </div>
                     {targetIds.length > 0 && (
                       <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
-                        <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }}>目标:</span>
+                        <span style={{ fontSize: 10, color: "var(--ink-9ca3af)", flexShrink: 0 }}>目标:</span>
                         {targetIds.map(tid => <span key={tid} data-join-target={tid} style={{display:'inline-flex',alignItems:'center',gap:4}}>
                           <JoinEndpointType messageId={tid} messages={relatedCatalog}/>
                           {
@@ -1313,14 +1321,14 @@ function GraphViewCanvas(props: GraphViewProps) {
                             <span
                               key={tid}
                               onClick={(e) => { e.stopPropagation(); onNavigateToMessage(tid); }}
-                              style={{ fontSize: 10, fontFamily: "monospace", color: "#93c5fd", cursor: "pointer", padding: "1px 4px", borderRadius: 3, background: "rgba(59,130,246,0.15)", textDecoration: "underline", textUnderlineOffset: 2 }}
+                              style={{ fontSize: 10, fontFamily: "monospace", color: "var(--ink-93c5fd)", cursor: "pointer", padding: "1px 4px", borderRadius: 3, background: "var(--surface-rgba-59-130-246-0-15)", textDecoration: "underline", textUnderlineOffset: 2 }}
                               title={`跳转到消息 ${tid}`}
                             >{tid}</span>
                           ) : (
-                            <span key={tid} style={{ fontSize: 10, fontFamily: "monospace", color: "#6b7280", padding: "1px 4px", borderRadius: 3, background: "rgba(107,114,128,0.1)" }}>{tid}</span>
+                            <span key={tid} style={{ fontSize: 10, fontFamily: "monospace", color: "var(--ink-6b7280-2)", padding: "1px 4px", borderRadius: 3, background: "var(--surface-rgba-107-114-128-0-1)" }}>{tid}</span>
                           )
                           }
-                          {tid===props.joinFilterTargetId&&<span data-join-target-self={tid} style={{fontSize:10,color:'#9ca3af',whiteSpace:'nowrap'}}>（自身）</span>}
+                          {tid===props.joinFilterTargetId&&<span data-join-target-self={tid} style={{fontSize:10,color:'var(--ink-9ca3af)',whiteSpace:'nowrap'}}>（自身）</span>}
                           </span>)}
                       </div>
                     )}
@@ -1343,8 +1351,8 @@ function GraphViewCanvas(props: GraphViewProps) {
             width: rect.width,
             height: rect.height,
             boxSizing: 'border-box',
-            border: '2px solid #ff3b30',
-            background: 'rgba(255,59,48,0.08)',
+            border: '2px solid var(--line-ff3b30)',
+            background: 'var(--surface-rgba-255-59-48-0-08)',
             pointerEvents: 'none',
             zIndex: 30,
           }}
@@ -1380,12 +1388,12 @@ function GraphViewCanvas(props: GraphViewProps) {
             if (sf.isBlankCorrected) return null;
             const isWhole=isRelWholeSel(sf.relMsgId);
             return (
-              <g key={`supp-frame-${sf.relMsgId}`} data-frame-visual={sf.relMsgId}><rect data-jump-visual-msgids={sf.relMsgId} x={sf.rect.x} y={sf.rect.y} width={sf.rect.width} height={sf.rect.height}
+              <g key={`supp-frame-${sf.relMsgId}`} data-frame-visual={sf.relMsgId} {...skinForMessage(sf.relMsgId)} data-skin-type="arrange" data-whole-selected={isWhole || undefined}><rect data-jump-visual-msgids={sf.relMsgId} x={sf.rect.x} y={sf.rect.y} width={sf.rect.width} height={sf.rect.height}
                 rx={FRAME_RADIUS} ry={FRAME_RADIUS}
-                fill={isWhole?"rgba(251,191,36,0.22)":"rgba(130,80,200,0.04)"}
-                stroke={isWhole?"rgba(251,191,36,1)":"rgba(130,80,200,0.55)"}
+                fill={isWhole?"var(--ink-rgba-251-191-36-0-22)":"var(--ink-rgba-130-80-200-0-04)"}
+                stroke={isWhole?"var(--ink-rgba-251-191-36-1)":"var(--ink-rgba-130-80-200-0-55)"}
                 strokeWidth={isWhole?3:2} strokeDasharray={isWhole?undefined:"5 3"}/>
-              <ViewTargetCorners {...sf.rect}/></g>
+              <FrameSkin box={sf.rect} /><ViewTargetCorners {...sf.rect}/></g>
             );
           })}
           {/* GROUP frames (CLASSIFY/MERGE) and REPLACE-OVERLAY (SUMMARY); hidden when blank-corrected */}
@@ -1394,16 +1402,16 @@ function GraphViewCanvas(props: GraphViewProps) {
             const isWhole=isRelWholeSel(gf.relMsgId);
             const isReplaceOverlay = gf.relKind === 'replace-overlay';
             const strokeColor = isWhole
-              ? 'rgba(251,191,36,1)'
-              : (isReplaceOverlay ? (GROUP_FRAME_STROKE[gf.relColor] ?? 'rgba(180,120,0,0.7)') : (GROUP_FRAME_STROKE[gf.relColor] ?? 'rgba(140,140,150,0.55)'));
-            const fillColor = isWhole ? 'rgba(251,191,36,0.22)' : isReplaceOverlay ? 'rgba(200,150,0,0.04)' : 'rgba(130,130,140,0.03)';
+              ? 'var(--ink-rgba-251-191-36-1)'
+              : (isReplaceOverlay ? (GROUP_FRAME_STROKE[gf.relColor] ?? 'var(--ink-rgba-180-120-0-0-7)') : (GROUP_FRAME_STROKE[gf.relColor] ?? 'var(--ink-rgba-140-140-150-0-55)'));
+            const fillColor = isWhole ? 'var(--ink-rgba-251-191-36-0-22)' : isReplaceOverlay ? 'var(--ink-rgba-200-150-0-0-04)' : 'var(--ink-rgba-130-130-140-0-03)';
             const headerHeight=['classify','summary'].includes(gf.relType)?getGroupHeaderHeight(measuredHeights,gf.relMsgId):0;
             return (
-              <g key={`gf-${gf.relMsgId}`} data-frame-visual={gf.relMsgId}><rect data-jump-visual-msgids={gf.relMsgId} x={gf.rect.x} y={gf.rect.y} width={gf.rect.width} height={gf.rect.height}
+              <g key={`gf-${gf.relMsgId}`} data-frame-visual={gf.relMsgId} {...skinForMessage(gf.relMsgId)} data-skin-type={gf.relType} data-whole-selected={isWhole || undefined}><rect data-jump-visual-msgids={gf.relMsgId} x={gf.rect.x} y={gf.rect.y} width={gf.rect.width} height={gf.rect.height}
                 rx={FRAME_RADIUS} ry={FRAME_RADIUS}
                 fill={fillColor} stroke={strokeColor}
                 strokeWidth={isWhole?3:2} strokeDasharray={isReplaceOverlay?undefined:(isWhole?undefined:"6 3")}/>
-              <ViewTargetCorners {...gf.rect} y={gf.rect.y-headerHeight} height={gf.rect.height+headerHeight}/></g>
+              <FrameSkin box={gf.rect} /><ViewTargetCorners {...gf.rect} y={gf.rect.y-headerHeight} height={gf.rect.height+headerHeight}/></g>
             );
           })}
         </svg>
@@ -1429,28 +1437,35 @@ function GraphViewCanvas(props: GraphViewProps) {
               stanceHighlight.evidenceMsgIds.includes(edge.to.messageId)
             );
             const color = isEvidenceEdge
-              ? 'rgba(245,158,11,0.95)'  // gold for evidence edges
+              ? 'var(--ink-rgba-245-158-11-0-95)'  // gold for evidence edges
               : isStanceEdge
-                ? (edge.relationType === 'agree' ? 'rgba(34,197,94,0.95)' : 'rgba(239,68,68,0.95)')  // brighter green/red for stance edges
-                : edge.relationType === 'annotation' ? 'rgba(255,215,0,0.92)'
-                : edge.relationType === 'reference' ? 'rgba(80,180,255,0.92)'
-                : edge.relationType === 'reply' ? 'rgba(160,255,140,0.72)'
-                : edge.relationType === 'agree' ? 'rgba(2,170,90,0.92)'
-                : edge.relationType === 'disagree' ? 'rgba(210,50,50,0.92)'
-                : 'rgba(120,120,120,0.72)';
+                ? (edge.relationType === 'agree' ? 'var(--ink-rgba-34-197-94-0-95)' : 'var(--ink-rgba-239-68-68-0-95)')  // brighter green/red for stance edges
+                : edge.relationType === 'annotation' ? 'var(--ink-rgba-255-215-0-0-92)'
+                : edge.relationType === 'reference' ? 'var(--ink-rgba-80-180-255-0-92)'
+                : edge.relationType === 'reply' ? 'var(--ink-rgba-160-255-140-0-72)'
+                : edge.relationType === 'agree' ? 'var(--ink-rgba-2-170-90-0-92)'
+                : edge.relationType === 'disagree' ? 'var(--ink-rgba-210-50-50-0-92)'
+                : 'var(--ink-rgba-120-120-120-0-72)';
             const edgeStrokeWidth = (isStanceEdge || isEvidenceEdge) ? 2.0 : edge.relationType === 'reply' ? 1.0 : 1.2;
             const relId=edge.relationMessageId,isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,edge.id);
             const labelOpacity=isWhole||isFrag?1:edge.relationType==="reply"?0.65:0.9;
-            const labelStroke="rgba(0,0,0,0.85)";
+            const labelStroke="var(--graph-label-outline)";
             // Blank-corrected: anon-source CORRECT targets a relation message → hide arrow/text, keep bbox for badge
             const isBlankCorrected=anonCorrectedRelMsgIds.has(relId);
+            const labelBox = labelBboxes[pe.drawId];
             return (
-              <g key={pe.drawId} data-jump-visual-msgids={edge.relationMessageId} data-frame-edge-id={edge.id}>
-                {!isBlankCorrected&&<path d={path} stroke={color} strokeWidth={edgeStrokeWidth} fill="none" strokeDasharray={isEvidenceEdge?"6 3":undefined}/>}
-                {!isBlankCorrected&&<path d={`M ${ax1} ${ay1} L ${end.x} ${end.y} L ${ax2} ${ay2}`} fill={color}/>}
+              <g key={pe.drawId} className="graph-edge-label" {...skinForMessage(edge.relationMessageId)} style={{"--edge-base-width":`${edgeStrokeWidth}px`} as React.CSSProperties} data-relation-type={edge.relationType} data-label-hidden={isBlankCorrected}
+                data-edge-emphasis={isEvidenceEdge ? 'evidence' : undefined}
+                data-label-selection={isWhole ? 'whole' : isFrag ? 'fragment' : undefined}
+                data-jump-visual-msgids={edge.relationMessageId} data-frame-edge-id={edge.id}>
+                {!isBlankCorrected&&<path className="relation-edge-path" d={path} stroke={color} strokeWidth={edgeStrokeWidth} fill="none" strokeDasharray={isEvidenceEdge?"6 3":undefined}/>}
+                {!isBlankCorrected&&<path className="relation-edge-arrow" d={`M ${ax1} ${ay1} L ${end.x} ${end.y} L ${ax2} ${ay2}`} fill={color}/>}
+                {!isBlankCorrected && <EdgeSkin path={path} start={start} end={end} ctrl={ctrl} />}
                 {/* Text always rendered (opacity 0 when blank) so labelBboxes are stable for badge positioning */}
-                {/* Text with stroke for readability against any background */}
-                <text ref={el=>{textRefs.current[pe.drawId]=el;}} x={labelX} y={labelY} fill={color} opacity={isBlankCorrected?0:labelOpacity} fontSize={10} textAnchor="middle" dominantBaseline="central" style={{paintOrder:"stroke",stroke:labelStroke,strokeWidth:2,whiteSpace:'pre'} as any}>
+                {!isBlankCorrected && labelBox && <rect className="graph-edge-label-plate" aria-hidden="true"
+                  x={labelBox.x - 6} y={labelBox.y - 1} width={labelBox.width + 12} height={labelBox.height + 2} rx={3} />}
+                {!isBlankCorrected && labelBox && <EdgeLabelSkin box={labelBox} />}
+                <text className="graph-edge-label-text" ref={el=>{textRefs.current[pe.drawId]=el;}} x={labelX} y={labelY} fill={color} opacity={isBlankCorrected?0:labelOpacity} fontSize="var(--graph-label-size)" textAnchor="middle" dominantBaseline="central" style={{paintOrder:"stroke",stroke:labelStroke,strokeWidth:2,whiteSpace:'pre'} as any}>
                   {edgeLabelText}
                 </text>
               </g>
@@ -1489,10 +1504,10 @@ function GraphViewCanvas(props: GraphViewProps) {
           const box:LayoutBox={x:bb.x-padX-extraLeft,y:bb.y-padY,width:bb.width+padX*2+extraLeft+(showStatisticalStatus?EDGE_LABEL_HINT_GAP+EDGE_HINT_W:0),height:bb.height+padY*2};
           const isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,pe.edge.id);
           return (
-            <div key={`hit-${pe.drawId}`} role="group" tabIndex={0} aria-label={`关系消息 ${relId}`} aria-keyshortcuts="Enter Space Shift+Enter" onKeyDown={activateMessageFromKeyboard} data-msgid={relId} data-jump-msgids={relId} data-directed-edge-label={relId} data-frame-edge-id={pe.edge.id} data-rel-overlay="true" onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
-              style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:13,cursor:"pointer",pointerEvents:"auto",background:isWhole||isFrag?"rgba(91,65,0,0.35)":"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(251,191,36,0.95)":"1px solid transparent",boxShadow:isWhole||isFrag?"0 1px 4px rgba(251,191,36,0.35)":"none"}}
+            <div key={`hit-${pe.drawId}`} role="group" tabIndex={0} aria-label={`关系消息 ${relId}`} aria-keyshortcuts="Enter Space Shift+Enter" onKeyDown={activateMessageFromKeyboard} data-msgid={relId} data-jump-msgids={relId} data-directed-edge-label={relId} className="graph-edge-label-hit" data-frame-edge-id={pe.edge.id} data-rel-overlay="true" onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
+              style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:13,cursor:"pointer",pointerEvents:"auto",background:isWhole||isFrag?"var(--surface-rgba-91-65-0-0-35)":"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid var(--line-rgba-251-191-36-0-95)":"1px solid transparent",boxShadow:isWhole||isFrag?"0 1px 4px var(--shadow-rgba-251-191-36-0-35)":"none"}}
               title={`relation=${pe.edge.relationMessageId} edge=${pe.edge.id}`}>
-              {showStatisticalStatus&&<div data-edge-label-entry={relId} style={{position:'absolute',left:extraLeft+padX+bb.width+EDGE_LABEL_HINT_GAP,top:'50%',transform:'translateY(-50%)',height:EDGE_HINT_W,display:'flex',alignItems:'center',justifyContent:'center',background:'#101010',borderRadius:3}}>
+              {showStatisticalStatus&&<div data-edge-label-entry={relId} style={{position:'absolute',left:extraLeft+padX+bb.width+EDGE_LABEL_HINT_GAP,top:'50%',transform:'translateY(-50%)',height:EDGE_HINT_W,display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-101010)',borderRadius:3}}>
                 <MessageDisplayMarker messageId={relId} />
               </div>}
               {showCorrBadge&&(()=>{
@@ -1506,13 +1521,13 @@ function GraphViewCanvas(props: GraphViewProps) {
                   <div key={`corr-edge-${corrRelMsgId}`} data-msgid={corrRelMsgId} data-jump-msgids={corrRelMsgId} data-rel-overlay="true"
                     onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,corrRelMsgId);}}
                     onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,corrRelMsgId);}}
-                    title={`更正关系：${corrRelMsgId}；单击对比原文与当前正文，双击查看历史`}
+                    data-skin-decoration="correct" data-skin-selected={isCorrSel} {...skinForMessage(corrRelMsgId)} title={`更正关系：${corrRelMsgId}；单击对比原文与当前正文，双击查看历史`}
                     style={{position:"absolute",left:2,top:"50%",transform:"translateY(-50%)",
-                      width:CORR_BADGE_W_EDGE-4,background:isCorrSel?"#fbbf24":"rgba(170,110,0,0.9)",
-                      color:isCorrSel?"#111827":"#fff",borderRadius:3,fontSize:9,padding:"0 3px",fontWeight:600,
+                      width:CORR_BADGE_W_EDGE-4,background:isCorrSel?"var(--surface-fbbf24)":"var(--surface-rgba-170-110-0-0-9)",
+                      color:isCorrSel?"var(--ink-111827)":"var(--ink-fff)",borderRadius:3,fontSize:9,padding:"0 3px",fontWeight:600,
                       cursor:"pointer",pointerEvents:"auto",
-                      border:isCorrSel?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.15)",
-                      boxShadow:isCorrSel?"0 1px 4px rgba(251,191,36,0.35)":"none",
+                      border:isCorrSel?"2px solid var(--line-fbbf24)":"1px solid var(--line-rgba-255-255-255-0-15)",
+                      boxShadow:isCorrSel?"0 1px 4px var(--shadow-rgba-251-191-36-0-35)":"none",
                       whiteSpace:"nowrap",userSelect:"none",display:"flex",alignItems:"center",
                       justifyContent:"center",boxSizing:"border-box" as const}}>
                     ✏更正
@@ -1554,22 +1569,22 @@ function GraphViewCanvas(props: GraphViewProps) {
             const count=kind==="agree"?dec?.agreeCount??0:dec?.disagreeCount??0;
             if (count<=0) continue;
             const isSelected=isDecorationSelected(relId,kind);
-            const bgColor=kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
+            const bgColor=kind==="agree"?"var(--ink-rgba-2-150-80-0-9)":"var(--ink-rgba-200-40-40-0-9)";
             const icon=kind==="agree"?"👍":"👎";
             const label=kind==="agree"?"赞":"反";
             items.push(
-              <div key={`reldec-${kind}-${relId}`} data-msgid={relId}
+              <div key={`reldec-${kind}-${relId}`} {...skinForGroup(kind==='agree'?dec?.agreeRelMsgIds:dec?.disagreeRelMsgIds)} data-skin-decoration={kind} data-skin-selected={isSelected} data-msgid={relId}
                 data-jump-msgids={(kind==='agree'?dec?.agreeRelMsgIds:dec?.disagreeRelMsgIds)?.join(' ')} data-rel-overlay="true"
                 onClick={ev=>{ev.stopPropagation();}}
                 onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,relId,kind);}}
                 title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击进入临时分类`}
                 style={{position:"absolute",left:decLeft,top:decTop,width:DEC_W,height:DEC_H,zIndex:14,
-                  background:isSelected?"#fbbf24":bgColor,color:isSelected?"#111827":"#fff",borderRadius:4,display:"flex",alignItems:"center",
-                  fontSize:11,pointerEvents:"auto",boxShadow:isSelected?"0 2px 6px rgba(0,0,0,0.5)":"0 2px 6px rgba(0,0,0,0.5)",border:isSelected?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.08)",
+                  background:isSelected?"var(--surface-fbbf24)":bgColor,color:isSelected?"var(--ink-111827)":"var(--ink-fff)",borderRadius:4,display:"flex",alignItems:"center",
+                  fontSize:11,pointerEvents:"auto",boxShadow:isSelected?"0 2px 6px var(--shadow-rgba-0-0-0-0-5)":"0 2px 6px var(--shadow-rgba-0-0-0-0-5)",border:isSelected?"2px solid var(--line-fbbf24)":"1px solid var(--line-rgba-255-255-255-0-08)",
                   overflow:"hidden"}}>
                 <div onClick={ev=>{ev.stopPropagation();onDecorationIconClick?.(relId,kind);}}
                   style={{width:DEC_ICON_W,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
-                    cursor:"pointer",flexShrink:0,background:"rgba(0,0,0,0.15)",fontSize:12}}
+                    cursor:"pointer",flexShrink:0,background:"var(--surface-rgba-0-0-0-0-15)",fontSize:12}}
                   title={`点击：快速发送${kind==="agree"?"赞同":"反对"}`}>{icon}</div>
                 <div onClick={ev=>{ev.stopPropagation();onDecorationBodyClick?.(ev,relId,kind);}}
                   style={{flex:1,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:2,cursor:"pointer"}}>
@@ -1602,7 +1617,7 @@ function GraphViewCanvas(props: GraphViewProps) {
               <div key={`reltag-${relMsgIds[0]}`} data-msgid={relId} data-jump-msgids={[relId, ...relMsgIds].join(' ')} data-rel-overlay="true"
                 onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,relId,tagLabel,relMsgIds);}}
                 onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,relId,tagLabel,relMsgIds);}}
-                title={`标注：${displayLabel}；单击选中，双击进入临时分类`}
+                data-skin-tag="true" data-skin-selected={relMsgIds.some(isRelWholeSel)} {...skinForGroup(relMsgIds)} title={`标注：${displayLabel}；单击选中，双击进入临时分类`}
                 style={{position:"absolute",left:annotation.x-TAG_HIT_PAD_X,top:decTop-TAG_HIT_PAD,
                   width:tagW+2*TAG_HIT_PAD_X,height:TAG_H+2*TAG_HIT_PAD,
                   zIndex:14,cursor:"pointer",pointerEvents:"auto",background:"transparent",
@@ -1610,9 +1625,9 @@ function GraphViewCanvas(props: GraphViewProps) {
                   padding:`${TAG_HIT_PAD}px ${TAG_HIT_PAD_X}px`,boxSizing:"border-box"}}>
                 <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
                   width:tagW,height:TAG_H,boxSizing:"border-box",
-                  background:"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
-                  fontSize:10,padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
-                  border:"1px solid rgba(255,255,255,0.15)",
+                  background:"var(--surface-rgba-180-150-0-0-85)",color:"var(--ink-fff)",borderRadius:3,
+                  fontSize:10,padding:"0 4px",boxShadow:"0 1px 4px var(--shadow-rgba-0-0-0-0-4)",
+                  border:"1px solid var(--line-rgba-255-255-255-0-15)",
                   whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
                   🏷{displayLabel}
                 </span>
@@ -1667,31 +1682,31 @@ function GraphViewCanvas(props: GraphViewProps) {
               onClick={event => { event.stopPropagation(); setExpandedFrameIds(previous => previous.includes(sf.relMsgId)
                 ? previous.filter(id => id !== sf.relMsgId) : [...previous, sf.relMsgId]); }}
               style={{position:'absolute',left:x+(sfCorrInfo?100:8),top:y-HH+1,zIndex:frameZ+2,
-                height:16,padding:'0 6px',border:'1px solid rgba(167,139,250,0.4)',borderRadius:4,
-                background:'#171324',color:'#c4b5fd',fontSize:10,cursor:'pointer',pointerEvents:'auto'}}>
+                height:16,padding:'0 6px',border:'1px solid var(--line-rgba-167-139-250-0-4)',borderRadius:4,
+                background:'var(--surface-171324)',color:'var(--ink-c4b5fd)',fontSize:10,cursor:'pointer',pointerEvents:'auto'}}>
               {cardFrameIds.has(sf.relMsgId) ? '▾' : '▸'}
             </button>}
             {!cardFrameIds.has(sf.relMsgId) && <div data-rel-overlay="true"
-              style={{position:'absolute',left:x+(sfCorrInfo?100:8)+26,top:y-HH+1,zIndex:frameZ+2,pointerEvents:'auto',background:'#101010',display:'flex',alignItems:'center',gap:6}}>
+              style={{position:'absolute',left:x+(sfCorrInfo?100:8)+26,top:y-HH+1,zIndex:frameZ+2,pointerEvents:'auto',background:'var(--surface-101010)',display:'flex',alignItems:'center',gap:6}}>
               {homeRoleLabel(sf.relMsgId)&&<><MessageElement reference={msgMap.get(sf.relMsgId)&&messageTypeReference(msgMap.get(sf.relMsgId)!)}
-                label="排列" style={{fontSize:10,color:'#c4b5fd'}}>排列</MessageElement><HomeFilterBadge label={homeRoleLabel(sf.relMsgId)} reason={props.homeReasonByMessageId?.get(sf.relMsgId)}/></>}
+                label="排列" style={{fontSize:10,color:'var(--ink-c4b5fd)'}}>排列</MessageElement><HomeFilterBadge label={homeRoleLabel(sf.relMsgId)} reason={props.homeReasonByMessageId?.get(sf.relMsgId)}/></>}
               <MessageDisplayMarker messageId={sf.relMsgId} />
               {renderCorrectionRecords(sf.relMsgId)}
               {relatedConnections?.has(sf.relMsgId) && <div data-msgid={sf.relMsgId} data-rel-overlay="true">
                 {renderRelatedConnections(sf.relMsgId)}
               </div>}
             </div>}
-            {cardFrameIds.has(sf.relMsgId) && virtual.mounted.has(sf.relMsgId) && <div data-msgid={sf.relMsgId} data-rel-overlay="true" data-frame-header="true"
+            {cardFrameIds.has(sf.relMsgId) && virtual.mounted.has(sf.relMsgId) && <div data-msgid={sf.relMsgId} data-rel-overlay="true" data-frame-header="true" data-skin-frame-header="true" {...skinForMessage(sf.relMsgId)} data-skin-type="arrange" data-skin-selected={isRelWholeSel(sf.relMsgId)}
               data-measure-min-height={MERGE_CARD_H} ref={el => { cardRefs.current[sf.relMsgId] = el; }}
               role="group" tabIndex={0} aria-label={`组织消息 ${sf.relMsgId}`} aria-keyshortcuts="Enter Space Shift+Enter"
               onKeyDown={activateMessageFromKeyboard} onClick={handleClick} onDoubleClick={handleDblClick} title={title}
               style={{ position: 'absolute', left: cardHeaderRect.x, top: cardHeaderRect.y, width: cardHeaderRect.width, minHeight: cardHeaderRect.height,
-                zIndex: frameZ + 1, cursor: 'pointer', pointerEvents: 'auto', userSelect: 'none', boxSizing: 'border-box',
-                color: '#f5f5f5', borderRadius: 6, padding: '4px 10px',
-                background: isRelWholeSel(sf.relMsgId) ? 'rgba(91,65,0,0.55)' : '#1f1f1f',
-                border: isRelWholeSel(sf.relMsgId) ? '2px solid #fbbf24' : lastClickedMessageId === sf.relMsgId ? '1px solid rgba(56,189,248,0.8)' : '1px solid #444',
-                outline: lastClickedMessageId === sf.relMsgId ? '1px dashed #0b84ff' : 'none',
-                boxShadow: '0 6px 14px rgba(0,0,0,0.35)' }}>
+                zIndex: isRelWholeSel(sf.relMsgId)||activeTextSelectId===sf.relMsgId ? Math.max(GRAPH_SELECTED_CARD_LAYER, frameZ + 1) : frameZ + 1, cursor: 'pointer', pointerEvents: 'auto', userSelect: 'none', boxSizing: 'border-box',
+                color: 'var(--ink-f5f5f5)', borderRadius: 6, padding: '4px 10px',
+                background: isRelWholeSel(sf.relMsgId) ? 'var(--surface-rgba-91-65-0-0-55)' : 'var(--surface-1f1f1f)',
+                border: isRelWholeSel(sf.relMsgId) ? '2px solid var(--line-fbbf24)' : lastClickedMessageId === sf.relMsgId ? '1px solid var(--line-rgba-56-189-248-0-8)' : '1px solid var(--line-444)',
+                outline: lastClickedMessageId === sf.relMsgId ? '1px dashed var(--line-0b84ff)' : 'none',
+                boxShadow: '0 6px 14px var(--shadow-rgba-0-0-0-0-35)' }}>
               <OrganizationFrameHeader message={msgMap.get(sf.relMsgId)} messageId={sf.relMsgId} kind="arrange"
                 homeLabel={homeRoleLabel(sf.relMsgId)} homeReason={props.homeReasonByMessageId?.get(sf.relMsgId)}
                 correctionRecords={renderCorrectionRecords(sf.relMsgId)}
@@ -1710,13 +1725,13 @@ function GraphViewCanvas(props: GraphViewProps) {
                 <div key={`corr-supp-${ci.corrRelMsgId}`} data-jump-visual-msgids={`${sf.relMsgId} ${ci.corrRelMsgId}`} data-rel-overlay="true"
                   onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,ci.corrRelMsgId);}}
                   onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,ci.corrRelMsgId);}}
-                  title={`更正关系：${ci.corrRelMsgId}；单击对比原文与当前正文，双击查看历史`}
+                  data-skin-decoration="correct" data-skin-selected={isCorrSel} {...skinForMessage(ci.corrRelMsgId)} title={`更正关系：${ci.corrRelMsgId}；单击对比原文与当前正文，双击查看历史`}
                   style={{position:"absolute",left:x+4,top:y-HH+1,zIndex:5,
-                    background:isCorrSel?"#fbbf24":"rgba(170,110,0,0.9)",
-                    color:isCorrSel?"#111827":"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
+                    background:isCorrSel?"var(--surface-fbbf24)":"var(--surface-rgba-170-110-0-0-9)",
+                    color:isCorrSel?"var(--ink-111827)":"var(--ink-fff)",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
                     cursor:"pointer",pointerEvents:"auto",
-                    border:isCorrSel?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.15)",
-                    boxShadow:isCorrSel?"0 1px 4px rgba(251,191,36,0.35)":"none",
+                    border:isCorrSel?"2px solid var(--line-fbbf24)":"1px solid var(--line-rgba-255-255-255-0-15)",
+                    boxShadow:isCorrSel?"0 1px 4px var(--shadow-rgba-251-191-36-0-35)":"none",
                     whiteSpace:"nowrap",userSelect:"none",
                     height:HH*2-2,display:"flex",alignItems:"center"}}>
                   ✏更正
@@ -1736,7 +1751,7 @@ function GraphViewCanvas(props: GraphViewProps) {
         const groupHeaderRect = getGroupHeaderRect(gf.rect, getGroupHeaderHeight(measuredHeights, gf.relMsgId));
         const gfZ = 4 + (frameDepthMap.get(gf.relMsgId) ?? 0);
         const isSummaryHeader = gf.relType === "summary";
-        const headerKindColor = isSummaryHeader ? "#34d399" : "#a78bfa";
+        const headerKindColor = isSummaryHeader ? "var(--ink-34d399)" : "var(--ink-a78bfa)";
         const stripBase: React.CSSProperties={position:"absolute",zIndex:gfZ,cursor:"pointer",pointerEvents:"auto",background:"transparent"};
         const title=(gf.relType === "classify" || gf.relType === "summary")
           ? `${gf.relType === "summary" ? "总结" : "分类"}：${gf.relMsgId}；单击选中，双击展开或收起框架`
@@ -1763,13 +1778,13 @@ function GraphViewCanvas(props: GraphViewProps) {
                 <div key={`corr-gf-${ci.corrRelMsgId}`} data-jump-visual-msgids={`${gf.relMsgId} ${ci.corrRelMsgId}`} data-rel-overlay="true"
                   onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,ci.corrRelMsgId);}}
                   onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,ci.corrRelMsgId);}}
-                  title={`更正关系：${ci.corrRelMsgId}；单击对比原文与当前正文，双击查看历史`}
+                  data-skin-decoration="correct" data-skin-selected={isCorrSel} {...skinForMessage(ci.corrRelMsgId)} title={`更正关系：${ci.corrRelMsgId}；单击对比原文与当前正文，双击查看历史`}
                   style={{position:"absolute",left:x+4,top:y-HH+1,zIndex:5,
-                    background:isCorrSel?"#fbbf24":"rgba(170,110,0,0.9)",
-                    color:isCorrSel?"#111827":"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
+                    background:isCorrSel?"var(--surface-fbbf24)":"var(--surface-rgba-170-110-0-0-9)",
+                    color:isCorrSel?"var(--ink-111827)":"var(--ink-fff)",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
                     cursor:"pointer",pointerEvents:"auto",
-                    border:isCorrSel?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.15)",
-                    boxShadow:isCorrSel?"0 1px 4px rgba(251,191,36,0.35)":"none",
+                    border:isCorrSel?"2px solid var(--line-fbbf24)":"1px solid var(--line-rgba-255-255-255-0-15)",
+                    boxShadow:isCorrSel?"0 1px 4px var(--shadow-rgba-251-191-36-0-35)":"none",
                     whiteSpace:"nowrap",userSelect:"none",
                     height:HH*2-2,display:"flex",alignItems:"center"}}>
                   ✏更正
@@ -1777,7 +1792,7 @@ function GraphViewCanvas(props: GraphViewProps) {
               );
             })()}
             {virtual.mounted.has(gf.relMsgId) && (gf.relType === "classify" || gf.relType === "summary" || gf.relType === "merge") && (
-              <div data-msgid={gf.relMsgId} data-rel-overlay="true" data-frame-header="true"
+              <div data-msgid={gf.relMsgId} data-rel-overlay="true" data-frame-header="true" data-skin-frame-header="true" {...skinForMessage(gf.relMsgId)} data-skin-type={gf.relType} data-skin-selected={isRelWholeSel(gf.relMsgId)}
                 data-measure-min-height={gf.relType === 'merge' ? MERGE_CARD_H : GROUP_HEADER_HEIGHT}
                 ref={el => { cardRefs.current[gf.relMsgId] = el; }}
                 role="group" tabIndex={0} aria-label={`组织消息 ${gf.relMsgId}`} aria-keyshortcuts="Enter Space Shift+Enter" onKeyDown={activateMessageFromKeyboard}
@@ -1793,12 +1808,12 @@ function GraphViewCanvas(props: GraphViewProps) {
                           top: mergeCardHeaderRect.y,
                           width: mergeCardHeaderRect.width,
                           minHeight: mergeCardHeaderRect.height,
-                          color: "#f5f5f5",
+                          color: "var(--ink-f5f5f5)",
                           borderRadius: 6,
-                          background: isRelWholeSel(gf.relMsgId) ? "rgba(91,65,0,0.55)" : "#1f1f1f",
-                          border: isRelWholeSel(gf.relMsgId) ? "2px solid #fbbf24" : (lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : "1px solid #444"),
-                          boxShadow: isRelWholeSel(gf.relMsgId) ? "0 8px 20px rgba(251,191,36,0.28)" : (lastClickedMessageId===gf.relMsgId ? "0 6px 16px rgba(56,189,248,0.14)" : "0 6px 14px rgba(0,0,0,0.35)"),
-                          outline: lastClickedMessageId===gf.relMsgId ? "1px dashed #0b84ff" : "none",
+                          background: isRelWholeSel(gf.relMsgId) ? "var(--surface-rgba-91-65-0-0-55)" : "var(--surface-1f1f1f)",
+                          border: isRelWholeSel(gf.relMsgId) ? "2px solid var(--line-fbbf24)" : (lastClickedMessageId===gf.relMsgId ? "1px solid var(--line-rgba-56-189-248-0-8)" : "1px solid var(--line-444)"),
+                          boxShadow: isRelWholeSel(gf.relMsgId) ? "0 8px 20px var(--shadow-rgba-251-191-36-0-28)" : (lastClickedMessageId===gf.relMsgId ? "0 6px 16px var(--shadow-rgba-56-189-248-0-14)" : "0 6px 14px var(--shadow-rgba-0-0-0-0-35)"),
+                          outline: lastClickedMessageId===gf.relMsgId ? "1px dashed var(--line-0b84ff)" : "none",
                           padding: "4px 10px",
                         } as React.CSSProperties;
                       })()
@@ -1807,22 +1822,22 @@ function GraphViewCanvas(props: GraphViewProps) {
                         top: groupHeaderRect.y,
                         width: groupHeaderRect.width,
                         minHeight: GROUP_HEADER_HEIGHT,
-                        background: isRelWholeSel(gf.relMsgId) ? "#5b4100" : isSummaryHeader ? "rgba(52,211,153,0.08)" : "#1f1f1f",
-                        color: "#f5f5f5",
+                        background: isRelWholeSel(gf.relMsgId) ? "var(--surface-5b4100)" : isSummaryHeader ? "var(--surface-rgba-52-211-153-0-08)" : "var(--surface-1f1f1f)",
+                        color: "var(--ink-f5f5f5)",
                         borderRadius: 6,
-                        borderTop: isRelWholeSel(gf.relMsgId) ? "2px solid #fbbf24" : lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : "1px solid #444",
-                        borderRight: isRelWholeSel(gf.relMsgId) ? "2px solid #fbbf24" : lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : "1px solid #444",
-                        borderBottom: isRelWholeSel(gf.relMsgId) ? "2px solid #fbbf24" : lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : "1px solid #444",
-                        borderLeft: isRelWholeSel(gf.relMsgId) ? "2px solid #fbbf24" : lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : `3px solid ${headerKindColor}`,
-                        boxShadow: isRelWholeSel(gf.relMsgId) ? "0 8px 20px rgba(251,191,36,0.28)" : (lastClickedMessageId===gf.relMsgId ? "0 6px 16px rgba(56,189,248,0.14)" : "0 4px 10px rgba(0,0,0,0.5)"),
-                        outline: lastClickedMessageId===gf.relMsgId ? "1px dashed #0b84ff" : "none",
+                        borderTop: isRelWholeSel(gf.relMsgId) ? "2px solid var(--line-fbbf24)" : lastClickedMessageId===gf.relMsgId ? "1px solid var(--line-rgba-56-189-248-0-8)" : "1px solid var(--line-444)",
+                        borderRight: isRelWholeSel(gf.relMsgId) ? "2px solid var(--line-fbbf24)" : lastClickedMessageId===gf.relMsgId ? "1px solid var(--line-rgba-56-189-248-0-8)" : "1px solid var(--line-444)",
+                        borderBottom: isRelWholeSel(gf.relMsgId) ? "2px solid var(--line-fbbf24)" : lastClickedMessageId===gf.relMsgId ? "1px solid var(--line-rgba-56-189-248-0-8)" : "1px solid var(--line-444)",
+                        borderLeft: isRelWholeSel(gf.relMsgId) ? "2px solid var(--line-fbbf24)" : lastClickedMessageId===gf.relMsgId ? "1px solid var(--line-rgba-56-189-248-0-8)" : `3px solid ${headerKindColor}`,
+                        boxShadow: isRelWholeSel(gf.relMsgId) ? "0 8px 20px var(--shadow-rgba-251-191-36-0-28)" : (lastClickedMessageId===gf.relMsgId ? "0 6px 16px var(--shadow-rgba-56-189-248-0-14)" : "0 4px 10px var(--shadow-rgba-0-0-0-0-5)"),
+                        outline: lastClickedMessageId===gf.relMsgId ? "1px dashed var(--line-0b84ff)" : "none",
                         padding: "12px 16px",
                         display: "flex",
                         flexDirection: "column",
                         gap: 8,
                       }),
                   position: "absolute",
-                  zIndex: 5,
+                  zIndex: isRelWholeSel(gf.relMsgId)||activeTextSelectId===gf.relMsgId ? GRAPH_SELECTED_CARD_LAYER : 5,
                   cursor: "pointer",
                   pointerEvents: "auto",
                   userSelect: "none",
@@ -1876,22 +1891,22 @@ function GraphViewCanvas(props: GraphViewProps) {
           const count=kind==="agree"?sf.relAgreeCount:sf.relDisagreeCount;
           if (count<=0) continue;
           const isSelected=isDecorationSelected(sf.relMsgId,kind);
-          const bgColor=kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
+          const bgColor=kind==="agree"?"var(--ink-rgba-2-150-80-0-9)":"var(--ink-rgba-200-40-40-0-9)";
           const icon=kind==="agree"?"👍":"👎";
           const label=kind==="agree"?"赞":"反";
           nodes.push(
-            <div key={`sf-${kind}-${sf.relMsgId}`} data-msgid={sf.relMsgId}
+            <div key={`sf-${kind}-${sf.relMsgId}`} {...skinForGroup(kind==='agree'?sf.relAgreeMsgIds:sf.relDisagreeMsgIds)} data-skin-decoration={kind} data-skin-selected={isSelected} data-msgid={sf.relMsgId}
               data-jump-msgids={(kind === 'agree' ? sf.relAgreeMsgIds : sf.relDisagreeMsgIds).join(' ')} data-rel-overlay="true"
               onClick={ev=>{ev.stopPropagation();}}
               onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,sf.relMsgId,kind);}}
               title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击进入临时分类`}
               style={{position:"absolute",left:sfDecLeft+EDGE_HINT_W+DEC_GAP,top:sfDecTop,width:DEC_W,height:DEC_H,zIndex:7,
-                background:isSelected?"#fbbf24":bgColor,color:isSelected?"#111827":"#fff",borderRadius:4,display:"flex",alignItems:"center",
-                fontSize:11,pointerEvents:"auto",boxShadow:isSelected?"0 2px 6px rgba(0,0,0,0.5)":"0 2px 6px rgba(0,0,0,0.5)",border:isSelected?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.08)",
+                background:isSelected?"var(--surface-fbbf24)":bgColor,color:isSelected?"var(--ink-111827)":"var(--ink-fff)",borderRadius:4,display:"flex",alignItems:"center",
+                fontSize:11,pointerEvents:"auto",boxShadow:isSelected?"0 2px 6px var(--shadow-rgba-0-0-0-0-5)":"0 2px 6px var(--shadow-rgba-0-0-0-0-5)",border:isSelected?"2px solid var(--line-fbbf24)":"1px solid var(--line-rgba-255-255-255-0-08)",
                 overflow:"hidden"}}>
               <div onClick={ev=>{ev.stopPropagation();onDecorationIconClick?.(sf.relMsgId,kind);}}
                 style={{width:DEC_ICON_W,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
-                  cursor:"pointer",flexShrink:0,background:"rgba(0,0,0,0.15)",fontSize:12}}
+                  cursor:"pointer",flexShrink:0,background:"var(--surface-rgba-0-0-0-0-15)",fontSize:12}}
                 title={`点击：快速发送${kind==="agree"?"赞同":"反对"}`}>{icon}</div>
               <div onClick={ev=>{ev.stopPropagation();onDecorationBodyClick?.(ev,sf.relMsgId,kind);}}
                 style={{flex:1,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:2,cursor:"pointer"}}>
@@ -1916,22 +1931,22 @@ function GraphViewCanvas(props: GraphViewProps) {
           const count=kind==="agree"?gf.relAgreeCount:gf.relDisagreeCount;
           if (count<=0) continue;
           const isSelected=isDecorationSelected(gf.relMsgId,kind);
-          const bgColor=kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
+          const bgColor=kind==="agree"?"var(--ink-rgba-2-150-80-0-9)":"var(--ink-rgba-200-40-40-0-9)";
           const icon=kind==="agree"?"👍":"👎";
           const label=kind==="agree"?"赞":"反";
           nodes.push(
-            <div key={`gf-${kind}-${gf.relMsgId}`} data-msgid={gf.relMsgId}
+            <div key={`gf-${kind}-${gf.relMsgId}`} {...skinForGroup(kind==='agree'?gf.relAgreeMsgIds:gf.relDisagreeMsgIds)} data-skin-decoration={kind} data-skin-selected={isSelected} data-msgid={gf.relMsgId}
               data-jump-msgids={(kind==='agree'?gf.relAgreeMsgIds:gf.relDisagreeMsgIds).join(' ')} data-jump-visual-msgids={gf.relMsgId} data-rel-overlay="true"
               onClick={ev=>{ev.stopPropagation();}}
               onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,gf.relMsgId,kind);}}
               title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击进入临时分类`}
               style={{position:"absolute",left:gfDecLeft+EDGE_HINT_W+DEC_GAP,top:gfDecTop,width:DEC_W,height:DEC_H,zIndex:7,
-                background:isSelected?"#fbbf24":bgColor,color:isSelected?"#111827":"#fff",borderRadius:4,display:"flex",alignItems:"center",
-                fontSize:11,pointerEvents:"auto",boxShadow:isSelected?"0 2px 6px rgba(0,0,0,0.5)":"0 2px 6px rgba(0,0,0,0.5)",border:isSelected?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.08)",
+                background:isSelected?"var(--surface-fbbf24)":bgColor,color:isSelected?"var(--ink-111827)":"var(--ink-fff)",borderRadius:4,display:"flex",alignItems:"center",
+                fontSize:11,pointerEvents:"auto",boxShadow:isSelected?"0 2px 6px var(--shadow-rgba-0-0-0-0-5)":"0 2px 6px var(--shadow-rgba-0-0-0-0-5)",border:isSelected?"2px solid var(--line-fbbf24)":"1px solid var(--line-rgba-255-255-255-0-08)",
                 overflow:"hidden"}}>
               <div onClick={ev=>{ev.stopPropagation();onDecorationIconClick?.(gf.relMsgId,kind);}}
                 style={{width:DEC_ICON_W,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
-                  cursor:"pointer",flexShrink:0,background:"rgba(0,0,0,0.15)",fontSize:12}}
+                  cursor:"pointer",flexShrink:0,background:"var(--surface-rgba-0-0-0-0-15)",fontSize:12}}
                 title={`点击：快速发送${kind==="agree"?"赞同":"反对"}`}>{icon}</div>
               <div onClick={ev=>{ev.stopPropagation();onDecorationBodyClick?.(ev,gf.relMsgId,kind);}}
                 style={{flex:1,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:2,cursor:"pointer"}}>
@@ -1964,7 +1979,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                 data-msgid={_mid} data-jump-msgids={[_mid, ...group.relMsgIds].join(' ')} data-rel-overlay="true"
                 onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,_mid,group.label,group.relMsgIds);}}
                 onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,_mid,group.label,group.relMsgIds);}}
-                title={`标注：${group.label}（${count}人）；单击选中，双击进入临时分类`}
+                data-skin-tag="true" data-skin-selected={group.relMsgIds.some(isRelWholeSel)} {...skinForGroup(group.relMsgIds)} title={`标注：${group.label}（${count}人）；单击选中，双击进入临时分类`}
                 style={{position:"absolute",left:group.rect.x-TAG_HIT_PAD_X,top:group.rect.y-TAG_HIT_PAD,
                   width:group.rect.width+2*TAG_HIT_PAD_X,height:group.rect.height+2*TAG_HIT_PAD,
                   zIndex:7,cursor:"pointer",pointerEvents:"auto",background:"transparent",
@@ -1972,9 +1987,9 @@ function GraphViewCanvas(props: GraphViewProps) {
                   padding:`${TAG_HIT_PAD}px ${TAG_HIT_PAD_X}px`,boxSizing:"border-box"}}>
                 <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
                   width:group.rect.width,height:group.rect.height,boxSizing:"border-box",
-                  background:"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
-                  fontSize:10,padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
-                  border:"1px solid rgba(255,255,255,0.15)",
+                  background:"var(--surface-rgba-180-150-0-0-85)",color:"var(--ink-fff)",borderRadius:3,
+                  fontSize:10,padding:"0 4px",boxShadow:"0 1px 4px var(--shadow-rgba-0-0-0-0-4)",
+                  border:"1px solid var(--line-rgba-255-255-255-0-15)",
                   whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
                   🏷{displayLabel}
                 </span>
@@ -1987,7 +2002,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                 data-msgid={_mid} data-jump-msgids={[_mid, ...group.relMsgIds].join(' ')} data-rel-overlay="true"
                 onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,_mid,group.label,group.relMsgIds);}}
                 onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,_mid,group.label,group.relMsgIds);}}
-                title={`标注：${group.label}（${count}人）；单击选中，双击进入临时分类`}
+                data-skin-tag="true" data-skin-selected={group.relMsgIds.some(isRelWholeSel)} {...skinForGroup(group.relMsgIds)} title={`标注：${group.label}（${count}人）；单击选中，双击进入临时分类`}
                 style={{position:"absolute",left:group.rect.x-TAG_HIT_PAD_X,top:group.rect.y-TAG_HIT_PAD,
                   width:group.rect.width+2*TAG_HIT_PAD_X,height:group.rect.height+2*TAG_HIT_PAD,
                   zIndex:7,cursor:"pointer",pointerEvents:"auto",background:"transparent",
@@ -1995,9 +2010,9 @@ function GraphViewCanvas(props: GraphViewProps) {
                   padding:`${TAG_HIT_PAD}px ${TAG_HIT_PAD_X}px`,boxSizing:"border-box"}}>
                 <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
                   width:group.rect.width,height:group.rect.height,boxSizing:"border-box",
-                  background:"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
-                  fontSize:10,padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
-                  border:"1px solid rgba(255,255,255,0.15)",
+                  background:"var(--surface-rgba-180-150-0-0-85)",color:"var(--ink-fff)",borderRadius:3,
+                  fontSize:10,padding:"0 4px",boxShadow:"0 1px 4px var(--shadow-rgba-0-0-0-0-4)",
+                  border:"1px solid var(--line-rgba-255-255-255-0-15)",
                   whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
                   🏷{displayLabel}
                 </span>
@@ -2015,22 +2030,22 @@ function GraphViewCanvas(props: GraphViewProps) {
                   const selectedDecorationIds=kind==="agree"?group.relAgreeMsgIds:group.relDisagreeMsgIds;
                   const isDecorationSel=selectedDecorationIds.some(isRelWholeSel);
                   const top=curTop; curTop+=DEC_H+DEC_GAP;
-                  const bgColor=kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
+                  const bgColor=kind==="agree"?"var(--ink-rgba-2-150-80-0-9)":"var(--ink-rgba-200-40-40-0-9)";
                   const icon=kind==="agree"?"👍":"👎";
                   const label=kind==="agree"?"赞":"反";
                   return (
-                    <div key={`tag-dec-${kind}-${_mid}-${group.label}`} data-msgid={tagIconRelMsgId} data-jump-msgids={selectedDecorationIds.join(' ')}
+                    <div key={`tag-dec-${kind}-${_mid}-${group.label}`} {...skinForGroup(selectedDecorationIds)} data-skin-decoration={kind} data-skin-selected={isDecorationSel} data-msgid={tagIconRelMsgId} data-jump-msgids={selectedDecorationIds.join(' ')}
                       data-jump-visual-msgids={[...group.relMsgIds, ...selectedDecorationIds].join(' ')} data-rel-overlay="true"
                       onClick={ev=>{ev.stopPropagation();}}
                       onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,tagIconRelMsgId,kind);}}
                       title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击进入临时分类`}
                       style={{position:"absolute",left:tagDecLeft,top:top,width:DEC_W,height:DEC_H,zIndex:7,
-                        background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
-                        fontSize:11,pointerEvents:"auto",boxShadow:isDecorationSel?"0 2px 6px rgba(0,0,0,0.5)":"0 2px 6px rgba(0,0,0,0.5)",border:isDecorationSel?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.08)",
+                        background:bgColor,color:"var(--ink-fff)",borderRadius:4,display:"flex",alignItems:"center",
+                        fontSize:11,pointerEvents:"auto",boxShadow:isDecorationSel?"0 2px 6px var(--shadow-rgba-0-0-0-0-5)":"0 2px 6px var(--shadow-rgba-0-0-0-0-5)",border:isDecorationSel?"2px solid var(--line-fbbf24)":"1px solid var(--line-rgba-255-255-255-0-08)",
                         overflow:"hidden"}}>
                       <div onClick={ev=>{ev.stopPropagation();onDecorationIconClick?.(tagIconRelMsgId,kind);}}
                         style={{width:DEC_ICON_W,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
-                          cursor:"pointer",flexShrink:0,background:"rgba(0,0,0,0.15)",fontSize:12}}
+                          cursor:"pointer",flexShrink:0,background:"var(--surface-rgba-0-0-0-0-15)",fontSize:12}}
                         title={`点击：快速发送${kind==="agree"?"赞同":"反对"}`}>{icon}</div>
                       <div onClick={ev=>{ev.stopPropagation();onDecorationBodyClick?.(ev,tagIconRelMsgId,kind);}}
                         style={{flex:1,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:2,cursor:"pointer"}}>
@@ -2065,21 +2080,21 @@ function GraphViewCanvas(props: GraphViewProps) {
         if(!visibleDecorationIds.has(v.messageId))return null;
         const counts=decorationsByMsgState[v.messageId]; if (!counts) return null;
         const cnt=v.kind==="agree"?counts.agreeCount:counts.disagreeCount;
-        const baseBg=v.kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
+        const baseBg=v.kind==="agree"?"var(--surface-rgba-2-150-80-0-9)":"var(--surface-rgba-200-40-40-0-9)";
         const icon=v.kind==="agree"?"👍":"👎";
         const decKey=`${v.messageId}::${v.kind}`;
         const isSel=selectedDecorations?.has(decKey)??false;
         const bgColor=isSel
-          ? "rgba(91,65,0,0.55)"
+          ? "var(--ink-rgba-91-65-0-0-55)"
           : baseBg;
         const borderStyle=isSel
-          ?"2px solid #fbbf24"
-          :"1px solid rgba(255,255,255,0.08)";
+          ?"2px solid var(--line-fbbf24)"
+          :"1px solid var(--line-rgba-255-255-255-0-08)";
         const shadowStyle=isSel
-          ?"0 2px 8px rgba(251,191,36,0.35)"
-          :"0 2px 6px rgba(0,0,0,0.5)";
+          ?"0 2px 8px var(--shadow-rgba-251-191-36-0-35)"
+          :"0 2px 6px var(--shadow-rgba-0-0-0-0-5)";
         return (
-          <div key={`dec-${v.key}`}
+          <div key={`dec-${v.key}`} {...skinForGroup(edges.filter(edge=>edge.relationType===v.kind&&edge.to.messageId===v.messageId).map(edge=>edge.relationMessageId))} data-skin-decoration={v.kind} data-skin-selected={isSel}
             data-msgid={v.messageId}
             data-jump-msgids={edges
               .filter(edge => edge.relationType === v.kind && edge.to.messageId === v.messageId)
@@ -2090,14 +2105,14 @@ function GraphViewCanvas(props: GraphViewProps) {
             onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,v.messageId,v.kind);}}
             title={`${v.kind==="agree"?"赞同":"反对"}${isSel?"（已选中）":""}：点击图标快速发送，点击数字区域切换选中，双击进入临时分类`}
             style={{position:"absolute",left:v.rect.x,top:v.rect.y,width:v.rect.width,height:v.rect.height,zIndex:7,
-              background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
+              background:bgColor,color:"var(--ink-fff)",borderRadius:4,display:"flex",alignItems:"center",
               fontSize:11,pointerEvents:"auto",boxShadow:shadowStyle,border:borderStyle,
               overflow:"hidden"}}>
             {/* Icon area: click = quick send */}
             <div
               onClick={ev=>{ev.stopPropagation();onDecorationIconClick?.(v.messageId,v.kind);}}
               style={{width:DEC_ICON_W,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
-                cursor:"pointer",flexShrink:0,background:"rgba(0,0,0,0.15)",fontSize:12}}
+                cursor:"pointer",flexShrink:0,background:"var(--surface-rgba-0-0-0-0-15)",fontSize:12}}
               title={`点击：快速发送${v.kind==="agree"?"赞同":"反对"}`}>
               {icon}
             </div>
@@ -2119,7 +2134,7 @@ function GraphViewCanvas(props: GraphViewProps) {
         let voteColumn=0;
         return badges.map(badge => {
           const isWholeSel = isRelWholeSel(badge.relMsgId);
-          const bg = INLINE_BADGE_COLOR[badge.relColor] ?? 'rgba(100,100,120,0.9)';
+          const bg = INLINE_BADGE_COLOR[badge.relColor] ?? 'var(--surface-rgba-100-100-120-0-9)';
           const badgeIds=badge.relMsgIds??[badge.relMsgId];
           const voteGroups=badgeIds.flatMap(id=>{
             const votes=relDecByRelMsgState.get(id);
@@ -2148,15 +2163,15 @@ function GraphViewCanvas(props: GraphViewProps) {
               }).join('\n')}\n双击查看详情`
             : `${badge.relLabel}；双击展开操作详情`;
           return <React.Fragment key={`inline-${badge.relMsgId}`}>
-            <div key={`badge-${badge.relMsgId}`} data-msgid={badge.relMsgId} data-jump-msgids={[badge.relMsgId, ...(badge.relMsgIds ?? [])].join(' ')} data-rel-overlay="true"
+            <div key={`badge-${badge.relMsgId}`} {...skinForGroup(badge.relMsgIds??[badge.relMsgId])} data-skin-decoration="annotation" data-skin-operation={badge.relColor} data-skin-selected={isWholeSel} data-msgid={badge.relMsgId} data-jump-msgids={[badge.relMsgId, ...(badge.relMsgIds ?? [])].join(' ')} data-rel-overlay="true"
               onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,badge.relMsgId);}}
               onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,badge.relMsgId, { relMsgIds: badge.relMsgIds, subDetails: badge.subDetails });}}
               title={tooltip}
               style={{position:"absolute",left:badge.rect.x,top:badge.rect.y,width:badge.rect.width,height:badge.rect.height,
-                zIndex:7,boxSizing:'border-box',background:isWholeSel?"#fbbf24":bg,color:isWholeSel?"#111827":"#fff",borderRadius:3,display:"flex",alignItems:"center",justifyContent:"center",
+                zIndex:7,boxSizing:'border-box',background:isWholeSel?"var(--surface-fbbf24)":bg,color:isWholeSel?"var(--ink-111827)":"var(--ink-fff)",borderRadius:3,display:"flex",alignItems:"center",justifyContent:"center",
                 fontSize:9,pointerEvents:"auto",cursor:"pointer",padding:"0 4px",
-                boxShadow:isWholeSel?"0 2px 8px rgba(251,191,36,0.35)":"0 1px 4px rgba(0,0,0,0.5)",
-                border:isWholeSel?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.15)",
+                boxShadow:isWholeSel?"0 2px 8px var(--shadow-rgba-251-191-36-0-35)":"0 1px 4px var(--shadow-rgba-0-0-0-0-5)",
+                border:isWholeSel?"2px solid var(--line-fbbf24)":"1px solid var(--line-rgba-255-255-255-0-15)",
                 whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",fontWeight:600}}>
               <span style={{minWidth:0,overflow:'hidden',textOverflow:'ellipsis'}}>{badge.relLabel}</span>
               {voteGroups.length>0&&renderDecorationToggle(badgeIds,{marginLeft:2,border:0,background:'transparent',color:'inherit'})}
@@ -2170,18 +2185,18 @@ function GraphViewCanvas(props: GraphViewProps) {
                 if(!count)return [];
                 const y=top;top+=DEC_H+DEC_GAP;
                 const selected=ids.some(isRelWholeSel);
-                return <div key={`inline-vote-${id}-${kind}`} data-msgid={id} data-jump-msgids={ids.join(' ')} data-rel-overlay="true"
+                return <div key={`inline-vote-${id}-${kind}`} {...skinForGroup(ids)} data-skin-decoration={kind} data-skin-selected={selected} data-msgid={id} data-jump-msgids={ids.join(' ')} data-rel-overlay="true"
                   onClick={event=>event.stopPropagation()}
                   onDoubleClick={event=>{event.stopPropagation();onDecorationDoubleClick?.(event,id,kind);}}
                   title={`${kind==='agree'?'赞同':'反对'}：点击图标快速发送，点击数字区域切换选中，双击进入临时分类`}
                   style={{position:'absolute',left:voteLeft+(firstColumn+index)*(DEC_W+DEC_GAP),top:y,width:DEC_W,height:DEC_H,zIndex:14,
-                    background:selected?'#fbbf24':kind==='agree'?'rgba(2,150,80,0.9)':'rgba(200,40,40,0.9)',color:selected?'#111827':'#fff',
+                    background:selected?'var(--surface-fbbf24)':kind==='agree'?'var(--surface-rgba-2-150-80-0-9)':'var(--surface-rgba-200-40-40-0-9)',color:selected?'var(--ink-111827)':'var(--ink-fff)',
                     display:'flex',alignItems:'center',borderRadius:4,fontSize:11,pointerEvents:'auto',overflow:'hidden',
-                    border:selected?'2px solid #fbbf24':'1px solid rgba(255,255,255,0.08)',boxShadow:'0 2px 6px rgba(0,0,0,0.5)'}}>
+                    border:selected?'2px solid var(--line-fbbf24)':'1px solid var(--line-rgba-255-255-255-0-08)',boxShadow:'0 2px 6px var(--shadow-rgba-0-0-0-0-5)'}}>
                   <div onClick={event=>{event.stopPropagation();onDecorationIconClick?.(id,kind);}}
                     title={`点击：快速发送${kind==='agree'?'赞同':'反对'}`}
                     style={{width:DEC_ICON_W,height:'100%',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',
-                      flexShrink:0,background:'rgba(0,0,0,0.15)',fontSize:12}}>{kind==='agree'?'👍':'👎'}</div>
+                      flexShrink:0,background:'var(--surface-rgba-0-0-0-0-15)',fontSize:12}}>{kind==='agree'?'👍':'👎'}</div>
                   <div onClick={event=>{event.stopPropagation();onDecorationBodyClick?.(event,id,kind);}}
                     style={{flex:1,height:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:2,cursor:'pointer'}}>
                     <span style={{fontWeight:700}}>{count}</span><span style={{fontSize:9,opacity:0.85}}>{kind==='agree'?'赞':'反'}</span>

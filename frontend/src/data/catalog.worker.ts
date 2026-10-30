@@ -14,6 +14,7 @@ self.onmessage = (event: MessageEvent<{ type: string; id: number; options: Catal
       onProgress: progress => self.postMessage({ type: 'progress', progress }),
     });
   } else if (type === 'catch-up') engine?.catchUp();
+  else if (type === 'reload') engine?.reload();
   else if (type === 'committed') event.data.pages.forEach(page => engine?.applyCommitted(page));
   else if (type === 'refresh' || type === 'filters') {
     void (async () => {

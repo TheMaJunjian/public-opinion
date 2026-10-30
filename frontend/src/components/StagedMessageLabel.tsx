@@ -25,14 +25,14 @@ export default function StagedMessageLabel({ messageId, message, status, content
     onClick={() => { setSelected(value => !value); setCopyStatus(''); }}
     onDoubleClick={event => { event.preventDefault(); event.stopPropagation(); void copyMessageId(); }}
     style={{ flex: 1, minWidth: 0, textAlign: 'left', padding: '4px 6px', borderRadius: 4,
-      border: selected ? '1px solid #38bdf8' : '1px solid transparent',
-      background: selected ? '#123047' : 'transparent', color: '#eee', fontSize: 12,
+      border: selected ? '1px solid var(--line-38bdf8)' : '1px solid transparent',
+      background: selected ? 'var(--surface-123047)' : 'transparent', color: 'var(--ink-eee)', fontSize: 12,
       cursor: 'pointer', overflowWrap: 'anywhere' }}>
-    <span style={{ color: '#94a3b8' }}>【{getMessageTypeLabel(message)}】 </span>
+    <span style={{ color: 'var(--ink-94a3b8)' }}>【{getMessageTypeLabel(message)}】 </span>
     <span style={{ whiteSpace: selected ? 'pre-wrap' : 'normal', fontFamily: selected ? 'inherit' : 'monospace' }}>
       {selected ? (content ?? getMessageCardContent(message)) || '（暂无消息内容）' : messageId}
     </span>
-    {status && <span style={{ color: '#94a3b8' }}> · {status}</span>}
-    {copyStatus && <span role="status" style={{ color: '#94a3b8' }}> · {copyStatus}</span>}
+    {status && <span style={{ color: 'var(--ink-94a3b8)' }}> · {status}</span>}
+    {copyStatus && <span role="status" style={{ color: 'var(--ink-94a3b8)' }}> · {copyStatus}</span>}
   </button>{wholeMessage&&<Suspense fallback={null}><MessageDisplayMarker messageId={messageId} compact/></Suspense>}</span>;
 }

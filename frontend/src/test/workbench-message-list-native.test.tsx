@@ -130,8 +130,9 @@ describe('native list content and navigation regressions', () => {
     expect(recordRow).toHaveAttribute('data-relation-record', 'true');
     const textRow = view.container.querySelector<HTMLElement>('[data-msgid="text"]')!;
     expect(recordRow.style.backgroundColor).not.toBe(textRow.style.backgroundColor);
-    expect(recordRow.style.borderTopStyle).toBe('dashed');
-    expect(textRow.style.borderTopStyle).toBe('solid');
+    // jsdom preserves var() in the shorthand instead of expanding its longhands.
+    expect(recordRow.style.borderTop).toContain(' dashed ');
+    expect(textRow.style.borderTop).toContain(' solid ');
     expect(recordRow.style.borderRadius).not.toBe(textRow.style.borderRadius);
     expect(within(recordRow).getAllByText('text-relation')).toHaveLength(1);
   });

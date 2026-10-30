@@ -57,7 +57,7 @@ export default function MessagePagination({ parent, loadedCount, hasMore, loadin
       document.removeEventListener('visibilitychange', check);
     };
   }, [parent, loadedCount, hasMore, loading, panelRef, onMore, onError]);
-  return <div ref={footerRef} style={{ padding: 16, textAlign: 'center', color: '#94a3b8', fontSize: 12 }}>
+  return <div ref={footerRef} style={{ padding: 16, textAlign: 'center', color: 'var(--ink-94a3b8)', fontSize: 12 }}>
     当前已显示 {loadedCount} 条消息。{loading ? '正在准备消息…' : hasMore ? '向下浏览将自动显示后续结构。' : '当前范围已全部显示。'}
   </div>;
 }

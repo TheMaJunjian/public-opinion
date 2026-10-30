@@ -149,7 +149,7 @@ export default function PromptModal({
             disabled={confirmDisabled}
             style={{
               ...dialogStyles.primaryButton,
-              background: danger ? '#b91c1c' : '#2563eb',
+              background: danger ? 'var(--button-danger-bg)' : dialogStyles.primaryButton.background,
               cursor: confirmDisabled ? 'not-allowed' : 'pointer',
               opacity: confirmDisabled ? 0.6 : 1,
             }}

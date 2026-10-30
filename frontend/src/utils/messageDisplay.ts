@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import type { DemoEdge, DemoMessage } from './modelBridge';
 import { getPresentationSpec, getRelationTitle } from '../types';
 import { getRelationMessageLabel } from './attachedRelationLabels';
@@ -35,9 +36,11 @@ export function getMessageProminence(message: Pick<DemoMessage, 'state' | 'spend
   return {
     recommendation,
     level,
-    fontSize: 13 + 5 * level,
-    backgroundImage: level ? `linear-gradient(135deg, rgba(99,102,241,${0.06 + level * 0.15}), transparent)` : undefined,
-    boxShadow: level ? `0 0 ${Math.round(8 + level * 16)}px rgba(129,140,248,${0.1 + level * 0.25}), 0 4px 10px rgba(0,0,0,0.5)` : undefined,
+    fontSize: 15 + 3 * level,
+    cssFontSize: `calc(var(--message-font-min) + ${level} * var(--message-font-range))`,
+    variables: { '--recommendation-level': level } as CSSProperties,
+    backgroundImage: level ? 'var(--recommendation-gradient)' : undefined,
+    boxShadow: level ? 'var(--recommendation-shadow)' : undefined,
   };
 }
 

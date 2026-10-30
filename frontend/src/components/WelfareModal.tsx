@@ -57,12 +57,12 @@ export default function WelfareModal({ open, onClose }: Props) {
                 rel="noopener noreferrer"
                 onClick={() => void handleCopy(url)}
                 style={{
-                  color: '#9ca3af', overflowWrap: 'anywhere', textDecoration: 'underline',
+                  color: 'var(--ink-9ca3af)', overflowWrap: 'anywhere', textDecoration: 'underline',
                 }}
               >
                 {url}
               </a>
-              {copiedUrl === url && <span style={{ marginLeft: 8, color: '#86efac', whiteSpace: 'nowrap' }}>已复制</span>}
+              {copiedUrl === url && <span style={{ marginLeft: 8, color: 'var(--ink-86efac)', whiteSpace: 'nowrap' }}>已复制</span>}
             </div>
           ))}
         </div>

@@ -1,0 +1,28 @@
+/* opus5.5-high · 案卷·印信. Complete paper palette plus the carrier specimens. */
+:root[data-appearance='opus-paper'] {
+  --skin-neutral: #c8bba1;
+  --skin-border: #b9aa90;
+  --skin-classify: #5d6591;
+  --skin-summary: #52745f;
+  --skin-merge: #7c766a;
+  --skin-correction: #805b18;
+  --skin-governance: #a34736;
+  --skin-agree: #316647;
+  --skin-disagree: #9c3e32;
+  --skin-selected: #26231e;
+  --skin-frame-fill: rgba(221, 208, 180, .14);
+  --skin-decoration-line: #d8c8a9;
+  --skin-tag-bg: #f2e8cf;
+  --selection-bg: #f0ece3;
+  --recommendation-gradient: linear-gradient(110deg, rgb(183 134 43 / calc(var(--recommendation-level) * .12)), transparent 60%);
+  --recommendation-shadow: 0 calc(1px + var(--recommendation-level) * 5px) 0 -1px #fffdf8, 0 calc(2px + var(--recommendation-level) * 6px) 0 -1px rgb(151 112 37 / calc(.18 + var(--recommendation-level) * .4));
+}
+:root[data-appearance='opus-paper'] .app-navbar { border-bottom: 1px solid var(--skin-border); }
+:root[data-appearance='opus-paper'] .workbench-relation-toolbar { border-bottom: 1px solid var(--skin-border); }
+:root[data-appearance='opus-paper'] .workbench-section-heading { letter-spacing: .03em; }
+:root[data-appearance='opus-paper'] .themed-message[data-skin-type='normal'] { border-left-width: 1px !important; }
+:root[data-appearance='opus-paper'] [data-skin-frame-header] { border-top: 3px solid var(--skin-type-accent, var(--skin-border)) !important; }
+:root[data-appearance='opus-paper'] .graph-edge-label-plate { rx: 1px; }
+:root[data-appearance='opus-paper'] .trace-reading-panel { background: var(--surface-card); border-color: var(--skin-border) !important; }
+:root[data-appearance='opus-paper'] .workbench-operation-panel > [data-guide-selection-staging],
+:root[data-appearance='opus-paper'] .workbench-composer-section { box-shadow: inset 3px 0 var(--skin-decoration-line); }

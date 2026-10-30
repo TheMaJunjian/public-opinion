@@ -199,8 +199,8 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
   }, [busy]);
 
   return <WorkbenchDrawingContext.Provider value={tasks}><LoadingContext.Provider value={reportLoading}><SendingContext.Provider value={reportSending}><DrawingPreparationContext.Provider value={prepareDrawing}>
-    {waitNotice && <div role="alert" style={{ padding: 12, background: '#3b2616', color: '#fde68a' }}>{waitNotice}</div>}
-    {failure && <div role="alert" style={{ padding: 12, background: '#3b2616', color: '#fde68a' }}>
+    {waitNotice && <div role="alert" style={{ padding: 12, background: 'var(--surface-3b2616)', color: 'var(--ink-fde68a)' }}>{waitNotice}</div>}
+    {failure && <div role="alert" style={{ padding: 12, background: 'var(--surface-3b2616)', color: 'var(--ink-fde68a)' }}>
       {failure.reason === 'timeout' ? '绘制等待超过 30 秒，已停止等待并恢复操作。' : `${taskNames[failure.kind]}失败，已恢复操作。`}
       页面可能显示不完整，请重新加载。
       <button type="button" onClick={() => {

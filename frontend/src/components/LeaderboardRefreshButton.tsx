@@ -34,14 +34,14 @@ export default function LeaderboardRefreshButton({ onRefresh }: { onRefresh: () 
 
   return <>
     <button onClick={refresh} disabled={refreshing}
-      style={{ border: '1px solid #475569', background: '#1e293b', color: '#cbd5e1', borderRadius: 6, padding: '2px 8px', cursor: refreshing ? 'default' : 'pointer', fontSize: 12 }}
+      style={{ border: '1px solid var(--line-475569)', background: 'var(--surface-1e293b)', color: 'var(--ink-cbd5e1)', borderRadius: 6, padding: '2px 8px', cursor: refreshing ? 'default' : 'pointer', fontSize: 12 }}
       title="检查并同步最新变化">
       {refreshing ? '刷新中…' : '刷新'}
     </button>
     {notice && createPortal(<div role="status" aria-label="排行榜刷新提示" style={{
       position: 'fixed', top: 20, left: '50%', transform: 'translateX(-50%)', zIndex: 1600,
-      background: '#1e293b', color: '#e2e8f0', border: '1px solid #475569', borderRadius: 8,
-      padding: '10px 18px', boxShadow: '0 4px 18px #0006', pointerEvents: 'none', fontSize: 13,
+      background: 'var(--surface-1e293b)', color: 'var(--ink-e2e8f0)', border: '1px solid var(--line-475569)', borderRadius: 8,
+      padding: '10px 18px', boxShadow: '0 4px 18px var(--shadow-0006)', pointerEvents: 'none', fontSize: 13,
     }}>{notice}</div>, document.body)}
   </>;
 }

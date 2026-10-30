@@ -109,19 +109,19 @@ export function renderAnnoNodes(
 ): React.ReactNode[] {
   const selectedStyles = [
     {
-      bg: "rgba(11,132,255,0.24)",
-      outline: "2px solid rgba(11,132,255,0.95)",
-      ring: "inset 0 0 0 1px rgba(147,197,253,0.7)",
+      bg: "var(--surface-rgba-11-132-255-0-24)",
+      outline: "2px solid var(--line-rgba-11-132-255-0-95)",
+      ring: "inset 0 0 0 1px var(--ink-rgba-147-197-253-0-7)",
     },
     {
-      bg: "rgba(56,189,248,0.28)",
-      outline: "2px dashed rgba(56,189,248,0.95)",
-      ring: "inset 0 0 0 1px rgba(125,211,252,0.78)",
+      bg: "var(--surface-rgba-56-189-248-0-28)",
+      outline: "2px dashed var(--line-rgba-56-189-248-0-95)",
+      ring: "inset 0 0 0 1px var(--ink-rgba-125-211-252-0-78)",
     },
     {
-      bg: "rgba(14,165,233,0.32)",
-      outline: "2px dotted rgba(14,165,233,0.98)",
-      ring: "inset 0 0 0 1px rgba(103,232,249,0.86)",
+      bg: "var(--surface-rgba-14-165-233-0-32)",
+      outline: "2px dotted var(--line-rgba-14-165-233-0-98)",
+      ring: "inset 0 0 0 1px var(--ink-rgba-103-232-249-0-86)",
     },
   ] as const;
   const result: React.ReactNode[] = [];
@@ -141,28 +141,29 @@ export function renderAnnoNodes(
     const bgColor = selected
       ? selectedStyle.bg
       : isTargetHint
-        ? (isInner ? "rgba(16,185,129,0.20)" : "rgba(16,185,129,0.12)")
+        ? (isInner ? "var(--ink-rgba-16-185-129-0-20)" : "var(--ink-rgba-16-185-129-0-12)")
       : isInner
-        ? (isAnno ? "rgba(255,220,0,0.30)" : "rgba(80,180,255,0.20)")
-        : (isAnno ? "rgba(255,255,0,0.12)" : "rgba(80,180,255,0.08)");
+        ? (isAnno ? "var(--ink-rgba-255-220-0-0-30)" : "var(--ink-rgba-80-180-255-0-20)")
+        : (isAnno ? "var(--ink-rgba-255-255-0-0-12)" : "var(--ink-rgba-80-180-255-0-08)");
     const outlineStyle = selected
       ? selectedStyle.outline
       : isTargetHint
-        ? "2px dashed rgba(16,185,129,0.95)"
+        ? "2px dashed var(--line-rgba-16-185-129-0-95)"
       : isInner
-        ? (isAnno ? "2px solid rgba(255,210,0,0.95)" : "2px solid rgba(80,180,255,0.85)")
-        : (isAnno ? "1px solid rgba(255,255,0,0.8)" : "1px solid rgba(80,180,255,0.45)");
+        ? (isAnno ? "2px solid var(--line-rgba-255-210-0-0-95)" : "2px solid var(--line-rgba-80-180-255-0-85)")
+        : (isAnno ? "1px solid var(--line-rgba-255-255-0-0-8)" : "1px solid var(--line-rgba-80-180-255-0-45)");
     const innerContent = node.children.length > 0
       ? renderAnnoNodes(text, node.children, node.start, node.end, depth + 1, messageId, isFragSel, onFragClick, isTargetHintFrag)
       : text.slice(node.start, node.end);
     result.push(
       <span key={`h-${node.start}-${node.end}`}
         data-rel-anchor={`${node.relationType}::${node.start}:${node.end}`}
+        data-fragment-selected={selected || undefined}
         onClick={e => { e.stopPropagation(); onFragClick(messageId, node.start, len, frag); }}
         title="点击：进入文本选择状态并切换选中该片段"
         style={{whiteSpace:"pre-wrap",cursor:"pointer",position:"relative",zIndex:isInner?Math.min(9,1+depth):undefined,
           backgroundColor:bgColor,outline:outlineStyle,borderRadius:2,
-          boxShadow:selected?selectedStyle.ring:(isTargetHint?"inset 0 0 0 1px rgba(110,231,183,0.85)":undefined)}}
+          boxShadow:selected?selectedStyle.ring:(isTargetHint?"inset 0 0 0 1px var(--shadow-rgba-110-231-183-0-85)":undefined)}}
       >
         {innerContent}
       </span>

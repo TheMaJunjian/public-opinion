@@ -87,6 +87,7 @@ export function createCatalogClient(userId: string, parent: string, callbacks: {
     getProgress: () => progress,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     prioritize,
+    reload() { prioritize(); if (worker) worker.postMessage({ type: 'reload' }); else void fallback?.then(engine => engine.reload()); },
     catchUp() { if (worker) worker.postMessage({ type: 'catch-up' }); else void fallback?.then(engine => engine.catchUp()); },
     applyCommitted(pages: WorkbenchSnapshot[]) {
       prioritize();

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { useInterfaceZoom } from '../../context/InterfaceZoomContext';
 import { useWorkbenchDrawingTask } from '../../context/WorkbenchDrawingContext';
 
@@ -6,7 +6,8 @@ import { useWorkbenchDrawingTask } from '../../context/WorkbenchDrawingContext';
 export function useRelationToolbar(loading: boolean) {
   const startMeasurement = useWorkbenchDrawingTask('measurement');
   const interfaceZoom = useInterfaceZoom();
-  const relationBarRef = useRef<HTMLDivElement>(null);
+  // The toolbar mounts inside a deferred subtree, after this hook's first effects.
+  const [relationBar, relationBarRef] = useState<HTMLDivElement | null>(null);
   const relationLeftControlsRef = useRef<HTMLDivElement>(null);
   const relationRightControlsRef = useRef<HTMLDivElement>(null);
   const [relationBarHeight, setRelationBarHeight] = useState(0);
@@ -14,35 +15,25 @@ export function useRelationToolbar(loading: boolean) {
   const [relationControlsRightOffset, setRelationControlsRightOffset] = useState(16);
 
   const measureRelationBar = useCallback(() => {
+    if (!relationBar) return;
     const task = startMeasurement();
     task.run(() => {
-      const relationBar = relationBarRef.current;
-      if (relationBar) {
-        setRelationBarHeight(relationBar.getBoundingClientRect().height / interfaceZoom);
-        const leftWidth = (relationLeftControlsRef.current?.getBoundingClientRect().width ?? 0) / interfaceZoom;
-        const rightWidth = (relationRightControlsRef.current?.getBoundingClientRect().width ?? 0) / interfaceZoom;
-        const contentWidth = leftWidth + rightWidth + 32;
-        setRelationBarMinWidth(current => current === contentWidth ? current : contentWidth);
-        const leftControls = relationLeftControlsRef.current;
-        const rightControls = relationRightControlsRef.current;
-        if (!leftControls || !rightControls) { task.complete(); return; }
-        const leftRect = leftControls.getBoundingClientRect();
-        const rightRect = rightControls.getBoundingClientRect();
+      setRelationBarHeight(relationBar.getBoundingClientRect().height / interfaceZoom);
+      const leftRect = relationLeftControlsRef.current?.getBoundingClientRect();
+      const rightRect = relationRightControlsRef.current?.getBoundingClientRect();
+      const contentWidth = ((leftRect?.width ?? 0) + (rightRect?.width ?? 0)) / interfaceZoom + 32;
+      setRelationBarMinWidth(current => current === contentWidth ? current : contentWidth);
+      if (leftRect && rightRect) {
         const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
         const nextRightOffset = Math.min(16, (viewportWidth - leftRect.right - rightRect.width) / interfaceZoom - 16);
         setRelationControlsRightOffset(current => current === nextRightOffset ? current : nextRightOffset);
       }
       task.complete();
     });
-  }, [interfaceZoom, startMeasurement]);
+  }, [relationBar, interfaceZoom, startMeasurement]);
 
   useLayoutEffect(() => {
-    measureRelationBar();
-  }, [loading, measureRelationBar]);
-
-  useEffect(() => {
-    const relationBar = relationBarRef.current;
-    if (!relationBar) return;
+    if (!relationBar) { setRelationBarHeight(0); setRelationBarMinWidth(0); setRelationControlsRightOffset(16); return; }
     const updatePinnedState = () => measureRelationBar();
     updatePinnedState();
     const observer = new ResizeObserver(updatePinnedState);
@@ -57,7 +48,7 @@ export function useRelationToolbar(loading: boolean) {
       window.removeEventListener('resize', updatePinnedState);
       window.removeEventListener('scroll', updatePinnedState);
     };
-  }, [loading, measureRelationBar]);
+  }, [loading, relationBar, measureRelationBar]);
 
 
   return { relationBarRef, relationLeftControlsRef, relationRightControlsRef, relationBarHeight, relationBarMinWidth, relationControlsRightOffset };

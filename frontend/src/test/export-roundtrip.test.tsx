@@ -58,6 +58,7 @@ it('re-exports the open archive with the current viewer and filters without fetc
   const data: ExportData = { formatVersion: 1, exportedAt: time, scope: { messageId: null, title: '原文件' },
     messages: [{ ...message('archived'), authorId: user.id, author: user.username }], relations: [] };
   const props: Parameters<typeof WorkbenchViewToolbar>[0] = {
+    onJump: vi.fn(),
     top: 0, scopeMessageId: 'root', exportTitle: '原文件', exportData: data, exportUsername: user.username, showAlert: vi.fn(),
     home: { mode: 'read-self', onChange: vi.fn() }, filter: { settings: { hideJoin: false, hideSettlement: true }, onChange: vi.fn() },
     clean: { active: true, filters: [{ id: 'sender', kind: 'sender', username: user.username }], matchCount: 1, totalCount: 1, onAdd: vi.fn(), onRemove: vi.fn(), onUpdate: vi.fn(), onClear: vi.fn() },

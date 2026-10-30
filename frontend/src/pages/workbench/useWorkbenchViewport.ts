@@ -44,9 +44,14 @@ export function useWorkbenchViewport({ loading }: WorkbenchViewportInput) {
 
   const savedLeftFlex = Number(localStorage.getItem(SAVED_LEFT_FLEX_KEY));
 
+  // Give desktop reading more room; a user's saved splitter position still wins.
+  const defaultLeftFlex = window.matchMedia('(min-width: 1024px) and (pointer: fine)').matches
+    ? TOTAL_FLEX * (1 - 420 / Math.max(MIN_LEFT_PX + 420, viewportWidth / interfaceZoom - 12))
+    : TOTAL_FLEX / 2;
+
   const initialLeftFlex = Number.isFinite(savedLeftFlex) && savedLeftFlex > 0 && savedLeftFlex < TOTAL_FLEX
     ? savedLeftFlex
-    : TOTAL_FLEX / 2;
+    : defaultLeftFlex;
 
   const [leftFlex, setLeftFlex] = useState(initialLeftFlex);
 

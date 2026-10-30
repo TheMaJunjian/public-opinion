@@ -3,6 +3,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
+import {dialogStyles} from './dialogStyles';
+import ThemeIcon from '../theme/ThemeIcon';
 import type { PointsBalance, PointTransaction } from '../types';
 
 /**
@@ -106,7 +108,7 @@ export default function PointsBadge() {
 
   if (error || !balance) {
     return (
-      <span className="text-indigo-300 text-xs" title="贡献点加载失败">
+      <span className="text-[color:var(--ink-a5b4fc-3)] text-xs" title="贡献点加载失败">
         ⚠ 贡献点
       </span>
     );
@@ -118,32 +120,33 @@ export default function PointsBadge() {
     <div className="relative" ref={popRef}>
       <button
         data-guide-points="true"
+        aria-label={`贡献点：可用 ${points.available}，锁定 ${points.locked}，累计损失 ${breakdown.totalLost}，累计协议费 ${breakdown.totalProtocolFees}，累计收益 ${breakdown.totalEarned}`}
         onClick={handleClick}
-        className={`flex items-center gap-2 text-sm hover:opacity-80 transition-opacity cursor-pointer ${flash ? `animate-pulse ring-2 rounded px-1 ${flash === 'gain' ? 'ring-red-400' : 'ring-green-400'}` : ''}`}
+        className={`flex items-center gap-2 text-sm hover:opacity-80 transition-opacity cursor-pointer ${flash ? `animate-pulse ring-2 rounded px-1 ${flash === 'gain' ? 'ring-[color:var(--ink-f87171)]' : 'ring-[color:var(--ink-4ade80)]'}` : ''}`}
         title={`可用${points.available} · 锁定${points.locked} · 损失${breakdown.totalLost} · 协议费${breakdown.totalProtocolFees} · 收益${breakdown.totalEarned}`}
       >
-        <span className="text-indigo-200">
-          🪙 {points.available.toLocaleString()}
+        <span className="text-[color:var(--ink-c7d2fe)]">
+          <ThemeIcon name="points" fallback="🪙" /> {points.available.toLocaleString()}
         </span>
-        <span className="text-indigo-400 text-xs" title={`锁定: ${points.locked}`}>
-          🔒{points.locked}
+        <span className="text-[color:var(--ink-818cf8-3)] text-xs" title={`锁定: ${points.locked}`}>
+          <ThemeIcon name="lock" fallback="🔒" />{points.locked}
         </span>
-        <span className="text-red-400 text-xs" title={`累计损失: ${breakdown.totalLost}`}>
-          📉{breakdown.totalLost}
+        <span className="text-[color:var(--ink-f87171)] text-xs" title={`累计损失: ${breakdown.totalLost}`}>
+          <ThemeIcon name="loss" fallback="📉" />{breakdown.totalLost}
         </span>
-        <span className="text-orange-400 text-xs" title={`累计协议费: ${breakdown.totalProtocolFees}`}>
-          🏛{breakdown.totalProtocolFees}
+        <span className="text-[color:var(--ink-utility-orange-400)] text-xs" title={`累计协议费: ${breakdown.totalProtocolFees}`}>
+          <ThemeIcon name="proposal" fallback="🏛" />{breakdown.totalProtocolFees}
         </span>
-        <span className="text-green-400 text-xs" title={`累计收益: ${breakdown.totalEarned}`}>
-          📈{breakdown.totalEarned}
+        <span className="text-[color:var(--ink-4ade80)] text-xs" title={`累计收益: ${breakdown.totalEarned}`}>
+          <ThemeIcon name="gain" fallback="📈" />{breakdown.totalEarned}
         </span>
         {bal.debtFrozen && (
-          <span className="text-red-400 text-xs font-bold animate-pulse" title="账户负债冻结">
+          <span className="text-[color:var(--ink-f87171)] text-xs font-bold animate-pulse" title="账户负债冻结">
             ❄️冻结
           </span>
         )}
         {bal.amount < 0 && (
-          <span className="text-orange-400 text-xs" title={`负债: ${bal.amount}`}>
+          <span className="text-[color:var(--ink-utility-orange-400)] text-xs" title={`负债: ${bal.amount}`}>
             负债{Math.abs(bal.amount)}
           </span>
         )}
@@ -153,21 +156,22 @@ export default function PointsBadge() {
       {open && (
         <div
           data-guide-points-panel="true"
-          className="absolute right-0 top-full mt-2 w-72 bg-white border border-gray-200 rounded-lg shadow-xl z-50 max-h-80 overflow-auto"
+          className="absolute right-0 top-full mt-2 w-72 z-50 max-h-80 overflow-auto"
+          style={dialogStyles.panel}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="px-3 py-2 border-b border-gray-100 font-semibold text-sm text-gray-700 sticky top-0 bg-white">
+          <div className="px-3 py-2 border-b border-[color:var(--dialog-border)] font-semibold text-sm text-[color:var(--text-primary)] sticky top-0 bg-[color:var(--dialog-surface)]">
             贡献点记录
-            <span className="ml-2 font-normal text-xs text-gray-400">
+            <span className="ml-2 font-normal text-xs text-[color:var(--text-muted)]">
               可用 {points.available} · 锁定 {points.locked}
             </span>
           </div>
           {txLoading ? (
-            <div className="px-3 py-4 text-sm text-gray-400 text-center">加载中...</div>
+            <div className="px-3 py-4 text-sm text-[color:var(--text-muted)] text-center">加载中...</div>
           ) : transactions.length === 0 ? (
-            <div className="px-3 py-4 text-sm text-gray-400 text-center">暂无记录</div>
+            <div className="px-3 py-4 text-sm text-[color:var(--text-muted)] text-center">暂无记录</div>
           ) : (
-            <ul className="divide-y divide-gray-50">
+            <ul className="divide-y divide-[color:var(--dialog-border)]">
               {transactions.map((tx) => {
                 const txData = tx.data as Record<string, unknown> | null;
                 const hasMessage = !!(txData?.messageId);
@@ -176,7 +180,7 @@ export default function PointsBadge() {
                 <li
                   key={tx.id}
                   data-guide-points-record={txData?.roundId ? String(txData.roundId) : undefined}
-                  className={`px-3 py-2 text-xs flex justify-between items-center select-none ${hasMessage ? 'cursor-pointer hover:bg-indigo-50' : ''}`}
+                  className={`px-3 py-2 text-xs flex justify-between items-center select-none ${hasMessage ? 'cursor-pointer hover:bg-[color:var(--surface-hover)]' : ''}`}
                   onDoubleClick={canNavigate ? (e) => {
                     e.preventDefault();
                     const msgId = txData!.messageId as string;
@@ -213,24 +217,24 @@ export default function PointsBadge() {
                   title={canNavigate ? '双击跳转到相关消息并展开结算记录' : hasMessage ? '关联消息（无法跳转）' : undefined}
                 >
                   <div>
-                    <span className="font-medium text-gray-700">
+                    <span className="font-medium text-[color:var(--text-primary)]">
                       {typeLabel(tx.type)}
                     </span>
-                    <span className="ml-1 text-gray-500">
+                    <span className="ml-1 text-[color:var(--text-muted)]">
                       {txDetail(tx)}
                     </span>
                     {hasMessage && !canNavigate && (
-                      <span className="ml-1 text-gray-300 text-xs">📎</span>
+                      <span className="ml-1 text-[color:var(--ink-d1d5db)] text-xs">📎</span>
                     )}
                   </div>
                   <div className="text-right">
-                    <span className={tx.amount >= 0 ? 'text-green-600' : 'text-red-500'}>
+                    <span className={tx.amount >= 0 ? 'text-[color:var(--ink-4ade80)]' : 'text-[color:var(--ink-ef4444)]'}>
                       {tx.amount >= 0 ? '+' : ''}{tx.amount.toLocaleString()}
                     </span>
-                    <span className="ml-2 text-gray-400">
+                    <span className="ml-2 text-[color:var(--text-muted)]">
                       余额 {tx.balanceAfter.toLocaleString()}
                     </span>
-                    {canNavigate && <span className="ml-1 text-indigo-400" title="双击跳转到相关消息">↗</span>}
+                    {canNavigate && <span className="ml-1 text-[color:var(--ink-818cf8-3)]" title="双击跳转到相关消息">↗</span>}
                   </div>
                 </li>
                 );

@@ -21,9 +21,9 @@ export default function WorkbenchActivityIndicator() {
     pointerEvents: 'none', fontSize: 12,
   }}>
     {labels.map(label => <div key={label} style={{
-      padding: '4px 8px', border: '1px solid #52525b', borderRadius: 5,
-      background: 'rgba(24,24,27,0.92)', color: '#e4e4e7',
-      boxShadow: '0 2px 8px rgba(0,0,0,0.35)',
+      padding: '4px 8px', border: '1px solid var(--line-52525b)', borderRadius: 5,
+      background: 'var(--surface-rgba-24-24-27-0-92)', color: 'var(--ink-e4e4e7)',
+      boxShadow: '0 2px 8px var(--shadow-rgba-0-0-0-0-35)',
     }}>{label}</div>)}
   </div>;
 }

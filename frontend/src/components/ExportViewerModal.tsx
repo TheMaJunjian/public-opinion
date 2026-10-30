@@ -156,23 +156,23 @@ export default function ExportViewerModal({ open, onClose }: Props) {
         </div>
 
         <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center' }}>
-          <div style={{ color: '#94a3b8', fontSize: 13, textAlign: 'center' }}>
+          <div style={{ color: 'var(--ink-94a3b8)', fontSize: 13, textAlign: 'center' }}>
             选择导出的 JSON 文件，将使用系统中已有的线性和非线性视图进行阅览。
           </div>
 
           {lastExport && (
             <button onClick={() => openData(lastExport.data)} style={{
               width: '100%', padding: '12px 16px', borderRadius: 8,
-              border: '1px solid #4a9eff', background: '#1a2a3c',
-              color: '#4a9eff', fontSize: 13, cursor: 'pointer',
+              border: '1px solid var(--line-4a9eff)', background: 'var(--surface-1a2a3c)',
+              color: 'var(--ink-4a9eff)', fontSize: 13, cursor: 'pointer',
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
             }}>
               <span>📋 上次阅览：{lastExport.data.scope.title}</span>
               <span style={{ fontSize: 11, opacity: 0.7 }}>点击打开</span>
             </button>
           )}
-          {!selectedFile && lastExport?.verification && <div role="status" style={{ color: '#86efac', fontSize: 12 }}>{lastExport.verification}</div>}
-          {cacheError && <div role="alert" style={{ color: '#f87171', fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', width: '100%' }}>{cacheError}</div>}
+          {!selectedFile && lastExport?.verification && <div role="status" style={{ color: 'var(--ink-86efac)', fontSize: 12 }}>{lastExport.verification}</div>}
+          {cacheError && <div role="alert" style={{ color: 'var(--ink-f87171)', fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', width: '100%' }}>{cacheError}</div>}
 
           <div
             onDrop={handleDrop}
@@ -181,9 +181,9 @@ export default function ExportViewerModal({ open, onClose }: Props) {
             onClick={() => { if (!processing) fileInputRef.current?.click(); }}
             style={{
               width: '100%', height: 140,
-              border: `2px dashed ${dragging ? '#0b84ff' : selectedFile ? '#4ade80' : '#444'}`,
+              border: `2px dashed ${dragging ? 'var(--line-0b84ff)' : selectedFile ? 'var(--line-4ade80)' : 'var(--line-444)'}`,
               borderRadius: 10,
-              background: dragging ? 'rgba(11,132,255,0.08)' : selectedFile ? 'rgba(74,222,128,0.06)' : '#1a1a1a',
+              background: dragging ? 'var(--surface-rgba-11-132-255-0-08)' : selectedFile ? 'var(--surface-rgba-74-222-128-0-06)' : 'var(--surface-1a1a1a)',
               display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
               cursor: selectedFile ? 'default' : 'pointer', gap: 8,
               transition: 'border-color 0.2s, background 0.2s',
@@ -192,19 +192,19 @@ export default function ExportViewerModal({ open, onClose }: Props) {
             {processing ? (
               <>
                 <div style={{ fontSize: 20 }}>⏳</div>
-                <div style={{ color: '#94a3b8', fontSize: 14 }}>正在处理…</div>
+                <div style={{ color: 'var(--ink-94a3b8)', fontSize: 14 }}>正在处理…</div>
               </>
             ) : selectedFile ? (
               <>
                 <div style={{ fontSize: 20 }}>📄</div>
-                <div style={{ color: '#e2e8f0', fontSize: 14 }}>{selectedFile.name}</div>
-                <div style={{ color: '#64748b', fontSize: 11 }}>{prepared ? '点击下方按钮阅览；点击此处更换文件' : '点击此处更换文件'}</div>
+                <div style={{ color: 'var(--ink-e2e8f0)', fontSize: 14 }}>{selectedFile.name}</div>
+                <div style={{ color: 'var(--ink-64748b)', fontSize: 11 }}>{prepared ? '点击下方按钮阅览；点击此处更换文件' : '点击此处更换文件'}</div>
               </>
             ) : (
               <>
                 <div style={{ fontSize: 24 }}>📁</div>
-                <div style={{ color: '#94a3b8', fontSize: 14 }}>拖拽 JSON 文件到此处</div>
-                <div style={{ color: '#64748b', fontSize: 11 }}>或点击选择文件</div>
+                <div style={{ color: 'var(--ink-94a3b8)', fontSize: 14 }}>拖拽 JSON 文件到此处</div>
+                <div style={{ color: 'var(--ink-64748b)', fontSize: 11 }}>或点击选择文件</div>
               </>
             )}
           </div>
@@ -218,20 +218,20 @@ export default function ExportViewerModal({ open, onClose }: Props) {
             style={{ display: 'none' }}
           />
 
-          {prepared?.verification && <div role="status" style={{ color: '#86efac', fontSize: 12, padding: '8px 12px', background: 'rgba(34,197,94,0.1)', borderRadius: 6, width: '100%' }}>{prepared.verification}</div>}
+          {prepared?.verification && <div role="status" style={{ color: 'var(--ink-86efac)', fontSize: 12, padding: '8px 12px', background: 'var(--surface-rgba-34-197-94-0-1)', borderRadius: 6, width: '100%' }}>{prepared.verification}</div>}
 
           {prepared && !processing && (
             <button onClick={processAndOpen} style={{
               width: '100%', padding: '10px 16px', borderRadius: 8,
-              border: 'none', background: '#0b84ff',
-              color: '#fff', fontSize: 14, cursor: 'pointer',
+              border: 'none', background: 'var(--surface-0b84ff)',
+              color: 'var(--ink-fff)', fontSize: 14, cursor: 'pointer',
             }}>
               阅览此文件
             </button>
           )}
 
           {error && (
-            <div role="alert" style={{ color: '#f87171', fontSize: 12, padding: '8px 12px', background: 'rgba(239,68,68,0.1)', borderRadius: 6, width: '100%', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+            <div role="alert" style={{ color: 'var(--ink-f87171)', fontSize: 12, padding: '8px 12px', background: 'var(--surface-rgba-239-68-68-0-1)', borderRadius: 6, width: '100%', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
               {error}
             </div>
           )}

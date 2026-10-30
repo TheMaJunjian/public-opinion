@@ -42,7 +42,7 @@ export default function RelationRecordPopups({ messages, edges, decorationPopup,
             ) : (
               <ul style={{ listStyle: "none", padding: 0, margin: 0, maxHeight: 160, overflow: "auto", fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
                 {matchingRelations.map(r => (
-                  <li key={r.id} style={{ padding: "4px 6px", borderRadius: 4, background: "#2a2a2a", display: "flex", justifyContent: "space-between" }}>
+                  <li key={r.id} style={{ padding: "4px 6px", borderRadius: 4, background: "var(--surface-2a2a2a)", display: "flex", justifyContent: "space-between" }}>
                     <span style={{ fontWeight: 600 }}>{r.author}</span>
                     <span style={{ opacity: 0.6 }}>{new Date(r.createdAt).toLocaleString()}</span>
                   </li>
@@ -65,7 +65,7 @@ export default function RelationRecordPopups({ messages, edges, decorationPopup,
             <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 8, overflowWrap: 'anywhere' }}>消息：{messageId}</div>
             {/* SubType breakdown */}
             {subDetails && subDetails.length > 0 && (
-              <div style={{ marginBottom: 8, padding: "6px 8px", borderRadius: 4, background: "#2a2a2a", fontSize: 11 }}>
+              <div style={{ marginBottom: 8, padding: "6px 8px", borderRadius: 4, background: "var(--surface-2a2a2a)", fontSize: 11 }}>
                 <div style={{ fontWeight: 600, marginBottom: 4, opacity: 0.8 }}>理由明细：</div>
                 {subDetails.map(d => {
                   const stLabels: Record<string, string> = { SPAM: '垃圾', OFFTOPIC: '跑题', LOWVALUE: '低质', IMPORTANT: '重要', CUSTOM: '自定义', YES: '是', NO: '否' };
@@ -83,7 +83,7 @@ export default function RelationRecordPopups({ messages, edges, decorationPopup,
             ) : (
               <ul style={{ listStyle: "none", padding: 0, margin: 0, maxHeight: 160, overflow: "auto", fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
                 {taggers.map(r => (
-                  <li key={r.id} style={{ padding: "4px 6px", borderRadius: 4, background: "#2a2a2a", display: "flex", justifyContent: "space-between" }}>
+                  <li key={r.id} style={{ padding: "4px 6px", borderRadius: 4, background: "var(--surface-2a2a2a)", display: "flex", justifyContent: "space-between" }}>
                     <span style={{ fontWeight: 600 }}>{r.author}</span>
                     <span style={{ opacity: 0.6 }}>{new Date(r.createdAt).toLocaleString()}</span>
                   </li>

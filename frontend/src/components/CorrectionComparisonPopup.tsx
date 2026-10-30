@@ -27,8 +27,8 @@ export function CurrentBodyComparison({before,after,version,basis,onClose}:{befo
   return <PromptModal open title="原文与当前版本正文对比" confirmText={busy?'保存中…':'已阅'} confirmDisabled={busy} onConfirm={()=>void confirm()} onCancel={onClose}
     lockScroll={false} zIndex={10100} dialogProps={{style:{width:'min(700px, 100%)'}}} message={<>
       <CorrectionTextComparison before={snapshot.before} after={snapshot.after} beforeLabel="原文" afterLabel="当前版本正文"/>
-      <div style={{color:'#94a3b8',fontSize:11,marginTop:8}}>确认本次对比已阅；消息和影响需另行确认。</div>
-      {error&&<div role="alert" style={{color:'#fca5a5',fontSize:11,marginTop:6}}>{error}</div>}
+      <div style={{color:'var(--ink-94a3b8)',fontSize:11,marginTop:8}}>确认本次对比已阅；消息和影响需另行确认。</div>
+      {error&&<div role="alert" style={{color:'var(--ink-fca5a5)',fontSize:11,marginTop:6}}>{error}</div>}
     </>}/>;
 }
 
@@ -149,8 +149,8 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
         for (const change of positionedChanges) {
           const isCurrent = change.version.correctionId === selectedVersion.correctionId;
           const color = isCurrent
-            ? side === 'before' ? '#ff6b6b' : '#4ade80'
-            : '#fbbf24';
+            ? side === 'before' ? 'var(--ink-ff6b6b)' : 'var(--ink-4ade80)'
+            : 'var(--ink-fbbf24)';
           const text = side === 'before'
             ? beforeContent.slice(change.start, change.end)
             : change.replacement;
@@ -162,10 +162,10 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
         if (cursor < content.length) parts.push({ text: content.slice(cursor) });
         return parts.map((part, index) => (
           <span key={index} style={part.color ? {
-            background: part.color === '#fbbf24' ? 'rgba(245,158,11,0.38)' : `${part.color}55`,
+            background: `color-mix(in srgb, ${part.color} 10%, transparent)`,
             color: part.color,
             borderRadius: 2,
-            outline: `1px solid ${part.color}99`,
+            outline: `1px solid color-mix(in srgb, ${part.color} 60%, transparent)`,
           } : undefined}>{part.text}</span>
         ));
       };
@@ -177,14 +177,14 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
             position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
             onClick={e => e.stopPropagation()}>
             <div style={{ ...dialogStyles.header, margin: '-16px -16px 16px' }}>✏ 更正对比</div>
-            <div style={{ fontSize: 11, color: '#fbbf24', marginBottom: 8 }}>
+            <div style={{ fontSize: 11, color: 'var(--ink-fbbf24)', marginBottom: 8 }}>
               附加关系：{'修正文字'} · {selectedVersion.valid ? '当前对你有效' : '当前对你无效'}。以下展示更正前后全文；消息卡按本人立场及公共统计显示有效正文。
             </div>
             <div style={{ display: 'flex', gap: 10 }}>
-              <MessageDiffColumn title="原文" message={{ ...origMsg, content: beforeContent }} isCorrected={false} border="#554" background="#211e14">
+              <MessageDiffColumn title="原文" message={{ ...origMsg, content: beforeContent }} isCorrected={false} border="var(--line-554)" background="var(--surface-211e14)">
                 {renderHighlightedContent(beforeContent, 'before')}
               </MessageDiffColumn>
-              <MessageDiffColumn title="更正影响预览" message={{ ...origMsg, content: afterContent }} border="#255" background="#14201e">
+              <MessageDiffColumn title="更正影响预览" message={{ ...origMsg, content: afterContent }} border="var(--line-255)" background="var(--surface-14201e)">
                 {renderHighlightedContent(afterContent, 'after')}
               </MessageDiffColumn>
             </div>
@@ -233,23 +233,23 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
             onClick={e => e.stopPropagation()}>
             <div style={{ ...dialogStyles.header, margin: '-16px -16px 16px' }}>✏ 更正对比（关系消息）</div>
             <div style={{ display: 'flex', gap: 10 }}>
-              <div style={{ flex: 1, minWidth: 0, borderRadius: 6, border: '1px solid #554', background: '#211e14', padding: 10 }}>
+              <div style={{ flex: 1, minWidth: 0, borderRadius: 6, border: '1px solid var(--line-554)', background: 'var(--surface-211e14)', padding: 10 }}>
                 <div style={{ fontSize: 11, marginBottom: 6 }}>
                   <span style={{ fontWeight: 600 }}>被替换内容</span>
-                  <span style={{ opacity: 0.45, marginLeft: 6, fontSize: 10 }}>{origMsg.id}</span>
+                  <span style={{ color: 'var(--text-muted)', marginLeft: 6, fontSize: 10 }}>{origMsg.id}</span>
                 </div>
                 <div style={{ fontSize: 13, fontFamily: 'monospace', lineHeight: 1.8 }}>
-                  <span style={{ color: '#ff9944', fontWeight: 700 }}>{oldChanges.join('\n') || '无可见变化'}</span>
+                  <span style={{ color: 'var(--ink-ff9944)', fontWeight: 700 }}>{oldChanges.join('\n') || '无可见变化'}</span>
                 </div>
               </div>
-              <div style={{ flex: 1, minWidth: 0, borderRadius: 6, border: '1px solid #255', background: '#14201e', padding: 10 }}>
+              <div style={{ flex: 1, minWidth: 0, borderRadius: 6, border: '1px solid var(--line-255)', background: 'var(--surface-14201e)', padding: 10 }}>
                 <div style={{ fontSize: 11, marginBottom: 6 }}>
                   <span style={{ fontWeight: 600 }}>替换内容</span>
-                  {sourceMsg && <span style={{ opacity: 0.45, marginLeft: 6, fontSize: 10 }}>{sourceMsg.id}</span>}
+                  {sourceMsg && <span style={{ color: 'var(--text-muted)', marginLeft: 6, fontSize: 10 }}>{sourceMsg.id}</span>}
                 </div>
                 {sourceMsg && (
                   <div style={{ fontSize: 13, fontFamily: 'monospace', lineHeight: 1.8 }}>
-                    <span style={{ color: '#44ddaa', fontWeight: 700 }}>{newChanges.join('\n') || '无可见变化'}</span>
+                    <span style={{ color: 'var(--ink-44ddaa)', fontWeight: 700 }}>{newChanges.join('\n') || '无可见变化'}</span>
                   </div>
                 )}
               </div>
@@ -303,10 +303,10 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
             onClick={e => e.stopPropagation()}>
             <div style={{ ...dialogStyles.header, margin: '-16px -16px 16px' }}>✏ 更正对比</div>
             <div style={{ display: 'flex', gap: 10 }}>
-              <MessageDiffColumn title="原文" message={origMsg} border="#554" background="#211e14">
+              <MessageDiffColumn title="原文" message={origMsg} border="var(--line-554)" background="var(--surface-211e14)">
                 {renderDiffParts(origParts, 'orig')}
               </MessageDiffColumn>
-              <MessageDiffColumn title="更正后" message={sourceMsg} border="#255" background="#14201e">
+              <MessageDiffColumn title="更正后" message={sourceMsg} border="var(--line-255)" background="var(--surface-14201e)">
                 {renderDiffParts(nextParts, 'next')}
               </MessageDiffColumn>
             </div>
@@ -329,9 +329,9 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
         </div>
         <div style={{ display: 'flex', gap: 12, flexDirection: 'column' }}>
           {targetMsgs.map(tm => (
-            <PlainMessageCard key={tm.id} title="原文" message={tm} border="#554" background="#232018" />
+            <PlainMessageCard key={tm.id} title="原文" message={tm} border="var(--line-554)" background="var(--surface-232018)" />
           ))}
-          {sourceMsg && <PlainMessageCard title="更新" message={sourceMsg} border="#255" background="#182028" />}
+          {sourceMsg && <PlainMessageCard title="更新" message={sourceMsg} border="var(--line-255)" background="var(--surface-182028)" />}
         </div>
         <CloseRow onClose={onClose} />
       </div>
@@ -366,7 +366,7 @@ function MessageDiffColumn(props: { title: string; message: DemoMessage; isCorre
   return (
     <div style={{ flex: 1, minWidth: 0, borderRadius: 6, border: `1px solid ${border}`, background, padding: 10 }}>
       <MessageMeta title={title} message={message} isCorrected={isCorrected} />
-      <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 12, color: '#ddd', fontFamily: 'monospace', lineHeight: 1.6 }}>
+      <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 12, color: 'var(--text-primary)', fontFamily: 'monospace', lineHeight: 1.6 }}>
         {children}
       </pre>
     </div>
@@ -378,7 +378,7 @@ function PlainMessageCard(props: { title: string; message: DemoMessage; border: 
   return (
     <div style={{ borderRadius: 6, border: `1px solid ${border}`, background, padding: 8 }}>
       <MessageMeta title={title} message={message} />
-      <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 12, color: '#ddd', fontFamily: 'monospace' }}>{message.content}</pre>
+      <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 12, color: 'var(--text-primary)', fontFamily: 'monospace' }}>{message.content}</pre>
     </div>
   );
 }
@@ -387,10 +387,10 @@ function MessageMeta({ title, message, isCorrected }: { title: string; message: 
   return (
     <div style={{ fontSize: 11, marginBottom: 6 }}>
       <span style={{ fontWeight: 600 }}>{title}</span>
-      <span style={{ opacity: 0.45, marginLeft: 6, fontSize: 10 }}>{message.id}</span>
+      <span style={{ color: 'var(--text-muted)', marginLeft: 6, fontSize: 10 }}>{message.id}</span>
       <span style={{ marginLeft: 6 }}>{message.author}</span>
-      {isCorrected && <span style={{ color: '#fbbf24', fontWeight: 700, marginLeft: 6 }} title="此内容来自更正版本">已被更正</span>}
-      <span style={{ opacity: 0.6, marginLeft: 6 }}>{new Date(message.createdAt).toLocaleString()}</span>
+      {isCorrected && <span style={{ color: 'var(--ink-fbbf24)', fontWeight: 700, marginLeft: 6 }} title="此内容来自更正版本">已被更正</span>}
+      <span style={{ color: 'var(--text-secondary)', marginLeft: 6 }}>{new Date(message.createdAt).toLocaleString()}</span>
     </div>
   );
 }

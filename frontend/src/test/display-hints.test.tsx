@@ -653,10 +653,10 @@ describe('computed display hints',()=>{
     </MessageDisplayHintsProvider>);
     const oldMarker=screen.getByRole('button',{name:/显示提示 old：.*推荐不显示/});
     expect(oldMarker).toHaveAccessibleName(/选择显示/);
-    expect(oldMarker).toHaveStyle({color:'#fca5a5'});
+    expect(oldMarker).toHaveStyle({color:'var(--ink-fca5a5)'});
     const newMarker=screen.getByRole('button',{name:/显示提示 new：.*推荐显示/});
     expect(newMarker).toHaveAccessibleName(/选择不显示/);
-    expect(newMarker).toHaveStyle({color:'#86efac'});
+    expect(newMarker).toHaveStyle({color:'var(--ink-86efac)'});
     fireEvent.click(oldMarker);
     expect(screen.getByRole('tooltip')).toHaveTextContent('选择显示');
     expect(screen.getByRole('tooltip')).toHaveTextContent('推荐不显示');
@@ -765,7 +765,7 @@ describe('shared display markers',()=>{
     await act(async()=>fireEvent.click(screen.getByRole('button',{name:'标记当前消息已阅'})));
     const read={...input,readingMarks:onMarkRead.mock.calls[0][0]};view.rerender(element(read));
     const completed=screen.getByRole('button',{name:'当前消息已阅'});expect(completed).toBeDisabled();
-    expect(completed).toHaveStyle({color:'#64748b',background:'#26303d'});fireEvent.click(completed);
+    expect(completed).toHaveStyle({color:'var(--ink-64748b)',background:'var(--surface-26303d)'});fireEvent.click(completed);
     expect(onMarkRead).toHaveBeenCalledOnce();
     const message=screen.getByRole('region',{name:'消息阅读确认'});
     expect(message).toHaveTextContent('消息 · 【文本】 m');expect(message).not.toHaveTextContent('（已阅）');
@@ -775,7 +775,7 @@ describe('shared display markers',()=>{
     const changed={...fixture([text('m')],[...input.relations,rel('vote','AGREE',['m'])]),readingMarks:read.readingMarks};view.rerender(element(changed));
     expect(screen.getByRole('button',{name:/^收起未阅影响/})).toHaveAttribute('aria-expanded','true');
     const confirmNew=screen.getByRole('button',{name:'确认新影响'});
-    expect(confirmNew).toBeEnabled();expect(confirmNew).toHaveStyle({color:'#bae6fd',background:'#243448'});
+    expect(confirmNew).toBeEnabled();expect(confirmNew).toHaveStyle({color:'var(--ink-bae6fd)',background:'var(--surface-243448)'});
     await act(async()=>fireEvent.click(confirmNew));
     expect(onMarkRead.mock.calls[1][0].filter(mark=>mark.scope==='influence').map(mark=>JSON.parse(mark.eventId!)[0])).toEqual(['vote']);
     view.rerender(element({...changed,readingMarks:[...read.readingMarks,...onMarkRead.mock.calls[1][0]]}));
@@ -912,9 +912,9 @@ describe('shared display markers',()=>{
       expect(marker).toHaveAttribute('data-display-statistical',statistical?'active':'inactive');
       expect(marker).toHaveAttribute('data-display-reading',unread?'unread':'read');
       expect(marker.querySelector(statistical?'circle':'rect')).not.toBeNull();
-      expect(marker).toHaveStyle({color:statistical?'#86efac':'#fca5a5'});
+      expect(marker).toHaveStyle({color:statistical?'var(--ink-86efac)':'var(--ink-fca5a5)'});
       expect(marker).toHaveAttribute('data-display-comparison',personal!==statistical?'different':'same');
-      expect(marker.querySelector('path')).toHaveAttribute('stroke',personal!==statistical?'#7dd3fc':'#94a3b8');
+      expect(marker.querySelector('path')).toHaveAttribute('stroke',personal!==statistical?'var(--ink-7dd3fc)':'var(--ink-94a3b8)');
       expect(marker.querySelector('path')).toHaveAttribute('d',`M5 6.5h6M5 9.5h6${personal!==statistical?'M9.5 4.5l-3 7':''}`);
       expect(marker.querySelector('[data-display-hint-mismatch]')).toBeNull();
       expect(marker).toHaveAccessibleName(new RegExp(`${personal?'选择显示':'选择不显示'}；${statistical?'推荐显示':'推荐不显示'}`));

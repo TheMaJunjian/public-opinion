@@ -45,9 +45,9 @@ export default function RegistrationGuideHint({ open, onClose }: RegistrationGui
             left: targetRect.left - 8,
             width: targetRect.width + 16,
             height: targetRect.height + 12,
-            border: '2px solid #facc15',
+            border: '2px solid var(--line-facc15)',
             borderRadius: 6,
-            boxShadow: '0 0 0 9999px rgba(0,0,0,0.35), 0 0 18px rgba(250,204,21,0.7)',
+            boxShadow: '0 0 0 9999px var(--shadow-rgba-0-0-0-0-35), 0 0 18px var(--shadow-rgba-250-204-21-0-7)',
           }}
         />
       )}

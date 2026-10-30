@@ -2,6 +2,7 @@
 // 提供可视化界面来添加/移除/查看过滤规则，以及匹配结果统计。
 
 import { useState, useRef, useEffect, useId } from 'react';
+import {dialogStyles} from './dialogStyles';
 import type { CleanFilterRule } from '../types';
 import { CLEAN_FILTER_LABELS, CLEAN_MESSAGE_TYPES, CLEAN_CONTENT_TYPES, defaultCleanRule } from '../types';
 
@@ -125,9 +126,9 @@ export default function CleanFilterPanel({
         style={{
           padding: '4px 10px',
           borderRadius: 4,
-          border: active ? '1px solid #3b82f6' : '1px solid #555',
-          background: active ? '#2563eb' : '#333',
-          color: '#eee',
+          border: active ? '1px solid var(--line-3b82f6)' : '1px solid var(--line-555)',
+          background: active ? 'var(--surface-2563eb)' : 'var(--surface-333)',
+          color: 'var(--ink-eee)',
           cursor: 'pointer',
           fontSize: 12,
           fontWeight: active ? 600 : 400,
@@ -148,15 +149,12 @@ export default function CleanFilterPanel({
             maxWidth: 'calc(100vw - 24px)',
             maxHeight: 'min(600px, calc(100dvh - 130px))',
             overflowY: 'auto',
-            background: '#1a1a2e',
-            border: '1px solid #334155',
-            borderRadius: 8,
+            ...dialogStyles.panel,
             padding: 12,
             zIndex: 100,
-            boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
           }}
         >
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: '#e2e8f0' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: 'var(--ink-e2e8f0)' }}>
             🔍 过滤器
           </div>
           <div style={{display:'flex',gap:6,marginBottom:8}}>
@@ -171,7 +169,7 @@ export default function CleanFilterPanel({
 
           {/* 已有规则列表 */}
           {filters.length === 0 && !addingKind && (
-            <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8 }}>
+            <div style={{ fontSize: 12, color: 'var(--ink-94a3b8)', marginBottom: 8 }}>
               同一消息类型可多选（满足任一类型）；不同规则需同时满足。
             </div>
           )}
@@ -185,10 +183,10 @@ export default function CleanFilterPanel({
                 padding: '4px 8px',
                 marginBottom: 4,
                 borderRadius: 4,
-                background: 'rgba(59,130,246,0.12)',
-                border: '1px solid rgba(59,130,246,0.25)',
+                background: 'var(--surface-rgba-59-130-246-0-12)',
+                border: '1px solid var(--line-rgba-59-130-246-0-25)',
                 fontSize: 12,
-                color: '#e2e8f0',
+                color: 'var(--ink-e2e8f0)',
               }}
             >
               <button type="button" title="展开或收起规则" aria-expanded={editingId === rule.id} aria-controls={editingId === rule.id ? editorId : undefined}
@@ -199,7 +197,7 @@ export default function CleanFilterPanel({
                 style={{
                   background: 'none',
                   border: 'none',
-                  color: '#94a3b8',
+                  color: 'var(--ink-94a3b8)',
                   cursor: 'pointer',
                   fontSize: 14,
                   padding: '0 2px',
@@ -225,7 +223,7 @@ export default function CleanFilterPanel({
           {/* 添加规则按钮区 */}
           {!addingKind && (
             <div style={{ marginTop: 8 }}>
-              <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4 }}>添加规则：</div>
+              <div style={{ fontSize: 11, color: 'var(--ink-64748b)', marginBottom: 4 }}>添加规则：</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                 {RULE_KINDS.map(kind => (
                   <button
@@ -235,9 +233,9 @@ export default function CleanFilterPanel({
                     style={{
                       padding: '2px 8px',
                       borderRadius: 4,
-                      border: '1px solid #475569',
-                      background: filters.some(f => f.kind === kind) ? '#1e293b' : '#0f172a',
-                      color: filters.some(f => f.kind === kind) ? '#475569' : '#cbd5e1',
+                      border: '1px solid var(--line-475569)',
+                      background: filters.some(f => f.kind === kind) ? 'var(--surface-1e293b)' : 'var(--surface-0f172a)',
+                      color: filters.some(f => f.kind === kind) ? 'var(--ink-475569)' : 'var(--ink-cbd5e1)',
                       cursor: filters.some(f => f.kind === kind) ? 'default' : 'pointer',
                       fontSize: 11,
                     }}
@@ -256,9 +254,9 @@ export default function CleanFilterPanel({
                 marginTop: 8,
                 padding: '4px 8px',
                 borderRadius: 4,
-                background: 'rgba(34,197,94,0.08)',
+                background: 'var(--surface-rgba-34-197-94-0-08)',
                 fontSize: 11,
-                color: '#86efac',
+                color: 'var(--ink-86efac)',
               }}
             >
               {pending ? '正在准备全局筛选结果…' : filters.some(rule => rule.kind === 'messageType'||rule.kind==='time')
@@ -288,8 +286,8 @@ function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
       return <div style={{marginBottom:8,display:'grid',gap:6,fontSize:12}}>
         <label>开始时间<input aria-label="开始时间" type="datetime-local" value={rule.from} onChange={event=>onChange({...rule,from:event.target.value})} style={{display:'block',width:'100%',boxSizing:'border-box'}}/></label>
         <label>结束时间<input aria-label="结束时间" type="datetime-local" value={rule.to} onChange={event=>onChange({...rule,to:event.target.value})} style={{display:'block',width:'100%',boxSizing:'border-box'}}/></label>
-        <div style={{fontSize:11,color:'#94a3b8'}}>按本地时间筛选，可只填一端；结束时间包含所选整分钟。必要的关联消息会作为上下文保留。</div>
-        {invalid&&<div role="alert" style={{color:'#fca5a5'}}>结束时间不能早于开始时间</div>}
+        <div style={{fontSize:11,color:'var(--ink-94a3b8)'}}>按本地时间筛选，可只填一端；结束时间包含所选整分钟。必要的关联消息会作为上下文保留。</div>
+        {invalid&&<div role="alert" style={{color:'var(--ink-fca5a5)'}}>结束时间不能早于开始时间</div>}
         <EditorButtons onConfirm={onConfirm} onCancel={onCancel}/>
       </div>;
     }
@@ -298,12 +296,12 @@ function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
         || rule.messageTypes.includes('CONTENT') && CLEAN_CONTENT_TYPES.includes(type)
         || rule.messageTypes.includes('RELATION') && !CLEAN_CONTENT_TYPES.includes(type));
       return <div style={{marginBottom:8}}>
-        <div style={{fontSize:11,color:'#94a3b8',marginBottom:4}}>消息类型（可多选）：</div>
+        <div style={{fontSize:11,color:'var(--ink-94a3b8)',marginBottom:4}}>消息类型（可多选）：</div>
         <div style={{display:'grid',gap:8,maxHeight:260,overflowY:'auto'}}>
-          {(['CONTENT','RELATION'] as const).map(group => <fieldset key={group} style={{border:'1px solid #475569',borderRadius:4,padding:8,minWidth:0}}>
-            <legend style={{fontSize:12,color:'#93c5fd'}}>{group === 'CONTENT' ? '内容型' : '关系型'}</legend>
+          {(['CONTENT','RELATION'] as const).map(group => <fieldset key={group} style={{border:'1px solid var(--line-475569)',borderRadius:4,padding:8,minWidth:0}}>
+            <legend style={{fontSize:12,color:'var(--ink-93c5fd)'}}>{group === 'CONTENT' ? '内容型' : '关系型'}</legend>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4}}>
-          {CLEAN_MESSAGE_TYPES.filter(([value]) => CLEAN_CONTENT_TYPES.includes(value) === (group === 'CONTENT')).map(([value,label]) => <label key={value} style={{fontSize:12,color:'#e2e8f0'}}>
+          {CLEAN_MESSAGE_TYPES.filter(([value]) => CLEAN_CONTENT_TYPES.includes(value) === (group === 'CONTENT')).map(([value,label]) => <label key={value} style={{fontSize:12,color:'var(--ink-e2e8f0)'}}>
             <input type="checkbox" checked={selected.includes(value)} onChange={event => onChange({...rule,messageTypes:event.target.checked
               ? [...selected,value] : selected.filter(type => type !== value)})}/>{label}
           </label>)}
@@ -316,7 +314,7 @@ function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
     case 'sender':
       return (
         <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>输入与会者名：</div>
+          <div style={{ fontSize: 11, color: 'var(--ink-94a3b8)', marginBottom: 4 }}>输入与会者名：</div>
           <input
             autoFocus
             value={(rule as { username: string }).username}
@@ -327,9 +325,9 @@ function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
               width: '100%',
               padding: '4px 8px',
               borderRadius: 4,
-              border: '1px solid #475569',
-              background: '#0f172a',
-              color: '#e2e8f0',
+              border: '1px solid var(--line-475569)',
+              background: 'var(--surface-0f172a)',
+              color: 'var(--ink-e2e8f0)',
               fontSize: 12,
               boxSizing: 'border-box',
             }}
@@ -341,7 +339,7 @@ function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
     case 'stake':
       return (
         <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>最小押注额度（点）：</div>
+          <div style={{ fontSize: 11, color: 'var(--ink-94a3b8)', marginBottom: 4 }}>最小押注额度（点）：</div>
           <input
             autoFocus
             type="number"
@@ -353,9 +351,9 @@ function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
               width: '100%',
               padding: '4px 8px',
               borderRadius: 4,
-              border: '1px solid #475569',
-              background: '#0f172a',
-              color: '#e2e8f0',
+              border: '1px solid var(--line-475569)',
+              background: 'var(--surface-0f172a)',
+              color: 'var(--ink-e2e8f0)',
               fontSize: 12,
               boxSizing: 'border-box',
               marginBottom: 4,
@@ -373,9 +371,9 @@ function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
               width: '100%',
               padding: '4px 8px',
               borderRadius: 4,
-              border: '1px solid #475569',
-              background: '#0f172a',
-              color: '#e2e8f0',
+              border: '1px solid var(--line-475569)',
+              background: 'var(--surface-0f172a)',
+              color: 'var(--ink-e2e8f0)',
               fontSize: 12,
               boxSizing: 'border-box',
             }}
@@ -391,7 +389,7 @@ function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
     case 'participants':
       return (
         <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>最小站队人数：</div>
+          <div style={{ fontSize: 11, color: 'var(--ink-94a3b8)', marginBottom: 4 }}>最小站队人数：</div>
           <input
             autoFocus
             type="number"
@@ -403,9 +401,9 @@ function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
               width: '100%',
               padding: '4px 8px',
               borderRadius: 4,
-              border: '1px solid #475569',
-              background: '#0f172a',
-              color: '#e2e8f0',
+              border: '1px solid var(--line-475569)',
+              background: 'var(--surface-0f172a)',
+              color: 'var(--ink-e2e8f0)',
               fontSize: 12,
               boxSizing: 'border-box',
             }}
@@ -417,7 +415,7 @@ function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
     case 'rounds':
       return (
         <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>最小结算轮次：</div>
+          <div style={{ fontSize: 11, color: 'var(--ink-94a3b8)', marginBottom: 4 }}>最小结算轮次：</div>
           <input
             autoFocus
             type="number"
@@ -429,9 +427,9 @@ function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
               width: '100%',
               padding: '4px 8px',
               borderRadius: 4,
-              border: '1px solid #475569',
-              background: '#0f172a',
-              color: '#e2e8f0',
+              border: '1px solid var(--line-475569)',
+              background: 'var(--surface-0f172a)',
+              color: 'var(--ink-e2e8f0)',
               fontSize: 12,
               boxSizing: 'border-box',
             }}
@@ -443,7 +441,7 @@ function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
     case 'tag':
       return (
         <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>标签类型 / 最小次数：</div>
+          <div style={{ fontSize: 11, color: 'var(--ink-94a3b8)', marginBottom: 4 }}>标签类型 / 最小次数：</div>
           <div style={{ display: 'flex', gap: 4 }}>
             <select
               value={(rule as { tagType: string }).tagType}
@@ -452,9 +450,9 @@ function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
                 flex: 1,
                 padding: '4px 8px',
                 borderRadius: 4,
-                border: '1px solid #475569',
-                background: '#0f172a',
-                color: '#e2e8f0',
+                border: '1px solid var(--line-475569)',
+                background: 'var(--surface-0f172a)',
+                color: 'var(--ink-e2e8f0)',
                 fontSize: 12,
               }}
             >
@@ -472,9 +470,9 @@ function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
                 width: 60,
                 padding: '4px 8px',
                 borderRadius: 4,
-                border: '1px solid #475569',
-                background: '#0f172a',
-                color: '#e2e8f0',
+                border: '1px solid var(--line-475569)',
+                background: 'var(--surface-0f172a)',
+                color: 'var(--ink-e2e8f0)',
                 fontSize: 12,
                 boxSizing: 'border-box',
               }}
@@ -487,7 +485,7 @@ function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
     case 'relationType':
       return (
         <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>选择关系类型：</div>
+          <div style={{ fontSize: 11, color: 'var(--ink-94a3b8)', marginBottom: 4 }}>选择关系类型：</div>
           <select
             autoFocus
             value={(rule as { relationType: string }).relationType}
@@ -497,9 +495,9 @@ function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
               width: '100%',
               padding: '4px 8px',
               borderRadius: 4,
-              border: '1px solid #475569',
-              background: '#0f172a',
-              color: '#e2e8f0',
+              border: '1px solid var(--line-475569)',
+              background: 'var(--surface-0f172a)',
+              color: 'var(--ink-e2e8f0)',
               fontSize: 12,
               boxSizing: 'border-box',
             }}
@@ -539,8 +537,8 @@ function EditorButtons({ onConfirm, onCancel }: { onConfirm: () => void; onCance
           padding: '2px 12px',
           borderRadius: 4,
           border: 'none',
-          background: '#2563eb',
-          color: '#fff',
+          background: 'var(--surface-2563eb)',
+          color: 'var(--ink-fff)',
           cursor: 'pointer',
           fontSize: 11,
         }}
@@ -552,9 +550,9 @@ function EditorButtons({ onConfirm, onCancel }: { onConfirm: () => void; onCance
         style={{
           padding: '2px 12px',
           borderRadius: 4,
-          border: '1px solid #475569',
+          border: '1px solid var(--line-475569)',
           background: 'transparent',
-          color: '#94a3b8',
+          color: 'var(--ink-94a3b8)',
           cursor: 'pointer',
           fontSize: 11,
         }}

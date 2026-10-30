@@ -1,6 +1,8 @@
 import { lazy, Suspense, useState, type ComponentProps, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import DeferredWorkbench from '../../../components/DeferredWorkbench';
 import HistoryArrowIcon from '../../../components/HistoryArrowIcon';
+import MessageJumpControl from '../../../components/MessageJumpControl';
+import {useThemeSettings} from '../../../theme/theme';
 import HomeFilterPanel from '../../../components/HomeFilterPanel';
 import MessageFilterPanel from '../../../components/MessageFilterPanel';
 import { Z_INDEX } from '../../../constants/zIndex';
@@ -28,6 +30,7 @@ interface ComparisonControls {
   onStartComparison: () => void;
 }
 interface Props {
+  onJump: (id: string) => void;
   scopeHeader?: ReactNode;
   top: number; scopeMessageId: string; exportTitle: string; showAlert: (message: string) => void;
   exportData?: ExportData | null; exportUsername?: string | null;
@@ -36,12 +39,13 @@ interface Props {
   correctionFilterTargetId: string | null; onLeaderboard: () => void;
   history?: { canGoBack: boolean; canGoForward: boolean; back: () => void; forward: () => void };
 }
-export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId, exportTitle, exportData, exportUsername, home, clean, filter, view, comparison, correctionFilterTargetId, onLeaderboard, history }: Props) {
+export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId, exportTitle, exportData, exportUsername, home, clean, filter, view, comparison, correctionFilterTargetId, onLeaderboard, history, onJump }: Props) {
+  const {layout}=useThemeSettings();
   const [exportOpen, setExportOpen] = useState(false);
   const { viewMode, setViewMode, leftPanelRef, viewModeScrollRef, draftUnits, targetUnits, traceCount, currentClassifyRelMsgId, messages, relations, findContainingClassification, exitClassification, enterClassification, scheduleViewNavigation } = view;
   const { singleSideReview, comparisonMode, comparisonReviewed, comparisonTargetId, setComparisonTargetId, onStartComparison } = comparison;
   return (
-    <div data-workbench-view-toolbar="true" style={{ flex: "0 0 auto", borderBottom: "1px solid #333", background: "#141414", position: "sticky", top, zIndex: Z_INDEX.header - 1 }}>
+    <div data-workbench-view-toolbar="true" style={{ flex: "0 0 auto", borderBottom: "1px solid var(--line-333)", background: "var(--surface-141414)", position: "sticky", top, zIndex: Z_INDEX.header - 1 }}>
       <div style={{ padding: 8 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0, flexWrap: "wrap" }}>
@@ -51,24 +55,26 @@ export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId,
           </div>
         </div>
         <div className="workbench-view-actions" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <button onClick={() => setExportOpen(true)} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: "pointer", fontWeight: 400 }}>
+          <button onClick={() => setExportOpen(true)} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-fff)", fontSize: 12, cursor: "pointer", fontWeight: 400 }}>
             导出
           </button>
+          {layout.messageJump==='clipboard-dialog'&&<MessageJumpControl knownIds={new Set(messages.map(message=>message.id))} onJump={onJump}/>}
           <HomeFilterPanel {...home} />
           <DeferredWorkbench label="过滤选项" blocksDrawing><CleanFilterPanel {...clean} /></DeferredWorkbench>
           <MessageFilterPanel {...filter} />
           {!comparisonMode && !comparisonReviewed && <button
             onClick={onStartComparison}
-            style={{ padding: "2px 8px", borderRadius: 4, border: comparisonMode ? "1px solid #22c55e" : "1px solid #666", background: comparisonMode ? "#12351f" : "#333", color: comparisonMode ? "#86efac" : "#fff", fontSize: 12, cursor: "pointer" }}
+            style={{ padding: "2px 8px", borderRadius: 4, border: comparisonMode ? "1px solid var(--line-22c55e)" : "1px solid var(--line-666)", background: comparisonMode ? "var(--surface-12351f)" : "var(--surface-333)", color: comparisonMode ? "var(--ink-86efac)" : "var(--ink-fff)", fontSize: 12, cursor: "pointer" }}
             title="查看赞同/反对生效后的不同显示效果"
           >
             {comparisonMode ? '退出对比' : '对比'}
           </button>}
           <button
+            className="workbench-leaderboard-button"
             onClick={() => {
               onLeaderboard();
             }}
-            style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #d97706", background: "#3f2a06", color: "#fbbf24", fontSize: 12, cursor: "pointer" }}
+            style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-d97706)", background: "var(--surface-3f2a06)", color: "var(--ink-fbbf24)", fontSize: 12, cursor: "pointer" }}
             title="查看人榜与消息榜"
           >
             排行榜

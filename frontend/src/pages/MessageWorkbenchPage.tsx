@@ -68,7 +68,6 @@ import { deriveSingleButtonEnabled } from './workbench/projections/singleButtonE
 import { deriveSingleButtonLabel } from './workbench/projections/singleButtonLabel';
 import { deriveTraceFrameIds } from './workbench/projections/traceFrameIds';
 import type { ClassifyStackEntry, DraftGroup, TraceEntry, TraceSnapshot, ViewMode } from './workbench/types';
-import RelationToolbar from './workbench/ui/RelationToolbar';
 
 import type { Json } from '@gonglun/core';
 import ErrorBoundary from '../components/ErrorBoundary';
@@ -113,6 +112,8 @@ import { nextId, selKey, unitEquals } from './workbench/model/selection';
 
 // ========================= MessageWorkbenchPage =========================
 const GraphView = lazy(() => import('../components/GraphView'));
+const RelationToolbar = lazy(() => import('./workbench/ui/RelationToolbar'));
+const RelationChoices = lazy(() => import('./workbench/ui/RelationToolbar').then(module => ({ default: module.RelationChoices })));
 const WorkbenchViewToolbar = lazy(() => import('./workbench/ui/WorkbenchViewToolbar'));
 const ClassificationHeader = lazy(() => import('./workbench/ui/ClassificationHeader'));
 const TraceReadingController = lazy(() => import('../components/TraceReadingController'));
@@ -2772,10 +2773,10 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
 
   const activePageParent = recordCategory?`related:${recordCategory.targetId}`:joinFilterTargetId ? `related:${joinFilterTargetId}` : correctionFilterTargetId ? `related:${correctionFilterTargetId}` : containerPreviewId ?? currentClassifyRelMsgId ?? scopeMessageId;
 
-  function confirmMessageIdNavigation(): void {
-    const id = messageIdInput.trim();
+  function confirmMessageIdNavigation(value = messageIdInput): void {
+    const id = value.trim();
     if (id && !isPreloaded && onDemand && !messagesRef.current.some(message => message.id === id)) { handleNavigateToMessage(id); return; }
-    return runConfirmMessageIdNavigation({ messageIdInput, showAlert, messagesRef, handleNavigateToMessage, setAutoClassifyMsgId });
+    return runConfirmMessageIdNavigation({ messageIdInput: value, showAlert, messagesRef, handleNavigateToMessage, setAutoClassifyMsgId });
   }
 
   const handleNavigateFromCorrectionTemporaryCategory = useCallback((messageId: string, switchToList: boolean) => {
@@ -3110,9 +3111,9 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   if (loading) return null;
   if (loadError) {
     return (
-      <div style={{ padding: 16, background: "#101010", color: "#eee", height: "100%" }}>
+      <div style={{ padding: 16, background: "var(--surface-101010)", color: "var(--ink-eee)", height: "100%" }}>
         <div style={{ fontWeight: 700, marginBottom: 8 }}>加载失败</div>
-        <pre style={{ whiteSpace: "pre-wrap", color: "#ff8080" }}>{loadError}</pre>
+        <pre style={{ whiteSpace: "pre-wrap", color: "var(--ink-ff8080)" }}>{loadError}</pre>
       </div>
     );
   }
@@ -3121,7 +3122,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   const isRouteScope = scopeMessageId !== 'root' && !isInsideClassify && traceEntries.length === 0;
   const classificationHeader = (recordCategory||isInsideClassify||isRouteScope||isTemporaryJoinCategory||correctionFilterTargetId!==null||comparisonMode)?<DeferredWorkbench label="分类标题" blocksDrawing><ClassificationHeader recordCategory={recordCategory} isTemporaryFrameCategory={isTemporaryFrameCategory} isInsideClassify={isInsideClassify || isRouteScope} isRouteScope={isRouteScope} isTemporaryJoinCategory={isTemporaryJoinCategory} correctionFilterTargetId={correctionFilterTargetId} comparisonMode={comparisonMode}
                 correctionRecords={currentClassifyRelMsg&&correctionVersions.get(currentClassifyRelMsg.id)?.versions.length?<span>
-                  <span role="button" tabIndex={0} title="双击查看更正记录" style={{color:'#fbbf24',fontSize:10,cursor:'pointer'}}
+                  <span role="button" tabIndex={0} title="双击查看更正记录" style={{color:'var(--ink-fbbf24)',fontSize:10,cursor:'pointer'}}
                     onClick={event=>handleInlineBadgeClick(event,correctionVersions.get(currentClassifyRelMsg.id)!.versions[0].correctionId)}
                     onDoubleClick={event=>handleInlineBadgeDoubleClick(event,correctionVersions.get(currentClassifyRelMsg.id)!.versions[0].correctionId)}
                     onKeyDown={event=>{if(event.key==='Enter')handleInlineBadgeDoubleClick(event as unknown as React.MouseEvent,correctionVersions.get(currentClassifyRelMsg.id)!.versions[0].correctionId);}}>
@@ -3139,11 +3140,11 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
       windowState={displayHintWindow} currentContainerId={hintContainerId} versionHistory={readingVersionHistory}>
       <AuthoredReadingBackfill enabled={!isPreloaded&&!loading&&readingState.ready} userId={user?.id}/>
       <ErrorBoundary onError={reportDrawingFailure}>
-        <div className="workbench-shell" style={{ flex: "1 0 auto", width: effectiveContainerWidth, minWidth: MIN_LEFT_PX + MIN_RIGHT_PX + 12, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
-          <RelationToolbar barRef={relationBarRef} leftControlsRef={relationLeftControlsRef} rightControlsRef={relationRightControlsRef}
+        <div className="workbench-shell" style={{ flex: "1 0 auto", width: effectiveContainerWidth, minWidth: MIN_LEFT_PX + MIN_RIGHT_PX + 12, margin: 0, display: "flex", flexDirection: "column", background: "var(--surface-101010)", color: "var(--ink-eee)", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
+          <DeferredWorkbench label="关系工具栏" blocksDrawing><RelationToolbar barRef={relationBarRef} leftControlsRef={relationLeftControlsRef} rightControlsRef={relationRightControlsRef}
             top={topControlsFrozen ? topControlsOffset : 0} springWidth={relationSpringWidth} rightOffset={relationControlsRightOffset} viewer={isPreloaded}
-            messageIdInput={messageIdInput} onMessageIdChange={setMessageIdInput} onJump={confirmMessageIdNavigation}
-            composer={{ relationType, secondaryRelationType, newMessageContent, subType, setRelationType, setSecondaryRelationType, setNewMessageContent, lastTagSecondaryRef, lastDelegationSecondaryRef, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, guideTargetIdRef }} />
+            messageIdInput={messageIdInput} onMessageIdChange={setMessageIdInput} onJump={()=>confirmMessageIdNavigation()}
+            composer={{ relationType, secondaryRelationType, newMessageContent, subType, setRelationType, setSecondaryRelationType, setNewMessageContent, lastTagSecondaryRef, lastDelegationSecondaryRef, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, guideTargetIdRef }} /></DeferredWorkbench>
 
           {/* 两侧内容必须自然展开，不得给内容层添加 height/maxHeight 等高度上限。
               滚动由独立悬浮视口承接，并跟随手机缩放后的实际可见范围，不能用 vh/dvh 截短内容。
@@ -3152,6 +3153,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
           <div ref={panelContainerRef} className="workbench-panels" style={{ display: "flex", flex: "1 0 auto", width: "100%", minWidth: 0 }}>
             <div className="workbench-message-pane" data-workbench-panel-surface="true" style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: MIN_LEFT_PX, alignSelf: 'flex-start', position: 'sticky', top: panelStickyTop, overflow: "visible", paddingBottom: 8 }}>
               <DeferredWorkbench label="视图工具栏" blocksDrawing><WorkbenchViewToolbar top={panelStickyTop}
+                onJump={confirmMessageIdNavigation}
                 history={browsingHistory}
                 scopeHeader={!containerPreview && !comparisonReviewed ? classificationHeader : undefined}
                 scopeMessageId={scopeMessageId} exportTitle={scope?.title ?? 'export'} showAlert={showAlert}
@@ -3180,19 +3182,19 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
                 {messagePulse && <MessageJumpOverlay messageId={messagePulse.messageId} targetElement={messagePulse.element} targetRect={messagePulse.rect} />}
                 <RecentWorkbenchViews key={recentViewOwner} ownerKey={browsingHistoryKey} viewKey={recentViewKey}>
                 {globalFilterPending ? (
-                  <div role="status" style={{ padding: 48, textAlign: 'center', color: '#94a3b8' }}>
+                  <div role="status" style={{ padding: 48, textAlign: 'center', color: 'var(--ink-94a3b8)' }}>
                     {globalFilters.error ?? '正在准备全局筛选结果…'}
                     {globalFilters.error && <button onClick={globalFilters.retry}>重试筛选</button>}
                   </div>
                 ) : (previewMessages??messagesToRenderFiltered).length === 0 && !containerPreview && !comparisonReviewed ? (
-                  <div style={{ padding: 48, textAlign: "center", color: "#666", fontSize: 14, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                  <div style={{ padding: 48, textAlign: "center", color: "var(--ink-666)", fontSize: 14, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                     <div style={{ fontSize: 36, opacity: 0.3 }}>📭</div>
                     <div>{comparisonMode ? "没有可对比的消息" : isInsideClassify ? `当前${classifyKindLabel}中暂无消息` : traceEntries.length > 0 ? "追溯范围内没有可见消息" : "暂无消息，请先发送一条消息或创建关系"}</div>
                     <div style={{ fontSize: 12, opacity: 0.7, maxWidth: 360, lineHeight: 1.6 }}>
                       {comparisonMode ? "仅列出已有赞同或反对记录的关系消息，不含加入、结算等消息。" : isInsideClassify ? "该分类下还没有消息。你可以退出分类视图，在完整画布中发送消息。" : traceEntries.length > 0 ? "当前追溯范围内没有匹配的消息。尝试退出追溯或调整追溯距离。" : "发送消息需支付协议费，真假和价值至少一项大于 0，也可以同时投入。选中消息或正文片段后，选择关系并发送，即可继续讨论。"}
                     </div>
                     {isInsideClassify && (
-                      <button onClick={handleExitClassification} style={{ marginTop: 8, padding: "4px 16px", borderRadius: 6, border: "1px solid #555", background: "#333", color: "#ccc", cursor: "pointer", fontSize: 13 }}>
+                      <button onClick={handleExitClassification} style={{ marginTop: 8, padding: "4px 16px", borderRadius: 6, border: "1px solid var(--line-555)", background: "var(--surface-333)", color: "var(--ink-ccc)", cursor: "pointer", fontSize: 13 }}>
                         {classifyExitLabel}
                       </button>
                     )}
@@ -3306,6 +3308,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
 
 
             <DeferredWorkbench label="发言操作" blocksDrawing><WorkbenchPanel
+              relationChoices={<RelationChoices placement="desk" frozen={topControlsFrozen} composer={{ relationType, secondaryRelationType, newMessageContent, subType, setRelationType, setSecondaryRelationType, setNewMessageContent, lastTagSecondaryRef, lastDelegationSecondaryRef, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, guideTargetIdRef }} />}
               rightPanelRef={rightPanelRef}
               leftPanelRef={leftPanelRef}
               TOTAL_FLEX={TOTAL_FLEX}

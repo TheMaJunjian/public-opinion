@@ -80,6 +80,7 @@ export function beginRequestOperation(label: string, quiet = false, owner = requ
     operations = operations.map(operation => operation.id === id ? { ...operation, long: true } : operation); publish();
   }, LONG_OPERATION_MS));
   return {
+    discard() { removeOperation(id); },
     finish(state: Exclude<OperationState, 'pending'>, message?: string) {
       clearTimeout(timers.get(id)); timers.delete(id);
       const entry = operations.find(operation => operation.id === id);

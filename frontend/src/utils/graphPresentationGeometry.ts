@@ -14,6 +14,9 @@ export const DEC_RIGHT_TOP = 4; // y offset from card top
 export const DEC_ICON_W = 20;   // clickable icon area width within a decoration badge
 export const EDGE_HINT_W = 16;
 export const EDGE_LABEL_HINT_GAP = 2;
+// Selected cards must escape the ordinary card layer and cover paths and their hit areas.
+export const GRAPH_CARD_LAYER = 1;
+export const GRAPH_SELECTED_CARD_LAYER = 16;
 
 export function getEdgeDecorationLeft(label: Rect, hasHint = true): number {
   return label.x + label.width + (hasHint ? EDGE_LABEL_HINT_GAP + EDGE_HINT_W : 0) + DEC_RIGHT_GAP;
@@ -59,17 +62,17 @@ export const GROUP_HEADER_HEIGHT = 56;
 
 // Group frame stroke colors by relColor value
 export const GROUP_FRAME_STROKE: Record<string,string> = {
-  yellow: 'rgba(220,180,0,0.7)', amber: 'rgba(200,140,0,0.7)',
-  gray: 'rgba(140,140,150,0.55)', slate: 'rgba(100,110,120,0.55)',
+  yellow: 'var(--ink-rgba-220-180-0-0-7)', amber: 'var(--ink-rgba-200-140-0-0-7)',
+  gray: 'var(--ink-rgba-140-140-150-0-55)', slate: 'var(--ink-rgba-100-110-120-0-55)',
 };
 export const SHOW_SELECTED_ACTUAL_RECTS = false;
 
 // Inline badge background colors by relColor value
 export const INLINE_BADGE_COLOR: Record<string,string> = {
-  orange: 'rgba(200,90,0,0.9)',
-  slate: 'rgba(80,90,100,0.9)',
-  green: 'rgba(21,128,61,0.9)',
-  red: 'rgba(185,28,28,0.9)',
+  orange: 'var(--ink-rgba-200-90-0-0-9)',
+  slate: 'var(--ink-rgba-80-90-100-0-9)',
+  green: 'var(--ink-rgba-21-128-61-0-9)',
+  red: 'var(--ink-rgba-185-28-28-0-9)',
 };
 
 

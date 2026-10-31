@@ -96,6 +96,7 @@ export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId,
                 viewModeScrollRef.current[viewMode] = { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft };
               }
               const nextViewMode = viewMode === "list" ? "graph" : "list";
+              const restoreTraceViewport = traceCount > 0 && viewModeScrollRef.current[nextViewMode] !== null;
               const navigationUnits = draftUnits.length > 0 ? draftUnits : targetUnits;
               const comparisonId = navigationUnits.length === 1 ? navigationUnits[0].messageId : comparisonTargetId;
               if (comparisonMode && nextViewMode === 'list') {
@@ -116,7 +117,9 @@ export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId,
               const scrollTargetId = comparisonMode
                 ? comparisonId
                 : selectedMessageId;
-              if (scrollTargetId) {
+              // A trace's saved viewport takes priority over its staged selection.
+              // Delayed selection navigation would cancel an unfinished restore.
+              if (scrollTargetId && !restoreTraceViewport) {
                 const scrollTargetMessage = messages.find(message => message.id === scrollTargetId);
                 const scrollTargetRelation = relations.find(relation => relation.id === scrollTargetId);
                 const isCorrectionTarget = scrollTargetMessage?.relationType?.toUpperCase() === 'CORRECT'

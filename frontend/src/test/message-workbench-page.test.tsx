@@ -892,7 +892,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     graphRendering.actual=true;
     try{
       render(<MessageWorkbenchPage/>);
-      const ready=()=>waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      const ready=waitForWorkbenchIdle;
       await waitFor(()=>expect(latest()?.messages.some((message:Message)=>message.id==='A')).toBe(true));
       await ready();
       expect(screen.getByRole('button',{name:'返回'})).toBeDisabled();
@@ -1896,7 +1896,7 @@ describe('directed reading and continuous traces',()=>{
       expect(view.container.querySelector('[data-reading-current-id]')).not.toHaveAttribute('data-reading-current-id','N');expect(latest().draftUnits).toEqual(staged);
     }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;mockApi.getReadingState.mockResolvedValue({marks:[]});}
   });
-  it('restores both graph and table scroll positions after returning from a child trace',async()=>{
+  it.each([false,true])('restores both graph and table scroll positions after returning from a child trace (delayed layout: %s)',async delayed=>{
     const dimensions=[vi.spyOn(HTMLElement.prototype,'scrollHeight','get').mockReturnValue(5000),vi.spyOn(HTMLElement.prototype,'scrollWidth','get').mockReturnValue(5000),
       vi.spyOn(HTMLElement.prototype,'clientHeight','get').mockReturnValue(400),vi.spyOn(HTMLElement.prototype,'clientWidth','get').mockReturnValue(600)];
     const {view,geometry}=await setup();
@@ -1912,9 +1912,18 @@ describe('directed reading and continuous traces',()=>{
       expect(screen.getByRole('button',{name:'切换为消息图'})).toBeInTheDocument();
       expect(left().scrollTop).toBe(620);expect(left().scrollLeft).toBe(40);expect(right().scrollTop).toBe(90);
       expect(readingCurrentMessage('N')).toBeInTheDocument();
-      fireEvent.click(screen.getByRole('button',{name:'切换为消息图'}));await waitForWorkbenchIdle();
+      if(delayed)vi.useFakeTimers();
+      fireEvent.click(screen.getByRole('button',{name:'切换为消息图'}));
+      if(delayed){
+        let release!:()=>void;
+        act(()=>{release=graphRendering.tasks!.begin('measurement').release;});
+        // Keep layout pending past automatic selection navigation's deadline.
+        await act(async()=>{await vi.advanceTimersByTimeAsync(150);});
+        act(release);
+      }
+      await waitForWorkbenchIdle();
       expect(left().scrollTop).toBe(360);expect(left().scrollLeft).toBe(25);
-    }finally{view.unmount();geometry.mockRestore();dimensions.forEach(spy=>spy.mockRestore());graphRendering.actual=false;mockApi.getReadingState.mockResolvedValue({marks:[]});}
+    }finally{view.unmount();vi.useRealTimers();geometry.mockRestore();dimensions.forEach(spy=>spy.mockRestore());graphRendering.actual=false;mockApi.getReadingState.mockResolvedValue({marks:[]});}
   },15000);
   it('keeps the reading card at its prior visible position when the parent layout changes while tracing a child',async()=>{
     const {view,geometry}=await setup();let shift=0;

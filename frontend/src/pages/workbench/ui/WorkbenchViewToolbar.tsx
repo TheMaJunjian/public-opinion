@@ -4,7 +4,7 @@ import HistoryArrowIcon from '../../../components/HistoryArrowIcon';
 import MessageJumpControl from '../../../components/MessageJumpControl';
 import {useThemeSettings} from '../../../theme/theme';
 import HomeFilterPanel from '../../../components/HomeFilterPanel';
-import MessageFilterPanel from '../../../components/MessageFilterPanel';
+import type MessageFilterPanel from '../../../components/MessageFilterPanel';
 import { Z_INDEX } from '../../../constants/zIndex';
 import type { Relation } from '../../../types';
 import type { DemoMessage, UnitSelection } from '../../../utils/modelBridge';
@@ -61,7 +61,6 @@ export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId,
           {layout.messageJump==='clipboard-dialog'&&<MessageJumpControl knownIds={new Set(messages.map(message=>message.id))} onJump={onJump}/>}
           <HomeFilterPanel {...home} />
           <DeferredWorkbench label="过滤选项" blocksDrawing><CleanFilterPanel {...clean} /></DeferredWorkbench>
-          <MessageFilterPanel {...filter} />
           {!comparisonMode && !comparisonReviewed && <button
             onClick={onStartComparison}
             style={{ padding: "2px 8px", borderRadius: 4, border: comparisonMode ? "1px solid var(--line-22c55e)" : "1px solid var(--line-666)", background: comparisonMode ? "var(--surface-12351f)" : "var(--surface-333)", color: comparisonMode ? "var(--ink-86efac)" : "var(--ink-fff)", fontSize: 12, cursor: "pointer" }}

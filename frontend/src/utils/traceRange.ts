@@ -1,4 +1,5 @@
 import type {DemoEdge,DemoMessage} from './modelBridge';
+import {isTraceTextLikeMessage,isSettlementRecord} from './modelBridge';
 import {getPresentationSpec} from '../types';
 
 export type TraceDirection='up'|'down'|'both';
@@ -7,7 +8,7 @@ export const DEFAULT_TRACE_DEPTHS:Readonly<TraceDepths>={up:1,down:2};
 export const traceDepths=(distance:number,direction:TraceDirection='both'):TraceDepths=>({up:direction==='down'?0:distance,down:direction==='up'?0:distance});
 export const TRACE_DIRECTION_LABELS:Record<TraceDirection,string>={up:'向上：前因／依据',down:'向下：后续／影响',both:'双向：前因与后续'};
 
-/** Semantic connections and shared arrangement membership each cost one hop. */
+/** Content endpoints and arrangement membership cost a hop; pure relation records do not. */
 export function traceRange(messages:DemoMessage[],edges:DemoEdge[],starts:string[],distance:number|TraceDepths,direction:TraceDirection='both'){
   const ids=new Set(messages.map(message=>message.id)),messageMap=new Map(messages.map(message=>[message.id,message]));
   const up=new Map<string,Set<string>>(),down=new Map<string,Set<string>>();
@@ -20,6 +21,7 @@ export function traceRange(messages:DemoMessage[],edges:DemoEdge[],starts:string
   for(const edge of edges){
     if(['read','unread'].includes(edge.relationType))continue;
     const owner=edge.relationMessageId,target=edge.to.messageId,source=edge.from.messageId;
+    if([owner,source,target].some(id=>isSettlementRecord(messageMap.get(id))))continue;
     // JOIN history cannot bridge former siblings. Active memberships arrive
     // as edges owned by the current container instead.
     if(String(edge.relationType)==='join'||messageMap.get(owner)?.kind==='join'
@@ -42,22 +44,30 @@ export function traceRange(messages:DemoMessage[],edges:DemoEdge[],starts:string
   }
   const distances=new Map<string,number>(),queue=starts.filter(id=>ids.has(id));
   queue.forEach(id=>distances.set(id,0));
+  const transparentIds=new Set(messages.filter(message=>message.kind==='relation'
+    &&!isTraceTextLikeMessage(message)&&!getPresentationSpec(message.relationType??'').isContainer).map(message=>message.id));
   const walk=(maximum:number,maps:Array<Map<string,Set<string>>>)=>{
-    const visited=new Map(queue.map(id=>[id,0])),pending=[...queue],expandedArrangements=new Set<string>();
-    for(let index=0;index<pending.length;index++){
-      const id=pending[index],depth=visited.get(id)!+1;
-      if(depth>Math.max(0,Math.floor(maximum)))continue;
-      const visit=(target:string)=>{if(!visited.has(target)){
-        visited.set(target,depth);pending.push(target);
-        distances.set(target,Math.min(depth,distances.get(target)??Infinity));
-      }};
-      for(const map of maps)for(const target of map.get(id)??[])visit(target);
+    const visited=new Map(queue.map(id=>[id,0])),pending:string[][]=[[...queue]],expandedArrangements=new Set<string>();
+    const limit=Math.max(0,Math.floor(maximum));
+    // A disabled direction keeps only the explicit origins.
+    if(limit===0)return;
+    // Process distance buckets in order so a later zero-cost route can replace
+    // an earlier, longer route before an arrangement is expanded.
+    for(let depth=0;depth<pending.length;depth++)for(let index=0;index<(pending[depth]?.length??0);index++){
+      const id=pending[depth][index];if(visited.get(id)!==depth)continue;
+      const visit=(target:string,cost:number)=>{
+        const next=depth+cost;
+        if(next>limit||next>=(visited.get(target)??Infinity))return;
+        visited.set(target,next);(pending[next]??=[]).push(target);
+        distances.set(target,Math.min(next,distances.get(target)??Infinity));
+      };
+      for(const map of maps)for(const target of map.get(id)??[])visit(target,transparentIds.has(target)?0:1);
       // Peers have no causal direction. Expand each arrangement once per walk
       // to avoid building a quadratic set of pairwise membership edges.
       for(const arrangement of arrangementsByMessage.get(id)??[]){
         if(expandedArrangements.has(arrangement))continue;
         expandedArrangements.add(arrangement);
-        for(const member of arrangementMembers.get(arrangement)!)visit(member);
+        for(const member of arrangementMembers.get(arrangement)!)visit(member,1);
       }
     }
   };

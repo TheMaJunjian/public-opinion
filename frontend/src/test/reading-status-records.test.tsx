@@ -32,19 +32,19 @@ const scope=new Set(['m','reason','value']),allowed=new Set(['m','reason']);
 const confirm=(input:ReturnType<typeof fixture>,id:string)=>readingMarksFor(input,id,deriveDisplayHints(input).hints.get(id)!.displayed);
 
 describe('status records do not expand automatic trace reading',()=>{
-  it('keeps join and arbitration effects at their affected messages without adding record visits',()=>{
+  it('keeps join effects at their affected messages and excludes settlement records',()=>{
     const input=fixture(),tasks=readingTasks(input,scope,allowed).tasks;
     expect(new Set(tasks.map(task=>task.destinationId))).toEqual(new Set(['m','reason']));
     expect(tasks.every(task=>task.location==='inside')).toBe(true);
-    expect(tasks.filter(task=>task.influence?.messageId==='value-round')).toEqual([expect.objectContaining({destinationId:'m',targetId:'m'})]);
+    expect(tasks.filter(task=>task.influence?.messageId==='value-round')).toEqual([]);
     expect(tasks.find(task=>task.influence?.messageId==='join')).toMatchObject({destinationId:'reason',targetId:'reason'});
-    expect(tasks.find(task=>task.influence?.messageId==='truth-round')).toMatchObject({destinationId:'reason',targetId:'reason'});
+    expect(tasks.find(task=>task.influence?.messageId==='truth-round')).toBeUndefined();
   });
   it('does not reopen record bodies or their own effects after confirmation in the status window',()=>{
     const input=fixture(),marks=[...confirm(input,'m'),...confirm(input,'reason')],after=fixture(marks);
     const progress=deriveReadingProgress(after);
-    expect(progress.pendingBodies.has('value')).toBe(true);
-    expect(progress.pendingInfluences.get('value')?.some(item=>item.messageId==='value-round')).toBe(true);
+    expect(progress.pendingBodies.has('value')).toBe(false);
+    expect(progress.pendingInfluences.get('value')??[]).toEqual([]);
     expect(readingTasks(after,scope,allowed).tasks).toEqual([]);
   });
   it('confirms the affected body and exact effects without silently reading the record bodies',()=>{
@@ -56,7 +56,7 @@ describe('status records do not expand automatic trace reading',()=>{
     expect(deriveDisplayHints(after).hints.get('reason')?.pendingInfluences.length).toBeGreaterThan(0);
     expect(new Set(readingTasks(after,scope,allowed).tasks.map(task=>task.destinationId))).toEqual(new Set(['reason']));
   });
-  it.each(['value','join','archive'])('allows an explicitly opened %s record to keep its own reading progress',entry=>{
+  it.each(['join','archive'])('allows an explicitly opened %s record to keep its own reading progress',entry=>{
     const input=fixture(),ids=new Set(input.messages.map(message=>message.id));
     const tasks=readingTasks(input,new Set([entry]),ids,'both','discussion',undefined,undefined,new Set([entry])).tasks;
     expect(tasks.find(task=>task.kind==='body')).toMatchObject({destinationId:entry,location:'inside'});
@@ -67,12 +67,20 @@ describe('status records do not expand automatic trace reading',()=>{
     expect(deriveDisplayHints(fixture(marks)).hints.get(entry)?.unread).toBe(false);
     expect(deriveDisplayHints(fixture(marks)).hints.get('m')?.unread).toBe(true);
   });
-  it('keeps a later settlement result pending at the affected message after earlier events were confirmed',()=>{
+  it.each(['value','value-round','truth-round'])('excludes an explicitly requested settlement record %s from reading visits',entry=>{
+    const input=fixture(),ids=new Set(input.messages.map(message=>message.id));
+    const result=readingTasks(input,new Set([entry]),ids,'both','discussion',undefined,undefined,new Set([entry]));
+    expect(result.tasks).toEqual([]);
+    expect(result.navigationIds).toEqual([]);
+    expect(result.progress.pendingBodies.has(entry)).toBe(false);
+  });
+  it('keeps later settlement results in the settlement entry after earlier effects were confirmed',()=>{
     const input=fixture(),marks=[...confirm(input,'m'),...confirm(input,'reason')];
     const result:Message={...text('later-result'),kind:'ROUND_RESULT',targetRefs:[{kind:'message',messageId:'m'}]};
     const later=fixture(marks,[result],[relation('later-result','ROUND_RESULT',['m'])]);
     const tasks=readingTasks(later,new Set([...scope,'later-result']),allowed).tasks;
-    expect(tasks).toEqual([expect.objectContaining({destinationId:'m',targetId:'m',location:'inside',influence:expect.objectContaining({messageId:'later-result'})})]);
+    expect(tasks).toEqual([]);
+    expect(deriveReadingProgress(later).pendingBodies.has(result.id)).toBe(false);
   });
   it.each(['outside','filtered'] as const)('retains an independent unread reply body that is %s',location=>{
     const input=fixture([], [text('reply-body')],[relation('reply','REPLY',['m'],'reply-body')]);
@@ -107,7 +115,8 @@ describe('status records do not expand automatic trace reading',()=>{
     if(action==='status'){
       fireEvent.click(screen.getByRole('button',{name:/^显示提示 m：/}));
       const popup=within(screen.getByRole('tooltip')),influences=popup.getByRole('region',{name:'相关影响'});
-      expect(influences).toHaveTextContent('结算 · 发起结算');
+      expect(influences).toHaveTextContent('冷藏');
+      expect(influences).not.toHaveTextContent('结算 · 发起结算');
       await act(async()=>fireEvent.click(popup.getByRole('button',{name:'标记当前消息已阅'})));
     }else await act(async()=>fireEvent.click(screen.getByRole('button',{name:'已读并继续'})));
     const marks=save.mock.calls[0][0];

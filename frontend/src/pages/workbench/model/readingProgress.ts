@@ -1,7 +1,7 @@
 import {bodyVersion,bodyVersionKey,messageReadingKey,type ReadingMark,type BodyVersion,type ReferenceContext} from '@gonglun/core';
 import {displayedBodyVersion} from '../../../utils/bodyVersions';
 import type {Relation} from '../../../types';
-import {buildStanceTargetMap,resolveDisplayedStance,computeCorrectionVersions,computeEffectiveSuppressedRelIds,type DemoMessage,type DemoEdge,type CorrectionVersion} from '../../../utils/modelBridge';
+import {buildStanceTargetMap,resolveDisplayedStance,computeCorrectionVersions,computeEffectiveSuppressedRelIds,isSettlementRecord,type DemoMessage,type DemoEdge,type CorrectionVersion} from '../../../utils/modelBridge';
 import {displaySignature,type DisplaySnapshot} from './displayHintSnapshot';
 
 export type ReadingInfluence={messageId:string;key:string;type:string;versionId?:string;basisIds?:string[];context?:ReferenceContext;eventId?:string;resultKey?:string;causes?:string[];acknowledgementMessageId?:string};
@@ -93,6 +93,7 @@ export function readingInfluences(input:Pick<ReadingInput,'messages'|'edges'|'re
   const result=new Map<string,ReadingInfluence[]>(),byEvent=new Map<string,Map<string,{type:string;versionId?:string;basisIds?:string[];context?:ReferenceContext}>>();
   const add=(target:string,event:string,type:string,key:string,versionId?:string)=>{
     if(target===event||!map.has(target)||!map.has(event)||retired(type))return;
+    if(isSettlementRecord(map.get(event))||isSettlementRecord(map.get(target)))return;
     if(map.get(event)?.relationPayload?.operationType==='TERMINATE_SETTLEMENT'){type='terminate_settlement';key='terminate_settlement:';}
     if(type==='round'||type==='round_result')key=`${type}:`;
     if(correctionTargets.has(event)&&rootTarget(event)===target)versionId=event;
@@ -233,7 +234,7 @@ export function deriveReadingProgress(input:ReadingInput) {
   const ownIds=authoredReadingMessageIds(input),authoredIds=new Set(input.messages.filter(message=>ownIds.has(message.id)&&(message.revision??1)===1).map(message=>message.id));
   const unreadCorrections=unreadCorrectionIndex(input,authoredIds);
   for(const message of input.messages){
-    if(retired(message.relationType)||!input.username)continue;
+    if(isSettlementRecord(message)||retired(message.relationType)||!input.username)continue;
     const own=latest.get(JSON.stringify([message.id,'message']));
     const authored=authoredIds.has(message.id);
     if(own?own.state==='UNREAD':!authored)pendingBodies.add(message.id);

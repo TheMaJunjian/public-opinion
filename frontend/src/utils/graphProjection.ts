@@ -1,5 +1,5 @@
 import type { DemoEdge, DemoMessage } from './modelBridge';
-import { computeCorrectedEdgeMap, isCardMessage, isContentKind, presentationTarget } from './modelBridge';
+import { computeCorrectedEdgeMap, isCardMessage, isContentKind, isSettlementRecord, presentationTarget } from './modelBridge';
 import { getSummaryCoveredIds, hasActiveDisplayEffect, needsSeparateStanceCard } from './messageDisplay';
 import { projectStanceLayoutEdges } from './stanceLayout';
 import {projectAnnotationLayoutEdges} from './annotationLayout';
@@ -13,6 +13,7 @@ export interface GraphProjectionInput {
   edges: DemoEdge[];
   traceExpandedFrameIds: Set<string>;
   isTraceWindow: boolean;
+  showJoinRecords?: boolean;
   standaloneMessageIds?:ReadonlySet<string>;
   rejectedContainerIds?:ReadonlySet<string>;
   rejectedRelationIds?:ReadonlySet<string>;
@@ -21,7 +22,7 @@ export interface GraphProjectionInput {
 }
 
 /** Derive visible cards, organization ownership and relative columns without DOM or UI state. */
-export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTraceWindow,standaloneMessageIds,rejectedContainerIds,rejectedRelationIds,hiddenMessageIds,cardFrameIds }: GraphProjectionInput) {
+export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTraceWindow,showJoinRecords=false,standaloneMessageIds,rejectedContainerIds,rejectedRelationIds,hiddenMessageIds,cardFrameIds }: GraphProjectionInput) {
   if(!isTraceWindow)traceExpandedFrameIds=new Set();
   const msgMap = new Map(messages.map(message => [message.id, message]));
   const edgesByRelMsg = new Map<string, DemoEdge[]>();
@@ -75,12 +76,14 @@ export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTr
   }
   const hiddenTargetIds = new Set([...getSummaryCoveredIds(msgMap, edges)]
     .filter(id => !summaryRelMsgIds.has(id) && !tracedSummaryMembers.has(id)));
-  const normals = messages.filter(message => !hiddenMessageIds?.has(message.id) && !traceExpandedFrameIds.has(message.id) && !hiddenTargetIds.has(message.id)
-    && !presentationTarget(message) && (isContentKind(message.kind)
+  const normals = messages.filter(message => !isSettlementRecord(message) && (message.kind !== 'join' || showJoinRecords) && !hiddenMessageIds?.has(message.id) && !traceExpandedFrameIds.has(message.id) && !hiddenTargetIds.has(message.id)
+    && (!presentationTarget(message) || showJoinRecords && message.kind === 'join') && (isContentKind(message.kind)
       || message.kind === 'relation' && relationCardMsgIds.has(message.id)));
   const normalIds = normals.map(message => message.id);
   const relIds = new Set(messages.filter(message => message.kind === 'relation' && !relationCardMsgIds.has(message.id)).map(message => message.id));
-  const layoutEdges = projectAnnotationLayoutEdges(messages,projectStanceLayoutEdges(messages, edges.filter(edge => !hiddenMessageIds?.has(edge.relationMessageId) && (isTraceWindow || hasActiveDisplayEffect(edge, msgMap)))));
+  const layoutEdges = projectAnnotationLayoutEdges(messages,projectStanceLayoutEdges(messages, edges.filter(edge =>
+    ![edge.relationMessageId,edge.from.messageId,edge.to.messageId].some(id=>isSettlementRecord(msgMap.get(id))||!showJoinRecords&&msgMap.get(id)?.kind==='join')
+    && !hiddenMessageIds?.has(edge.relationMessageId) && (isTraceWindow || hasActiveDisplayEffect(edge, msgMap)))));
   const base = computeMinColumnsForAnnoRefRule1(normalIds, layoutEdges, relIds);
   const reply = applyReplyLayoutAdjustmentsWithConstraints({ normals, edges: layoutEdges, baseCol: base.col, baseMaxCol: base.maxCol, relIds });
   const stance = applyAgreeDisagreeColumnOverride({ normals, edges: layoutEdges, ...reply });

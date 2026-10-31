@@ -1,4 +1,5 @@
 import React from "react";
+import SettlementMessageContent from '../../../components/SettlementMessageContent';
 import { buildAnnoTree, extractTextTargetsForMessage, renderAnnoNodes } from '../../../utils/graphTextSelection';
 import { getPresentationSpec } from '../../../types';
 import { getMessageTypeLabel, getMessageProminence } from '../../../utils/messageDisplay';
@@ -90,26 +91,7 @@ interface RenderRelationContentWithTargetsDependencies {
 }
 
 export function renderSettlementContentWithTarget({ handleNavigateToMessage }: RenderRelationContentWithTargetsDependencies, message: DemoMessage): React.JSX.Element {
-  const targetId = message.settlementTargetId;
-  const parts = readableParts(message);
-  const content = parts.length ? parts.map(partText).join('\n') : message.content;
-  // These headings and target previews are generated; the type and target chips replace them.
-  let details = content;
-  if (targetId) {
-    details = details.replace(/^(?:发起(?:真假|价值)仲裁|(?:真假|价值)仲裁完成)：目标消息(?:「[^\n]*」|[^；\n]*)(?:；|$)/u, '');
-    if (/^发起结算：/u.test(details) && details.includes('。发起人：')) details = details.slice(details.lastIndexOf('。发起人：') + 1);
-    else if (/^(?:请求)?发起结算：「[^\n]*」$/u.test(details)) details = '';
-  }
-  details = details.replace(/^(?:发起(?:真假|价值)仲裁|(?:真假|价值)仲裁完成)：/u, '');
-  return <div style={{ display: 'contents' }}>
-    {targetId ? <div style={{ display: 'flex', alignItems: 'center', gap: 4, maxWidth: '100%', order: 1, fontSize: 11 }}>
-      <span>目标</span>
-      <button type="button" title={`跳转到目标消息 ${targetId}`}
-        onClick={event => { event.stopPropagation(); handleNavigateToMessage(targetId); }}
-        style={{ padding: '1px 5px', border: '1px solid var(--line-374151)', borderRadius: 3, background: 'var(--surface-rgba-148-163-184-0-05)', color: 'var(--ink-93c5fd)', cursor: 'pointer', fontFamily: 'monospace', fontSize: 12, minWidth: 0, overflowWrap: 'anywhere' }}>{targetId}</button>
-    </div> : <span title="这条结算记录没有保存目标消息引用" style={{ order: 1, fontSize: 11, color: 'var(--ink-9ca3af)' }}>目标未记录</span>}
-    {details.trim() && <div style={{ order: 1, minWidth: 0, fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{details.trim()}</div>}
-  </div>;
+  return <SettlementMessageContent message={message} onTargetClick={(_event, id) => handleNavigateToMessage(id)}/>;
 }
 
 export function renderRelationContentWithTargets(dependencies: RenderRelationContentWithTargetsDependencies, message: DemoMessage): React.JSX.Element {

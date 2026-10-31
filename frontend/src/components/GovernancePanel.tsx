@@ -47,7 +47,7 @@ export default function GovernancePanel({ scopeMessageId }: { scopeMessageId: st
   }
 
   return (
-    <div className="border border-[color:var(--line-e5e7eb)] rounded-lg p-4 bg-[color:var(--surface-fff)] space-y-4">
+    <div className="record-panel border border-[color:var(--line-e5e7eb)] rounded-lg p-4 bg-[color:var(--surface-fff)] space-y-4">
       <h3 className="font-semibold text-[color:var(--ink-1f2937)] text-sm">🏛️ 治理提案</h3>
 
       {/* New proposal form */}

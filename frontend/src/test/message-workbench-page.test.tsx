@@ -91,7 +91,7 @@ const { mockApi, mockNavigate, mockGraphView, graphRendering, viewerRoute } = vi
   });
   return { mockApi, mockNavigate: vi.fn(), mockGraphView: vi.fn(), graphRendering: { actual: false,
     tasks: null as ReturnType<typeof import('../context/WorkbenchDrawingContext')['createWorkbenchDrawingTasks']> | null,
-  }, viewerRoute: { archive: null as ExportData | null, key: '' } };
+  }, viewerRoute: { archive: null as ExportData | null, key: '', query: '' } };
 });
 
 const catalogHarness = vi.hoisted(() => ({ callbacks: null as any, data: null as any,
@@ -130,7 +130,7 @@ vi.mock('react-router-dom', async () => {
     useParams: () => viewerRoute.archive ? {} : ({ messageId: 'classification-1' }),
     useNavigate: () => mockNavigate,
     useLocation: () => ({ pathname: viewerRoute.archive ? '/viewer' : '/messages/classification-1', state: viewerRoute.archive ? { exportData: viewerRoute.archive } : null, key: viewerRoute.key, search: '', hash: '' }),
-    useSearchParams: () => [new URLSearchParams(), vi.fn()] as const,
+    useSearchParams: () => [new URLSearchParams(viewerRoute.query), (next: URLSearchParams) => { viewerRoute.query = next.toString(); }] as const,
   };
 });
 vi.mock('../components/GraphView', async () => {
@@ -227,6 +227,10 @@ async function waitForWorkbenchIdle() {
     }
     assertIdle();
   } else await waitFor(assertIdle, { timeout: 5000 });
+}
+
+function messageCanvas() {
+  return within(document.querySelector<HTMLElement>('[data-workbench-left-panel]')!);
 }
 
 async function jumpToMessageId(id:string) {
@@ -573,6 +577,73 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     expect(mockGraphView).toHaveBeenCalled();
   });
 
+  it('shows clicked message connections in graph and list views before starting a reading trace',async()=>{
+    mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'引用的引用'});
+    mockApi.getMessages.mockResolvedValue({data:['A','C','D'].map(id=>makeMessage(id,`${id} 的正文`))});
+    const reference=(id:string,source:string,target:string):Relation=>({id,relationType:'REFERENCE',sourceMessageId:source,
+      targetRefs:[{kind:'message',messageId:target}],createdAt:'2024-01-02',createdBy:makeUser(),payload:{}});
+    mockApi.getRelations.mockResolvedValue({data:[reference('B','C','A'),reference('E','D','B')]});
+    const view=render(<MessageWorkbenchPage/>);
+    await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+    expect(screen.queryByRole('region',{name:'消息关联'})).toBeNull();
+    await act(async()=>latest().onEdgeLabelSingleClick(event(),'E'));
+    let connections=screen.getByRole('region',{name:'消息关联'});
+    expect(connections).toHaveAttribute('data-selected-message-connections','E');
+    expect(connections).toHaveTextContent('当前消息：');
+    expect(within(connections).getByRole('region',{name:'本消息指向'})).toHaveTextContent('本消息指向 · 0 条关联');
+    await act(async()=>latest().onMessageClick(event(),'D'));
+    connections=screen.getByRole('region',{name:'消息关联'});
+    expect(connections).toHaveAttribute('data-selected-message-connections','D');
+    expect(within(connections).getByRole('region',{name:'本消息指向'})).toContainElement(within(connections).getByRole('button',{name:'阅读关联消息 B'}));
+    expect(within(connections).getByRole('button',{name:'阅读关联消息 B'})).toHaveTextContent('B');
+    expect(within(connections).queryByRole('button',{name:'阅读关联消息 A'})).toBeNull();
+    expect(within(connections).queryByRole('button',{name:'阅读关联消息 C'})).toBeNull();
+    expect(screen.queryByRole('region',{name:'追溯阅读'})).toBeNull();
+    expect(screen.queryByRole('group',{name:'追溯起点'})).toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));await waitForWorkbenchIdle();
+    fireEvent.click(view.container.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="C"]')!);
+    connections=screen.getByRole('region',{name:'消息关联'});
+    expect(connections).toHaveAttribute('data-selected-message-connections','C');
+    expect(within(connections).getByRole('region',{name:'本消息指向'})).toHaveTextContent('A 的正文');
+    expect(screen.queryByRole('region',{name:'追溯阅读'})).toBeNull();
+    expect(mockApi.markReading).not.toHaveBeenCalled();
+    expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();
+  });
+
+  it.each(['callback','url'])('opens the existing settlement entry for an old record through %s without rendering or attaching settlement messages',async navigation=>{
+    mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'结算入口'});
+    const record:Message={...makeMessage('value-record','价值仲裁记录'),kind:'ROUND',targetRefs:[{kind:'message',messageId:'target'}],relationPayload:{settlementType:'VALUE'} as unknown as Message['relationPayload']};
+    mockApi.getMessages.mockResolvedValue({data:[makeMessage('target','目标正文'),record]});
+    mockApi.getRelations.mockResolvedValue({data:[]});
+    graphRendering.actual=true;
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    if(navigation==='url')viewerRoute.query='msg=value-record';
+    const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="value-record"]')).toBeNull();
+      if(navigation==='callback')await act(async()=>latest().onNavigateToMessage(record.id));
+      await waitForWorkbenchIdle();
+      expect(latest().settlementOpenMsgId).toBe('target');expect(latest().settlementOpenType).toBe('VALUE');
+      expect(await screen.findByText('价值仲裁',{exact:false})).toBeInTheDocument();
+      expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();
+      expect((window as any).__addSettlementMessage).toBeUndefined();
+    }finally{view.unmount();viewerRoute.query='';graphRendering.actual=false;geometry.mockRestore();}
+  });
+
+  it('opens the join history when an initial URL targets a hidden join record',async()=>{
+    fixture('CLASSIFY',true);
+    viewerRoute.query='msg=join-B';
+    const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      expect(screen.getByText('加入记录临时分类（1）')).toBeInTheDocument();
+      expect(latest().showJoinRecords).toBe(true);
+      expect(latest().messages.map((message:Message)=>message.id)).toContain('join-B');
+      expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();
+    }finally{view.unmount();viewerRoute.query='';}
+  });
+
   it('keeps the classification header and navigation after a tab resumes, with only incremental reads',async()=>{
     fixture();
     const original=mockApi.getWorkbenchSnapshot.getMockImplementation()!;
@@ -823,8 +894,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       });
       await waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
       expect(screen.queryByText('加入记录临时分类（1）')).toBeNull();
-      fireEvent.click(screen.getByRole('button',{name:/清爽/}));
-      expect(screen.getByRole('checkbox',{name:'屏蔽加入消息'})).toBeChecked();
+      expect(latest().messages.some((message:Message)=>String(message.kind).toLowerCase()==='join')).toBe(false);
       expect(mockApi.createRelation).not.toHaveBeenCalled();
     }finally{geometry.mockRestore();graphRendering.actual=false;}
   });
@@ -860,7 +930,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       navigating = true;
       fireEvent.click(within(panel).getByTitle('跳转到加入消息 join-B 的当前实际位置'));
       await waitFor(() => expect(document.querySelector('[data-message-jump-target="join-B"]')).not.toBeNull());
-      expect(screen.queryByText('加入记录临时分类（1）')).toBeNull();
+      expect(screen.getByText('加入记录临时分类（1）')).toBeInTheDocument();
       const card = panel.querySelector<HTMLElement>('[data-msgid="join-B"]:not([data-rel-overlay])')!;
       const rect = card.getBoundingClientRect(), viewport = panel.getBoundingClientRect();
       expect(rect.top).toBeGreaterThanOrEqual(viewport.top);
@@ -908,19 +978,15 @@ describe('rejected child container boundaries and single-side comparison',()=>{
         left.scrollTop=450+offset;left.scrollLeft=70+offset;right.scrollTop=110+offset;right.scrollLeft=50+offset;
         page.scrollTop=800+offset;page.scrollLeft=30+offset;return read();
       };
-      fireEvent.click(screen.getByRole('button',{name:/清爽/}));
-      fireEvent.click(screen.getByRole('checkbox',{name:'屏蔽结算消息'}));
-      const filterState=()=>[screen.getByRole<HTMLInputElement>('checkbox',{name:'屏蔽加入消息'}).checked,
-        screen.getByRole<HTMLInputElement>('checkbox',{name:'屏蔽结算消息'}).checked];
-      expect(filterState()).toEqual([true,false]);
+      const filterState=()=>[!left.querySelector('[data-msgid="join-B"]')];
+      expect(filterState()).toEqual([true]);
       const originScroll=write(0),requests=mockApi.getWorkbenchSnapshot.mock.calls.length;
       fireEvent.click(within(left).getByRole('button',{name:'查看加入消息（1条）'}));
       await ready();
       fireEvent.click(screen.getByRole('button',{name:mode==='graph'?'切换为消息表':'切换为消息图'}));
-      fireEvent.click(screen.getByRole('checkbox',{name:'屏蔽结算消息'}));
       await ready();
       const joinMode=mode==='graph'?'list':'graph',joinScroll=write(100);
-      expect(filterState()).toEqual([false,true]);
+      expect(filterState()).toEqual([false]);
       const join=await waitFor(()=>{const card=left.querySelector<HTMLElement>('[data-msgid="join-B"]');expect(card).not.toBeNull();return card!;});
       fireEvent.click(within(join).getByTitle(/跳转到.*消息 C/));
       await ready();
@@ -932,14 +998,14 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       const assertRecords=async()=>{
         expect(screen.getByText('加入记录临时分类（1）')).toBeInTheDocument();
         expect(screen.getByRole('button',{name:joinMode==='list'?'切换为消息图':'切换为消息表'})).toBeInTheDocument();
-        expect(filterState()).toEqual([false,true]);
+        expect(filterState()).toEqual([false]);
         await ready();await waitFor(()=>expect(read()).toEqual(joinScroll));
       };
       back();await assertRecords();
       back();
       expect(screen.queryByText('加入记录临时分类（1）')).toBeNull();
       expect(screen.getByRole('button',{name:mode==='list'?'切换为消息图':'切换为消息表'})).toBeInTheDocument();
-      expect(filterState()).toEqual([true,false]);
+      expect(filterState()).toEqual([true]);
       await ready();await waitFor(()=>expect(read()).toEqual(originScroll));
       forward();await assertRecords();
       forward();await ready();await waitFor(()=>expect(read()).toEqual(destinationScroll));
@@ -1029,8 +1095,6 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       const right=document.querySelector<HTMLElement>('.workbench-right-panel')!,page=document.documentElement;
       const row=(id:string)=>left.querySelector<HTMLElement>(`[data-msgid="${id}"]:not([data-rel-overlay])`)!;
       const readScroll=()=>[left.scrollTop,left.scrollLeft,right.scrollTop,right.scrollLeft,page.scrollTop,page.scrollLeft];
-      const filter=()=>[screen.getByRole<HTMLInputElement>('checkbox',{name:'屏蔽加入消息'}).checked,
-        screen.getByRole<HTMLInputElement>('checkbox',{name:'屏蔽结算消息'}).checked];
       const mode=()=>screen.queryByRole('button',{name:'切换为消息表'})?'graph':'list';
       const historyButtons=screen.getByRole('group',{name:'浏览历史'});
       expect(historyButtons.closest('.workbench-view-actions')).not.toBeNull();
@@ -1042,23 +1106,18 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       const follow=async(member:string,parent:string)=>{
         fireEvent.click(within(row(`join-${member}-${parent}`)).getByTitle(new RegExp(`跳转到.*消息 ${parent}$`)));await ready();
       };
-      type Saved={kind:'container'|'records'|'root';id:string;mode:'graph'|'list';filter:boolean[];scroll:number[]};
+      type Saved={kind:'container'|'records'|'root';id:string;mode:'graph'|'list';scroll:number[]};
       let position=0;
-      const save=async(kind:Saved['kind'],id:string,view:Saved['mode'],settings:boolean[]):Promise<Saved>=>{
+      const save=async(kind:Saved['kind'],id:string,view:Saved['mode']):Promise<Saved>=>{
         if(mode()!==view){fireEvent.click(screen.getByRole('button',{name:view==='graph'?'切换为消息图':'切换为消息表'}));await ready();}
-        if(!screen.queryByRole('checkbox',{name:'屏蔽加入消息'}))fireEvent.click(screen.getByRole('button',{name:/清爽/}));
-        for(const [index,label] of ['屏蔽加入消息','屏蔽结算消息'].entries()){
-          const input=screen.getByRole<HTMLInputElement>('checkbox',{name:label});
-          if(input.checked!==settings[index])fireEvent.click(input);
-        }
         await ready();position++;
         const scroll=[300+position*110,20+position*13,80+position*37,10+position*11,650+position*130,15+position*17];
         [left.scrollTop,left.scrollLeft,right.scrollTop,right.scrollLeft,page.scrollTop,page.scrollLeft]=scroll;
-        return {kind,id,mode:view,filter:settings,scroll};
+        return {kind,id,mode:view,scroll};
       };
       const assertSaved=async(saved:Saved)=>{
         await ready();
-        expect(mode()).toBe(saved.mode);expect(filter()).toEqual(saved.filter);
+        expect(mode()).toBe(saved.mode);
         if(saved.kind==='records'){
           expect(screen.getByText('加入记录临时分类（3）')).toBeInTheDocument();
           expect(screen.getByText(new RegExp(`消息 member-${saved.id} 加入容器`))).toBeInTheDocument();
@@ -1083,14 +1142,14 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       const forward=()=>fireEvent.click(screen.getByRole('button',{name:'前进'}));
       const opposite=initialMode==='graph'?'list':'graph';
       const states:Saved[]=[];
-      await enter('A');states.push(await save('container','A',initialMode,[true,true]));
-      await records('A');states.push(await save('records','A',opposite,[false,false]));
-      await follow('A','B');states.push(await save('root','B',initialMode,[true,false]));
-      await enter('B');states.push(await save('container','B',opposite,[true,false]));
-      await records('B');states.push(await save('records','B',initialMode,[false,true]));
-      await follow('B','C');states.push(await save('root','C',opposite,[true,true]));
-      await enter('C');states.push(await save('container','C',initialMode,[true,false]));
-      await records('C');states.push(await save('records','C',opposite,[false,true]));
+      await enter('A');states.push(await save('container','A',initialMode));
+      await records('A');states.push(await save('records','A',opposite));
+      await follow('A','B');states.push(await save('root','B',initialMode));
+      await enter('B');states.push(await save('container','B',opposite));
+      await records('B');states.push(await save('records','B',initialMode));
+      await follow('B','C');states.push(await save('root','C',opposite));
+      await enter('C');states.push(await save('container','C',initialMode));
+      await records('C');states.push(await save('records','C',opposite));
       await assertSaved(states.at(-1)!);
       for(let index=states.length-2;index>=0;index--){back();await assertSaved(states[index]);}
       for(const state of states.slice(1)){forward();await assertSaved(state);}
@@ -1100,10 +1159,10 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       await follow('B','A');
       expect(screen.getByRole('button',{name:'前进'})).toBeDisabled();
       const branch=states.slice(0,5);
-      branch.push(await save('root','A',opposite,[true,true]));
-      await enter('A');branch.push(await save('container','A',initialMode,[true,false]));
-      await records('A');branch.push(await save('records','A',opposite,[false,true]));
-      await follow('A','C');branch.push(await save('root','C',initialMode,[true,false]));
+      branch.push(await save('root','A',opposite));
+      await enter('A');branch.push(await save('container','A',initialMode));
+      await records('A');branch.push(await save('records','A',opposite));
+      await follow('A','C');branch.push(await save('root','C',initialMode));
       for(let index=branch.length-2;index>=0;index--){back();await assertSaved(branch[index]);}
       for(const state of branch.slice(1)){forward();await assertSaved(state);}
       expect(screen.getByRole('button',{name:'前进'})).toBeDisabled();
@@ -1319,15 +1378,13 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     expect(latest().messages.map((m:Message)=>m.id)).toContain('B');
     fireEvent.click(screen.getByRole('button',{name:'退出分类'}));
     expect(latest().messages.map((m:Message)=>m.id)).toContain('C');
-    fireEvent.click(screen.getByRole('button',{name:/清爽/}));
-    fireEvent.click(screen.getByRole('checkbox',{name:'屏蔽加入消息'}));
     await act(async()=>latest().onCanvasBlankClick(event()));
     fireEvent.click(screen.getByRole('button',{name:'退出查看'}));
     await waitFor(()=>expect(screen.queryByRole('region',{name:'单侧对比'})).toBeNull());
     expect(latest().messages.map((m:Message)=>m.id)).toEqual(originalIds);
     expect(latest().draftUnits).toEqual([]);
     expect(latest().rejectedContainerIds.has('C')).toBe(true);
-    expect(screen.getByRole('checkbox',{name:'屏蔽加入消息'})).toBeChecked();
+    expect(latest().messages.some((message:Message)=>String(message.kind).toLowerCase()==='join')).toBe(false);
     expect(screen.getByRole('button',{name:'退出分类'})).toBeInTheDocument();
     expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();expect(mockApi.castVote).not.toHaveBeenCalled();
   });
@@ -1381,7 +1438,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     expect(screen.getByTestId('graph-view')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button',{name:'退出查看'}));
     expect(screen.getByRole('button',{name:'切换为消息图'})).toBeInTheDocument();
-    expect(screen.getByText('A 内的 B')).toBeInTheDocument();
+    expect(messageCanvas().getByText('A 内的 B')).toBeInTheDocument();
     expect(screen.queryByTestId('graph-view')).toBeNull();
   });
 
@@ -2192,7 +2249,6 @@ describe('MessageWorkbenchPage home filter container projection', () => {
     await waitFor(()=>expect(mockGraphView).toHaveBeenCalled());
     const latest=()=>mockGraphView.mock.lastCall![0];
     await act(async()=>latest().onMessageDoubleClick({stopPropagation:vi.fn()},'topic'));
-    fireEvent.click(screen.getByRole('button',{name:/清爽/}));
     await waitFor(()=>{
       const props=latest();
       expect(props.messages.map((m:Message)=>m.id)).toContain('category');
@@ -2217,27 +2273,24 @@ describe('MessageWorkbenchPage home filter container projection', () => {
     });
   });
 
-  it('restores join filtering on ordinary temporary-category exit but not on tag navigation', async () => {
+  it('shows join records in the temporary category and preserves it when navigating to its record', async () => {
     render(<MessageWorkbenchPage />);
     await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole('button', { name: /清爽/ }));
 
     const getLatestGraphProps = () => mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
     await act(async () => {
       getLatestGraphProps().onJoinFilterClick('inner-arrange', 'outgoing');
     });
-    expect(screen.getByRole('checkbox', { name: '屏蔽加入消息' })).not.toBeChecked();
+    expect(document.querySelector('[data-workbench-left-panel] [data-msgid="join-hit"]')).not.toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: '退出临时分类' }));
-    expect(screen.getByRole('checkbox', { name: '屏蔽加入消息' })).toBeChecked();
+    expect(document.querySelector('[data-workbench-left-panel] [data-msgid="join-hit"]')).toBeNull();
 
     await act(async () => {
       getLatestGraphProps().onJoinFilterClick('inner-arrange', 'outgoing');
     });
-    await act(async () => {
-      getLatestGraphProps().onNavigateToMessage('join-hit');
-    });
-    expect(screen.getByRole('checkbox', { name: '屏蔽加入消息' })).not.toBeChecked();
+    await jumpToMessageId('join-hit');
+    expect(document.querySelector('[data-workbench-left-panel] [data-msgid="join-hit"]')).not.toBeNull();
   });
 });
 
@@ -2315,7 +2368,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     view.unmount();
   });
 
-  it('shows native join records in the message table when the join filter is disabled',async()=>{
+  it('shows native join records in the message table only after opening a join label',async()=>{
     const container:Relation={...makeRelation(),id:'join-container',relationType:'ARRANGE',sourceMessageId:null,targetRefs:[],payload:{title:'容器'}};
     const join:Relation={...makeRelation(),id:'visible-join',relationType:'JOIN',sourceMessageId:container.id,
       parts:[{id:'relation',type:'relation',relation:'member-of',roles:{parent:[{id:'parent',reference:{messageId:container.id}}],member:[{id:'member',reference:{messageId:'msg-1'}}]}},
@@ -2325,7 +2378,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
     fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));await waitForWorkbenchIdle();
     expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="visible-join"]')).toBeNull();
-    fireEvent.click(screen.getByRole('button',{name:/清爽/}));fireEvent.click(screen.getByRole('checkbox',{name:'屏蔽加入消息'}));await waitForWorkbenchIdle();
+    fireEvent.click(screen.getByRole('button',{name:'查看加入消息（1条）'}));await waitForWorkbenchIdle();
     expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="visible-join"]')).not.toBeNull();
   });
 
@@ -4349,7 +4402,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     expect(screen.getByText('被加入记录临时分类（1）')).toBeInTheDocument();
     expect(document.querySelector('[data-msgid="join-inner"]')).not.toBeNull();
     fireEvent.click(screen.getByRole('button', { name: '退出临时分类' }));
-    fireEvent.doubleClick(screen.getByText(outer.id));
+    fireEvent.doubleClick(messageCanvas().getByText(outer.id));
     fireEvent.click(screen.getByRole('button', { name: '查看加入消息（1条）' }));
     expect(screen.getByText('加入记录临时分类（1）')).toBeInTheDocument();
     expect(document.querySelector('[data-msgid="join-inner"]')).not.toBeNull();
@@ -4816,7 +4869,7 @@ describe('MessageWorkbenchPage nested-classify merge expansion', () => {
     await jumpToMessageId('rel-merge');
     await waitFor(() => expect(mockGraphView.mock.lastCall![0].messages.map((message: { id: string }) => message.id))
       .toEqual(expect.arrayContaining(['rel-merge', 'msg-a', 'msg-b'])));
-    expect(screen.getByText('内层分类')).toBeInTheDocument();
+    expect(screen.getByRole('button',{name:'退出分类'}).parentElement).toHaveTextContent('内层分类');
   });
 
   it('shows only outer classify targets and their related messages after entering classification', async () => {
@@ -4927,19 +4980,19 @@ describe('MessageWorkbenchPage deeply nested classify → classify → merge', (
     // should be shown as a classification card. Nested CLASSIFY/SUMMARY are opaque — their
     // internal content (rel-inner, rel-merge, msg-a, msg-b) should NOT be expanded.
     await waitFor(() => {
-      expect(screen.getByText('rel-middle')).toBeInTheDocument();
+      expect(messageCanvas().getByText('rel-middle')).toBeInTheDocument();
     });
     expect(screen.queryByText('msg-a')).not.toBeInTheDocument();
     expect(screen.queryByText('msg-b')).not.toBeInTheDocument();
     expect(screen.queryByText('归并 rel-merge')).not.toBeInTheDocument();
     expect(screen.queryByText('分类 rel-inner')).not.toBeInTheDocument();
 
-    fireEvent.doubleClick(screen.getByText('rel-middle'));
+    fireEvent.doubleClick(messageCanvas().getByText('rel-middle'));
 
     const exitButton = await screen.findByRole('button', { name: '退出分类' });
     fireEvent.click(exitButton);
     await waitFor(() => {
-      expect(screen.getByText('rel-middle')).toBeInTheDocument();
+      expect(messageCanvas().getByText('rel-middle')).toBeInTheDocument();
     });
 
   });
@@ -5235,7 +5288,7 @@ describe('MessageWorkbenchPage CLASSIFY classification with arrange source visib
 
     await waitFor(() => {
       // The arrange relation message must be visible in the classification view
-      expect(screen.getByText('rel-supp')).toBeInTheDocument();
+      expect(messageCanvas().getByText('rel-supp')).toBeInTheDocument();
     });
     // The arrange's source text (msg-a) must also be visible so its frame can render
     expect(screen.getByRole('group', { name: '消息 msg-a，未选中' })).toHaveTextContent('排列来源');
@@ -5292,7 +5345,7 @@ describe('MessageWorkbenchPage SUMMARY classification with arrange source visibi
     fireEvent.doubleClick(screen.getByText('rel-summary'));
 
     await waitFor(() => {
-      expect(screen.getByText('rel-supp')).toBeInTheDocument();
+      expect(messageCanvas().getByText('rel-supp')).toBeInTheDocument();
     });
     expect(screen.getByRole('group', { name: '消息 msg-a，未选中' })).toHaveTextContent('排列来源');
     expect(screen.getAllByText('msg-b').length).toBeGreaterThan(0);
@@ -6032,7 +6085,7 @@ describe('MessageWorkbenchPage exit classify classification restores base view',
 
     // After exit: base view should be restored exactly as before
     await waitFor(() => {
-      expect(screen.getByText('rel-classify')).toBeInTheDocument();
+      expect(messageCanvas().getByText('rel-classify')).toBeInTheDocument();
     });
     expect(screen.queryByText('msg-a')).not.toBeInTheDocument();
     expect(screen.queryByText('msg-b')).not.toBeInTheDocument();

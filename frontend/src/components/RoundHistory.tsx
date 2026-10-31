@@ -71,14 +71,14 @@ export default function RoundHistory({ messageId, compact = false }: Props) {
     const latest = rounds.filter(r => r.status === 'SETTLED')[0];
     if (!latest) return <span className="text-xs text-[color:var(--text-muted)]">未结算</span>;
     return (
-      <span className={`text-xs font-semibold ${resultColor(latest.result)}`}>
+      <span className={`round-history text-xs font-semibold ${resultColor(latest.result)}`}>
         {resultLabel(latest.result)}
       </span>
     );
   }
 
   return (
-    <div className="space-y-2">
+    <div className="round-history space-y-2">
       {/* Chain visualization */}
       <div className="flex flex-col gap-1 text-xs">
         <div className="flex items-center gap-1 flex-wrap">

@@ -12,6 +12,7 @@ import { REVEAL_VIRTUAL_MESSAGE } from '../hooks/useVirtualMessageMounts';
 import {useRef} from 'react';
 import {useViewedMessageHighlight} from '../hooks/useViewedMessageHighlight';
 import { setTheme, THEME_STORAGE_KEY } from '../theme/theme';
+import { buildTraceProjection } from '../utils/traceProjection';
 
 const message = (id: string): DemoMessage => ({ id, author: 'tester', content: id, kind: 'normal', createdAt: '2026-01-01T00:00:00Z' });
 const relation = (id: string, type: DemoEdge['relationType'], source: string, target: string): DemoEdge => ({
@@ -29,6 +30,36 @@ function renderScene(messages: DemoMessage[], edges: DemoEdge[],extra:Partial<Gr
 }
 
 describe('rendered graph scene', () => {
+  it.each((['graph','card'] as const).flatMap(surface=>(['round','round_result'] as const).map(kind=>({surface,kind}))))('handles stored $kind records in $surface while keeping the graph free of settlement cards', ({surface,kind}) => {
+    const target={...message('settlement-target-id'),content:'目标正文\n包含「内部引号」和详细内容'};
+    const content=`${kind==='round'?'发起真假仲裁':'真假仲裁完成'}：目标消息「${target.content}」${kind==='round_result'?'；结果：赞成胜出':''}`;
+    const record:DemoMessage={...message('settlement-record'),kind,content,settlementTargetId:target.id,parts:[{id:'body',type:'text',text:content}]};
+    const onNavigate=vi.fn(),onSelect=vi.fn();
+    const view=surface==='graph'?renderScene([target,record],[relation(record.id,'round' as DemoEdge['relationType'],`anon:${record.id}`,target.id)],{onNavigateToMessage:onNavigate,onMessageClick:onSelect})
+      :render(<MessageCard msg={record} ctx={{isRelationRecord:true}} onClick={onSelect} onSettlementTargetClick={(_event,id)=>onNavigate(id)}/>);
+    const card=view.container.querySelector<HTMLElement>('[data-msgid="settlement-record"]')!;
+    if(surface==='graph'){
+      expect(card).toBeNull();expect(view.container.querySelector('[data-msgid="settlement-target-id"]')).not.toBeNull();
+      expect(view.container.querySelector('[data-directed-edge-label="settlement-record"]')).toBeNull();return;
+    }
+    expect(card).not.toHaveTextContent('目标正文');expect(card).not.toHaveTextContent('内部引号');
+    if(kind==='round_result')expect(card).toHaveTextContent('结果：赞成胜出');
+    const tag=within(card).getByRole('button',{name:target.id});
+    expect(tag).toHaveAttribute('title',`跳转到目标消息 ${target.id}`);
+    fireEvent.click(tag);expect(onNavigate).toHaveBeenCalledExactlyOnceWith(target.id);expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('renders both reference labels and all content endpoints when tracing a reference to a reference', () => {
+    const records = ['B', 'E'].map(id => ({ ...message(id), kind: 'relation' as const, relationType: 'reference' as const, content: '' }));
+    const projection = buildTraceProjection({ messages: [...['A', 'C', 'D'].map(message), ...records],
+      edges: [relation('B', 'reference', 'C', 'A'), relation('E', 'reference', 'D', 'B')],
+      startIds: ['E'], distance: 1, depths: { up: 1, down: 0 } });
+    const view = renderScene(projection.messages, projection.edges);
+    for (const id of ['A', 'C', 'D']) expect(view.container.querySelector(`.themed-message[data-msgid="${id}"]`)).not.toBeNull();
+    for (const id of ['B', 'E']) expect(view.container.querySelector(`[data-directed-edge-label="${id}"]`)).not.toBeNull();
+    expect(view.container.querySelectorAll('.relation-edge-path')).toHaveLength(2);
+  });
+
   it.each(['normal','classify'] as const)('raises a selected %s card above directed paths without raising all cards, then restores it', kind => {
     const a:DemoMessage={...message('layer-a'),...(kind==='classify'?{kind:'relation' as const,relationType:'classify'}:{})};
     const values=[a,message('layer-b')],links=[relation('layer-ref','reference','layer-a','layer-b')];
@@ -390,7 +421,7 @@ describe('rendered graph scene', () => {
     const parent:DemoMessage={...message('parent'),kind:'relation',relationType:type,relationPayload:{label:'容器的自定义标签'}};
     const target=message('target'),nested:DemoMessage={...message('nested'),kind:'relation',relationType:'summary'};
     const join:DemoMessage={...message('join'),kind:'join',content:'加入容器',parts:[{id:'body',type:'text',text:'建立关系：JOIN；目标：iy6ruf2a'}],joinInfo:{containerId:'parent',containerType:'JOIN',targetIds:['target','nested']}};
-    const view=renderScene([join],[],{relatedMessages:[parent,target,nested,join]});
+    const view=renderScene([join],[],{showJoinRecords:true,relatedMessages:[parent,target,nested,join]});
     const card=view.container.querySelector<HTMLElement>('[data-msgid="join"]:not([data-rel-overlay])')!;
     expect(card.querySelector('[data-join-endpoint-type="parent"]')).toHaveTextContent(`【${label}】ID：`);
     expect(card).not.toHaveTextContent('容器 ID：');
@@ -704,7 +735,7 @@ describe('rendered graph scene', () => {
 
   it.each([['personal','当前用户生效'],['recommended','统计生效']] as const)('distinguishes %s JOIN ownership on the graph',(source,label)=>{
     const joining:DemoMessage={...message('joining'),kind:'join',joinInfo:{containerId:'parent',containerType:'classify',targetIds:['leaf']}};
-    const view=renderScene([joining],[],{joinStatusByMessage:new Map([['joining','valid']]),
+    const view=renderScene([joining],[],{showJoinRecords:true,joinStatusByMessage:new Map([['joining','valid']]),
       joinEffectSourcesByMessage:new Map([['joining',new Set([source])]])});
     expect(view.container.querySelector('[data-msgid="joining"]')).toHaveTextContent(label);
   });

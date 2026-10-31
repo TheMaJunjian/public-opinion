@@ -37,7 +37,7 @@ import type {
   RelationType,
   UnitSelection,
 } from '../utils/modelBridge';
-import { computeCorrectionVersions, computeGloballySuppressedRelIds, computeTransitiveVoteStats, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, demoMessageToRelation, isCardMessage, isContentKind, presentationTarget, withCorrectionContent } from '../utils/modelBridge';
+import { computeCorrectionVersions, computeGloballySuppressedRelIds, computeTransitiveVoteStats, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, demoMessageToRelation, isCardMessage, isContentKind, isSettlementRecord, presentationTarget, withCorrectionContent } from '../utils/modelBridge';
 import { blockCorrectionForSecondBettor as runBlockCorrectionForSecondBettor, handleAuthError as runHandleAuthError, requireAuth as runRequireAuth } from './workbench/actions/authentication';
 import { clearDraftAll as runClearDraftAll, commitDraftTo as runCommitDraftTo, handleCanvasBlankClick as runHandleCanvasBlankClick, handleFragmentAnchorClick as runHandleFragmentAnchorClick, handleMessageClick as runHandleMessageClick, handleMessageDoubleClick as runHandleMessageDoubleClick, handleMessageMouseDown as runHandleMessageMouseDown, handleMessageMouseUp as runHandleMessageMouseUp, handleTextMouseUp as runHandleTextMouseUp, toggleFragmentSelection as runToggleFragmentSelection, toggleWholeUnit as runToggleWholeUnit, undoRecentClickActionsForMessage as runUndoRecentClickActionsForMessage } from './workbench/actions/cardSelection';
 import { renderAlertMessage as runRenderAlertMessage, renderMessageContentWithAnchorsForList as runRenderMessageContentWithAnchorsForList, renderRelationContentWithTargets as runRenderRelationContentWithTargets } from './workbench/actions/messageRendering';
@@ -47,7 +47,7 @@ import type { ScrollMessageOptions } from './workbench/actions/scrollNavigation'
 import { REVEAL_VIRTUAL_MESSAGE } from '../hooks/useVirtualMessageMounts';
 import { handleQuickSendAndRelateFromDraftTargets as runHandleQuickSendAndRelateFromDraftTargets } from './workbench/actions/sendDraft';
 import { createJoinRelationsForContainer as runCreateJoinRelationsForContainer, handleCreateRelationWithSourcesAndTargets as runHandleCreateRelationWithSourcesAndTargets, sendTagRelation as runSendTagRelation } from './workbench/actions/sendRelation';
-import { attachMessageToCurrentClassify as runAttachMessageToCurrentClassify, handleSendMessageOnly as runHandleSendMessageOnly, registerCreatedRelationInCurrentClassify as runRegisterCreatedRelationInCurrentClassify } from './workbench/actions/sendText';
+import { handleSendMessageOnly as runHandleSendMessageOnly, registerCreatedRelationInCurrentClassify as runRegisterCreatedRelationInCurrentClassify } from './workbench/actions/sendText';
 import { handleSendClick as runHandleSendClick } from './workbench/actions/sendTransaction';
 import { collectExclusiveRelationMsgIds as runCollectExclusiveRelationMsgIds, getClassifyTargetRefs as runGetClassifyTargetRefs, getContainerCycleError as runGetContainerCycleError, getContainerMembershipTargetError as runGetContainerMembershipTargetError, getDependentDisplayTarget as runGetDependentDisplayTarget, getDependentDisplayTargets as runGetDependentDisplayTargets, getGroupedTargetTextMessageIds as runGetGroupedTargetTextMessageIds, getJoinContainerCycleError as runGetJoinContainerCycleError, getSelectedWholeMessageIds as runGetSelectedWholeMessageIds, hasCrossNonReferenceTextLinkForClassifyTargets as runHasCrossNonReferenceTextLinkForClassifyTargets, organizationTargetRef as runOrganizationTargetRef, promoteCompleteContainerSelections as runPromoteCompleteContainerSelections, resolveEffectiveTargetUnits as runResolveEffectiveTargetUnits } from './workbench/actions/targetResolution';
 import { captureSnapshot as runCaptureSnapshot, confirmMessageIdNavigation as runConfirmMessageIdNavigation, enterClassification as runEnterClassification, enterTemporaryCategory as runEnterTemporaryCategory, enterTrace as runEnterTrace, enterTraceMultiple as runEnterTraceMultiple, exitAllTemporaryCategories as runExitAllTemporaryCategories, exitAllTrace as runExitAllTrace, exitClassification as runExitClassification, exitTemporaryCategory as runExitTemporaryCategory, findContainingClassification as runFindContainingClassification, handleExitClassification as runHandleExitClassification, restoreSnapshot as runRestoreSnapshot } from './workbench/actions/viewHistory';
@@ -478,24 +478,6 @@ function MessageWorkbenchContent() {
     window.dispatchEvent(new CustomEvent('guide-selection-changed', { detail: { messageId: targetId, selected } }));
     if (selected) window.dispatchEvent(new Event('guide-selection-complete'));
   }, [draftUnits, guideActive]);
-
-  const handleSettlementMessageCreated = useCallback((m: any) => {
-    const normalized = { ...m, author: m.author || user?.username || '', kind: m.kind || 'round' };
-    setMessagesRef.current((prev: any) => {
-      const exists = prev.some((item: DemoMessage) => item.id === normalized.id);
-      return exists ? prev : [...prev, normalized];
-    });
-    if (isInsideClassify && currentClassifyRelMsgId) {
-      void attachMessageToCurrentClassify(normalized.id).catch((error) => {
-        console.warn('结算结果加入当前分类失败', { messageId: normalized.id, error });
-      });
-      setClassifyKey(k => k + 1);
-    }
-    scheduleViewNavigation(normalized.settlementTargetId ?? normalized.id, 50);
-  }, [user, isInsideClassify, currentClassifyRelMsgId]);
-
-  // Phase 6: expose for SettlementPanel direct access
-  useEffect(() => { (window as any).__addSettlementMessage = handleSettlementMessageCreated; return () => { delete (window as any).__addSettlementMessage; }; }, [handleSettlementMessageCreated]);
 
   // Scroll to message after data loads and renders (also triggers on trace changes for in-place nav).
   // View-switch decisions (graph→list for hidden messages) are made in the auto-classify
@@ -949,6 +931,13 @@ function MessageWorkbenchContent() {
   },[classifyKey,currentClassifyRelMsgId,containerEffect]);
   useLayoutEffect(() => {
     if (loading || !autoClassifyMsgId) return;
+    const target=messages.find(message=>message.id===autoClassifyMsgId);
+    if(isSettlementRecord(target)||target?.kind==='join'){
+      // Initial URL navigation must use the same record entry as an in-app link.
+      setAutoClassifyMsgId(null);
+      handleNavigateToMessage(autoClassifyMsgId,{recordHistory:false});
+      return;
+    }
     // Locate in the same effective, innermost scope that renders the message.
     // Historical target declarations may still mention members moved elsewhere.
     const containerId = findContainingClassification(autoClassifyMsgId);
@@ -1967,10 +1956,6 @@ function MessageWorkbenchContent() {
     return runRegisterCreatedRelationInCurrentClassify({ appendCreatedRelation }, backendRel);
   }
 
-  async function attachMessageToCurrentClassify(messageId: string): Promise<void> {
-    return runAttachMessageToCurrentClassify({ isInsideClassify, currentClassifyRelMsgId, relationsRef, createJoinRelationsForContainer }, messageId);
-  }
-
   async function handleSendMessageOnly(overrideContent?: string): Promise<DemoMessage | null> {
     const text=contributionRef.current('TEXT'),join=contributionRef.current('JOIN');
     return runHandleSendMessageOnly({ requireAuth, newMessageContent, scopeMessageId, stakeAmount:text.truth, setSendError, selectedRelationRef, recommendationRef:textRecommendationRef, stakeFeeAmountRef, isInsideClassify, availablePoints, currentClassifyRelMsgId, setMessages, mergeStakeSnapshot, setAuthorStakes, setStakeAmount, minSelfStake, setNewMessageContent, scrollMsgToCenter, setClassifyKey, handleAuthError,
@@ -2676,12 +2661,40 @@ function MessageWorkbenchContent() {
 
   /** Navigate to a message: switch canvas if needed, scroll, select (clear + add to candidates) */
   const handleNavigateToMessage = useCallback((messageId: string, options?: { select?: boolean; preserveScope?: boolean; recordHistory?: boolean; onComplete?: ScrollMessageOptions['onComplete'] }) => {
+    const settlement = messagesRef.current.find(message=>message.id===messageId);
+    if(isSettlementRecord(settlement)){
+      if(!settlement?.settlementTargetId){showAlert('这条结算记录没有保存目标消息，请从原消息的结算入口查看');return;}
+      messageId=settlement.settlementTargetId;
+      openSettlement(messageId,settlement.roundPayload?.settlementType==='VALUE'?'VALUE':'TRUTH');
+    }
     if (!isPreloaded && onDemand && !messagesRef.current.some(message => message.id === messageId)) {
       pendingRemoteNavigationRef.current = { messageId, options };
       void ensureMessages([messageId]).catch(error => {
         if (pendingRemoteNavigationRef.current?.messageId === messageId) pendingRemoteNavigationRef.current = null;
         showAlert(error instanceof Error ? error.message : '消息加载失败');
       });
+      return;
+    }
+    const joinMessage=messagesRef.current.find(message=>message.id===messageId);
+    if(joinMessage?.kind==='join'){
+      const record=relationsRef.current.find(relation=>relation.id===messageId);
+      const members=(record?.targetRefs??joinMessage.targetRefs??[]).map(ref=>ref.kind==='relation'?ref.relationId:ref.messageId);
+      const parent=record?.sourceMessageId??joinMessage.joinInfo?.containerId??joinMessage.sourceMessageId;
+      const inRecordCategory=recordCategory?.recordIds.includes(messageId);
+      const inJoinCategory=joinFilterTargetId!==null&&(joinFilterDirection==='outgoing'?joinFilterTargetId===parent:members.includes(joinFilterTargetId));
+      if(!inRecordCategory&&!inJoinCategory){
+        const anchor=members[0]??parent;
+        if(!anchor){showAlert('这条加入记录没有保存目标或容器消息');return;}
+        handleJoinRecords(anchor,members.length?'incoming':'outgoing');
+      }
+      scrollRequestIdRef.current++;
+      setReadingAnchorId(null);
+      if(options?.select!==false)setDraftUnits([{messageId,selection:{kind:'whole'}}]);
+      setLastClickedMessageId(messageId);
+      pendingScrollDependencyIdsRef.current=[];
+      pendingScrollMsgRef.current=messageId;
+      pendingScrollCompletionRef.current=options?.onComplete;
+      setScrollKey(key=>key+1);
       return;
     }
     if(!options?.preserveScope&&messagesRef.current.find(message=>message.id===messageId)?.relationType==='correct'){
@@ -2698,9 +2711,7 @@ function MessageWorkbenchContent() {
       && navigationFilterState.cleanVisibleIds
       && !navigationFilterState.cleanVisibleIds.visibleRelIds.has(messageId)
       && !navigationFilterState.cleanVisibleIds.visibleTextIds.has(messageId);
-    const targetTypeFiltered = (navigationFilterState.msgFilter.hideJoin && targetMessage?.kind === 'join')
-      || (navigationFilterState.msgFilter.hideSettlement
-        && (targetMessage?.kind === 'round' || targetMessage?.kind === 'round_result'));
+    const targetTypeFiltered = navigationFilterState.msgFilter.hideJoin && targetMessage?.kind === 'join';
     const canAutoClearTargetFilters = Boolean(targetCleanFiltered || targetTypeFiltered);
     if (canAutoClearTargetFilters) {
       if (targetCleanFiltered) {
@@ -2710,9 +2721,6 @@ function MessageWorkbenchContent() {
         setMsgFilter(previous => ({
           ...previous,
           hideJoin: targetMessage?.kind === 'join' ? false : previous.hideJoin,
-          hideSettlement: targetMessage?.kind === 'round' || targetMessage?.kind === 'round_result'
-            ? false
-            : previous.hideSettlement,
         }));
       }
     }
@@ -2771,7 +2779,7 @@ function MessageWorkbenchContent() {
     pendingScrollMsgRef.current = messageId;
     pendingScrollCompletionRef.current = options?.onComplete;
     setScrollKey(k => k + 1);
-  }, [cleanMode, joinFilterTargetId, correctionFilterTargetId, msgFilter, clearCleanView, showAlert, hiddenInGraphView, isPreloaded, onDemand, ensureMessages]);
+  }, [cleanMode, joinFilterTargetId, joinFilterDirection, recordCategory, correctionFilterTargetId, msgFilter, clearCleanView, showAlert, hiddenInGraphView, isPreloaded, onDemand, ensureMessages, openSettlement]);
 
   const pendingRemoteNavigationRef = useRef<{ messageId: string; options?: { select?: boolean; preserveScope?: boolean; recordHistory?: boolean; onComplete?: ScrollMessageOptions['onComplete'] } } | null>(null);
   useEffect(() => {
@@ -2896,7 +2904,7 @@ function MessageWorkbenchContent() {
           .map(id => msgMap.get(id))
           .filter((message): message is DemoMessage => Boolean(message))
           .filter(message => !msgFilter.hideJoin || message.kind !== 'join')
-        : typeFilteredMessages).map(message=>{
+        : typeFilteredMessages).filter(message=>!isSettlementRecord(message)&&(message.kind!=='join'||joinFilterTargetId!==null||recordCategory!==null)).map(message=>{
           const state=containerEffect.msgMap.get(message.id)?.state;
           return state&&state!==message.state?{...message,state}:message;
         });
@@ -3222,12 +3230,13 @@ function MessageWorkbenchContent() {
                   <WorkbenchMessageList
                     crossCanvasRelations={containerPreview?.context.crossCanvasRelations??crossCanvasRelations} onRelatedRelationView={viewRelatedRelation}
                     onRelatedNavigate={viewRelatedContainer} standaloneMessageIds={recordCategory?new Set(recordCategory.recordIds):comparisonViewIds??correctionTemporaryViewIds??standaloneMessageIds}
+                    showJoinRecords={joinFilterTargetId!==null||recordCategory!==null}
                     visibleMessages={messageWindow.messages}
                     joinRecordContext={joinFilterTargetId&&joinFilterDirection==='outgoing'?{containerId:joinFilterTargetId,effect:containerPreview?.effect??containerEffect}:undefined}
                     catalog={{ messages:containerPreview?.allMessages??containerEffect.messages, edges:containerPreview?.edges??edges, msgMap:containerPreview?new Map(containerPreview.allMessages.map(message=>[message.id,message])):containerEffect.msgMap, relationById:containerPreview?new Map(containerPreview.relations.map(relation=>[relation.id,relation])):containerEffect.relationById, relationTypeByRelMsgId, joinRelationsByTarget, joinRelationsBySource, effectiveJoinRelationIds:containerPreview?.effectiveJoinIds??effectiveJoinRelationIds, joinStatusByMessage:containerPreview?.context.joinStatusByMessage??joinStatusByMessage, joinEffectSourcesByMessage:containerPreview?.context.joinEffectSourcesByMessage??containerEffect.context.joinEffectSourcesByMessage, containerOwnership:containerPreview?.effect.ownership??containerEffect.ownership, summaryCoverageByMessageId, correctionVersions }}
                     display={{ embeddedMessageIds:comparisonMode?new Set<string>():embeddedMessageIds, suppressedRelIds:containerPreview?.suppressed??suppressedRelIds, rejectedContainerIds:containerPreview?.rejectedContainerIds??rejectedContainerIds, overriddenStanceRelIds, readStatusByMessageId, homeMatchIds: homeFilterResult?.matchIds, homeReasonByMessageId: homeFilterResult?.reasonByMessageId, homeDisplayRoleByMessageId, authorStakes, stakeCounts:correctionStances.counts, correctionFilterTargetId, joinFilterTargetId }}
                     comparison={{ comparisonReviewed, comparisonTargetId, comparisonRecommendedDisplay, activeStanceByRelMsgId, activeStanceMap }}
-                    settlement={{ settlementOpenMsgId, settlementOpenType, settlementEntryHighlight, closeSettlement, openSettlement, onMessageCreated: message => (window as Window & { __addSettlementMessage?: (value: typeof message) => void }).__addSettlementMessage?.(message) }}
+                    settlement={{ settlementOpenMsgId, settlementOpenType, settlementEntryHighlight, closeSettlement, openSettlement }}
                     selection={{ draftUnits, activeTextSelectId, lastClickedMessageId }}
                     cardHandlers={{ onClick: handleMessageClick, onDoubleClick: handleMessageDoubleClick, onMouseDown: handleMessageMouseDown, onMouseUp: handleMessageMouseUp, onContentMouseUp: handleTextMouseUp }}
                     scopeMessageId={scopeMessageId}
@@ -3251,6 +3260,7 @@ function MessageWorkbenchContent() {
                     rejectedRelationIds={containerPreview?.suppressed??suppressedRelIds}
                     onRelatedMessageNavigate={viewRelatedContainer}
                     standaloneMessageIds={standaloneMessageIds}
+                    showJoinRecords={joinFilterTargetId!==null||recordCategory!==null}
                     messages={!containerPreview&&comparisonReviewed ? comparisonGraphMessages : graphMessagesFinal} edges={!containerPreview&&comparisonReviewed ? (comparisonAgreeGraph?.edges ?? temporaryEdgesToRender) : edgesToRender} invalidCorrectionIds={invalidCorrectionIds} draftUnits={draftUnits}
                     visibleMessageIds={messageWindow.enabled ? messageWindow.visibleIds : undefined}
                     visibleEdgeIds={messageWindow.enabled ? messageWindow.edgeIds : undefined}
@@ -3299,7 +3309,6 @@ function MessageWorkbenchContent() {
                     scopeMessageId={scopeMessageId ?? undefined}
                     settlementOpenMsgId={settlementOpenMsgId}
                     settlementOpenType={settlementOpenType}
-                    onSettlementMessageCreated={handleSettlementMessageCreated}
                     stanceHighlight={stanceHighlight}
                     settlementEntryHighlight={settlementEntryHighlight}
                     crossCanvasRelations={containerPreview?.context.crossCanvasRelations??crossCanvasRelations}

@@ -78,13 +78,13 @@ export default function StanceHistoryPanel({ userId, scopeMessageId }: Props) {
 
   useEffect(() => { load(); }, [load]);
 
-  if (loading) return <div className="text-sm text-[color:var(--ink-6b7280)] p-4">加载中...</div>;
-  if (error) return <div className="text-sm text-[color:var(--ink-dc2626)] p-4">{error}</div>;
+  if (loading) return <div className="record-panel text-sm text-[color:var(--ink-6b7280)] p-4">加载中...</div>;
+  if (error) return <div className="record-panel text-sm text-[color:var(--ink-dc2626)] p-4">{error}</div>;
 
   const totalCount = relations.length + stakes.length + tags.length;
   if (totalCount === 0) {
     return (
-      <div className="text-sm text-[color:var(--ink-6b7280)] p-4 space-y-2">
+      <div className="record-panel text-sm text-[color:var(--ink-6b7280)] p-4 space-y-2">
         <div>暂无记录</div>
         <div className="text-xs text-[color:var(--ink-9ca3af)]">赞同/反对记录在「站队」中，标注记录在「表态」中，其他消息消耗的贡献点记录在「立场」中。</div>
       </div>
@@ -107,7 +107,7 @@ export default function StanceHistoryPanel({ userId, scopeMessageId }: Props) {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="record-panel space-y-3">
       <div className="flex gap-1 border-b border-[color:var(--line-e5e7eb)]">
         {TABS.map(tab => (
           <button key={tab.key} onClick={() => setActiveTab(tab.key)}

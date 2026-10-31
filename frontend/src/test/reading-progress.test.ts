@@ -37,7 +37,7 @@ it('records an authored body with the actual display fingerprint and keeps its c
   expect(hints.get('authored')).toMatchObject({unread:false,readChanged:false});
   expect(hints.get('target')).toMatchObject({unread:true});
 });
-it.each(['parts','payload'])('auto-reads a self-initiated settlement and its effects using %s attribution',source=>{
+it.each(['parts','payload'])('keeps settlements out of unread bodies and influences using %s attribution',source=>{
   const system={id:'system',username:'公论规则',createdAt:''};
   const round=(id:string,openedBy:string,triggerId:string):Message=>({...message(id,system),kind:'ROUND',sequence:20,
     targetRefs:[{kind:'message',messageId:'target'}],
@@ -48,16 +48,17 @@ it.each(['parts','payload'])('auto-reads a self-initiated settlement and its eff
     [{...relation('incoming','AGREE',['mine']),sequence:31}]);
   const progress=deriveReadingProgress(input);
   expect(progress.pendingBodies.has('mine')).toBe(false);expect(progress.pendingBodies.has(own.id)).toBe(false);
-  for(const id of ['target',foreign.id,result.id])expect(progress.pendingBodies.has(id)).toBe(true);
-  expect(pending(input,'target')).toEqual(new Set([foreign.id,result.id]));expect(pending(input,'mine')).toEqual(new Set(['incoming']));
+  expect(progress.pendingBodies.has('target')).toBe(true);
+  for(const id of [foreign.id,result.id])expect(progress.pendingBodies.has(id)).toBe(false);
+  expect(pending(input,'target')).toEqual(new Set());expect(pending(input,'mine')).toEqual(new Set(['incoming']));
   expect(deriveDisplayHints(input).hints.get(own.id)?.unread).toBe(false);
   const marks=authoredReadingBackfill(input,user.id,id=>getMessageDisplaySignature(input,id));
   expect(new Set(marks.filter(mark=>mark.scope==='message').map(mark=>mark.messageId))).toEqual(new Set(['mine',own.id]));
-  expect(marks.filter(mark=>mark.scope==='influence').map(mark=>JSON.parse(mark.eventId!)[0])).toEqual([own.id]);
+  expect(marks.filter(mark=>mark.scope==='influence')).toEqual([]);
   expect(authoredReadingMarks(input,own.id,'display:sent').filter(mark=>mark.scope==='influence')).toEqual(marks.filter(mark=>mark.scope==='influence'));
   const saved={...input,marks};expect(authoredReadingBackfill(saved,user.id,id=>getMessageDisplaySignature(input,id))).toEqual([]);
   const unread=marks.map(mark=>({...mark,state:'UNREAD' as const}));
-  expect(deriveReadingProgress({...input,marks:unread}).pendingBodies.has(own.id)).toBe(true);
+  expect(deriveReadingProgress({...input,marks:unread}).pendingBodies.has(own.id)).toBe(false);
   expect(authoredReadingBackfill({...input,marks:unread},user.id,id=>getMessageDisplaySignature(input,id))).toEqual([]);
   expect(input.messages.find(message=>message.id===own.id)?.authorId).toBe('system');
 });
@@ -69,7 +70,7 @@ it('identifies the settlement initiator even when the triggering message is not 
   expect(pending(input,'target')).toEqual(new Set());
   const marks=authoredReadingBackfill(input,user.id,id=>getMessageDisplaySignature(input,id));
   expect(marks.filter(mark=>mark.scope==='message').map(mark=>mark.messageId)).toEqual([round.id]);
-  expect(marks.filter(mark=>mark.scope==='influence').map(mark=>mark.messageId)).toEqual(['target']);
+  expect(marks.filter(mark=>mark.scope==='influence')).toEqual([]);
   const confirmed=deriveHomeFilterResult({...input,displayUser:user,homeFilterMode:{scope:'all',status:'confirmed'},msgMap:new Map(input.messages.map(message=>[message.id,message])),
     readStatusByMessageId:input.readStatus,traceContainerMemberships:input.memberships});
   expect(confirmed?.matchIds.has(round.id)).toBe(true);

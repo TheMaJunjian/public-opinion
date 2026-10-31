@@ -36,7 +36,7 @@ export function useWorkbenchViewport({ loading }: WorkbenchViewportInput) {
 
   const MIN_RIGHT_PX = 280;
 
-  const MAX_RIGHT_PX = 700;
+  const MAX_RIGHT_PX = 1200;
 
   const BASE_WIDTH = 1024;
 

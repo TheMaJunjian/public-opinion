@@ -547,6 +547,79 @@
   --line-utility-slate-300: #cbd5e1;
 }
 
+/* Legacy popup and record interiors inherit the original dark surface palette. */
+:root[data-appearance='gpt'] :is(
+  [data-popup-overlay='true'], [role='dialog'], [role='tooltip'],
+  .record-panel, .settlement-panel, .round-history
+) {
+  --surface-fff: var(--surface-card);
+  --surface-f9fafb: var(--surface-panel);
+  --surface-eef2ff: color-mix(in srgb, var(--recommendation-accent) 12%, var(--surface-panel));
+  --surface-eef2ff-2: var(--surface-eef2ff);
+  --surface-eff6ff: color-mix(in srgb, var(--fragment-accent) 9%, var(--surface-panel));
+  --surface-f0fdf4: color-mix(in srgb, var(--ink-4ade80) 9%, var(--surface-panel));
+  --surface-fef2f2: color-mix(in srgb, var(--ink-f87171) 9%, var(--surface-panel));
+  --surface-fffbeb: color-mix(in srgb, var(--selection-accent) 10%, var(--surface-panel));
+  --surface-fef3c7: var(--surface-fffbeb);
+  --surface-utility-yellow-100: color-mix(in srgb, var(--selection-accent) 18%, var(--surface-panel));
+  --surface-utility-amber-100: var(--surface-fffbeb);
+  --surface-utility-red-100: var(--surface-fef2f2);
+  --surface-utility-green-100: var(--surface-f0fdf4);
+  --surface-utility-emerald-100: color-mix(in srgb, var(--ink-6ee7b7) 10%, var(--surface-panel));
+  --surface-utility-purple-100: color-mix(in srgb, var(--ink-c4b5fd) 12%, var(--surface-panel));
+  --surface-utility-orange-100: color-mix(in srgb, var(--ink-utility-orange-400) 10%, var(--surface-panel));
+  --surface-utility-blue-100: var(--surface-eff6ff);
+  --surface-f3f4f6: var(--surface-hover);
+  --surface-a5b4fc: var(--button-disabled-bg);
+  --surface-9ca3af: var(--button-disabled-bg);
+
+  --line-e5e7eb: var(--border-default);
+  --line-d1d5db: var(--border-default);
+  --line-f3f4f6: var(--border-default);
+  --line-utility-gray-300: var(--border-default);
+  --line-utility-slate-300: var(--border-default);
+  --line-a5b4fc: color-mix(in srgb, var(--recommendation-accent) 40%, var(--border-default));
+  --line-a5b4fc-2: var(--line-a5b4fc);
+  --line-c7d2fe: var(--line-a5b4fc);
+  --line-bfdbfe: color-mix(in srgb, var(--fragment-accent) 35%, var(--border-default));
+  --line-bbf7d0: color-mix(in srgb, var(--ink-4ade80) 35%, var(--border-default));
+  --line-fecaca: color-mix(in srgb, var(--ink-f87171) 35%, var(--border-default));
+  --line-fde68a: color-mix(in srgb, var(--selection-accent) 35%, var(--border-default));
+  --line-utility-yellow-300: color-mix(in srgb, var(--selection-accent) 55%, var(--border-default));
+
+  --ink-1f2937: var(--text-primary);
+  --ink-374151: var(--text-secondary);
+  --ink-4b5563: var(--text-secondary);
+  --ink-475569: var(--text-secondary);
+  --ink-6b7280: var(--text-muted);
+  --ink-6b7280-2: var(--text-muted);
+  --ink-666: var(--text-muted);
+  --ink-777: var(--text-muted);
+  --ink-166534: var(--ink-4ade80);
+  --ink-15803d: var(--ink-4ade80);
+  --ink-16a34a: var(--ink-4ade80);
+  --ink-991b1b: var(--ink-f87171);
+  --ink-dc2626: var(--ink-f87171);
+  --ink-b91c1c: var(--ink-f87171);
+  --ink-3730a3: var(--ink-a5b4fc);
+  --ink-4338ca: var(--ink-a5b4fc);
+  --ink-4f46e5: var(--ink-a5b4fc);
+  --ink-4f46e5-2: var(--ink-a5b4fc);
+  --ink-1d4ed8: var(--fragment-accent);
+  --ink-3b82f6: var(--fragment-accent);
+  --ink-64748b: var(--text-muted);
+  --ink-6b7280-3: var(--text-muted);
+  --ink-d97706: var(--selection-accent);
+  --ink-b45309: var(--selection-accent);
+  --ink-utility-green-700: var(--ink-4ade80);
+  --ink-utility-red-700: var(--ink-f87171);
+  --ink-utility-amber-700: var(--selection-accent);
+  --ink-utility-emerald-700: var(--ink-6ee7b7);
+  --ink-utility-purple-700: var(--ink-c4b5fd);
+  --ink-utility-orange-700: var(--ink-utility-orange-400);
+  --ink-utility-blue-700: var(--fragment-accent);
+}
+
 :root[data-theme='gpt'] .message-read-stamp { display: none; }
 :root[data-theme='gpt'] .themed-message[data-whole-selected='true'] {
   background-image: none !important;

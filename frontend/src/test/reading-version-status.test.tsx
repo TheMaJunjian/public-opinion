@@ -59,13 +59,13 @@ describe('shared reading status across display versions',()=>{
     }
     expect(all.some(mark=>['agree1','agree2','reply'].includes(mark.messageId)&&mark.scope==='message')).toBe(false);
   });
-  it('new corrections and multi-round results add reminders without reopening the shared body',()=>{
+  it('new corrections add reminders without reopening the shared body or enrolling settlement results',()=>{
     const marks=ready(),all=[...marks,...fixture(corrections,marks).confirm('m')];
     const newCorrection=relation('c3','CORRECT','m',{correctionBeforeContent:'原文',correctionAfterContent:'新一轮文字'});
     const later=fixture([...corrections,newCorrection],all),progress=deriveReadingProgress(later.readingInput);
     expect(progress.pendingBodies.has('m')).toBe(false);expect(progress.pendingBodies.has('c3')).toBe(true);expect(later.hints.hints.get('m')!.relatedUnreadIds).toContain('c3');
     const input={...later.readingInput,messages:[...later.readingInput.messages,{...later.readingInput.messages[0],id:'round2',kind:'round_result' as const,settlementTargetId:'m'}]};
-    expect(deriveReadingProgress(input).pendingInfluences.get('m')!.some(item=>item.messageId==='round2')).toBe(true);
+    expect(deriveReadingProgress(input).pendingInfluences.get('m')!.some(item=>item.messageId==='round2')).toBe(false);
     expect(()=>later.confirm('m')).not.toThrow();
   });
   it('manual unread is shared and the first confirmation evidence permits re-reading after later changes',()=>{
@@ -75,12 +75,14 @@ describe('shared reading status across display versions',()=>{
     const c3=relation('c3','CORRECT','m',{correctionBeforeContent:'原文',correctionAfterContent:'后加'});
     expect(()=>fixture([...corrections,c3],[...all,unread]).confirm('m')).not.toThrow();
   });
-  it('also propagates a WIDTH correction settlement result as a reminder on the already-read subject',()=>{
+  it('keeps WIDTH correction reminders separate from settlement results',()=>{
     const initial=fixture([],[]),marks=initial.confirm('m');
     const width=relation('width','CORRECT','m',{correctionKind:'WIDTH',correctionWidth:640}),later=fixture([width],marks);
     const result={...later.readingInput.messages[0],id:'width-result',kind:'round_result' as const,settlementTargetId:'width'};
     const progress=deriveReadingProgress({...later.readingInput,messages:[...later.readingInput.messages,result]});
-    expect(progress.pendingBodies.has('m')).toBe(false);expect(progress.pendingInfluences.get('m')!.some(item=>item.messageId==='width-result')).toBe(true);
+    expect(progress.pendingBodies.has('m')).toBe(false);
+    expect(progress.pendingInfluences.get('m')!.some(item=>item.messageId==='width')).toBe(true);
+    expect(progress.pendingInfluences.get('m')!.some(item=>item.messageId==='width-result')).toBe(false);
   });
   it('does not infer a shared read from old-format records without migration',()=>{
     const v=bodyVersion('m'),mark={messageId:'m',scope:'message' as const,key:'old',format:2 as const,version:v,state:'READ' as const};
@@ -106,7 +108,7 @@ describe('shared reading status across display versions',()=>{
     expect(after.hints.hints.get('m')?.relatedUnreadIds).toEqual(expect.arrayContaining(['d','t1','t2','r1','r2']));
     expect(marks).toHaveLength(2);expect(marks.every(mark=>mark.messageId==='m'&&mark.scope==='influence'&&mark.key==='agree:'&&!!mark.eventId)).toBe(true);
   });
-  it('confirms votes, annotations and settlement effects from the single current-message button',async()=>{
+  it('confirms votes and annotations from the current-message button while excluding settlement effects',async()=>{
     const relations=[relation('agree1','AGREE','m'),relation('agree2','AGREE','m'),relation('oppose','DISAGREE','m'),relation('tag','TAG','m',{label:'可靠'}),relation('reply','REPLY','m')];
     const base=fixture(relations),before={...base,input:{...base.input,messages:[...base.input.messages,
       {...base.input.messages[0],id:'start',kind:'round' as const,settlementTargetId:'m'},
@@ -114,10 +116,11 @@ describe('shared reading status across display versions',()=>{
     const element=(input:DisplayHintsInput)=><MessageDisplayHintsProvider input={input} onView={onView} onMarkRead={onMarkRead}><MessageDisplayMarker messageId="m"/></MessageDisplayHintsProvider>;
     const view=render(element(before.input));fireEvent.click(screen.getByRole('button',{name:/^显示提示 m：/}));
     const tooltip=screen.getByRole('tooltip');
-    expect(tooltip).toHaveTextContent('未阅影响（7 条）');
+    expect(tooltip).toHaveTextContent('未阅影响（5 条）');
     const confirm=within(tooltip).getByRole('button',{name:'标记当前消息已阅'});
     expect(tooltip.querySelector('[data-display-hint-influences]')).toHaveStyle({scrollbarGutter:'stable',paddingRight:'6px',overflowX:'hidden'});
-    for(const label of ['赞同','反对','标注「可靠」','结算 · 发起结算','结算 · 结算结果'])expect(tooltip).toHaveTextContent(label);
+    for(const label of ['赞同','反对','标注「可靠」'])expect(tooltip).toHaveTextContent(label);
+    for(const label of ['结算 · 发起结算','结算 · 结算结果'])expect(tooltip).not.toHaveTextContent(label);
     const agreements=within(tooltip).getByRole('region',{name:'赞同影响'});
     expect(within(agreements).getByRole('button',{name:'展开赞同（2 条）'})).toHaveAttribute('aria-expanded','false');
     expect(within(agreements).getByTitle('查看赞同 agree1')).not.toBeVisible();
@@ -131,7 +134,7 @@ describe('shared reading status across display versions',()=>{
     await act(async()=>fireEvent.click(confirm));
     const marks=onMarkRead.mock.calls[0][0];
     expect(marks).toContainEqual(expect.objectContaining({messageId:'m',scope:'message'}));
-    expect(new Set(marks.filter(mark=>mark.scope==='influence').map(mark=>JSON.parse(mark.eventId!)[0]))).toEqual(new Set(['agree1','agree2','oppose','tag','start','result','reply']));
+    expect(new Set(marks.filter(mark=>mark.scope==='influence').map(mark=>JSON.parse(mark.eventId!)[0]))).toEqual(new Set(['agree1','agree2','oppose','tag','reply']));
     expect(marks.some(mark=>['agree1','agree2','oppose','tag','reply'].includes(mark.messageId)&&mark.scope!=='influence')).toBe(false);
     expect(onView).not.toHaveBeenCalled();
     view.rerender(element({...before.input,readingMarks:onMarkRead.mock.calls[0][0]}));
@@ -140,15 +143,15 @@ describe('shared reading status across display versions',()=>{
     expect(onMarkRead).toHaveBeenCalledOnce();
     expect(within(screen.getByRole('region',{name:'相关影响'})).queryByRole('button',{name:'已阅'})).toBeNull();
   });
-  it('keeps start, result and termination as distinct settlement confirmations',()=>{
+  it('keeps termination proposals readable while excluding settlement start and result records',()=>{
     const initial=fixture([relation('stop','PROPOSAL','m',{operationType:'TERMINATE_SETTLEMENT'})]);
     const messages=[...initial.readingInput.messages,
       {...initial.readingInput.messages[0],id:'start',kind:'round' as const,settlementTargetId:'m'},
       {...initial.readingInput.messages[0],id:'result',kind:'round_result' as const,settlementTargetId:'m'}];
     const input={...initial.readingInput,messages},progress=deriveReadingProgress(input),groups=groupReadingInfluences(progress.pendingInfluences.get('m')!,new Map(messages.map(message=>[message.id,message])));
-    expect(groups.map(group=>group.label)).toEqual(['结算 · 发起结算','结算 · 结算结果','结算 · 终止结算']);
+    expect(groups.map(group=>group.label)).toEqual(['结算 · 终止结算']);
     const marks=influenceReadingMarks('m',groups[0].items),after=deriveReadingProgress({...input,marks});
-    expect(new Set(after.pendingInfluences.get('m')?.map(item=>item.messageId))).toEqual(new Set(['stop','result']));
+    expect(after.pendingInfluences.get('m')??[]).toEqual([]);
     expect(marks.some(mark=>mark.bodySignature===bodySignature('原文'))).toBe(false);
   });
 });

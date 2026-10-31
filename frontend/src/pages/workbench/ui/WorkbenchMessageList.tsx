@@ -68,7 +68,7 @@ interface ListSettlement {
   settlementEntryHighlight: ComponentProps<typeof SettlementPanel>['entryHighlight'];
   closeSettlement: () => void;
   openSettlement: (messageId: string, type?: 'TRUTH' | 'VALUE') => void;
-  onMessageCreated: ComponentProps<typeof SettlementPanel>['onMessageCreated'];
+  onMessageCreated?: ComponentProps<typeof SettlementPanel>['onMessageCreated'];
 }
 interface Props {
   visibleMessages: DemoMessage[];
@@ -86,6 +86,7 @@ interface Props {
   crossCanvasRelations?:Map<string,CrossCanvasRelationGroups>;
   onRelatedRelationView?:(messageId:string)=>void;
   standaloneMessageIds?:ReadonlySet<string>;
+  showJoinRecords?:boolean;
   onCorrectionNavigate: (messageId: string, switchToList: boolean) => void;
   onCorrectionHistory?: (event:React.MouseEvent,messageId:string)=>void;
   onCorrectionCompare?: (event:React.MouseEvent,messageId:string)=>void;
@@ -104,11 +105,12 @@ export default function WorkbenchMessageList(props: Props) {
   const { draftUnits, activeTextSelectId, lastClickedMessageId } = props.selection;
   const relatedByTarget=useMemo(()=>indexRelatedMessages(messages,rejectedContainerIds),[messages,rejectedContainerIds]);
   const standaloneMessageIds = props.standaloneMessageIds;
+  const showJoinRecords=props.showJoinRecords??props.display.joinFilterTargetId!==null;
   const listMessages = useMemo(() => filterMessageListContext(
     messagesToRenderFiltered
       .filter(msg => msg.kind==='join'||!embeddedMessageIds.has(msg.id)),
-    messages, edges, standaloneMessageIds,
-  ).sort(chronologicalOrder), [messagesToRenderFiltered, messages, edges, embeddedMessageIds, rejectedContainerIds, standaloneMessageIds]);
+    messages, edges, standaloneMessageIds,showJoinRecords,
+  ).sort(chronologicalOrder), [messagesToRenderFiltered, messages, edges, embeddedMessageIds, rejectedContainerIds, standaloneMessageIds, showJoinRecords]);
   const { settlementOpenMsgId, settlementOpenType, settlementEntryHighlight, closeSettlement, openSettlement, onMessageCreated } = props.settlement;
   const rowIds = useMemo(() => listMessages.map(message => message.id), [listMessages]);
   const rowMap = useMemo(() => new Map(listMessages.map(message => [message.id, message])), [listMessages]);
@@ -136,7 +138,6 @@ export default function WorkbenchMessageList(props: Props) {
           const organizationTitle = isOrganizationMessage ? getOrganizationTitle(msg, memberCount) : "";
           const summaryCoverages = summaryCoverageByMessageId.get(msg.id) ?? [];
           const settleTargetId = msg.settlementTargetId;
-          const targetMsg = settleTargetId ? msgMap.get(settleTargetId) : undefined;
           const relatedJoinRelations = joinRelationsByTarget.get(msg.id) ?? [];
           const outgoingJoinRelations = joinRelationsBySource.get(msg.id) ?? [];
           const joinRelation = msg.kind === 'join' ? relationById.get(msg.id) : undefined;
@@ -156,8 +157,6 @@ export default function WorkbenchMessageList(props: Props) {
             memberCount,
             relType,
             settlementTargetId: settleTargetId,
-            settlementTargetContent: targetMsg?.content ?? '',
-            isValueSettlement: msg.roundPayload?.settlementType === 'VALUE',
             lastClickedMsgId: lastClickedMessageId,
             readStatus: readStatusByMessageId.get(msg.id),
             homeMatch: homeMatchIds?.has(msg.id),

@@ -1,4 +1,4 @@
-import {isCardMessage,type DemoMessage} from '../../../utils/modelBridge';
+import {isCardMessage,isSettlementRecord,type DemoMessage} from '../../../utils/modelBridge';
 import {chronologicalOrder,discussionForest} from '../../../utils/discussionOrder';
 import type {TraceDirection} from '../../../utils/traceRange';
 import {deriveReadingProgress,influenceReadingMarks,readingMarksFor,type ReadingInput,type ReadingInfluence} from './readingProgress';
@@ -30,7 +30,7 @@ export function readingTasks(input:ReadingInput,scope:ReadonlySet<string>,allowe
   const progress=providedProgress??deriveReadingProgress(input),map=new Map(input.messages.map(message=>[message.id,message]));
   // Rendering a record in the semantic range must not recursively enroll its
   // own body and influences in the reading queue. Keep its private marks intact.
-  const readingScope=new Set([...scope].filter(id=>entryIds.has(id)||!statusReadingRecord(map.get(id))));
+  const readingScope=new Set([...scope].filter(id=>!isSettlementRecord(map.get(id))&&(entryIds.has(id)||!statusReadingRecord(map.get(id)))));
   const byRelation=new Map<string,string[]>();
   for(const edge of input.edges)if(!edge.from.messageId.startsWith('anon:')&&edge.from.messageId!==edge.relationMessageId){
     const values=byRelation.get(edge.relationMessageId)??[];values.push(edge.from.messageId);byRelation.set(edge.relationMessageId,values);

@@ -6,6 +6,11 @@ import {chronologicalOrder} from './discussionOrder';
 
 export type MessageKind = "normal" | "join" | "relation" | "round" | "round_result" | "governance" | "code" | "operations";
 
+/** Settlement records are viewed through their target's settlement entry. */
+export function isSettlementRecord(message: { kind: string } | undefined): boolean {
+  return message?.kind === 'round' || message?.kind === 'round_result';
+}
+
 /** All content-like kinds (display as cards, participate in graph layout) */
 export const CONTENT_KINDS: MessageKind[] = ["normal", "join", "round", "round_result", "governance", "code", "operations"];
 export const READABLE_RELATION_TYPES = new Set([

@@ -18,6 +18,7 @@ function listProps(messages: DemoMessage[]): ComponentProps<typeof WorkbenchMess
   const onNavigate = vi.fn();
   return {
     visibleMessages: messages,
+    showJoinRecords: true,
     catalog: { messages, edges: [], msgMap: new Map(messages.map(item => [item.id, item])), relationById: new Map(),
       relationTypeByRelMsgId: new Map(messages.flatMap(item => item.relationType ? [[item.id, item.relationType] as const] : [])),
       joinRelationsByTarget: new Map(), joinRelationsBySource: new Map(), effectiveJoinRelationIds: new Set(),
@@ -40,11 +41,22 @@ const renderList = (messages: DemoMessage[], props = listProps(messages)) => ren
 afterEach(() => { cleanup(); vi.restoreAllMocks(); window.getSelection()?.removeAllRanges(); });
 
 describe('native list content and navigation regressions', () => {
+  it('shows JOIN cards only in an explicitly opened record category',()=>{
+    const messages=[message('member'),message('join',{kind:'join'})],props=listProps(messages);
+    props.showJoinRecords=false;
+    const view=renderList(messages,props);
+    expect(view.container.querySelector('[data-msgid="member"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-msgid="join"]')).toBeNull();
+    view.rerender(<MemoryRouter><WorkbenchMessageList {...props} showJoinRecords/></MemoryRouter>);
+    const record=view.container.querySelector<HTMLElement>('[data-msgid="join"]')!;
+    fireEvent.click(record);expect(props.cardHandlers.onClick).toHaveBeenCalledWith(expect.anything(),'join');
+  });
+
   it('interleaves message types by publication time instead of placing relationship records after text cards',()=>{
     const chronological=[message('text-first'),message('agree-second',{kind:'relation',relationType:'agree'}),message('text-third'),
       message('round-fourth',{kind:'round'}),message('join-fifth',{kind:'join'})].map((item,index)=>({...item,createdAt:new Date(index*60000).toISOString()}));
     const view=renderList([chronological[2],chronological[0],chronological[3],chronological[4],chronological[1]]);
-    expect([...view.container.querySelectorAll('[data-virtual-message-list] > [data-measure-id]')].map(row=>row.getAttribute('data-measure-id'))).toEqual(chronological.map(item=>item.id));
+    expect([...view.container.querySelectorAll('[data-virtual-message-list] > [data-measure-id]')].map(row=>row.getAttribute('data-measure-id'))).toEqual(['text-first','agree-second','text-third','join-fifth']);
     expect(view.queryByRole('separator')).toBeNull();
     expect(view.container.querySelector('time,[data-message-authors]')).toBeNull();
   });
@@ -214,7 +226,7 @@ describe('native list content and navigation regressions', () => {
 
   it.each([
     ['ROUND', 'TRUTH'], ['ROUND', 'VALUE'], ['ROUND_RESULT', 'TRUTH'], ['ROUND_RESULT', 'VALUE'],
-  ] as const)('shows %s %s settlement records compactly with their ID and a navigable target', (kind, settlementType) => {
+  ] as const)('keeps %s %s records out of the list while preserving their settlement entry metadata', (kind, settlementType) => {
     const label = `${settlementType === 'VALUE' ? '价值' : '真假'}仲裁`;
     const content = kind === 'ROUND' ? `发起${label}：目标消息「建立关系：JOIN；目标：target-id」`
       : `${label}完成：目标消息 target-id；结果：赞成胜出（TRUE）；TRUE 权重 20，FALSE 权重 10`;
@@ -225,34 +237,28 @@ describe('native list content and navigation regressions', () => {
     }], []);
     const props = listProps(converted.messages), view = renderList(converted.messages, props);
     const row = view.container.querySelector<HTMLElement>('[data-msgid="settlement-id"]')!;
-    expect(row).toHaveAttribute('data-relation-record', 'true');
-    expect(row).toHaveTextContent('settlement-id');
-    expect(row.textContent!.split('target-id')).toHaveLength(2);
-    expect(row).not.toHaveTextContent('建立关系');
-    if (kind === 'ROUND_RESULT') expect(row).toHaveTextContent('结果：赞成胜出（TRUE）；TRUE 权重 20，FALSE 权重 10');
-    fireEvent.click(within(row).getByRole('button', { name: 'target-id' }));
-    expect(props.onNavigate).toHaveBeenCalledWith('target-id');
+    expect(row).toBeNull();
+    expect(converted.messages[0]).toMatchObject({settlementTargetId:'target-id',roundPayload:{settlementType}});
+    expect(props.onNavigate).not.toHaveBeenCalled();
     expect(props.cardHandlers.onClick).not.toHaveBeenCalled();
   });
 
-  it.each(['subjectId', 'targetMessageId'])('uses settlement %s metadata when target references are absent and keeps distribution details', field => {
+  it.each(['subjectId', 'targetMessageId'])('retains settlement %s metadata without a standalone result message', field => {
     const converted = convertMessagesToDemoModel([{ id: 'settlement-result', kind: 'ROUND_RESULT', contentType: 'TEXT',
       content: '对赌分配：30 贡献点；作者 +30。', createdAt: '', createdBy: { id: 'author', username: '作者', createdAt: '' },
       relationPayload: { [field]: 'target-id' },
     }], []);
     const view = renderList(converted.messages);
     const row = view.container.querySelector<HTMLElement>('[data-msgid="settlement-result"]')!;
-    expect(within(row).getByRole('button', { name: 'target-id' })).toBeVisible();
-    expect(row).toHaveTextContent('对赌分配：30 贡献点；作者 +30。');
+    expect(row).toBeNull();
+    expect(converted.messages[0]).toMatchObject({settlementTargetId:'target-id',content:'对赌分配：30 贡献点；作者 +30。'});
   });
 
-  it('identifies a legacy settlement with no recorded target instead of guessing from quoted text', () => {
+  it('does not restore a standalone legacy settlement when its target was not recorded', () => {
     const record = message('unlinked-result', { kind: 'round_result', content: '真假仲裁完成：目标消息「相同正文」；结果：赞成胜出' });
     const view = renderList([record]);
     const row = view.container.querySelector<HTMLElement>('[data-msgid="unlinked-result"]')!;
-    expect(row).toHaveTextContent('目标未记录');
-    expect(row).toHaveTextContent('结果：赞成胜出');
-    expect(row.querySelector('button[title^="跳转到目标消息"]')).toBeNull();
+    expect(row).toBeNull();expect(record.settlementTargetId).toBeUndefined();
   });
 
   it.each([

@@ -1,14 +1,15 @@
-// MessageFilterPanel.tsx — 消息类型过滤面板
-// 提供开关来屏蔽/显示结算消息和加入消息
+// Saved-view compatibility: ordinary views exclude records independently of old flags.
+// JOIN records are explicitly opened through the membership labels.
 
 import { useState, useRef, useEffect } from 'react';
 import {dialogStyles} from './dialogStyles';
 import ThemeIcon from '../theme/ThemeIcon';
+import { isSettlementRecord } from '../utils/modelBridge';
 
 export interface MessageFilterSettings {
-  /** 是否屏蔽结算消息 (round / round_result) */
+  /** Legacy saved-view field; settlement records now stay in the target's entry. */
   hideSettlement: boolean;
-  /** 是否屏蔽加入消息 (join) */
+  /** Legacy saved-view field; JOIN records are shown only in temporary categories. */
   hideJoin: boolean;
 }
 
@@ -27,7 +28,7 @@ export default function MessageFilterPanel({
   const panelRef = useRef<HTMLDivElement>(null);
 
   // 是否有任何过滤激活
-  const hasActive = settings.hideSettlement || settings.hideJoin;
+  const hasActive = settings.hideJoin;
 
   // 点击外部关闭
   useEffect(() => {
@@ -51,7 +52,7 @@ export default function MessageFilterPanel({
       <button
         className="workbench-clean-toggle"
         onClick={() => setOpen(prev => !prev)}
-        title="清爽视图：快速屏蔽结算/加入消息"
+        title="清爽视图：快速屏蔽加入消息"
         style={{
           padding: '4px 10px',
           borderRadius: 4,
@@ -87,30 +88,6 @@ export default function MessageFilterPanel({
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {/* 结算消息开关 */}
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                cursor: 'pointer',
-                padding: '6px 8px',
-                borderRadius: 4,
-                background: settings.hideSettlement ? 'var(--surface-rgba-167-139-250-0-1)' : 'transparent',
-                border: settings.hideSettlement ? '1px solid var(--line-rgba-167-139-250-0-3)' : '1px solid transparent',
-                fontSize: 13,
-                color: 'var(--ink-e2e8f0)',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={settings.hideSettlement}
-                onChange={() => toggleFilter('hideSettlement')}
-                style={{ accentColor: 'var(--ink-a78bfa)' }}
-              />
-              <span>屏蔽结算消息</span>
-            </label>
-
             {/* 加入消息开关 */}
             <label
               style={{
@@ -152,10 +129,11 @@ export function applyMessageFilter<T extends { id: string; kind: string }>(
   messages: T[],
   settings: MessageFilterSettings,
 ): T[] {
-  if (!settings.hideSettlement && !settings.hideJoin) return messages;
+  // Keep accepting legacy saved-view settings without letting them reveal records.
+  void settings;
   return messages.filter(m => {
-    if (settings.hideSettlement && (m.kind === 'round' || m.kind === 'round_result')) return false;
-    if (settings.hideJoin && m.kind === 'join') return false;
+    if (isSettlementRecord(m)) return false;
+    if (m.kind === 'join') return false;
     return true;
   });
 }

@@ -6,7 +6,7 @@ interface HandleSplitterPointerDownDependencies {
   splitterDragRef: React.MutableRefObject<{ startX: number; startLeftPx: number; containerW: number; } | null>;
   MIN_LEFT_PX: 560;
   MIN_RIGHT_PX: 280;
-  MAX_RIGHT_PX: 700;
+  MAX_RIGHT_PX: number;
   BASE_WIDTH: 1024;
   getMinimumContainerWidth: () => number;
   setContainerWidth: React.Dispatch<React.SetStateAction<number>>;

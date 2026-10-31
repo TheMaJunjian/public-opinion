@@ -25,7 +25,31 @@ export function getOrganizationTitle(message: DemoMessage, memberCount?: number)
 }
 
 export function getMessageCardContent(message: DemoMessage | undefined): string {
+  if (message && (message.kind === 'round' || message.kind === 'round_result')) {
+    return [message.settlementTargetId ? `目标：${message.settlementTargetId}` : '目标未记录', getSettlementDetails(message)].filter(Boolean).join('\n');
+  }
   return message ? getOrganizationTitle(message) || message.content : '';
+}
+
+/** Remove generated target previews while retaining the settlement's own results and notes. */
+export function getSettlementDetails(message: DemoMessage): string {
+  const parts = message.parts?.filter(part => part.type === 'text' || part.type === 'code' || part.type === 'web') ?? [];
+  let details = parts.length ? parts.map(part => part.type === 'text' ? part.text : part.type === 'code' ? part.source : part.excerpt || part.url).join('\n') : message.content;
+  const heading = details.match(/^(?:发起(?:真假|价值)仲裁|(?:真假|价值)仲裁完成)：目标消息/u);
+  if (heading) {
+    const target = details.slice(heading[0].length).trimStart();
+    if (target.startsWith('「')) {
+      let depth = 0, end = 0;
+      for (; end < target.length; end++) {
+        if (target[end] === '「') depth++;
+        else if (target[end] === '」' && --depth === 0) break;
+      }
+      details = target.slice(end + 1).replace(/^；/u, '');
+    } else details = target.replace(/^[^；\n]*(?:；|\n|$)/u, '');
+  }
+  if (/^发起结算：/u.test(details) && details.includes('。发起人：')) details = details.slice(details.lastIndexOf('。发起人：') + 1);
+  else if (/^(?:请求)?发起结算：「[\s\S]*」$/u.test(details)) details = '';
+  return details.replace(/^(?:发起(?:真假|价值)仲裁|(?:真假|价值)仲裁完成)：/u, '').trim();
 }
 
 /** Only recommendation expenditure buys prominence; wagers are not recommendations. */

@@ -11,8 +11,10 @@ import type { User } from '../types';
 import { getMessageCardContent, getMessageTypeLabel } from '../utils/messageDisplay';
 import WorkbenchScrollViewport from './WorkbenchScrollViewport';
 import type { DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge';
+import { isSettlementRecord } from '../utils/modelBridge';
 import SendPreviewProgress from './SendPreviewProgress';
 import MessageReferenceControl from './MessageReferenceControl';
+import MessageConnections from './MessageConnections';
 import OperationLogView from './OperationLogView';
 import StagedMessageLabel from './StagedMessageLabel';
 import StanceReadingReminder from './StanceReadingReminder';
@@ -598,6 +600,13 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           </div>
         </div>
       </>}
+
+      {p.lastClickedMessageId&&messageMap.has(p.lastClickedMessageId)&&!isSettlementRecord(messageMap.get(p.lastClickedMessageId))&&<section aria-label="消息关联" data-selected-message-connections={p.lastClickedMessageId}
+        style={{padding:8,border:'1px solid var(--line-475569)',borderRadius:6,fontSize:12}}>
+        <div>当前消息：<MessageReferenceControl messageId={p.lastClickedMessageId} type={getMessageTypeLabel(messageMap.get(p.lastClickedMessageId))}
+          summary={getMessageCardContent(messageMap.get(p.lastClickedMessageId))} onNavigate={p.onNavigateToMessage} wholeMessage={false}/></div>
+        <MessageConnections key={p.lastClickedMessageId} messageId={p.lastClickedMessageId} messages={p.messages} edges={p.edges} defaultOpen onNavigate={p.onNavigateToMessage}/>
+      </section>}
 
       {!p.isViewerMode && <>
       {/* Stance History */}

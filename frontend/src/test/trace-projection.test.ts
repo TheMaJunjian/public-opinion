@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyTraceFrameVisibility, buildTraceProjection } from '../utils/traceProjection';
+import { traceRange } from '../utils/traceRange';
 import { deriveContainerEffect } from '../pages/workbench/model/containerEffect';
 import { convertMessagesToDemoModel, type DemoEdge, type DemoMessage } from '../utils/modelBridge';
 import type { Relation } from '../types';
@@ -13,6 +14,45 @@ const edge = (owner: string, type: DemoEdge['relationType'], target: string, sou
 });
 
 describe('trace boundaries', () => {
+  it('continues through a referenced relation to both of its content endpoints within one layer', () => {
+    const messages = [message('A'), message('B', 'reference'), message('C'), message('D'), message('E', 'reference')];
+    const edges = [edge('B', 'reference', 'A', 'C'), edge('E', 'reference', 'B', 'D')];
+    const range = traceRange(messages, edges, ['E'], { up: 1, down: 0 });
+    for (const id of ['A', 'C', 'D']) expect(range.distances.get(id)).toBe(1);
+    expect(traceRange(messages, edges, ['E'], { up: 0, down: 1 }).ids).toEqual(new Set(['E']));
+    expect(traceRange(messages, edges, ['E'], { up: 0, down: 0 }).ids).toEqual(new Set(['E']));
+    const projection = buildTraceProjection({ messages, edges, startIds: ['E'], distance: 1, depths: { up: 1, down: 0 } });
+    expect(new Set(projection.messages.map(message => message.id))).toEqual(new Set(['A', 'B', 'C', 'D', 'E']));
+    expect(projection.edges).toEqual(edges);
+  });
+
+  it('stops at content endpoints while traversing multiple relation records and cycles safely', () => {
+    const messages = ['A', 'C', 'D', 'before', 'later'].map(id => message(id));
+    messages.push(...['B', 'E', 'F', 'cycle', 'previous', 'next'].map(id => message(id, 'reference')));
+    const edges = [edge('B', 'reference', 'A', 'C'), edge('E', 'reference', 'B', 'D'),
+      edge('F', 'reference', 'E'), edge('cycle', 'reference', 'F'), edge('F', 'reference', 'cycle'),
+      edge('previous', 'reference', 'before', 'A'), edge('next', 'reference', 'A', 'later')];
+    for (const nodes of [messages, [...messages].reverse()]) {
+      const one = buildTraceProjection({ messages: nodes, edges, startIds: ['F'], distance: 1, depths: { up: 1, down: 0 } });
+      for (const id of ['A', 'C', 'D']) expect(one.semanticMessageIds).toContain(id);
+      expect(one.messages.map(message => message.id)).not.toContain('before');
+      expect(one.messages.map(message => message.id)).not.toContain('later');
+      const two = buildTraceProjection({ messages: nodes, edges, startIds: ['F'], distance: 2, depths: { up: 2, down: 0 } });
+      expect(two.semanticMessageIds).toContain('before');
+      expect(two.messages.map(message => message.id)).not.toContain('later');
+    }
+  });
+
+  it('charges a layer for relation messages with their own readable body', () => {
+    const content = { ...message('B', 'reference'), parts: [{ id: 'body', type: 'text' as const, text: '引用附带的正文' }] };
+    const messages = [message('A'), content, message('C'), message('D'), message('E', 'reference')];
+    const edges = [edge('B', 'reference', 'A', 'C'), edge('E', 'reference', 'B', 'D')];
+    const one = buildTraceProjection({ messages, edges, startIds: ['E'], distance: 1, depths: { up: 1, down: 0 } });
+    expect(one.distanceMessageIds).toContain('B');
+    expect(one.messages.map(message => message.id)).not.toContain('A');
+    expect(one.messages.map(message => message.id)).not.toContain('C');
+  });
+
   it('recomputes both increasing and decreasing distances from the members of a single expanded classification',()=>{
     const messages=[message('group','classify'),...['member','peer','up-1','up-2','down-1','down-2'].map(id=>message(id)),
       ...['ref-up-1','ref-up-2','ref-down-1','ref-down-2'].map(id=>message(id,'reference'))];

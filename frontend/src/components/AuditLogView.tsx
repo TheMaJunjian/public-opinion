@@ -100,7 +100,7 @@ export default function AuditLogView({ scopeMessageId }: { scopeMessageId?: stri
   }, [scopeMessageId, page, filterAction]);
 
   return (
-    <div className="border border-[color:var(--line-e5e7eb)] rounded-lg p-4 bg-[color:var(--surface-fff)]">
+    <div className="record-panel border border-[color:var(--line-e5e7eb)] rounded-lg p-4 bg-[color:var(--surface-fff)]">
       <div className="flex items-center justify-between mb-3">
         <h3 className="font-semibold text-[color:var(--ink-1f2937)] text-sm">📋 审计日志</h3>
         <select

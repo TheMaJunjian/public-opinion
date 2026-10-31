@@ -1,6 +1,8 @@
 import { stakeAppearanceAttributes, groupStakeAppearanceAttributes } from '../utils/stakeAppearance';
 import StakeTierBadge, { SkinOrnament } from '../theme/StakeTierBadge';
 import { ThemeLabel } from '../theme/ThemeIcon';
+import SettlementMessageContent from './SettlementMessageContent';
+import { isSettlementRecord } from '../utils/modelBridge';
 import { EdgeSkin, EdgeLabelSkin, FrameSkin } from '../theme/GraphSkin';
 import { useGraphOverlays } from '../hooks/useGraphOverlays';
 import { projectGraphScene } from '../utils/graphProjection';
@@ -81,6 +83,7 @@ export interface GraphViewProps {
   invalidCorrectionIds?: Set<string>;
   draftUnits: UnitSelection[];
   activeTextSelectId: string | null;
+  showJoinRecords?: boolean;
   lastClickedMessageId: string | null;
   onMessageClick: (e: React.MouseEvent, messageId: string) => void;
   onMessageDoubleClick: (e: React.MouseEvent, messageId: string) => void;
@@ -442,9 +445,11 @@ function GraphViewCanvas(props: GraphViewProps) {
     messageId={messageId} memberRecords={joinRelationsByTarget?.get(messageId)} containerRecords={joinRelationsBySource?.get(messageId)}
     isContainer={isContainer} isEffective={isJoinEffective} onOpen={onJoinFilterClick} compact={compact}/>;
 
-  const messages = inputMessages;
+  const showJoinRecords=props.showJoinRecords??!!props.joinFilterTargetId;
+  const hiddenRecordIds=useMemo(()=>new Set(inputMessages.filter(message=>isSettlementRecord(message)||message.kind==='join'&&!showJoinRecords).map(message=>message.id)),[inputMessages,showJoinRecords]);
+  const messages = useMemo(()=>inputMessages.filter(message=>!hiddenRecordIds.has(message.id)),[inputMessages,hiddenRecordIds]);
   const relatedByTarget=useMemo(()=>indexRelatedMessages(props.relatedMessages??messages,props.rejectedContainerIds),[props.relatedMessages,messages,props.rejectedContainerIds]);
-  const edges = inputEdges;
+  const edges = useMemo(()=>inputEdges.filter(edge=>![edge.relationMessageId,edge.from.messageId,edge.to.messageId].some(id=>hiddenRecordIds.has(id))),[inputEdges,hiddenRecordIds]);
   const widthContext = useContext(CardWidthContext);
   const traceFrameIds = props.traceFrameIds ?? new Set<string>();
   // Expanded frame IDs are only meaningful inside an active trace window.
@@ -608,8 +613,8 @@ function GraphViewCanvas(props: GraphViewProps) {
   const { msgMap, edgesByRelMsg, classifyRelMsgIds, relationCardMsgIds, normals,
     layoutEdges, hiddenTargetIds, correctionsByTargetMsgId, frameBlocks, frameDepthMap,
     correctedEdgeIdsByRelMsg, pipelineCol, pipelineMaxCol } = useMemo(() => projectGraphScene({
-      messages, edges, traceExpandedFrameIds, isTraceWindow,standaloneMessageIds:props.standaloneMessageIds,rejectedContainerIds:props.rejectedContainerIds,rejectedRelationIds,hiddenMessageIds:effectiveHideMessageIds,cardFrameIds,
-    }), [messages, edges, traceExpandedFrameIds, isTraceWindow,props.standaloneMessageIds,props.rejectedContainerIds,rejectedRelationIds,effectiveHideMessageIds,cardFrameIds]);
+      messages, edges, traceExpandedFrameIds, isTraceWindow,showJoinRecords,standaloneMessageIds:props.standaloneMessageIds,rejectedContainerIds:props.rejectedContainerIds,rejectedRelationIds,hiddenMessageIds:effectiveHideMessageIds,cardFrameIds,
+    }), [messages, edges, traceExpandedFrameIds, isTraceWindow,showJoinRecords,props.standaloneMessageIds,props.rejectedContainerIds,rejectedRelationIds,effectiveHideMessageIds,cardFrameIds]);
   const availableFrameWidth=useAvailableFrameWidth(canvasRef,frameBlocks.some(frame=>frame.hasGroupHeader));
 
   const measuredHeights = useCardMeasurements(canvasRef, cardRefs);
@@ -1239,53 +1244,11 @@ function GraphViewCanvas(props: GraphViewProps) {
                 </div>
               )}
               {isText&&<div style={{fontSize:11,color:"var(--ink-0b84ff)",marginBottom:4}}>拖选文字即可选择片段，或点击已有高亮片段</div>}
-              {/* Settlement: content with inline target tag on first line */}
-              {(msg.kind === 'round' || msg.kind === 'round_result') ? (() => {
-                const settleTargetId = (msg as any).settlementTargetId as string | undefined;
-                const targetMsg = settleTargetId ? msgMap.get(settleTargetId) : undefined;
-                const targetContent = targetMsg?.content ?? '';
-                const targetPreview = targetContent.length > 40
-                  ? targetContent.slice(0, 40) + '…'
-                  : targetContent;
-                const isValue = (msg as any).roundPayload?.settlementType === 'VALUE';
-                const isRound = msg.kind === 'round';
-                const tagColor = isValue
-                  ? (isRound ? 'var(--ink-fcd34d)' : 'var(--ink-f59e0b)')
-                  : (isRound ? 'var(--ink-a5b4fc)' : 'var(--ink-818cf8)');
-                const lines = (msg.content ?? '').split('\n');
-                const firstLine = lines[0];
-                const restLines = lines.slice(1).join('\n');
-                return (
-                  <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"var(--ink-f5f5f5)"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
-                    <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexWrap: "wrap" }}>
-                      <span style={{ whiteSpace: "pre-wrap", fontFamily: "Menlo,Monaco,Consolas,'Courier New',monospace", fontSize: 13 }}>{firstLine}</span>
-                      {settleTargetId && (
-                        onNavigateToMessage ? (
-                          <span
-                            onClick={(e) => { e.stopPropagation(); onNavigateToMessage(settleTargetId); }}
-                            style={{
-                              fontSize: 10, fontWeight: 500, padding: "1px 6px", borderRadius: 4,
-                              background: `color-mix(in srgb, ${tagColor} 8.24%, transparent)`, color: tagColor, border: `1px solid color-mix(in srgb, ${tagColor} 25.1%, transparent)`,
-                              cursor: "pointer", maxWidth: 240, overflow: "hidden",
-                              textOverflow: "ellipsis", whiteSpace: "nowrap",
-                            }}
-                            title={`点击跳转到目标消息 ${settleTargetId.slice(-6)}${targetContent ? '：' + targetContent : ''}`}
-                          >
-                            → {settleTargetId.slice(-6)}{targetPreview ? `「${targetPreview}」` : ''}
-                          </span>
-                        ) : (
-                          <span style={{ fontSize: 10, color: "var(--ink-6b7280-2)", padding: "1px 4px", borderRadius: 3, background: "var(--surface-rgba-107-114-128-0-1)" }}>
-                            {settleTargetId.slice(-6)}
-                          </span>
-                        )
-                      )}
-                    </div>
-                    {restLines && (
-                      <pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "Menlo,Monaco,Consolas,'Courier New',monospace", fontSize: 13 }}>{restLines}</pre>
-                    )}
-                  </div>
-                );
-              })() : !msg.joinInfo && (
+              {(msg.kind === 'round' || msg.kind === 'round_result') ? (
+                <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"var(--ink-f5f5f5)"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
+                  <SettlementMessageContent message={msg} onTargetClick={onNavigateToMessage?(_event,id)=>onNavigateToMessage(id):undefined}/>
+                </div>
+              ) : !msg.joinInfo && (
               <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"var(--ink-f5f5f5)"}}>
                 {msg.parts?.some(part => ['text', 'web', 'code'].includes(part.type))
                   ? msg.parts.filter(part => ['text', 'web', 'code'].includes(part.type)).map(part =>

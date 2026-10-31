@@ -160,6 +160,7 @@ it.each(['join','round','round_result'] as const)('folds votes on a filtered %s 
   const messages=model.messages.map(message=>message.id==='target'?{...message,kind}:message);
   const visible=messages.filter(message=>message.kind!==kind);
   expect(filterMessageListContext(visible,messages,model.edges).map(m=>m.id)).toEqual(['source','reference']);
-  expect(filterMessageListContext(messages,messages,model.edges)).toEqual(messages);
+  expect(filterMessageListContext(messages,messages,model.edges).map(message=>message.id)).toEqual(['source','reference']);
+  if(kind==='join')expect(filterMessageListContext(messages,messages,model.edges,undefined,true)).toEqual(messages);
   expect(filterMessageListContext(visible,messages,model.edges,new Set(['agree'])).map(m=>m.id)).toEqual(['source','agree','reference']);
 });

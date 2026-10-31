@@ -24,10 +24,10 @@ export default function RevenuePanel() {
     return () => window.removeEventListener('revenue-refresh', load);
   }, []);
 
-  if (loading) return <div className="text-sm text-[color:var(--ink-6b7280)] p-4">加载收入数据...</div>;
+  if (loading) return <div className="record-panel text-sm text-[color:var(--ink-6b7280)] p-4">加载收入数据...</div>;
 
   return (
-    <div className="border border-[color:var(--line-e5e7eb)] rounded-lg p-4 bg-[color:var(--surface-fff)] space-y-4">
+    <div className="record-panel border border-[color:var(--line-e5e7eb)] rounded-lg p-4 bg-[color:var(--surface-fff)] space-y-4">
       <h3 className="font-semibold text-[color:var(--ink-1f2937)] text-sm">💰 收入池</h3>
 
       {pool ? (

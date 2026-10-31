@@ -4,6 +4,7 @@ import HomeFilterBadge from './HomeFilterBadge';
 import { getPresentationSpec } from '../types';
 import { getRelationMessageLabel } from '../utils/attachedRelationLabels';
 import MessageTextPart from './MessageTextPart';
+import SettlementMessageContent from './SettlementMessageContent';
 import MessageElement from './MessageElement';
 import { MessageDisplayMarker } from './MessageDisplayHints';
 import { isMessageElementSelected, messageMembersReference, messageTypeReference } from '../utils/messageElementSelection';
@@ -27,8 +28,6 @@ export interface MessageCardContext {
   memberCount?: number;
   relType?: string | null;
   settlementTargetId?: string | undefined;
-  settlementTargetContent?: string;
-  isValueSettlement?: boolean;
   lastClickedMsgId?: string | null;
   readStatus?: 'READ' | 'UNREAD';
   homeMatch?: boolean;
@@ -95,7 +94,7 @@ export default function MessageCard({
     isGovernanceMsg, governanceColor,
     organizationTitle, memberCount,
     relType,
-    settlementTargetId, settlementTargetContent, isValueSettlement,
+    settlementTargetId,
     lastClickedMsgId,
     readStatus,
     homeMatch,
@@ -260,7 +259,7 @@ export default function MessageCard({
       )}
 
       {/* Content */}
-      {!isOrganizationMessage && !inlineRelationContent && !(children != null && (msg.kind === 'relation' || msg.kind === 'join')) && msg.parts?.some(part => part.type === 'text' || part.type === 'code' || part.type === 'web') ? (
+      {!isOrganizationMessage && !inlineRelationContent && msg.kind !== 'round' && msg.kind !== 'round_result' && !(children != null && (msg.kind === 'relation' || msg.kind === 'join')) && msg.parts?.some(part => part.type === 'text' || part.type === 'code' || part.type === 'web') ? (
         <div style={{ display: 'grid', gap: 8 }}>
           {msg.parts.filter(part => part.type === 'text' || part.type === 'code' || part.type === 'web').map(part => (
             <MessageTextPart key={part.id} message={msg} partId={part.id} activeText={isActiveText} onMouseUp={onContentMouseUp}>{msg.kind === 'normal' && msg.parts!.filter(item => ['text', 'code', 'web'].includes(item.type)).length === 1 ? children : undefined}</MessageTextPart>
@@ -269,43 +268,9 @@ export default function MessageCard({
       ) : !isOrganizationMessage && !inlineRelationContent && (
         <div className="message-card-body" style={{ fontSize: isRelationRecord ? 12 : prominence.cssFontSize, color: isRelationRecord ? 'var(--ink-9ca3af)' : 'var(--ink-f5f5f5)' }} onMouseUp={e => onContentMouseUp?.(e, msg.id)}>
           {children != null ? children : (
-            isContentKind(msg.kind) && (msg.kind === 'round' || msg.kind === 'round_result') ? (() => {
-            const sid = settlementTargetId ?? (msg as any).settlementTargetId as string | undefined;
-            const tgtContent = settlementTargetContent ?? '';
-            const preview = tgtContent.length > 40 ? tgtContent.slice(0, 40) + '…' : tgtContent;
-            const isVal = isValueSettlement ?? (msg as any).roundPayload?.settlementType === 'VALUE';
-            const isRound = msg.kind === 'round';
-            const tc = isVal
-              ? (isRound ? 'var(--ink-fcd34d-2)' : 'var(--ink-f59e0b-2)')
-              : (isRound ? 'var(--ink-a5b4fc-2)' : 'var(--ink-818cf8-2)');
-            const lines = (msg.content ?? '').split('\n');
-            return (
-              <div>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
-                  <span style={{ whiteSpace: 'pre-wrap' }}>{lines[0]}</span>
-                  {sid && (
-                    <span
-                      onClick={e => { e.stopPropagation(); onSettlementTargetClick?.(e, sid); }}
-                      style={{
-                        fontSize: 11, fontWeight: 500, padding: '1px 6px', borderRadius: 4,
-                        background: `color-mix(in srgb, ${tc} 7.06%, transparent)`, color: tc, border: `1px solid color-mix(in srgb, ${tc} 20.78%, transparent)`,
-                        cursor: onSettlementTargetClick ? 'pointer' : 'default',
-                        maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      }}
-                      title={sid.slice(-6) + (tgtContent ? '：' + tgtContent : '')}
-                    >
-                      → {sid.slice(-6)}{preview ? `「${preview}」` : ''}
-                    </span>
-                  )}
-                </div>
-                {lines.slice(1).join('\n') && (
-                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'Menlo, Monaco, Consolas, monospace', fontSize: 13 }}>
-                    {lines.slice(1).join('\n')}
-                  </pre>
-                )}
-              </div>
-            );
-          })() : isContentKind(msg.kind) ? (
+            isContentKind(msg.kind) && (msg.kind === 'round' || msg.kind === 'round_result') ? (
+            <SettlementMessageContent message={settlementTargetId?{...msg,settlementTargetId}:msg} onTargetClick={onSettlementTargetClick}/>
+          ) : isContentKind(msg.kind) ? (
             <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
           ) : (
             <div style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: 'var(--ink-d1d5db)' }}>{msg.content}</div>

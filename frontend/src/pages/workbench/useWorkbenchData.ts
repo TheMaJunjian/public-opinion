@@ -227,6 +227,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
       document.addEventListener('visibilitychange', resume);
       window.addEventListener('pageshow', resume);
       window.addEventListener('focus', resume);
+      window.addEventListener('online', resume);
       stop = () => {
         window.removeEventListener('gonglun:reload', reload);
         window.removeEventListener('gonglun:invalidate-cache', invalidateCache);
@@ -235,6 +236,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
         document.removeEventListener('visibilitychange', resume);
         window.removeEventListener('pageshow', resume);
         window.removeEventListener('focus', resume);
+        window.removeEventListener('online', resume);
         if (syncRef.current === sync) syncRef.current = null;
         sync.stop();
       };
@@ -266,6 +268,12 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
 
 
   return {
+    captureTransient: records.captureTransient,
+    showSendPreview: records.showSendPreview,
+    clearSendPreview: records.clearSendPreview,
+    confirmSendPreview: records.confirmSendPreview,
+    liveSequence: records.liveSequence,
+    liveMessages: records.liveMessages, liveRelations:records.liveRelations,
     captureOptimisticRollback: records.captureOptimisticRollback,
     scope, messages: viewMessages, setMessages, edges: viewEdges, setEdges,
     edgesRef, relations: viewRelations, setRelations, attentionUsersByTarget, loadError, setRelatedTraceContext,

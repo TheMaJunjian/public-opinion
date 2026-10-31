@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { computeSceneLayout, type SceneLayoutInput } from '../utils/frameLayout';
 import { planMessageStructures, type MessageStructureInput } from '../utils/messageStructurePlan';
 import { useWorkbenchDrawingTask } from '../context/WorkbenchDrawingContext';
+import { sceneComputationKey } from '../utils/sceneComputationKey';
 
 type Job = { kind: 'layout'; input: SceneLayoutInput } | { kind: 'structures'; input: MessageStructureInput };
 export interface SceneComputationRequest { id: number; job: Job }
@@ -12,7 +13,7 @@ const compute = (job: Job): Result => job.kind === 'layout' ? computeSceneLayout
 export function useSceneComputation<K extends Job['kind']>(inputJob: Extract<Job, { kind: K }> | null, retainPrevious = false, retentionKey?: unknown) {
   // Worker inputs contain value data. Equal restored projections can reuse
   // this retained view's completed result even when their references change.
-  const inputKey=useMemo(()=>inputJob?JSON.stringify(inputJob,(_key,value)=>value instanceof Set?{set:[...value].sort()}:value instanceof Map?{map:[...value]}:value):null,[inputJob]);
+  const inputKey=useMemo(()=>sceneComputationKey(inputJob),[inputJob]);
   const stableJob=useRef({key:inputKey,job:inputJob});
   if(stableJob.current.key!==inputKey)stableJob.current={key:inputKey,job:inputJob};
   const job=stableJob.current.job;

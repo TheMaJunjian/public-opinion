@@ -162,13 +162,6 @@
   vertical-align: -.18em; pointer-events: none;
 }
 :root[data-appearance='gpt-arena'] .theme-icon-before-label { margin-right: 4px; }
-:root[data-appearance='gpt-arena'] .app-navbar-freeze {
-  position: static; width: 28px; height: 28px; border-radius: 5px;
-  border: 1px solid var(--border-default); box-shadow: none;
-}
-:root[data-appearance='gpt-arena'] .app-navbar-freeze[aria-pressed='true'] {
-  background: var(--selection-bg) !important; border-color: var(--selection-accent);
-}
 :root[data-appearance='gpt-arena'] [data-guide-points] > span {
   display: inline-flex; align-items: center; gap: 3px; font-variant-numeric: tabular-nums;
 }

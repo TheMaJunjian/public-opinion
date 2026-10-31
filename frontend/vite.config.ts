@@ -16,6 +16,7 @@ export default defineConfig({
           const path = id.replaceAll('\\', '/');
           if (path.endsWith('/src/utils/modelBridge.ts')) return 'message-model';
           if (path.endsWith('/src/pages/workbench/model/readingProgress.ts')) return 'reading-progress';
+          if (path.endsWith('/src/pages/workbench/useSendPreview.ts')) return 'send-preview';
         },
       },
     },

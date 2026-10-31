@@ -30,6 +30,7 @@ const reducer = (state: ComposerState, action: Action) => action.type === 'resto
 export function useWorkbenchComposer() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state); stateRef.current = state;
+  const transient = useRef<ComposerState | null>(null);
   const subTypeCustomBufferRef = useRef('');
   const savedTextOnTypeSwitchRef = useRef('');
   const savedTextBeforeDelegationRef = useRef('');
@@ -39,8 +40,10 @@ export function useWorkbenchComposer() {
   const previousComposerModeRef = useRef('plain::none');
   const setters = useMemo(() => {
     const field = <K extends keyof ComposerState>(key: K): Dispatch<SetStateAction<ComposerState[K]>> => value =>
-      dispatch({ type: 'update', apply: current => ({ ...current, [key]: typeof value === 'function'
-        ? (value as (previous: ComposerState[K]) => ComposerState[K])(current[key]) : value }) });
+      { const apply = (current: ComposerState): ComposerState => ({ ...current, [key]: typeof value === 'function'
+        ? (value as (previous: ComposerState[K]) => ComposerState[K])(current[key]) : value });
+        if (transient.current) transient.current = apply(transient.current);
+        else dispatch({ type: 'update', apply }); };
     return {
       setDraftUnits: field('draftUnits'), setSourceUnits: field('sourceUnits'), setTargetUnits: field('targetUnits'),
       setActiveTextSelectId: field('activeTextSelectId'), setRelationType: field('relationType'),
@@ -52,6 +55,24 @@ export function useWorkbenchComposer() {
     };
   }, []);
   const recovery = useMemo(() => ({
+    async captureTransient(work: () => Promise<unknown>): Promise<ComposerCheckpoint> {
+      const before = { state: stateRef.current, textOnTypeSwitch: savedTextOnTypeSwitchRef.current,
+        customText: subTypeCustomBufferRef.current, textBeforeDelegation: savedTextBeforeDelegationRef.current,
+        delegationContent: { ...delegationContentBufferRef.current } };
+      transient.current = before.state;
+      try {
+        await work();
+        return { state: transient.current!, textOnTypeSwitch: savedTextOnTypeSwitchRef.current,
+          customText: subTypeCustomBufferRef.current, textBeforeDelegation: savedTextBeforeDelegationRef.current,
+          delegationContent: { ...delegationContentBufferRef.current } };
+      } finally {
+        transient.current = null;
+        savedTextOnTypeSwitchRef.current = before.textOnTypeSwitch;
+        subTypeCustomBufferRef.current = before.customText;
+        savedTextBeforeDelegationRef.current = before.textBeforeDelegation;
+        delegationContentBufferRef.current = before.delegationContent;
+      }
+    },
     capture(): ComposerCheckpoint {
       return { state: stateRef.current, textOnTypeSwitch: savedTextOnTypeSwitchRef.current,
         customText: subTypeCustomBufferRef.current, textBeforeDelegation: savedTextBeforeDelegationRef.current,

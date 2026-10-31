@@ -87,6 +87,8 @@ interface SyncOptions {
   onPages?: (pages: Record<string, { hasMore: boolean; loading: boolean }>) => void;
 }
 
+export const WORKBENCH_SYNC_CHECK_MS = 30_000;
+
 /** Serialize snapshots and replay changes after the first page's sequence. SSE only wakes the reader. */
 export function syncWorkbench(options: SyncOptions) {
   const store = new WorkbenchStore();
@@ -120,8 +122,28 @@ export function syncWorkbench(options: SyncOptions) {
       catch { schedule(); }
     };
     events.onopen = schedule; // Reconnects always catch up from the last applied sequence.
-    events.onerror = () => { /* EventSource reconnects without resetting the applied cursor. */ };
+    events.onerror = () => {
+      // CLOSED streams are retried by wake's bounded timer, not recursively on error.
+      if ((typeof document === 'undefined' || !document.hidden)
+        && (typeof navigator === 'undefined' || navigator.onLine !== false)) schedule();
+    };
   };
+  // Mobile networks can leave a stream open without delivering further frames.
+  // Check the applied cursor independently; unchanged deltas never redraw the view.
+  function wake() {
+    if (stopped || (typeof document !== 'undefined' && document.hidden)
+      || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
+    if (events?.readyState === 2) connect();
+    if (timer && !running) { clearTimeout(timer); timer = undefined; }
+    schedule();
+  }
+  const recoveryTimer = setInterval(wake, WORKBENCH_SYNC_CHECK_MS);
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', wake);
+    window.addEventListener('pageshow', wake);
+    window.addEventListener('focus', wake);
+  }
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', wake);
   async function refresh() {
     if (running || stopped) return;
     running = true; queued = false;
@@ -248,6 +270,13 @@ export function syncWorkbench(options: SyncOptions) {
     },
     stop() {
       stopped = true; abort.abort(); events?.close(); if (timer) clearTimeout(timer);
+      clearInterval(recoveryTimer);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('online', wake);
+        window.removeEventListener('pageshow', wake);
+        window.removeEventListener('focus', wake);
+      }
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', wake);
       for (const waiter of waitingRefreshes) waiter.reject(new Error('同步已停止'));
       waitingRefreshes.clear();
       for (const demand of demands.splice(0)) demand.reject(new Error('同步已停止'));

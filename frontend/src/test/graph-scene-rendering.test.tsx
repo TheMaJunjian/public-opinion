@@ -169,6 +169,35 @@ describe('rendered graph scene', () => {
     view.unmount();
   });
 
+  it('paints an enclosing classification before its nested merge on the first render, without selecting either frame',()=>{
+    const outer:DemoMessage={...message('outer'),kind:'relation',relationType:'classify'};
+    const merge:DemoMessage={...message('merge'),kind:'relation',relationType:'merge'};
+    const edges=[relation('outer','classify','anon:outer','merge'),relation('merge','merge','anon:merge','member')];
+    // Relation insertion order is independent of nesting order.
+    const view=renderScene([merge,outer,message('member')],edges,{traceFrameIds:new Set(['outer','merge']),traceExpandedFrameIds:new Set(['outer'])});
+    const frames=[...view.container.querySelectorAll('[data-frame-visual]')];
+    expect(frames.map(frame=>frame.getAttribute('data-frame-visual'))).toEqual(['outer','merge']);
+    expect(frames.every(frame=>!frame.hasAttribute('data-whole-selected'))).toBe(true);
+    expect(view.getByRole('group',{name:'组织消息 merge'})).toBeInTheDocument();
+  });
+
+  it('reveals the header of a tall nested merge inside a bounded parent on the first jump',async()=>{
+    const outer:DemoMessage={...message('outer'),kind:'relation',relationType:'classify'};
+    const merge:DemoMessage={...message('merge'),kind:'relation',relationType:'merge'};
+    const members=Array.from({length:8},(_,index)=>message(`member-${index}`));
+    const edges=[relation('outer','classify','anon:outer','merge'),...members.map(member=>relation('merge','merge','anon:merge',member.id))];
+    const view=renderScene([merge,outer,...members],edges,{traceFrameIds:new Set(['outer','merge']),traceExpandedFrameIds:new Set(['outer']),
+      frameViewStateRef:{current:{main:{sizes:{outer:{width:480,height:240}},scrolls:{outer:{left:0,top:300}},full:{outer:false}}}}});
+    const canvas=view.container.querySelector('[data-jump-canvas]')!;
+    act(()=>canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:['merge']}})));
+    await act(async()=>{});
+    const header=view.getByRole('group',{name:'组织消息 merge'}),clip=header.closest<HTMLElement>('[data-frame-clip]')!;
+    expect(clip).not.toBeNull();
+    const top=parseFloat((header as HTMLElement).style.top),clipTop=parseFloat(clip.style.top);
+    expect(top).toBeGreaterThanOrEqual(clipTop);
+    expect(top+parseFloat((header as HTMLElement).style.minHeight)).toBeLessThanOrEqual(clipTop+parseFloat(clip.style.height));
+  });
+
   it('keeps a cross-frame citation visible and reveals its routed start inside the source viewport',async()=>{
     const group=(id:string):DemoMessage=>({...message(id),kind:'relation',relationType:'classify'});
     const members=Array.from({length:8},(_,index)=>message(`member-${index}`));

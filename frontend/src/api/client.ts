@@ -1,7 +1,7 @@
 import { signPayloadWithPrivateJwk } from '../utils/signature';
 import type { Session, Reference, ReadingMark,BodyVersion,Message as CoreMessage } from '@gonglun/core';
 import { decodeWorkbenchSnapshot, type CompactSnapshot } from '@gonglun/core';
-import { cancelCommandBatch, isPendingMessage, queueCommand, runCommandBatch } from './commandBatch';
+import { cancelCommandBatch, isPendingMessage, queueCommand, runCommandBatch, prepareCommandBatch as prepareBatch, commitPreparedBatch, type PreparedCommandBatch, type CommandCommit } from './commandBatch';
 import { beginRequestOperation, clearWriteRequestIdentity, fetchJsonWithDeadline, requestOwner, singleRequest, UncertainRequestError, writeRequestIdentity } from '../utils/requestLifecycle';
 
 const CORE_URL = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
@@ -114,6 +114,7 @@ export async function markReading(marks:ReadingMark[]) {
 }
 
 async function requestCore<T>(path: string, options: RequestInit, owner = requestOwner()): Promise<T> {
+  const rehearsal = path === '/commands/preview';
   options.signal?.throwIfAborted();
   const core = ['/setup', '/session', '/login', '/register', '/logout'].includes(path);
   const url = `${core ? CORE_URL : BASE_URL}${path}`;
@@ -142,8 +143,8 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
       const keyData = JSON.parse(rawKey) as JsonWebKey;
       const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(body)));
       const bodyHash = Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
-      identityKey = JSON.stringify([owner, url, options.method, bodyHash]);
-      const requestId = writeRequestIdentity(identityKey, body.requestId);
+      identityKey = rehearsal ? undefined : JSON.stringify([owner, url, options.method, bodyHash]);
+      const requestId = identityKey ? writeRequestIdentity(identityKey, body.requestId) : crypto.randomUUID();
       headers['X-Request-Id'] = requestId;
       const signed = JSON.stringify({ method: options.method, path: new URL(url, location.href).pathname, bodyHash, requestId });
       headers['X-Signed-Payload'] = btoa(String.fromCharCode(...new TextEncoder().encode(signed)));
@@ -155,18 +156,19 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
   // Both attempts consume the body within the deadline and reuse the exact signature.
   let received!: { response: Response; data: unknown };
   for (let attempt = 0; attempt < 2; attempt++) {
-    if (attempt === 0) { options.signal?.throwIfAborted(); if (identityKey||privateReading) checkOwner(); }
+    if (attempt === 0) { options.signal?.throwIfAborted(); if (identityKey||privateReading||rehearsal) checkOwner(); }
     try {
       options.signal?.throwIfAborted();
-      if (identityKey||privateReading) checkOwner();
+      if (identityKey||privateReading||rehearsal) checkOwner();
       received = await fetchJsonWithDeadline(url, { ...options, headers, credentials: 'same-origin' });
       break;
     } catch (error) {
       if (!headers['X-Request-Id']) throw error;
-      if (options.signal?.aborted || attempt === 1) throw new UncertainRequestError(error, headers['X-Request-Id']);
+      if (options.signal?.aborted || attempt === 1) { if (rehearsal) throw error; throw new UncertainRequestError(error, headers['X-Request-Id']); }
     }
   }
   const { response: res, data } = received;
+  if (rehearsal) checkOwner();
   if (!res.ok) {
     const err = (data ?? {}) as { error?: string; message?: string; code?: string; details?: unknown };
     const details = Array.isArray(err.details)
@@ -230,6 +232,16 @@ export function logout() {
 }
 
 export { cancelCommandBatch };
+export type { PreparedCommandBatch };
+export const prepareCommandBatch = (work: () => Promise<unknown>, previous?: PreparedCommandBatch) => prepareBatch(work, { apiBase: CORE_URL }, previous);
+export function previewCommandBatch(prepared: PreparedCommandBatch, parents: string[], signal?: AbortSignal) {
+  return requestCore<{ snapshots: import('../data/workbench').WorkbenchSnapshot[]; messageIds: string[]; baseSequence: number }>('/commands/preview', {
+    method: 'POST', body: JSON.stringify({ batch: prepared.envelope, parents }), signal,
+  }, prepared.context.owner);
+}
+export function confirmCommandPreview(prepared: PreparedCommandBatch) {
+  return commitPreparedBatch(prepared, body => requestCore<CommandCommit>('/commands', { method: 'POST', body: JSON.stringify(body) }, prepared.context.owner));
+}
 export function withCommandBatch<T>(work: () => Promise<T>, onCommitted?: (commandCount: number) => void): Promise<T> {
   return runCommandBatch(work, body => request('/commands', { method: 'POST', body: JSON.stringify(body) }), onCommitted, { apiBase: CORE_URL });
 }

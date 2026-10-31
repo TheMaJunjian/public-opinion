@@ -161,7 +161,7 @@ function consumeWheelDelta(element: HTMLElement, delta: number, axis: 'top' | 'l
 }
 
 /** Own the entire wheel sequence so handoff does not depend on the browser's latched scroll target. */
-export function handlePanelWheel(panel: HTMLElement, event: WheelEvent, fallbacks: readonly (HTMLElement | null)[] = []): void {
+export function handlePanelWheel(panel: HTMLElement, event: WheelEvent, page?: HTMLElement | null): void {
   if (event.defaultPrevented || !event.cancelable || event.ctrlKey || (event.deltaX === 0 && event.deltaY === 0)) return;
   event.preventDefault();
   const unitY = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? panel.clientHeight : 1;
@@ -189,7 +189,7 @@ export function handlePanelWheel(panel: HTMLElement, event: WheelEvent, fallback
     ancestor = ancestor.parentElement;
   }
   consume(panel, true);
-  // 当前侧还有余量时，另一侧必须冻结；只有到边界后才将剩余距离
-  // 依次传给另一侧和整页。不能把“优先滚动自身”误改为“禁止边界传递”。
-  for (const fallback of fallbacks) if (fallback) consume(fallback, true);
+  // The sibling is never a scroll destination. Keep page handoff for browser
+  // zoom/panning and oversized controls after this pane reaches its boundary.
+  if (page) consume(page, true);
 }

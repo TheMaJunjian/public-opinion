@@ -27,8 +27,6 @@ function AppContent() {
   const [welfareOpen, setWelfareOpen] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
   const [guideEnabled, setGuideEnabled] = useState(false);
-  const [topControlsFrozen, setTopControlsFrozen] = useState(false);
-  const [navbarHeight, setNavbarHeight] = useState(68);
   const [interfaceZoom, setInterfaceZoom] = useState(1);
   const appRootRef = useRef<HTMLDivElement>(null);
   const Router = window.location.protocol === 'file:' || import.meta.env.PROD ? HashRouter : BrowserRouter;
@@ -124,9 +122,6 @@ function AppContent() {
             onOpenWelfare={() => setWelfareOpen(true)}
             onOpenGuide={() => { if (guideEnabled) setGuideOpen(true); }}
             guideEnabled={guideEnabled}
-            topControlsFrozen={topControlsFrozen}
-            onToggleTopControls={() => setTopControlsFrozen(!topControlsFrozen)}
-            onHeightChange={setNavbarHeight}
           />
           <main className="flex-1 flex flex-col min-w-0">
             <Suspense fallback={routeFallback}>
@@ -134,9 +129,9 @@ function AppContent() {
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/register" element={<RegisterPage />} />
                 <Route path="/" element={<HomePage />} />
-                <Route path="/messages" element={<WorkbenchStartup><MessageWorkbenchPage topControlsFrozen={topControlsFrozen} topControlsOffset={navbarHeight} /></WorkbenchStartup>} />
-                <Route path="/messages/:messageId" element={<WorkbenchStartup><MessageWorkbenchPage topControlsFrozen={topControlsFrozen} topControlsOffset={navbarHeight} /></WorkbenchStartup>} />
-                <Route path="/viewer" element={<WorkbenchStartup><MessageWorkbenchPage topControlsFrozen={topControlsFrozen} topControlsOffset={navbarHeight} /></WorkbenchStartup>} />
+                <Route path="/messages" element={<WorkbenchStartup><MessageWorkbenchPage /></WorkbenchStartup>} />
+                <Route path="/messages/:messageId" element={<WorkbenchStartup><MessageWorkbenchPage /></WorkbenchStartup>} />
+                <Route path="/viewer" element={<WorkbenchStartup><MessageWorkbenchPage /></WorkbenchStartup>} />
               </Routes>
             </Suspense>
           </main>

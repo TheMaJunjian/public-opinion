@@ -23,7 +23,7 @@ const setDimensions = (element: HTMLElement) => Object.defineProperties(element,
 });
 
 it.each(['left', 'right'].flatMap(side => [1, -1].map(direction => ({ side, direction }))))(
-  'prioritizes the hovered region on the $side through boundary handoff and reversal (direction $direction)', ({ side, direction }) => {
+  'scrolls only the hovered $side through nested boundaries and reversal (direction $direction)', ({ side, direction }) => {
     vi.spyOn(document.documentElement, 'clientHeight', 'get').mockReturnValue(200);
     vi.spyOn(document.documentElement, 'scrollHeight', 'get').mockReturnValue(1000);
     render(<Viewport showRight />);
@@ -43,21 +43,21 @@ it.each(['left', 'right'].flatMap(side => [1, -1].map(direction => ({ side, dire
     wheel(nested, direction * 10);
     expect(positions()).toEqual([edge, edge, 300, 200]);
     wheel(nested, direction * 40);
-    expect(positions()).toEqual([edge, edge, 300 + direction * 40, 200]);
+    expect(positions()).toEqual([edge, edge, 300, 200 + direction * 40]);
     wheel(nested, direction * -20);
-    expect(positions()).toEqual([edge - direction * 20, edge, 300 + direction * 40, 200]);
+    expect(positions()).toEqual([edge - direction * 20, edge, 300, 200 + direction * 40]);
 
     // Moving to the opposite panel changes priority immediately as well.
     wheel(other, direction * -20);
-    expect(positions()).toEqual([edge - direction * 20, edge, 300 + direction * 20, 200]);
+    expect(positions()).toEqual([edge - direction * 20, edge, 300 - direction * 20, 200 + direction * 40]);
 
-    // Only after both sides reach the boundary may the remainder reach the page.
+    // A pane's boundary goes directly to the page, even if its sibling has room.
     nested.scrollTop = current.scrollTop = edge;
     other.scrollTop = edge - direction * 10;
     wheel(nested, direction * 40);
-    expect(positions()).toEqual([edge, edge, edge, 200 + direction * 30]);
+    expect(positions()).toEqual([edge, edge, edge - direction * 10, 200 + direction * 80]);
     wheel(nested, direction * -20);
-    expect(positions()).toEqual([edge - direction * 20, edge, edge, 200 + direction * 30]);
+    expect(positions()).toEqual([edge - direction * 20, edge, edge - direction * 10, 200 + direction * 80]);
   },
 );
 

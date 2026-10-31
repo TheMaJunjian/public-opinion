@@ -2,7 +2,6 @@ export const Z_INDEX = {
   page: 0,
   header: 10,
   popover: 50,
-  freezeButton: 60,
   popup: 190,
   modal: 1000,
   guide: 3100,

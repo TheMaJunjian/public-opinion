@@ -2,14 +2,14 @@ import {Suspense,useEffect,useLayoutEffect,useRef,useState,type CSSProperties,ty
 import {MessageDisplayMarker} from './LazyMessageDisplayHints';
 
 /** Used only by staged selections and trace reading references. */
-export default function MessageReferenceControl({messageId,type,summary,onNavigate,ariaLabel,navigateLabel,status,disabled=false,style,wholeMessage=true}:{
-  messageId:string;type:string;summary?:string;onNavigate?:(id:string)=>void;ariaLabel?:string;navigateLabel?:string;status?:string;disabled?:boolean;style?:CSSProperties;wholeMessage?:boolean;
+export default function MessageReferenceControl({messageId,type,summary,onNavigate,ariaLabel,navigateLabel,status,disabled=false,style,wholeMessage=true,initialView='id'}:{
+  messageId:string;type:string;summary?:string;onNavigate?:(id:string)=>void;ariaLabel?:string;navigateLabel?:string;status?:string;disabled?:boolean;style?:CSSProperties;wholeMessage?:boolean;initialView?:'id'|'summary';
 }){
-  const [showSummary,setShowSummary]=useState(false),[copyStatus,setCopyStatus]=useState('');
+  const [showSummary,setShowSummary]=useState(initialView==='summary'),[copyStatus,setCopyStatus]=useState('');
   const pending=useRef<ReturnType<typeof setTimeout>|null>(null);
   const latest=useRef({onNavigate,disabled});latest.current={onNavigate,disabled};
   const cancelClick=()=>{if(pending.current!==null){clearTimeout(pending.current);pending.current=null;}};
-  useEffect(()=>{setShowSummary(false);setCopyStatus('');return cancelClick;},[messageId]);
+  useEffect(()=>{setShowSummary(initialView==='summary');setCopyStatus('');return cancelClick;},[messageId,initialView]);
   useLayoutEffect(()=>cancelClick,[]);
   const click=(event:MouseEvent,action:()=>void)=>{
     event.stopPropagation();cancelClick();if(disabled||event.detail>1)return;

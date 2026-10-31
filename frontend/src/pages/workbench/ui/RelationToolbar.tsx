@@ -73,7 +73,7 @@ const RELATION_GROUPS = [
 ] as const;
 
 /** Both layouts use the original type-switching action and preserve the composition draft. */
-export function RelationChoices({ composer, placement = 'toolbar', frozen = false }: { composer: ComposerMode; placement?: 'toolbar' | 'desk'; frozen?: boolean }) {
+export function RelationChoices({ composer, placement = 'toolbar' }: { composer: ComposerMode; placement?: 'toolbar' | 'desk' }) {
   const {layout} = useThemeSettings();
   if (placement !== layout.relationControls) return null;
   const { relationType, secondaryRelationType, newMessageContent, setRelationType, setSecondaryRelationType, setNewMessageContent, lastTagSecondaryRef, lastDelegationSecondaryRef, savedTextOnTypeSwitchRef, guideTargetIdRef } = composer;
@@ -112,7 +112,7 @@ export function RelationChoices({ composer, placement = 'toolbar', frozen = fals
           ))}
   </>;
   if (placement === 'toolbar') return <><span>关系类型：</span>{renderTypes(ALL_RELATION_TYPES)}</>;
-  return <section className="desk-relations" aria-label="关系类型" data-controls-frozen={frozen || undefined}>
+  return <section className="desk-relations" aria-label="关系类型">
     <div className="desk-section-title"><span className="desk-section-number">03</span>关系类型</div>
     {RELATION_GROUPS.map(group => <div className="desk-relation-group" key={group.label}>
       <span>{group.label}</span><div>{renderTypes(group.types)}</div>

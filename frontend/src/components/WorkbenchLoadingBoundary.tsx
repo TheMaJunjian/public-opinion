@@ -9,6 +9,7 @@ import { createWorkbenchDrawingTasks, WorkbenchDrawingContext, WORKBENCH_DRAWING
 type Phase = 'loading' | 'drawing' | 'sending' | 'ready';
 const LoadingContext = createContext<(phase: Phase, resetFailure?: boolean) => void>(() => undefined);
 const SendingContext = createContext<(sending: boolean) => void>(() => undefined);
+const ViewOnlyDrawingContext = createContext<(active: boolean) => void>(() => undefined);
 const DrawingPreparationContext = createContext<((work: () => void) => () => void) | null>(null);
 export const WORKBENCH_REQUEST_WAIT_MS = 60_000;
 const taskNames = { module: '界面加载', projection: '消息整理', measurement: '尺寸测量', overlays: '连线绘制', positioning: '消息定位', fonts: '字体加载', render: '页面绘制' };
@@ -18,6 +19,7 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
   const [attempt, setAttempt] = useState(() => ({ tasks: createWorkbenchDrawingTasks(), key: 0 }));
   const { tasks } = attempt;
   const [failure, setFailure] = useState<DrawingFailure | null>(null);
+  const [viewOnly, setViewOnly] = useState(false);
   const [cycle, setCycle] = useState(0);
   const [waitNotice, setWaitNotice] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ phase: Phase; sending: boolean; reason: 'loading' | 'sending'; drawingRevision?: number }>({ phase: 'loading', sending: false, reason: 'loading' });
@@ -68,7 +70,7 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
       reason: previous.phase === 'sending' ? 'sending' : 'loading', drawingRevision: undefined }));
     return preparation.cancel;
   }, [tasks]);
-  const busy = phase !== 'ready';
+  const busy = phase !== 'ready' && !viewOnly;
 
   useLayoutEffect(() => {
     if (phase === 'drawing' && !tasks.failure) for (const preparation of preparations.current) preparation.schedule();
@@ -104,7 +106,7 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
     // A task can register in a child layout effect in this very commit.
     // Recheck before publishing completion or removing interaction guards.
     if (phase === 'ready' && drawingRevision !== undefined && (tasks.pending || tasks.revision !== drawingRevision)) {
-      if (content.current) content.current.inert = true;
+      if (content.current) content.current.inert = !viewOnly;
       setProgress(previous => ({ ...previous, phase: 'drawing', drawingRevision: undefined }));
       return;
     }
@@ -117,7 +119,7 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
       finishDrawing.current = null;
       if (tasks.failure) cancelWorkbenchDrawing();
     }
-  }, [busy, phase, drawingRevision, tasks]);
+  }, [busy, phase, drawingRevision, tasks, viewOnly]);
 
   useLayoutEffect(() => () => {
     finishDrawing.current?.(false);
@@ -210,7 +212,9 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
       }} style={{ marginLeft: 12 }}>重新加载</button>
     </div>}
     <div key={attempt.key} ref={content} aria-busy={busy} style={{ display: 'contents' }}>
+      <ViewOnlyDrawingContext.Provider value={setViewOnly}>
       <ErrorBoundary onError={error => tasks.abort({ kind: 'render', reason: 'error', error })}>{children}</ErrorBoundary>
+      </ViewOnlyDrawingContext.Provider>
     </div>
     {busy && <OperationProgressDialog title={reason === 'sending' ? '正在发送' : phase === 'drawing' ? '正在绘制' : '正在加载'}>
       <div data-workbench-progress-active="true">
@@ -220,6 +224,12 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
       </div>
     </OperationProgressDialog>}
   </DrawingPreparationContext.Provider></SendingContext.Provider></LoadingContext.Provider></WorkbenchDrawingContext.Provider>;
+}
+
+/** Preview actions own their wait dialog; settled previews leave the composer usable. */
+export function useWorkbenchViewOnlyDrawing(active: boolean) {
+  const report = useContext(ViewOnlyDrawingContext);
+  useLayoutEffect(() => { report(active); return () => report(false); }, [active, report]);
 }
 
 /** Errors must release the dialog as well, so the error remains visible. */

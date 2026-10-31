@@ -6,6 +6,8 @@
 
 控件布局统一在 `theme.ts` 的 `THEMES[].layout` 中设置。每个风格都必须明确填写 `messageJump`（`inline` 为顶部常驻输入框，`clipboard-dialog` 为导出右侧的剪贴板弹窗）和 `relationControls`（`toolbar` 为顶部，`desk` 为右侧操作台）。组件通过 `useThemeSettings()` 读取配置，跳转方式与关系控件位置可独立组合；不要根据风格名称推断布局。新增风格时保留 `ThemeDefinition` 的类型检查，配色和材质继续放在相应 CSS 中。
 
+左右区域保持独立滚动，不提供冻结开关。当前区域到达边界后只把剩余距离交给整页，不自动滚动另一侧；手机缩放后的页面移动仍由原来的页面边界处理。
+
 - `gpt.css`：原深色的颜色、字体、推荐显著性。
 - `opus.css`：暖纸的对应变量。
 - `shared.css`：两套主题共用的控件结构、状态和动画。
@@ -14,7 +16,7 @@
 - `message-skins.css`：新风格共用的载体外观规则、选择状态和风格弹窗。
 - `opus-paper.css` / `gpt-arena.css`：两套新风格各自独立的配色和外观。后续 Opus 调整 A 时修改前者；不要复制样稿交互或业务状态。
 - `specimen-skins.css`：直接对应样稿的材质、装裱、云纹角花、金属包角、卷轴签、玉牌与框架织纹；A/B 分别限定在 `data-appearance` 下。`StakeTierBadge.tsx` / `GraphSkin.tsx` 提供不接收点击的装饰层，SVG 始终使用真实端点和容器坐标。
-- `specimen-layout.css`：右侧 01–05 分区、16 种关系的五组入口、费用明细和发送条。`RelationChoices` 复用原来的切换动作；原版显示在顶部，新主题显示在右侧，冻结状态仍生效。
+- `specimen-layout.css`：右侧 01–05 分区、16 种关系的五组入口、费用明细和发送条。`RelationChoices` 复用原来的切换动作；原版显示在顶部，新主题显示在右侧。
 - `ThemeTierPreview.tsx`：风格弹窗中的四种载体 × 四档预览，复用正式装饰组件。`useSkinMotion.ts`：只在已知档位变化时播放一次动效，最多同时 4 个；视口外、减少动效或超过 200 个已挂载消息时跳过。
 - `ThemeIcon.tsx`：议事厅的仲裁、治理、账户、所含消息与工具按钮采用同一套线性图标，原版与案卷保留原符号。只转换程序定义的界面标签，消息正文保持原文。
 

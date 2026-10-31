@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { currentSession, requireCsrf, requireSession, rotateSigningKey, verifyDeviceSignature } from './auth.js';
 import { DomainError, id, Store } from './db.js';
 import { dataOf } from './economy.js';
-import { executeBatch, executeCommand } from './ui-commands.js';
+import { executeBatch, executeCommand, previewBatch } from './ui-commands.js';
 import { sendSnapshot } from './snapshot-response.js';
 import { windowSnapshot } from './window-snapshot.js';
 import {bodyVersionSchema} from './reference-schema.js';
@@ -225,6 +225,12 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
     catch (e) {
         next(e);
     } });
+    router.post('/commands/preview', async (req, res, next) => { try {
+        const session = await requireCsrf(store, req);
+        await verifyDeviceSignature(store, req, session);
+        const input = z.object({ batch: z.unknown(), parents: z.array(z.string().min(1).max(100)).max(20).optional() }).strict().parse(req.body);
+        res.json(await previewBatch(store, session.user, input.batch, input.parents));
+    } catch (error) { next(error); } });
     router.post('/commands', async (req, res, next) => { try {
         const session = (await requireCsrf(store, req)), signature = (await verifyDeviceSignature(store, req, session));
         const parsed = z.object({ requestId: z.string() }).passthrough().parse(req.body);

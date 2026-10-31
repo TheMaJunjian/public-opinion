@@ -1,6 +1,6 @@
 import { migratePendingSends } from '../../../apps/migrate/src/browser-state';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { cancelCommandBatch, queueCommand, runCommandBatch, type CommandEnvelope } from '../api/commandBatch';
+import { cancelCommandBatch, queueCommand, runCommandBatch, prepareCommandBatch, commitPreparedBatch, type CommandCommit, type CommandEnvelope } from '../api/commandBatch';
 import { buildRelationDemoMessage } from '../pages/workbench/model/relationComposition';
 import { displayDependencyIds } from '../utils/displayDependency';
 import type { Relation } from '../types';
@@ -9,6 +9,42 @@ beforeEach(() => { sessionStorage.clear(); localStorage.setItem('user', JSON.str
 const add = (body: object) => queueCommand('/messages', { method: 'POST', body: JSON.stringify(body) });
 
 describe('workbench sends', () => {
+  it('keeps provisional message identities and references when updating an unsent preview body',async()=>{
+    const capture=async(content:string,previous?:Awaited<ReturnType<typeof prepareCommandBatch>>)=>prepareCommandBatch(async()=>{
+      const message=add({content})!;
+      queueCommand('/relations',{method:'POST',body:JSON.stringify({relationType:'REFERENCE',targetRefs:[{kind:'message',messageId:message.id}]})});
+    },undefined,previous??undefined);
+    const first=(await capture('初稿'))!,second=(await capture('改过的正文',first))!;
+    expect(second.envelope.commands.map(command=>command.id)).toEqual(first.envelope.commands.map(command=>command.id));
+    expect(second.envelope.commands[0].body.content).toBe('改过的正文');
+    expect(second.envelope.commands[1].body.targetRefs).toEqual(first.envelope.commands[1].body.targetRefs);
+    expect(second.envelope.requestId).not.toBe(first.envelope.requestId);expect(sessionStorage.length).toBe(0);
+    const commit=vi.fn<(input:CommandEnvelope)=>Promise<CommandCommit>>(async()=>({}));await commitPreparedBatch(second,commit);
+    expect(commit.mock.calls[0][0]).toEqual(second.envelope);
+  });
+  it('rehearses without a pending write and confirms exactly the prepared IDs and references', async () => {
+    const prepared = await prepareCommandBatch(async () => {
+      const target = add({ content: '只在预览中' })!.id;
+      queueCommand('/relations', {method:'POST',body:JSON.stringify({relationType:'REFERENCE',targetRefs:[{kind:'message',messageId:target}]})});
+    });
+    expect(prepared).not.toBeNull(); expect(sessionStorage.length).toBe(0);
+    const commit = vi.fn(async () => ({}));
+    await commitPreparedBatch(prepared!,commit);
+    expect(commit).toHaveBeenCalledExactlyOnceWith(prepared!.envelope);
+    expect((prepared!.envelope.commands[1].body.targetRefs as {messageId:string}[])[0].messageId).toBe(prepared!.envelope.commands[0].id);
+    expect(sessionStorage.length).toBe(0);
+  });
+  it('keeps the same prepared request on an uncertain confirmation and rejects another account', async () => {
+    const prepared = (await prepareCommandBatch(async () => { add({content:'保留同一笔预览'}); }))!;
+    const commit = vi.fn().mockRejectedValueOnce(new TypeError('connection lost')).mockResolvedValue({});
+    await expect(commitPreparedBatch(prepared,commit)).rejects.toMatchObject({unknownOutcome:true});
+    expect(sessionStorage.length).toBe(1);
+    await commitPreparedBatch(prepared,commit);
+    expect(commit.mock.calls[1][0]).toEqual(commit.mock.calls[0][0]);
+    localStorage.setItem('user',JSON.stringify({id:'another'}));
+    await expect(commitPreparedBatch(prepared,commit)).rejects.toMatchObject({name:'AbortError'});
+    expect(commit).toHaveBeenCalledTimes(2);
+  });
   it.each(['source',null])('attaches a provisional reference to its source before catalog synchronization (legacy source: %s)', async sourceMessageId => {
     const sourceRefs=[{messageId:'source',revision:1,context:{kind:'MESSAGE' as const},partId:'body',range:{start:0,end:2}}];
     await runCommandBatch(async()=>{

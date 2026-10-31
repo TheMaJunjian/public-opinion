@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Z_INDEX } from '../constants/zIndex';
 import ThemeSwitcher from '../theme/ThemeSwitcher';
-import ThemeIcon from '../theme/ThemeIcon';
 import PointsBadge from './PointsBadge';
 import { useInterfaceZoom } from '../context/InterfaceZoomContext';
 
@@ -13,13 +12,10 @@ interface NavbarProps {
   onOpenWelfare?: () => void;
   onOpenGuide?: () => void;
   guideEnabled?: boolean;
-  topControlsFrozen?: boolean;
-  onToggleTopControls?: () => void;
-  onHeightChange?: (height: number) => void;
 }
 
 /** 顶部导航栏：展示系统名称"公论"与登录/注销入口 */
-export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, onOpenGuide, guideEnabled = false, topControlsFrozen = false, onToggleTopControls, onHeightChange }: NavbarProps) {
+export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, onOpenGuide, guideEnabled = false }: NavbarProps) {
   const interfaceZoom = useInterfaceZoom();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -33,8 +29,6 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
     if (!nav) return;
 
     const updateLayout = () => {
-      const navRect = nav.getBoundingClientRect();
-      onHeightChange?.(navRect.height / interfaceZoom);
       const leftControls = leftControlsRef.current;
       const rightControls = rightControlsRef.current;
       if (!leftControls || !rightControls) return;
@@ -57,7 +51,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
       observer.disconnect();
       window.removeEventListener('resize', updateLayout);
     };
-  }, [onHeightChange, interfaceZoom]);
+  }, [interfaceZoom]);
 
   async function handleLogout() {
     try {
@@ -68,7 +62,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
   }
 
   return (
-    <nav ref={navRef} className="app-navbar relative bg-[color:var(--surface-4338ca)] text-[color:var(--ink-fff-2)] pl-6 pr-4 py-3 flex items-center shadow-md" style={topControlsFrozen ? { position: 'sticky', top: 0, zIndex: Z_INDEX.freezeButton } : undefined}>
+    <nav ref={navRef} className="app-navbar relative bg-[color:var(--surface-4338ca)] text-[color:var(--ink-fff-2)] pl-6 pr-4 py-3 flex items-center shadow-md">
       <div ref={leftControlsRef} className="app-navbar-primary relative flex shrink-0 items-center gap-4">
         <Link to="/" className="flex flex-col leading-tight hover:opacity-90 transition-opacity">
           <span className="text-xl font-bold tracking-widest">公论</span>
@@ -99,25 +93,6 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
           title="打开福利"
         >
           福利
-        </button>
-        <button
-          type="button"
-          onClick={onToggleTopControls}
-          aria-label={topControlsFrozen ? '解冻顶部控件' : '冻结顶部控件'}
-          aria-pressed={topControlsFrozen}
-          title={topControlsFrozen ? '解冻教程、退出和关系类型控件' : '冻结教程、退出和关系类型控件'}
-          className="app-navbar-freeze absolute left-[calc(100%+8px)] top-full flex h-6 w-6 items-center justify-center rounded-full text-xs shadow-md"
-          style={{
-            background: 'transparent',
-            color: 'var(--ink-rgba-255-255-255-0-7)',
-            zIndex: Z_INDEX.freezeButton,
-          }}
-        >
-          <ThemeIcon name="pin" fallback={topControlsFrozen ? (
-            <span aria-hidden="true" className="relative inline-block h-4 w-4 translate-y-0.5 rounded-full border-2 border-[color:var(--line-ef4444)]">
-              <span className="absolute left-1/2 top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[color:var(--surface-ef4444)]" />
-            </span>
-          ) : '📌'} />
         </button>
       </div>
       <div aria-hidden="true" className="min-w-0 flex-1" />

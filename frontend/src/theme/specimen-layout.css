@@ -1,5 +1,8 @@
 .desk-section-number, .desk-section-title, .desk-fee-breakdown, .desk-send-balance, .desk-new-title { display: none; }
 .desk-submit-bar { display: contents; }
+.desk-send-preview-status { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; flex: 1 0 100%; width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--line-fbbf24); border-radius: 6px; background: var(--surface-1a1a1a); font-size: 12px; }
+.desk-send-preview-status strong { color: var(--ink-fbbf24); white-space: nowrap; }
+.desk-send-preview-status span { color: var(--ink-94a3b8); }
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-legacy-title,
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-legacy-fees { display: none; }
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-new-title { display: inline; }
@@ -34,7 +37,6 @@
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .workbench-jump-controls > div { background: var(--surface-panel) !important; border-color: var(--skin-border) !important; box-shadow: none !important; }
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .workbench-jump-controls input { background: var(--surface-card) !important; color: var(--text-primary) !important; border-color: var(--skin-border) !important; }
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .workbench-jump-controls button { background: var(--button-primary-bg) !important; color: var(--button-primary-text) !important; border-color: var(--button-primary-bg) !important; }
-:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-relations[data-controls-frozen='true'] { position: sticky; top: 0; z-index: 5; background: var(--surface-panel) !important; padding-top: 8px !important; }
 
 /* Preview uses the same ornaments and SVG components as the live carriers. */
 :root[data-theme] .theme-dialog { width: min(900px, 100%) !important; }

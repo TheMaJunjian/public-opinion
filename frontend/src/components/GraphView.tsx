@@ -10,7 +10,7 @@ import type {FrameViewSize} from '../utils/frameLayout';
 import {FrameViewportTools,FrameViewportScrollbars,clipFrameScene} from './graph/FrameViewport';
 import { GRAPH_CARD_LAYER, GRAPH_SELECTED_CARD_LAYER, unionLayoutRects, getGroupHeaderHeight, getGroupHeaderRect, getMergeCardHeaderRect, getEdgeDecorationLeft, getDecorationColumnWidth, getAnnotationPlacement, GROUP_HEADER_HEIGHT, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, DEC_ICON_W, EDGE_HINT_W, EDGE_LABEL_HINT_GAP, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_HIT_PAD, TAG_HIT_PAD_X, FRAME_RADIUS, GROUP_FRAME_STROKE, SHOW_SELECTED_ACTUAL_RECTS, INLINE_BADGE_COLOR } from '../utils/graphPresentationGeometry';
 import { unitEquals, selectionIsText, extractTextTargetsForMessage, relationTypeName, buildAnnoTree, renderAnnoNodes } from '../utils/graphTextSelection';
-import React, { useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CardWidthContext, CardWidthHandle } from './graph/CardWidthContext';
 import { effectiveCardWidths } from '../utils/cardWidth';
 import JoinEndpointType from './JoinEndpointType';
@@ -58,6 +58,7 @@ export type Rect = { x: number; y: number; width: number; height: number };
 
 
 export interface GraphViewProps {
+  pendingMessageIds?: readonly string[];
   decorationExpansion?: {requestId:number;messageIds:readonly string[]};
   highlightedMessageIds?: ReadonlySet<string>;
   frameViewStateRef?: React.MutableRefObject<GraphFrameViewState>;
@@ -567,7 +568,19 @@ function GraphViewCanvas(props: GraphViewProps) {
       };
       const anchors=detail.ids.slice(0,1).flatMap(id=>{
         const owned=relationEdges.get(id)??[],directed=owned.filter(edge=>getPresentationSpec(edge.relationType).kind==='edge-label'&&!edge.from.messageId.startsWith('anon:'));
-        if(!directed.length&&(views.layout[id]||views.frameRects[id]))return [id];
+        if(!directed.length&&(views.layout[id]||views.frameRects[id])){
+          const frame=views.frameRects[id];
+          if(frame){
+            // A large frame's center can hide its header inside an ancestor's
+            // viewport. Reveal the same header that message navigation locates.
+            const header=cardRefs.current[id],type=messages.find(message=>message.id===id)?.relationType;
+            const box=type==='classify'||type==='summary'?getGroupHeaderRect(frame,header?.offsetHeight||GROUP_HEADER_HEIGHT)
+              :{...getMergeCardHeaderRect(frame,header?.offsetWidth||undefined),height:header?.offsetHeight||MERGE_CARD_H};
+            for(const parent of views.ancestors(id)){box.x+=views.offsets[parent]?.left??0;box.y+=views.offsets[parent]?.top??0;}
+            anchorBoxes.set(id,box);
+          }
+          return [id];
+        }
         return (directed.length?directed:owned).slice(0,1).map(edge=>{
           const directed=getPresentationSpec(edge.relationType).kind==='edge-label'&&!edge.from.messageId.startsWith('anon:');
           const anchor=host(directed?edge.from.messageId:edge.to.messageId),start=directed?edgeStartsRef.current.get(id):undefined;
@@ -677,6 +690,9 @@ function GraphViewCanvas(props: GraphViewProps) {
   );
   const sceneLayout = useSceneComputation(layoutJob, true);
   const naturalScene=sceneLayout??EMPTY_SCENE_LAYOUT;
+  const sceneInstance = useId();
+  const sceneRevision = useRef({value:naturalScene,revision:0});
+  if (sceneRevision.current.value !== naturalScene) sceneRevision.current = {value:naturalScene,revision:sceneRevision.current.revision+1};
   const effectiveFrameSizes=useMemo(()=>Object.fromEntries(Object.entries({...naturalScene.frameViewportSizes,...frameViewSizes})
     .filter(([id])=>!naturalScene.fullFrameIds.includes(id))),[naturalScene.frameViewportSizes,naturalScene.fullFrameIds,frameViewSizes]);
   const manualFrameIds=useMemo(()=>new Set(Object.keys(frameViewSizes)),[frameViewSizes]);
@@ -722,8 +738,8 @@ function GraphViewCanvas(props: GraphViewProps) {
     for(const [id,box] of Object.entries(boxes))boxes[id]=frameViews.extent(id,box);
     return boxes;
   }, [layout, finalFrameRects, frameBlocks, measuredHeights, measuredWidths,frameViews]);
-  const virtualPins = useMemo(() => new Set([lastClickedMessageId, activeTextSelectId, settlementOpenMsgId, props.autoCenterMessageId]
-    .filter((id): id is string => !!id)), [lastClickedMessageId, activeTextSelectId, settlementOpenMsgId, props.autoCenterMessageId]);
+  const virtualPins = useMemo(() => new Set([lastClickedMessageId, activeTextSelectId, settlementOpenMsgId, props.autoCenterMessageId,...(props.pendingMessageIds??[])]
+    .filter((id): id is string => !!id)), [lastClickedMessageId, activeTextSelectId, settlementOpenMsgId, props.autoCenterMessageId,props.pendingMessageIds]);
   const revealGroups = useMemo(() => createMessageJumpGroups(messages, edges, new Map(frameBlocks.map(frame => [frame.relMsgId,
     new Set([...frame.cardIds, ...frame.childRelMsgIds])]))), [messages, edges, frameBlocks]);
   useLayoutEffect(() => {
@@ -812,7 +828,9 @@ function GraphViewCanvas(props: GraphViewProps) {
     !effectiveHideMessageIds.has(frame.relMsgId) &&
     (!isTraceWindow || !['classify', 'summary'].includes(frame.relType)
       || traceExpandedFrameIds.has(frame.relMsgId)),
-  ), [renderedGroupFrames, effectiveHideMessageIds, isTraceWindow, traceExpandedFrameIds]);
+  // Paint enclosing fills first so they cannot cover a nested frame's border.
+  ).sort((a,b)=>(frameDepthMap.get(a.relMsgId)??0)-(frameDepthMap.get(b.relMsgId)??0)),
+  [renderedGroupFrames, effectiveHideMessageIds, isTraceWindow, traceExpandedFrameIds,frameDepthMap]);
 
   const relatedCatalog = useMemo(() => new Map((props.relatedMessages ?? messages).map(message => [message.id, message])), [props.relatedMessages, messages]);
   const relatedConnections = useMemo(() => props.relatedEdges ? deriveCrossCanvasRelations({
@@ -991,7 +1009,7 @@ function GraphViewCanvas(props: GraphViewProps) {
     return role === 'source' ? '来源' : role === 'target' ? '目标' : role === 'source-target' ? '来源/目标' : props.homeReasonByMessageId?.has(messageId) ? '上下文' : null;
   };
   const canvas=(
-    <div ref={canvasRef} data-jump-canvas="true" style={{position:"relative",width:actualCanvasWidth,height:actualCanvasHeight,zIndex:0}}
+    <div ref={canvasRef} data-jump-canvas="true" data-scene-instance={sceneInstance} data-layout-revision={sceneRevision.current.revision} style={{position:"relative",width:actualCanvasWidth,height:actualCanvasHeight,zIndex:0}}
       onDoubleClick={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
       {props.visibleMessageIds && <div data-message-window-boundary="true" aria-hidden="true" style={{ position: 'absolute', top: visibleBottom, left: 0, height: 1, width: 1 }} />}
       <div data-graph-cards="true" style={{position:"absolute",left:0,top:0,width:actualCanvasWidth,height:actualCanvasHeight}}>

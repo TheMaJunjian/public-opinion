@@ -1,4 +1,5 @@
 import React from 'react';
+import { isCapturingPreview } from '../api/commandBatch';
 import type { DemoEdge, UnitSelection, Selection, RelationType } from './modelBridge';
 import { getPresentationSpec } from '../types';
 
@@ -21,6 +22,7 @@ export function selectionIsText(
 }
 
 export function clearBrowserSelection() {
+  if (isCapturingPreview()) return;
   const sel = window.getSelection();
   if (sel) sel.removeAllRanges();
 }

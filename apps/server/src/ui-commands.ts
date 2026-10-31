@@ -7,6 +7,7 @@ import { dataOf, valueRoundFor } from './economy.js';
 import { relationViewType, messageView, parentOf, primaryRelation, roundView, snapshot, type RecordData } from './ui-projections.js';
 import { readReference, validateBodyVersion } from './validation.js';
 import {bindCommandContexts} from './reference-contexts.js';
+import { withCommandIdentities } from './command-identities.js';
 export type Signature = {
     deviceId: string;
     publicKey: string;
@@ -272,6 +273,31 @@ async function executeWithinTransaction(context: CommandContext, method: string,
     throw new DomainError('不支持的操作', 404);
 }
 export const batchSchema = z.object({ requestId: z.string().min(1).max(100), commands: z.array(z.object({ id: z.string().uuid(), method: z.enum(['POST', 'PATCH']), path: z.string().startsWith('/').max(300), body: object })).min(1).max(100) }).strict();
+/** Project a real execution, then roll back every business write before returning. */
+export async function previewBatch(store: Store, user: User, input: unknown, parents: string[] = ['root']) {
+    const body = batchSchema.parse(input);
+    if (new Set(body.commands.map(command => command.id)).size !== body.commands.length)
+        throw new DomainError('命令编号不可重复');
+    class PreviewResult extends Error {
+        constructor(readonly value: { snapshots: Awaited<ReturnType<typeof snapshot>>[]; messageIds: string[]; baseSequence: number }) { super('preview rollback'); }
+    }
+    try {
+        await store.transaction(async () => {
+            if (await store.db.prepare('SELECT 1 FROM command_requests WHERE "userId"=$1 AND "requestId"=$2').get(user.id, body.requestId))
+                throw new DomainError('该笔发送已提交，请先刷新消息', 409);
+            const baseSequence = await store.latestSequence();
+            for (const command of body.commands) await withCommandIdentities(`${user.id}:${command.id}`, () =>
+                executeWithinTransaction({ store, user, requestId: command.id, messageId: command.id }, command.method, command.path, command.body));
+            const scopes = [...new Set([...parents, ...body.commands.map(command => String(command.body.parentMessageId ?? 'root'))])];
+            const snapshots = await Promise.all(scopes.map(parent => snapshot(store, parent, { after: baseSequence }, user.id)));
+            throw new PreviewResult({ snapshots, messageIds: body.commands.map(command => command.id), baseSequence });
+        });
+    } catch (error) {
+        if (error instanceof PreviewResult) return error.value;
+        throw error;
+    }
+    throw new Error('预览未完成回滚');
+}
 export async function executeBatch(store: Store, user: User, input: unknown, signature?: Signature) {
     const body = batchSchema.parse(input), serialized = JSON.stringify(body);
     if (new Set(body.commands.map(c => c.id)).size !== body.commands.length)
@@ -288,7 +314,7 @@ export async function executeBatch(store: Store, user: User, input: unknown, sig
         const results=[];
         // The batch owns rollback. Individual commands need no extra savepoint
         // around their existing send transaction; any failure aborts the batch.
-        for(const command of body.commands)results.push(await executeWithinTransaction({store,user,requestId:command.id,messageId:command.id,signature},command.method,command.path,command.body));
+        for(const command of body.commands)results.push(await withCommandIdentities(`${user.id}:${command.id}`,()=>executeWithinTransaction({store,user,requestId:command.id,messageId:command.id,signature},command.method,command.path,command.body)));
         const parents = new Set(body.commands.map(command => typeof command.body.parentMessageId === 'string' ? command.body.parentMessageId : 'root'));
         // Persist the command outcome before doing transport-only projection work.
         const result = { results, sequence: (await store.latestSequence()), projection: { after, parents: [...parents] } };

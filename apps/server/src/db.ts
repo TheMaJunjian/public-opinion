@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { commandIdentity } from './command-identities.js';
 import { type Account, type Change, type LedgerEntry, type Membership, type Message, type Rules, type User } from '@gonglun/core';
 import { statesFor } from './projections.js';
 import { Postgres } from './postgres.js';
@@ -8,7 +8,7 @@ import { upgradeDatabase } from './database-upgrade.js';
 
 class DatabaseUpgradeRequired extends Error {}
 
-export const id = () => randomUUID();
+export const id = commandIdentity;
 export const now = () => new Date().toISOString();
 export class DomainError extends Error { constructor(message: string, public status = 400) { super(message); } }
 export function integer(value: number, label = '金额'): number {

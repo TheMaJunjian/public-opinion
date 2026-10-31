@@ -1,6 +1,7 @@
 import { sendErrorMessage } from './sendErrors';
 import React from "react";
 import { api } from "../../../api";
+import { isCapturingPreview } from '../../../api/commandBatch';
 import { ApiError } from "../../../api/client";
 import type { MessageStakes, Relation, TargetRef } from "../../../types";
 import { operationLog } from "../../../utils/debugLog";
@@ -89,7 +90,7 @@ export async function handleSendMessageOnly(dependencies: HandleSendMessageOnlyD
     if (!overrideContent) setNewMessageContent("");
     if (dependencies.onCreated) dependencies.onCreated(msg.id);
     else scrollMsgToCenter(msg.id);
-    window.dispatchEvent(new Event('points-refresh'));
+    if (!isCapturingPreview()) window.dispatchEvent(new Event('points-refresh'));
     // The committed message/placement updates the existing canvas. Remounting
     // here briefly collapses its scroll range before final positioning.
     if (isInsideClassify && !dependencies.onCreated) setClassifyKey(key => key + 1);

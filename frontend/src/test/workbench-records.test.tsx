@@ -21,3 +21,30 @@ it('rolls back local edits while preserving a newer authoritative snapshot recei
   act(rollback);
   expect(result.current.messages[0].content).toBe('发送期间收到的新内容');
 });
+
+it('isolates preparation edits, overlays preview results, restores the latest live data on cancel, and promotes confirmation atomically',async()=>{
+  const {result}=renderHook(useWorkbenchRecords),first=snapshot(1,'实际内容');
+  act(()=>result.current.replace(first,projectWorkbenchSnapshot(first)));
+  await act(()=>result.current.captureTransient(async()=>{result.current.setMessages([]);}));
+  expect(result.current.messages[0].content).toBe('实际内容');
+  act(()=>result.current.showSendPreview([snapshot(3,'预览内容')]));
+  expect(result.current.messages[0].content).toBe('预览内容');expect(result.current.liveSequence).toBe(1);
+  const newer=snapshot(2,'并发更新');
+  act(()=>result.current.replace(newer,projectWorkbenchSnapshot(newer)));
+  expect(result.current.messages[0].content).toBe('预览内容');
+  act(()=>result.current.clearSendPreview());expect(result.current.messages[0].content).toBe('并发更新');
+  act(()=>result.current.showSendPreview([snapshot(4,'再次预览')]));
+  act(()=>result.current.confirmSendPreview([snapshot(5,'正式内容')]));
+  expect(result.current.messages[0].content).toBe('正式内容');expect(result.current.liveSequence).toBe(5);
+});
+
+it('keeps newer synchronized records when an older preview confirmation arrives',()=>{
+  const {result}=renderHook(useWorkbenchRecords),first=snapshot(1,'实际内容');
+  act(()=>result.current.replace(first,projectWorkbenchSnapshot(first)));
+  act(()=>result.current.showSendPreview([snapshot(3,'预览内容')]));
+  const newer=snapshot(5,'发送期间同步的新内容');
+  act(()=>result.current.replace(newer,projectWorkbenchSnapshot(newer)));
+  act(()=>result.current.confirmSendPreview([snapshot(4,'较早的发送结果')]));
+  expect(result.current.messages[0].content).toBe('发送期间同步的新内容');
+  expect(result.current.liveSequence).toBe(5);
+});

@@ -1,4 +1,5 @@
 import { clearBrowserSelection, relationTypeName } from "../../../utils/graphTextSelection";
+import { isCapturingPreview } from '../../../api/commandBatch';
 import type {
   UnitSelection
 } from "../../../utils/modelBridge";
@@ -84,7 +85,7 @@ export async function handleQuickSendAndRelateFromDraftTargets(dependencies: Dra
   if (relationType === null) {
     if (text.length === 0) return;
     const sentMessage = await handleSendMessageOnly(text);
-    if (sentMessage) {
+    if (sentMessage && !isCapturingPreview()) {
       guideTargetIdRef.current = sentMessage.id;
       window.dispatchEvent(new CustomEvent('guide-text-message-sent', {
         detail: { messageId: sentMessage.id, title: sentMessage.content.slice(0, 40) },

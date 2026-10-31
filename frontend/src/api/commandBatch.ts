@@ -3,10 +3,11 @@ import type { WorkbenchSnapshot } from '../data/workbench';
 
 export interface Command { id: string; method: string; path: string; body: Record<string, unknown> }
 export interface CommandEnvelope { requestId: string; commands: Command[] }
-export interface CommandCommit { snapshots?: WorkbenchSnapshot[] }
+export interface CommandCommit { snapshots?: WorkbenchSnapshot[]; sequence?: number }
 export interface CommandBatchContext { apiBase: string }
 interface CapturedContext { owner: string; api: string; key: string; user: User }
-type Batch = CommandEnvelope & { context: CapturedContext; previous: CommandEnvelope | null; failure?: Error; provisional: Map<string, Message | Relation> };
+export interface PreparedCommandBatch { envelope: CommandEnvelope; context: CapturedContext }
+type Batch = CommandEnvelope & { context: CapturedContext; previous: CommandEnvelope | null; failure?: Error; provisional: Map<string, Message | Relation>; preview?: boolean };
 let current: Batch | null = null;
 let active = false;
 
@@ -55,6 +56,51 @@ export function cancelCommandBatch(error: unknown) {
   if (current) current.failure = error instanceof Error ? error : new Error(String(error));
 }
 export function isPendingMessage(id: string): boolean { return current?.provisional.has(id) ?? false; }
+export function isCapturingPreview() { return current?.preview === true; }
+
+/** Capture every operation without sending, persisting a pending request, or holding the send lock. */
+export async function prepareCommandBatch(work: () => Promise<unknown>, options?: CommandBatchContext, previous?: PreparedCommandBatch): Promise<PreparedCommandBatch | null> {
+  if (active) throw new Error('上一条消息正在发送，请稍候');
+  active = true;
+  try {
+    const context = captureContext(options);
+    if (previous) {
+      assertOwner(previous.context);
+      if (previous.context.api !== context.api) throw new Error('发送环境已切换，请重新预览');
+    }
+    if (pending(context)) throw new Error('上一笔发送尚未确认，请先点击发送核对结果');
+    const batch: Batch = { requestId: crypto.randomUUID(), commands: [], provisional: new Map(), context, previous: previous?.envelope ?? null, preview: true };
+    current = batch;
+    await work();
+    if (batch.failure) throw batch.failure;
+    assertOwner(context);
+    return batch.commands.length ? { envelope: structuredClone({ requestId: batch.requestId, commands: batch.commands }), context } : null;
+  } finally { current = null; active = false; }
+}
+
+/** Confirm the very same identities and bodies that were rehearsed. */
+export async function commitPreparedBatch(prepared: PreparedCommandBatch, commit: (input: CommandEnvelope) => Promise<CommandCommit>) {
+  if (active) throw new Error('上一条消息正在发送，请稍候');
+  active = true;
+  const { context, envelope } = prepared;
+  try {
+    assertOwner(context);
+    const previous = pending(context);
+    if (previous && JSON.stringify(previous) !== JSON.stringify(envelope)) throw new Error('请先核对上一笔尚未确认的发送');
+    sessionStorage.setItem(context.key, JSON.stringify(envelope));
+    let committed: CommandCommit;
+    try { committed = await commit(envelope); }
+    catch (error) {
+      if (definiteRejection(error)) sessionStorage.removeItem(context.key);
+      else throw Object.assign(new Error('发送结果尚未确认，请保留预览并再次确认同一笔发送。', { cause: error }), { unknownOutcome: true });
+      throw error;
+    }
+    sessionStorage.removeItem(context.key);
+    assertOwner(context);
+    publishCommit(committed);
+    return committed;
+  } finally { active = false; }
+}
 
 /** The workbench keeps its interaction order; the resulting messages commit together. */
 export function queueCommand(path: string, options: RequestInit): Message | Relation | null {

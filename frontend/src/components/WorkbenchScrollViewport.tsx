@@ -67,7 +67,7 @@ const WorkbenchScrollViewport = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDi
         visual?.removeEventListener('scroll', schedule);
       };
     }, []);
-    // Frozen controls, filters and the composer can change the viewport's top
+    // Toolbar controls, filters and the composer can change the viewport's top
     // without resizing it. Re-measure after their layout has committed.
     useLayoutEffect(() => { measureRef.current?.(); });
 

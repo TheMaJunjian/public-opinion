@@ -17,6 +17,22 @@ beforeEach(async () => {
 });
 afterEach(() => { resetRequestOperations(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
+it('signs a rehearsal without pending-write state or uncertain-send errors',async()=>{
+  const prepared=await api.prepareCommandBatch(async()=>{await api.createMessage('root',{content:'未发送草稿',stakeAmount:1});});
+  expect(prepared).not.toBeNull();
+  const fetcher=vi.fn(async()=>new Response(JSON.stringify({error:'预览计算失败'}),{status:500}));vi.stubGlobal('fetch',fetcher);
+  await expect(api.previewCommandBatch(prepared!,['root'])).rejects.toMatchObject({status:500,path:'/commands/preview'});
+  expect(fetcher).toHaveBeenCalledOnce();expect(sessionStorage.length).toBe(0);expect(getOperations()).toEqual([]);
+});
+
+it('discards a rehearsal when the account switches during signing',async()=>{
+  const prepared=await api.prepareCommandBatch(async()=>{await api.createMessage('root',{content:'旧账号草稿',stakeAmount:1});});
+  vi.mocked(signPayloadWithPrivateJwk).mockImplementationOnce(async()=>{localStorage.setItem('user',JSON.stringify({id:'other',username:'other'}));return 'signature';});
+  const fetcher=vi.fn();vi.stubGlobal('fetch',fetcher);
+  await expect(api.previewCommandBatch(prepared!,['root'])).rejects.toMatchObject({name:'AbortError'});
+  expect(fetcher).not.toHaveBeenCalled();expect(sessionStorage.length).toBe(0);
+});
+
 it('saves private viewing state with CSRF but without signing keys or a public command batch',async()=>{
   localStorage.removeItem('privateKey:device:alice');vi.mocked(signPayloadWithPrivateJwk).mockClear();
   const marks=[{messageId:'m',scope:'message' as const,key:'body',signature:'display',bodySignature:'body'}];

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { WorkbenchStore, syncWorkbench, type WorkbenchSnapshot } from '../data/workbench';
+import { WorkbenchStore, syncWorkbench, WORKBENCH_SYNC_CHECK_MS, type WorkbenchSnapshot } from '../data/workbench';
 import type { Message } from '../types';
 import { queueCommand, runCommandBatch } from '../api/commandBatch';
 import { computeCorrectionVersions, computeEffectiveSuppressedRelIds, convertMessagesToDemoModel } from '../utils/modelBridge';
@@ -252,4 +252,65 @@ it('does not redraw an unchanged graph when the event stream reconnects',async()
   load.mockResolvedValue(page(10));source.onopen?.(new Event('open'));
   await vi.waitFor(()=>expect(load).toHaveBeenCalledTimes(3));
   expect(updated).toHaveBeenCalledTimes(1);sync.stop();
+});
+
+it('catches missed notifications on a foreground tab without redrawing unchanged records or polling after leaving',async()=>{
+  vi.useFakeTimers();
+  const load=vi.fn(async({after}:{after?:number})=>after===undefined?page(10,[message('old')]):page(10));
+  const updated=vi.fn(),onError=vi.fn(),source={close:vi.fn(),readyState:1} as unknown as EventSource;
+  const sync=syncWorkbench({parent:'root',load,events:()=>source,onSnapshot:updated,onError});
+  try {
+    await vi.advanceTimersByTimeAsync(0);expect(updated).toHaveBeenCalledOnce();
+    load.mockResolvedValueOnce(page(11,[message('other-device')]));
+    await vi.advanceTimersByTimeAsync(WORKBENCH_SYNC_CHECK_MS+30);
+    expect(updated.mock.lastCall![0].messages.map((record:Message)=>record.id)).toEqual(['old','other-device']);
+    expect(load.mock.lastCall![0]).toMatchObject({after:10});
+    load.mockResolvedValue(page(11));
+    await vi.advanceTimersByTimeAsync(WORKBENCH_SYNC_CHECK_MS);
+    expect(updated).toHaveBeenCalledTimes(2);expect(onError).not.toHaveBeenCalled();
+    sync.stop();const requests=load.mock.calls.length;
+    window.dispatchEvent(new Event('online'));window.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(WORKBENCH_SYNC_CHECK_MS+100);
+    expect(load).toHaveBeenCalledTimes(requests);
+  }finally{sync.stop();vi.useRealTimers();}
+});
+
+it('pauses offline and hidden checks, catches up on resume, and replaces a permanently closed stream',async()=>{
+  vi.useFakeTimers();let hidden=false,online=true;
+  vi.spyOn(document,'hidden','get').mockImplementation(()=>hidden);
+  vi.spyOn(navigator,'onLine','get').mockImplementation(()=>online);
+  const load=vi.fn(async()=>page(10)),updated=vi.fn();
+  const source={close:vi.fn(),readyState:1,onerror:null} as unknown as EventSource;
+  const reconnected={close:vi.fn(),readyState:1} as unknown as EventSource;
+  const events=vi.fn(()=>reconnected).mockReturnValueOnce(source);
+  const sync=syncWorkbench({parent:'root',load,events,onSnapshot:updated,onError:vi.fn()});
+  try{
+    await vi.advanceTimersByTimeAsync(0);expect(load).toHaveBeenCalledTimes(2);
+    hidden=true;await vi.advanceTimersByTimeAsync(WORKBENCH_SYNC_CHECK_MS+100);expect(load).toHaveBeenCalledTimes(2);
+    hidden=false;online=false;window.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(WORKBENCH_SYNC_CHECK_MS+100);expect(load).toHaveBeenCalledTimes(2);
+    online=true;Object.assign(source,{readyState:2});load.mockResolvedValue(page(12,[message('missed')]));
+    window.dispatchEvent(new Event('online'));document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(30);
+    expect(events).toHaveBeenLastCalledWith(10);expect(events).toHaveBeenCalledTimes(2);expect(source.close).toHaveBeenCalledOnce();
+    expect(load).toHaveBeenCalledTimes(3);expect(updated.mock.lastCall![0].messages.map((record:Message)=>record.id)).toEqual(['missed']);
+  }finally{sync.stop();vi.restoreAllMocks();vi.useRealTimers();}
+});
+
+it('bounds closed-stream retries and lets connectivity recovery interrupt a failed-request backoff',async()=>{
+  vi.useFakeTimers();
+  const load=vi.fn<(query:{after?:number})=>Promise<WorkbenchSnapshot>>(async()=>page(10)),updated=vi.fn(),onError=vi.fn();
+  const source={close:vi.fn(),readyState:2,onerror:null} as unknown as EventSource;
+  const events=vi.fn(()=>source);
+  const sync=syncWorkbench({parent:'root',load,events,onSnapshot:updated,onError});
+  try{
+    await vi.advanceTimersByTimeAsync(0);
+    load.mockRejectedValueOnce(new Error('暂时断网'));
+    source.onerror?.(new Event('error'));await vi.advanceTimersByTimeAsync(30);
+    expect(onError).toHaveBeenCalledOnce();expect(events).toHaveBeenCalledOnce();
+    load.mockResolvedValue(page(11,[message('restored')]));window.dispatchEvent(new Event('online'));
+    await vi.advanceTimersByTimeAsync(30);
+    expect(events).toHaveBeenCalledTimes(2);expect(updated.mock.lastCall![0].sequence).toBe(11);
+    expect(load.mock.lastCall![0]).toMatchObject({after:10});
+  }finally{sync.stop();vi.useRealTimers();}
 });

@@ -1,3 +1,5 @@
+import { isCapturingPreview } from '../api/commandBatch';
+
 /**
  * 本地诊断与最近 100 条操作记录，不为每次界面操作发送网络请求。
  */
@@ -23,6 +25,7 @@ export function debugLog(tag: string, msg: string) {
 
 /** 操作面板保留最近记录，不受调试开关影响。 */
 export function operationLog(action: string, details: string) {
+  if (isCapturingPreview()) return;
   const entry = { time: new Date().toLocaleTimeString('zh-CN'), action, details };
   operationEntries.push(entry);
   if (operationEntries.length > 100) operationEntries.shift();

@@ -133,8 +133,8 @@ export function useWorkbenchViewport({ loading }: WorkbenchViewportInput) {
       const left = leftPanelRef.current, right = rightPanelRef.current;
       const target = event.composedPath()[0] ?? event.target;
       if (!(target instanceof Node)) return;
-      if (right?.contains(target)) handlePanelWheel(right, event, [left, page]);
-      else if (left && (left.closest('[data-workbench-panel-surface]') ?? left).contains(target)) handlePanelWheel(left, event, [right, page]);
+      if (right?.contains(target)) handlePanelWheel(right, event, page);
+      else if (left && (left.closest('[data-workbench-panel-surface]') ?? left).contains(target)) handlePanelWheel(left, event, page);
     };
     // React delegates wheel events passively, so preventDefault must run here.
     container.addEventListener('wheel', scrollPanel, { passive: false });

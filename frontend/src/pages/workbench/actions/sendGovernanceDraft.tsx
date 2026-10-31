@@ -1,5 +1,6 @@
 import { sendErrorMessage } from './sendErrors';
 import { api } from "../../../api";
+import { isCapturingPreview } from '../../../api/commandBatch';
 import { clearBrowserSelection, relationTypeName } from "../../../utils/graphTextSelection";
 import type {
   DemoEdge,
@@ -156,7 +157,7 @@ export async function sendGovernanceDraft(dependencies: Pick<DraftSendDependenci
     api.getMessageStakes(backendRel.id).then(s => {
       mergeStakeSnapshot(backendRel.id, s);
     }).catch(() => { });
-    window.dispatchEvent(new Event('points-refresh'));
+    if (!isCapturingPreview()) window.dispatchEvent(new Event('points-refresh'));
   } catch (e) {
     showAlert(`建立${relationTypeName(relationType)}关系失败: ${sendErrorMessage(e)}`);
     return;

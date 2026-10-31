@@ -5,6 +5,15 @@ import MessageReferenceControl from '../components/MessageReferenceControl';
 
 afterEach(()=>vi.restoreAllMocks());
 const advance=()=>act(()=>new Promise<void>(resolve=>setTimeout(resolve,550)));
+it('can start with a summary and toggles only the display when clicking the type',()=>{
+  const navigate=vi.fn();
+  const view=render(<MessageReferenceControl messageId="record-id" type="引用" summary="中文正文摘要" initialView="summary" onNavigate={navigate} wholeMessage={false}/>);
+  const type=view.getByRole('button',{name:'切换消息 record-id 的摘要和 ID'}),value=view.getByRole('button',{name:'跳转到消息 record-id'});
+  expect(value).toHaveTextContent('中文正文摘要');fireEvent.click(type);expect(value).toHaveTextContent('record-id');expect(navigate).not.toHaveBeenCalled();
+  view.rerender(<MessageReferenceControl messageId="record-id" type="引用" summary="更新后的中文摘要" initialView="summary" onNavigate={navigate} wholeMessage={false}/>);
+  expect(value).toHaveTextContent('record-id');fireEvent.click(type);expect(value).toHaveTextContent('更新后的中文摘要');
+  fireEvent.click(value);expect(navigate).toHaveBeenCalledExactlyOnceWith('record-id');
+});
 it('toggles a compact summary from the type and navigates from the value, including keyboard activation',async()=>{
   const user=userEvent.setup(),navigate=vi.fn();
   const view=render(<MessageReferenceControl messageId="record-id" type="文本" summary={'第一行\n第二行'} onNavigate={navigate}/>);

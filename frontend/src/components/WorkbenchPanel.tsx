@@ -1,24 +1,30 @@
-import { messageScopePath } from '../utils/messageRoutes';
 import {DEFAULT_TRACE_DEPTHS} from '../utils/traceRange';
 import {targetInvestmentDimension} from '@gonglun/core';
 import CardWidthEditor from './graph/CardWidthEditor';
-import { lazy, useMemo, useRef } from 'react';
+import { lazy, useContext, useMemo, useRef, useSyncExternalStore, type ReactNode } from 'react';
+import { WorkbenchDrawingContext } from '../context/WorkbenchDrawingContext';
 import DeferredWorkbench from './DeferredWorkbench';
 import RecentWorkbenchViews from './RecentWorkbenchViews';
 import { describeUnit as describeVisibleSelection } from '../utils/selectionLabel';
 import { isWholeMessageSelection } from '../utils/messageElementSelection';
 import type { User } from '../types';
-import { getPresentationSpec } from '../types';
+import { getMessageCardContent, getMessageTypeLabel } from '../utils/messageDisplay';
 import WorkbenchScrollViewport from './WorkbenchScrollViewport';
 import type { DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge';
-import MessageRelationsView from './MessageRelationsView';
+import SendPreviewProgress from './SendPreviewProgress';
+import MessageReferenceControl from './MessageReferenceControl';
 import OperationLogView from './OperationLogView';
 import StagedMessageLabel from './StagedMessageLabel';
 import StanceReadingReminder from './StanceReadingReminder';
-import { useNavigate } from 'react-router-dom';
 const StanceHistoryPanel = lazy(() => import('./StanceHistoryPanel'));
 const AuditLogView = lazy(() => import('./AuditLogView'));
 const RevenuePanel = lazy(() => import('./RevenuePanel'));
+const noDrawingSubscription=()=>()=>{};
+function DrawingReady({children}:{children:(ready:boolean)=>ReactNode}) {
+  const drawing=useContext(WorkbenchDrawingContext);
+  const ready=useSyncExternalStore(drawing?.subscribe??noDrawingSubscription,()=>!drawing?.pending&&!drawing?.failure);
+  return <>{children(ready)}</>;
+}
 
 interface DraftGroup {
   messageId: string;
@@ -28,6 +34,7 @@ interface DraftGroup {
 }
 
 interface WorkbenchPanelProps {
+  sendPreview?: { active:boolean; phase:'idle'|'preparing'|'sending'; stale:boolean; uncertain:boolean; ready:boolean; canPrepare:boolean; onPreview:()=>Promise<void>; onCancel:()=>void };
   relationChoices?: React.ReactNode;
   contributionGroups:Array<{type:string;label:string;count:number;truth:number|'';value:number|'';total:number}>;
   onContributionChange:(type:string,field:'truth'|'value',value:number|'')=>void;
@@ -82,11 +89,7 @@ interface WorkbenchPanelProps {
   enterTrace: (id: string, opts: { replace: boolean }) => void;
   exitAllTrace: () => void;
   onNavigateToMessage: (messageId: string) => void;
-  isInsideClassify: boolean;
   currentTraceIds: string[] | null;
-  classifyKey: number;
-  traceKey: number;
-  viewCacheKey?:string;
   viewCacheOwner?:unknown;
 
   // Messages & edges
@@ -160,10 +163,6 @@ interface WorkbenchPanelProps {
   sendError: string | null;
   sendWarning: string | null;
 
-  // Recent
-  recentTexts: DemoMessage[];
-  recentRelations: DemoMessage[];
-
   // Panels
   showStanceHistory: boolean;
   setShowStanceHistory: (v: boolean) => void;
@@ -197,7 +196,6 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
     const historic = unit.reference?.revision !== undefined && message?.revision !== undefined && unit.reference.revision !== message.revision;
     return isWholeMessageSelection(unit, unit.messageId) && !historic ? undefined : describeSelection(unit);
   };
-  const navigate = useNavigate();
   const touchStartXRef = useRef<number | null>(null);
   const showContributionControls = !p.isPreviewMode;
   const handlePanelTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
@@ -282,11 +280,23 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           </dl>}
         </>}
         <div className="desk-submit-bar">
+        {p.sendPreview?.active && <div className="desk-send-preview-status" data-send-preview="true" role="status">
+          <strong>{p.sendPreview.uncertain ? '发送结果待核对' : '发送预览 · 尚未发送'}</strong>
+          <span>{p.sendPreview.uncertain ? '请再次确认以核对结果，当前输入会保留。' : p.sendPreview.stale ? '输入或消息已有变化，请更新预览。' : '可继续编辑，确认发送后才会发布。'}</span>
+        </div>}
         <span className="desk-send-balance">预计 {p.totalConsumption?.total ?? '—'} 点 · 可用 {p.availablePoints} 点</span>
-        <button data-guide-send="true" data-guide-text-message-send="true" onClick={() => { window.dispatchEvent(new Event('guide-send-selected')); p.handleQuickSendAndRelateFromDraftTargets(); }} disabled={p.isPreviewMode || !p.singleButtonEnabled}
-          style={{ padding: "4px 14px", borderRadius: 4, border: "1px solid var(--line-666)", background: (p.singleButtonEnabled && !p.isPreviewMode) ? "var(--surface-0b84ff)" : "var(--surface-333)", color: (p.singleButtonEnabled && !p.isPreviewMode) ? "var(--ink-fff)" : "var(--ink-777)", cursor: (p.singleButtonEnabled && !p.isPreviewMode) ? "pointer" : "default", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
-          发送
-        </button>
+        {p.sendPreview && (p.sendPreview.active || p.sendPreview.phase !== 'idle') && <button type="button" disabled={p.sendPreview.phase === 'sending'} onClick={p.sendPreview.onCancel}
+          style={{padding:'4px 12px',borderRadius:4,border:'1px solid var(--line-666)',background:'var(--surface-333)',color:'var(--ink-eee)'}}>退出预览</button>}
+        {p.sendPreview && <button type="button" disabled={!p.sendPreview.canPrepare || p.sendPreview.phase !== 'idle'}
+          onClick={() => void p.sendPreview?.onPreview()} style={{padding:'4px 12px',borderRadius:4,border:'1px solid var(--line-666)',background:'var(--surface-333)',color:'var(--ink-eee)'}}>
+          {p.sendPreview.active ? '更新预览' : '预览'}
+        </button>}
+        <DrawingReady>{drawingReady=>{
+          const enabled=!p.isPreviewMode && (!p.sendPreview || p.sendPreview.phase === 'idle') && (p.sendPreview?.active ? p.sendPreview.ready && drawingReady : p.singleButtonEnabled);
+          return <button data-guide-send="true" data-guide-text-message-send="true" onClick={() => { window.dispatchEvent(new Event('guide-send-selected')); p.handleQuickSendAndRelateFromDraftTargets(); }} disabled={!enabled}
+          style={{ padding: "4px 14px", borderRadius: 4, border: "1px solid var(--line-666)", background: enabled ? "var(--surface-0b84ff)" : "var(--surface-333)", color: enabled ? "var(--ink-fff)" : "var(--ink-777)", cursor: enabled ? "pointer" : "default", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
+          {p.sendPreview?.active ? '确认发送' : '发送'}
+        </button>;}}</DrawingReady>
         <span className="desk-send-hint" data-duplicates-validation={p.singleButtonLabel === p.sendValidationLabel || undefined} style={{ fontSize: 11, color: "var(--ink-fff)" }}>{p.singleButtonLabel}</span>
         </div>
       </div>
@@ -323,11 +333,22 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
   );
 
   return (
+    <>
+    {p.sendPreview && <SendPreviewProgress phase={p.sendPreview.phase} active={p.sendPreview.active}/>}
     <WorkbenchScrollViewport ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="workbench-right-panel" role="region" aria-label="发言与关系操作" tabIndex={-1} onTouchStart={handlePanelTouchStart} onTouchMove={handlePanelTouchMove} onTouchEnd={handlePanelTouchEnd} onTouchCancel={handlePanelTouchEnd} data-guide-right-panel="true" data-workbench-scroll-panel="true" data-workbench-panel-surface="true" style={viewportStyle}>
     <div className="workbench-operation-panel" data-workbench-panel-content="true" style={panelStyle}>
       {p.singleSideReview && <div role="region" aria-label="单侧对比" style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ fontWeight: 600 }}>{p.singleSideReview.kind==='correction'?'更正查看':p.singleSideReview.kind==='relation'?'消息效果查看':'容器查看'}</div>
         <div style={{ fontSize: 12, opacity: 0.8 }}>当前目标：{p.singleSideReview.title}</div>
+      </div>}
+      {!!p.currentTraceIds?.length && <div role="group" aria-label="追溯起点" data-trace-origins={JSON.stringify(p.currentTraceIds)} style={{fontSize:12,display:'flex',flexDirection:'column',gap:6}}>
+        <span style={{color:'var(--ink-94a3b8)'}}>追溯起点</span>
+        {p.currentTraceIds.map(id=>{const message=messageMap.get(id),summary=getMessageCardContent(message)||id;
+          return <div key={id} style={{padding:'5px 8px',border:'1px solid var(--line-444)',borderRadius:4,background:'var(--surface-222)'}}>
+            <MessageReferenceControl messageId={id} type={getMessageTypeLabel(message)} summary={summary} initialView="summary"
+              onNavigate={p.onNavigateToMessage} navigateLabel={`跳转到追溯起点 ${id}`} wholeMessage={false}/>
+          </div>;
+        })}
       </div>}
       <RecentWorkbenchViews ownerKey={p.viewCacheOwner??p.scopeMessageId} viewKey={p.traceReadingControls?'reading':'none'} limit={2}>
         {p.traceReadingControls}
@@ -578,52 +599,6 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
         </div>
       </>}
 
-      {!p.comparisonReviewed && <div style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8 }}>
-        <div style={{ fontWeight: 600 }}>追溯</div>
-        <div style={{ fontSize: 12, opacity: 0.75 }}>{p.isInsideClassify ? "当前模式：分类" : "当前模式：追溯"}</div>
-        <div style={{ fontSize: 12, opacity: 0.8 }}>当前追溯消息：{p.currentTraceIds ? p.currentTraceIds.join(", ") : "（无）"}</div>
-      </div>}
-
-      <RecentWorkbenchViews ownerKey={p.viewCacheOwner??p.scopeMessageId} viewKey={p.viewCacheKey??JSON.stringify(p.currentTraceIds)}>
-        <MessageRelationsView scopeMessageId={p.scopeMessageId} traceIds={p.currentTraceIds ?? []} messages={p.messages} edges={p.edges} onNavigateToMessage={p.onNavigateToMessage} />
-      </RecentWorkbenchViews>
-
-      {!p.isViewerMode && <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <div style={{ flex: 1, border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, minWidth: 0 }}>
-          <div title="独立文本消息；带正文的回复、提案等仍属于关系消息。" style={{ fontWeight: 600, marginBottom: 4 }}>最近文本消息</div>
-          <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, fontSize: 12, maxHeight: 200, overflow: "auto" }}>
-            {p.recentTexts.map(m => <li key={m.id} style={{ marginBottom: 2, wordBreak: "break-all" }}>{m.id}：{m.content}</li>)}
-          </ul>
-        </div>
-        <div style={{ flex: 1, border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, minWidth: 0 }}>
-          <div title="包含回复、引用、赞同、分类、提案、加入、发起结算和结算结果等关系消息，可带正文。" style={{ fontWeight: 600, marginBottom: 4 }}>最近关系消息</div>
-          <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, fontSize: 12, maxHeight: 200, overflow: "auto" }}>
-            {p.recentRelations.map(m => {
-              const notifyUsers = m.relationType === 'notify'
-                ? (Array.isArray(m.relationPayload?.notifyUsers) && m.relationPayload.notifyUsers.length > 0
-                  ? m.relationPayload.notifyUsers
-                  : (m.relationPayload?.notifyUserIds ?? []).map(id => ({ id, username: `与会者 ${id}` })))
-                : [];
-              return (
-                <li key={m.id} style={{ marginBottom: 2, wordBreak: "break-all" }}>
-                  {`【${m.kind === 'round' ? '发起结算' : m.kind === 'round_result' ? '结算结果' : m.kind === 'join' ? '加入' : m.relationType ? getPresentationSpec(m.relationType).label : '关系消息'}】`}{m.id}：{m.content}
-                  {notifyUsers.length > 0 && (
-                    <span>（通知与会者：{notifyUsers.map((notifyUser, index) => (
-                      <span key={notifyUser.id}>
-                        {index > 0 && '、'}
-                        <span onClick={() => navigate(`${messageScopePath(p.scopeMessageId)}?sender=${encodeURIComponent(notifyUser.username)}`)} style={{ color: 'var(--ink-a5f3fc)', textDecoration: 'underline', cursor: 'pointer' }}>
-                          {notifyUser.username}
-                        </span>
-                      </span>
-                    ))}）</span>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      </div>}
-
       {!p.isViewerMode && <>
       {/* Stance History */}
       <div style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, marginTop: 8 }}>
@@ -672,5 +647,6 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
 
     </div>
     </WorkbenchScrollViewport>
+    </>
   );
 }

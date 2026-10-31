@@ -8,6 +8,7 @@ import {getMessageTypeLabel,getOrganizationTitle} from '../utils/messageDisplay'
 import type {ReadingNavigationMarkers} from '../hooks/useViewedMessageHighlight';
 import {readingConfirmations} from '../pages/workbench/model/readingConfirmations';
 import RecentWorkbenchViews from './RecentWorkbenchViews';
+import MessageConnections from './MessageConnections';
 interface Props {
   scopeKey:string;scopeIds:ReadonlySet<string>;allowedIds:ReadonlySet<string>;direction:TraceDirection;order:ReadingOrder;onOrder:(order:ReadingOrder)=>void;
   placementOrder?:string[];path:string[][];focusId:string|null;focusLocated:boolean;incoming:ReadingTask[];ready:boolean;
@@ -121,6 +122,8 @@ function ReadingController(p:Props&{context:NonNullable<ReturnType<typeof useRea
       readingDetails={readingIds.length?<RecentWorkbenchViews ownerKey={context.versionHistory} viewKey={JSON.stringify([p.scopeKey,readingIds])}>{readingIds.map(id=><details key={id} open data-reading-message-section={id} style={{overflowWrap:'anywhere'}}>
         <summary style={{cursor:'pointer'}}>【{messageTypes.get(id)??'消息'}】 {id} · 消息与影响</summary>
         <MessageReadingDetails messageId={id} disabled={busy||!p.ready||!p.focusLocated}/>
+        <MessageConnections messageId={id} messages={context.readingInput.messages} edges={context.readingInput.edges} getMessageSummary={getMessageSummary}
+          disabled={busy||!p.ready||!p.focusLocated} onNavigate={id=>void visit(id,tasks.filter(task=>task.destinationId===id))}/>
       </details>)}</RecentWorkbenchViews>:undefined} canConfirm={confirmation.ready&&confirmation.pending}
       canGoBack={!!p.canGoBack} canGoForward={!!p.canGoForward} onBackward={()=>{setError(null);p.onBackward?.();}} onForward={()=>{setError(null);p.onForward?.();}} recentSelectedIds={p.recentSelectedIds}
       onSetReading={ids=>{if(ids.length)void visit(ids[0],tasks.filter(task=>ids.includes(task.destinationId)),false,ids);}}

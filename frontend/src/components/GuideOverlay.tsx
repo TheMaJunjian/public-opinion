@@ -507,7 +507,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
   return createPortal(
     <div data-guide-overlay="true" style={{ position: 'fixed', inset: 0, zIndex: Z_INDEX.guide, pointerEvents: 'none' }}>
       {guideMaskRect && (
-        <div aria-hidden="true" style={{ position: 'fixed', top: guideMaskRect.top, left: guideMaskRect.left, width: guideMaskRect.width, height: guideMaskRect.height, zIndex: 1, pointerEvents: 'none', boxShadow: '0 0 0 9999px var(--shadow-rgba-0-0-0-0-14)' }} />
+        <div data-guide-mask="true" aria-hidden="true" style={{ position: 'fixed', top: guideMaskRect.top, left: guideMaskRect.left, width: guideMaskRect.width, height: guideMaskRect.height, zIndex: 1, pointerEvents: 'none', boxShadow: '0 0 0 9999px var(--shadow-rgba-0-0-0-0-14)' }} />
       )}
       {invalidAction && (
         <div role="status" style={{ position: 'fixed', left: invalidAction.left, top: invalidAction.top, transform: 'translate(-50%, -120%)', zIndex: 5, padding: '5px 9px', borderRadius: 5, background: 'var(--surface-7f1d1d)', color: 'var(--ink-fee2e2)', fontSize: 12, whiteSpace: 'nowrap', boxShadow: '0 4px 14px var(--shadow-rgba-0-0-0-0-35)' }}>
@@ -545,7 +545,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
           <strong className="guide-title" style={{ color: 'var(--guide-title)' }}>{GUIDE_COPY[guideStage].title}</strong>
-          <button type="button" onClick={onClose} style={{ flex: '0 0 28px', width: 28, height: 28, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', margin: 0, padding: 0, border: 0, borderRadius: 0, background: 'transparent', color: 'var(--ink-d4d4d8)', cursor: 'pointer', fontSize: 19, fontWeight: 400, lineHeight: 1 }} aria-label="关闭引导">×</button>
+          <button type="button" data-dialog-close="true" onClick={onClose} style={{ flex: '0 0 28px', width: 28, height: 28, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', margin: 0, padding: 0, border: 0, borderRadius: 0, background: 'transparent', color: 'var(--ink-d4d4d8)', cursor: 'pointer', fontSize: 19, fontWeight: 400, lineHeight: 1 }} aria-label="关闭引导">×</button>
         </div>
         <div className="guide-copy" style={{ marginTop: 12, fontSize: 13, lineHeight: 1.65 }}>
           <div className="guide-kicker" style={{ color: 'var(--ink-a1a1aa)', fontSize: 11 }}>操作</div>

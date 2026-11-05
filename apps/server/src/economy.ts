@@ -140,14 +140,14 @@ export async function placeWager(tx: Mutation, message: Message, amount: number,
     const resolved = await resolveExecutedStance(tx.store, stance[0]!.roles.target![0]!.reference, stance[0]!.relation === 'agree' ? 'pro' : 'con');
     await placeResolvedWager(tx, message, amount, stance[0]!.id, resolved, {allowDebt});
 }
-export async function placeValueWager(tx: Mutation, message: Message, annotation: RelationPart, amount: number, allowDebt = false) {
+export async function placeValueWager(tx: Mutation, message: Message, annotation: RelationPart, amount: number, allowDebt = false, historical = false) {
     const reference = relationTarget(annotation);
     if (reference.revision !== undefined) await tx.store.message(reference.messageId);
     const subject = await tx.store.message(reference.messageId, reference.revision);
     const pinned = { ...reference, revision: subject.revision };
     const previous = await valueRoundFor(tx.store, pinned);
     const requested = dataOf(message).roundId;
-    if (requested !== undefined && requested !== previous?.id) throw new DomainError('投票目标与轮次不一致', 409);
+    if (!historical && requested !== undefined && requested !== previous?.id) throw new DomainError('投票目标与轮次不一致', 409);
     let target = previous?.target;
     if (!target) {
         const claim = await tx.create('system', [
@@ -157,7 +157,21 @@ export async function placeValueWager(tx: Mutation, message: Message, annotation
         ]);
         target = { messageId: claim.id, revision: claim.revision, partId: 'relation' };
     }
-    await placeResolvedWager(tx, message, amount, annotation.id, { target, side: annotationValueSide(annotation) }, {allowDebt});
+    await placeResolvedWager(tx, message, amount, annotation.id, { target, side: annotationValueSide(annotation) },
+        {allowDebt,historical,validateRequestedRound:!historical,...(historical?{ledgerReason:'旧消息最低投入补扣'}:{})});
+}
+/** Fund a retained execution after the old economic epoch was cleared; do not execute its action again. */
+export async function fundHistoricalMessageContribution(tx: Mutation, message: Message, action: RelationPart) {
+    const execution = await tx.store.db.prepare('SELECT target,side FROM execution_stances WHERE "sourceId"=$1 AND "partId"=$2 AND revision<=$3 ORDER BY revision DESC LIMIT 1')
+        .get(message.id, action.id, message.revision);
+    if (!execution && !['agree','disagree'].includes(action.relation)) {
+        await placeValueWager(tx, message, action, 1, true, true);
+        return;
+    }
+    const resolved = execution ? { target: JSON.parse(String(execution.target)) as Reference, side: execution.side as 'pro'|'con' }
+        : await resolveExecutedStance(tx.store, relationTarget(action), action.relation === 'agree' ? 'pro' : 'con');
+    await placeResolvedWager(tx, message, 1, action.id, resolved,
+        {historical:true,reuseExecution:true,validateRequestedRound:false,ledgerReason:'旧消息最低投入补扣'});
 }
 /** Maintenance only: backfill an author's self-agreement without replaying the message's actions. */
 export async function placeHistoricalSelfWager(tx: Mutation, message: Message, partId: string) {
@@ -195,7 +209,7 @@ export async function refundHistoricalSelfWager(tx: Mutation, message: Message, 
     // Close the migration's now-empty round without affecting any prior settlement.
     if(!round.previousRoundId&&!await tx.store.db.prepare('SELECT 1 FROM bets WHERE "targetKey"=$1').get(key))await settle(tx,round,message.id);
 }
-async function placeResolvedWager(tx: Mutation, message: Message, amount: number, partId: string, resolved: { target: Reference; side: 'pro' | 'con' }, options: {historical?:boolean;allowDebt?:boolean;validateApproval?:boolean;validateRequestedRound?:boolean} = {}) {
+async function placeResolvedWager(tx: Mutation, message: Message, amount: number, partId: string, resolved: { target: Reference; side: 'pro' | 'con' }, options: {historical?:boolean;allowDebt?:boolean;validateApproval?:boolean;validateRequestedRound?:boolean;reuseExecution?:boolean;ledgerReason?:string} = {}) {
     const {historical=false,allowDebt=false,validateApproval=true,validateRequestedRound=true}=options;
     if (!historical && validateApproval) await validateJoinApproval(tx.store, resolved.target, resolved.side, message.authorId);
     if(amount===0 && await tx.store.db.prepare('SELECT 1 FROM settlement_access WHERE "messageId"=$1').get(resolved.target.messageId)) {
@@ -205,9 +219,16 @@ async function placeResolvedWager(tx: Mutation, message: Message, amount: number
         return;
     }
     const selected = historical
-        ? { key: referenceKey(resolved.target), target: resolved.target, revision: message.revision }
+        ? { key: referenceKey(resolved.target), target: resolved.target, revision: (await tx.store.message(resolved.target.messageId,resolved.target.revision)).revision }
         : await targetKey(tx.store, resolved.target);
-    await tx.store.db.prepare(`INSERT INTO execution_stances("sourceId",revision,"partId",target,side) VALUES ($1,$2,$3,$4,$5)`).run(message.id, message.revision, partId, JSON.stringify(selected.target), resolved.side);
+    if (historical && options.reuseExecution) {
+        // Only the exact newly funded address becomes settleable; other frozen components stay closed.
+        await tx.store.db.prepare('UPDATE settlement_access SET allowed_keys=array_append(allowed_keys,$2) WHERE "messageId"=$1 AND NOT($2=ANY(allowed_keys))')
+            .run(selected.target.messageId,selected.key);
+    }
+    const retained = options.reuseExecution && await tx.store.db.prepare('SELECT target,side FROM execution_stances WHERE "sourceId"=$1 AND revision=$2 AND "partId"=$3').get(message.id,message.revision,partId);
+    if (retained && (referenceKey(JSON.parse(String(retained.target))) !== selected.key || retained.side !== resolved.side)) throw new Error('历史投入与原执行依据不一致');
+    if (!retained) await tx.store.db.prepare(`INSERT INTO execution_stances("sourceId",revision,"partId",target,side) VALUES ($1,$2,$3,$4,$5)`).run(message.id, message.revision, partId, JSON.stringify(selected.target), resolved.side);
     tx.affected.add((await recordStance(tx.store, message, { target: selected.target, side: resolved.side })));
     const history = await savedRounds(tx.store, selected.key);
     let round = history.find(r => r.status !== 'settled');
@@ -221,7 +242,7 @@ async function placeResolvedWager(tx: Mutation, message: Message, amount: number
     const requested=dataOf(message).roundId;if(validateRequestedRound&&requested!==undefined&&requested!==round.id)throw new DomainError('投票目标与轮次固定依据不一致',409);
     round[resolved.side] = integer(round[resolved.side] + amount);
     if (amount > 0) {
-        await tx.store.ledger(message.authorId, message.id, -amount, amount, historical ? '历史消息真假补扣' : '对赌锁定', historical || allowDebt);
+        await tx.store.ledger(message.authorId, message.id, -amount, amount, options.ledgerReason ?? (historical ? '历史消息真假补扣' : '对赌锁定'), historical || allowDebt);
         const betId = id();
         await tx.store.db.prepare(`INSERT INTO bets(id,"roundId","targetKey","userId","messageId",side,amount) VALUES ($1,$2,$3,$4,$5,$6,$7)`).run(betId, round.id, selected.key, message.authorId, message.id, resolved.side, amount);
         await tx.store.db.prepare('INSERT INTO stake_positions VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)').run(betId,message.authorId,
@@ -372,7 +393,10 @@ export async function distributeOperations(tx: Mutation, message: Message) {
     const previous = await getEffect<{
         sequence: number;
     }>(tx.store, 'operations:last');
-    const contributions = (await tx.store.db.prepare(`SELECT body FROM messages WHERE "authorId"<>'system' AND id<>$1 ORDER BY "createdAt",id`).all(message.id)).map(r => JSON.parse(r.body as string) as Message);
+    const contributions = (await tx.store.db.prepare(`SELECT body FROM messages m WHERE "authorId"<>'system' AND id<>$1
+      AND (COALESCE((m.body::jsonb #>> '{spending,protocol}')::bigint,0)>0 OR NOT EXISTS (SELECT 1 FROM points_archive_rows archive WHERE archive."tableName"='messages'
+        AND archive."archiveId"=(SELECT value::jsonb->>'archiveId' FROM settings WHERE key='usage-points-start') AND archive.body->>'id'=m.id))
+      ORDER BY "createdAt",id`).all(message.id)).map(r => JSON.parse(r.body as string) as Message);
     const qualityEffects = (await tx.store.db.prepare("SELECT body FROM effects WHERE key LIKE 'quality:%'").all()).map(row => JSON.parse(row.body as string) as QualityEffect);
     const excluded = new Set(qualityEffects.filter(e => e.active).map(e => e.messageId));
     const byId = new Map(contributions.map(m => [m.id, m]));

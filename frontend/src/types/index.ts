@@ -240,6 +240,16 @@ export interface PointsBalance {
   };
 }
 
+export interface UsagePointProgress {
+  earned: number;
+  totalEarned: number;
+  roundId: string;
+  waitSeconds: number;
+  remainingMs: number;
+  refreshInMs: number;
+  awarded: boolean;
+}
+
 export interface PointTransaction {
   id: string;
   type: string; // MINT | UNLOCK | LOCK | SPEND | TRANSFER

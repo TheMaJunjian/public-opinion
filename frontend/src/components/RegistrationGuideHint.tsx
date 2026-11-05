@@ -54,6 +54,8 @@ export default function RegistrationGuideHint({ open, onClose }: RegistrationGui
       <div
         role="dialog"
         aria-label="新手提示"
+        data-dialog-panel="true"
+        data-dialog-tone="hint"
         style={{
           ...dialogStyles.panel,
           position: 'fixed',
@@ -65,7 +67,7 @@ export default function RegistrationGuideHint({ open, onClose }: RegistrationGui
           pointerEvents: 'auto',
         }}
       >
-        <div style={{ ...dialogStyles.header, margin: '-16px -18px 0' }}>欢迎与会者参与公论</div>
+        <div data-dialog-header="true" style={{ ...dialogStyles.header, margin: '-16px -18px 0' }}>欢迎与会者参与公论</div>
         <p style={{ margin: '10px 0 0', fontSize: 13, lineHeight: 1.7 }}>
           点击上方的“引导”按钮，可以查看分步骤操作引导。<br />
           点击“引导”按钮右侧的“教程”按钮可以查看教程。

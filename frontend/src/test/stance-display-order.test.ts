@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest';
-import {computeCorrectionVersions,computeGloballySuppressedRelIds,computeUserActiveStanceRelIds,computeUserOverriddenStanceRelIds,type DemoMessage,type DemoEdge} from '../utils/modelBridge';
+import {computeCorrectionVersions,computeGloballySuppressedRelIds,computeUserActiveStanceRelIds,computeUserSuppressedRelIds,computeUserOverriddenStanceRelIds,type DemoMessage,type DemoEdge} from '../utils/modelBridge';
 
 const target:DemoMessage={id:'target',author:'other',content:'目标',kind:'relation',relationType:'reference',createdAt:'2026-10-27T09:00:00Z'};
 const stance=(id:string,type:'agree'|'disagree',wager:number,sequence:number):DemoMessage=>({id,author:'reader',content:'',kind:'relation',relationType:type,
@@ -18,6 +18,18 @@ it('uses publication sequence for personal choices and their superseded labels a
   const older=stance('z-older','agree',10,1),newer=stance('a-newer','disagree',10,2),records=[target,newer,older],edges=[edge(newer),edge(older)];
   expect(computeUserActiveStanceRelIds(edges,records,'reader').get(target.id)).toMatchObject({relMsgId:newer.id,type:'disagree'});
   expect(computeUserOverriddenStanceRelIds(edges,records,'reader')).toEqual(new Set([older.id]));
+});
+
+it('attributes native stances to their publisher rather than the author of their source evidence',()=>{
+  const source:DemoMessage={id:'source',kind:'normal',author:'source-author',content:'',createdAt:'2026-10-26T10:00:00Z'};
+  const older=stance('older','agree',0,1),newer=stance('newer','disagree',0,2);
+  const edges=[older,newer].map(message=>({...edge(message),from:{messageId:source.id,selection:{kind:'whole' as const}}}));
+  const records=[target,source,older,newer];
+  expect(computeUserSuppressedRelIds(edges,records,'reader')).toEqual(new Set([target.id]));
+  expect(computeUserActiveStanceRelIds(edges,records,'reader').get(target.id)).toMatchObject({relMsgId:newer.id,type:'disagree'});
+  expect(computeUserOverriddenStanceRelIds(edges,records,'reader')).toEqual(new Set([older.id]));
+  expect(computeUserSuppressedRelIds(edges,records,'source-author')).toEqual(new Set());
+  expect(computeUserActiveStanceRelIds(edges,records,'source-author').size).toBe(0);
 });
 
 it('prefers the latest personal correction approval when both approvals have the same timestamp',()=>{

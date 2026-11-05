@@ -6,6 +6,8 @@ import { api } from '../api';
 import {dialogStyles} from './dialogStyles';
 import ThemeIcon from '../theme/ThemeIcon';
 import type { PointsBalance, PointTransaction } from '../types';
+import { useUsagePoints } from './useUsagePoints';
+import UsagePointsProgress from './UsagePointsProgress';
 
 /**
  * PointsBadge — 导航栏贡献点显示组件。
@@ -15,6 +17,7 @@ import type { PointsBalance, PointTransaction } from '../types';
  */
 export default function PointsBadge() {
   const { user } = useAuth();
+  const usage = useUsagePoints(user?.id);
   const navigate = useNavigate();
   const location = useLocation();
   const [balance, setBalance] = useState<PointsBalance | null>(null);
@@ -22,8 +25,11 @@ export default function PointsBadge() {
   const [open, setOpen] = useState(false);
   const [transactions, setTransactions] = useState<PointTransaction[]>([]);
   const [txLoading, setTxLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(0);
   const [flash, setFlash] = useState<'gain' | 'loss' | null>(null);
   const popRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   const fetchBalance = useCallback(async () => {
     if (!user) return;
@@ -86,22 +92,30 @@ export default function PointsBadge() {
     return () => document.removeEventListener('mousedown', onClick);
   }, [open]);
 
-  async function handleClick() {
+  useEffect(() => {
+    if (!open || !user) return;
+    let active = true;
+    setTxLoading(true);
+    api.getPointsTransactions({ page, limit: 20 }).then(res => {
+      if (active) { setTransactions(res.data); setTotalPages(res.pagination.totalPages); }
+    }).catch(() => {}).finally(() => { if (active) setTxLoading(false); });
+    return () => { active = false; };
+  }, [open, user, balance, page]);
+
+  function handleClick() {
     if (open) {
       setOpen(false);
       return;
     }
     setOpen(true);
+    setPage(1);
     window.dispatchEvent(new Event('guide-points-opened'));
-    setTxLoading(true);
-    try {
-      const res = await api.getPointsTransactions({ limit: 20 });
-      setTransactions(res.data);
-    } catch {
-      // ignore
-    } finally {
-      setTxLoading(false);
-    }
+  }
+
+  function changePage(next: number) {
+    setTransactions([]);
+    setPage(next);
+    if (panelRef.current) panelRef.current.scrollTop = 0;
   }
 
   if (!user) return null;
@@ -122,9 +136,10 @@ export default function PointsBadge() {
         data-guide-points="true"
         aria-label={`贡献点：可用 ${points.available}，锁定 ${points.locked}，累计损失 ${breakdown.totalLost}，累计协议费 ${breakdown.totalProtocolFees}，累计收益 ${breakdown.totalEarned}`}
         onClick={handleClick}
-        className={`flex items-center gap-2 text-sm hover:opacity-80 transition-opacity cursor-pointer ${flash ? `animate-pulse ring-2 rounded px-1 ${flash === 'gain' ? 'ring-[color:var(--ink-f87171)]' : 'ring-[color:var(--ink-4ade80)]'}` : ''}`}
+        className={`flex flex-col items-stretch gap-1.5 text-sm hover:opacity-80 transition-opacity cursor-pointer ${flash ? `animate-pulse ring-2 rounded px-1 ${flash === 'gain' ? 'ring-[color:var(--ink-f87171)]' : 'ring-[color:var(--ink-4ade80)]'}` : ''}`}
         title={`可用${points.available} · 锁定${points.locked} · 损失${breakdown.totalLost} · 协议费${breakdown.totalProtocolFees} · 收益${breakdown.totalEarned}`}
       >
+        <span className="flex items-center gap-2">
         <span className="text-[color:var(--ink-c7d2fe)]">
           <ThemeIcon name="points" fallback="🪙" /> {points.available.toLocaleString()}
         </span>
@@ -150,14 +165,18 @@ export default function PointsBadge() {
             负债{Math.abs(bal.amount)}
           </span>
         )}
+        </span>
+        <UsagePointsProgress compact completion={usage.completion} roundId={usage.progress?.roundId} unavailable={!usage.progress || usage.error} />
       </button>
 
       {/* Popover: transaction list */}
       {open && (
         <div
+          ref={panelRef}
           data-guide-points-panel="true"
-          className="absolute right-0 top-full mt-2 w-72 z-50 max-h-80 overflow-auto"
+          className="absolute right-0 top-full mt-2 w-80 z-50 max-h-96 overflow-auto"
           style={dialogStyles.panel}
+          aria-busy={txLoading}
           onClick={(e) => e.stopPropagation()}
         >
           <div className="px-3 py-2 border-b border-[color:var(--dialog-border)] font-semibold text-sm text-[color:var(--text-primary)] sticky top-0 bg-[color:var(--dialog-surface)]">
@@ -166,7 +185,14 @@ export default function PointsBadge() {
               可用 {points.available} · 锁定 {points.locked}
             </span>
           </div>
-          {txLoading ? (
+          <div className="px-3 py-2 border-b border-[color:var(--dialog-border)] text-[color:var(--text-muted)]" style={{lineHeight:1.7,fontSize:11}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',fontSize:12,color:'var(--text-secondary)'}}>
+              <span>本轮时间</span><span>{usage.error ? '暂时无法同步' : usage.progress ? `${usage.progress.waitSeconds} 秒` : '同步中'}</span>
+            </div>
+            <div style={{marginTop:8}}><UsagePointsProgress completion={usage.completion} roundId={usage.progress?.roundId} unavailable={!usage.progress || usage.error} /></div>
+            <div style={{marginTop:5}}>每天 00:00 重置时长 · 使用贡献按天汇总</div>
+          </div>
+          {txLoading && transactions.length === 0 ? (
             <div className="px-3 py-4 text-sm text-[color:var(--text-muted)] text-center">加载中...</div>
           ) : transactions.length === 0 ? (
             <div className="px-3 py-4 text-sm text-[color:var(--text-muted)] text-center">暂无记录</div>
@@ -231,9 +257,9 @@ export default function PointsBadge() {
                     <span className={tx.amount >= 0 ? 'text-[color:var(--ink-4ade80)]' : 'text-[color:var(--ink-ef4444)]'}>
                       {tx.amount >= 0 ? '+' : ''}{tx.amount.toLocaleString()}
                     </span>
-                    <span className="ml-2 text-[color:var(--text-muted)]">
+                    {tx.type !== 'USAGE_REWARD' && <span className="ml-2 text-[color:var(--text-muted)]">
                       余额 {tx.balanceAfter.toLocaleString()}
-                    </span>
+                    </span>}
                     {canNavigate && <span className="ml-1 text-[color:var(--ink-818cf8-3)]" title="双击跳转到相关消息">↗</span>}
                   </div>
                 </li>
@@ -241,6 +267,11 @@ export default function PointsBadge() {
               })}
             </ul>
           )}
+          {totalPages > 1 && <div className="px-3 py-2 border-t border-[color:var(--dialog-border)] text-xs text-[color:var(--text-muted)]" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+            <button type="button" disabled={page <= 1 || txLoading} onClick={() => changePage(page - 1)} style={{...dialogStyles.button,padding:'3px 8px',opacity:page <= 1 ? .4 : 1}}>上一页</button>
+            <span>{page} / {totalPages}</span>
+            <button type="button" disabled={page >= totalPages || txLoading} onClick={() => changePage(page + 1)} style={{...dialogStyles.button,padding:'3px 8px',opacity:page >= totalPages ? .4 : 1}}>下一页</button>
+          </div>}
         </div>
       )}
     </div>
@@ -258,6 +289,7 @@ function typeLabel(type: string): string {
     UNLOCK: '解锁',
     SPEND: '支出',
     TRANSFER: '转入',
+    USAGE_REWARD: '使用贡献',
     REVENUE_DISTRIBUTION: '收入分配',
     REVENUE_WITHDRAWAL: '收入撤回',
   };
@@ -267,6 +299,7 @@ function typeLabel(type: string): string {
 function txDetail(tx: import('../types').PointTransaction): string {
   const d = tx.data as Record<string, unknown> | null;
   if (!d) return '';
+  if (tx.type === 'USAGE_REWARD') return `${String(d.day ?? '')} · ${Number(d.count ?? 0)} 次`;
 
   // Stake: show side + staked/burned
   if (tx.type === 'STAKE_LOCK') {
@@ -303,7 +336,7 @@ function txDetail(tx: import('../types').PointTransaction): string {
   }
 
   // Mint: show reason
-  if (d.reason) return String(d.reason);
+  if (d.reason) return String(d.reason).replace('使用公论计时奖励','使用公论计时贡献').replace('使用奖励汇总','使用贡献汇总');
 
   if (tx.type === 'REVENUE_DISTRIBUTION') return '按贡献点比例分配';
   if (tx.type === 'REVENUE_WITHDRAWAL') return '收入撤回';

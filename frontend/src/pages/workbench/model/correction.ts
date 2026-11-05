@@ -18,24 +18,23 @@ export function expandTextIdsWithCorrections(
   msgMap: Map<string, DemoMessage>
 ): Set<string> {
   const expanded = new Set(textIds);
+  if (!expanded.size) return expanded;
+  const adjacent = new Map<string, string[]>();
+  for (const edge of edges) {
+    if (edge.relationType !== 'correct' || edge.proposalOnly) continue;
+    const record = msgMap.get(edge.relationMessageId);
+    if (record?.parts?.length || record?.relationPayload?.correctionKind === 'WIDTH') continue;
+    const from = edge.from.messageId, to = edge.to.messageId;
+    if (msgMap.get(from)?.kind !== 'normal' || msgMap.get(to)?.kind !== 'normal') continue;
+    const targets = adjacent.get(from) ?? []; targets.push(to); adjacent.set(from, targets);
+    const sources = adjacent.get(to) ?? []; sources.push(from); adjacent.set(to, sources);
+  }
   const queue = Array.from(textIds);
-  const visited = new Set<string>();
-  while (queue.length > 0) {
-    const tid = queue.shift()!;
-    if (visited.has(tid)) continue;
-    visited.add(tid);
-    for (const e of edges) {
-      if (e.relationType !== 'correct' || e.proposalOnly) continue;
-      const record = msgMap.get(e.relationMessageId);
-      if (record?.parts?.length || record?.relationPayload?.correctionKind === 'WIDTH') continue;
-      if (msgMap.get(e.from.messageId)?.kind !== 'normal' || msgMap.get(e.to.messageId)?.kind !== 'normal') continue;
-      if (e.from.messageId === tid && !expanded.has(e.to.messageId)) {
-        expanded.add(e.to.messageId);
-        queue.push(e.to.messageId);
-      } else if (e.to.messageId === tid && !expanded.has(e.from.messageId)) {
-        expanded.add(e.from.messageId);
-        queue.push(e.from.messageId);
-      }
+  for (let index = 0; index < queue.length; index++) {
+    for (const neighbor of adjacent.get(queue[index]) ?? []) {
+      if (expanded.has(neighbor)) continue;
+      expanded.add(neighbor);
+      queue.push(neighbor);
     }
   }
   return expanded;

@@ -24,6 +24,7 @@ interface PromptModalProps {
   confirmButtonRef?: Ref<HTMLButtonElement>;
   onConfirm: () => void;
   onCancel?: () => void;
+  onClose?: () => void;
 }
 
 /**
@@ -47,6 +48,7 @@ export default function PromptModal({
   confirmButtonRef,
   onConfirm,
   onCancel,
+  onClose,
 }: PromptModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const footerRef = useRef<HTMLDivElement>(null);
@@ -107,6 +109,7 @@ export default function PromptModal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        data-dialog-layout="scroll"
         onClick={(e) => { e.stopPropagation(); dialogProps?.onClick?.(e); }}
         style={{
           ...dialogStyles.panel,
@@ -117,11 +120,13 @@ export default function PromptModal({
           ...dialogProps?.style,
         }}
       >
-        <div style={dialogStyles.header}>
+        <div data-dialog-header="true" style={{ ...dialogStyles.header, ...(onClose ? { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 } : {}) }}>
           {title}
+          {onClose && <button type="button" aria-label={`关闭${title}`} data-dialog-close="true" data-shortcut-cancel="true" onClick={onClose} style={dialogStyles.button}>✕</button>}
         </div>
 
         <div
+          data-dialog-body="true"
           {...(guideSettlementConfirm ? { 'data-guide-settlement-message': 'true' } : {})}
           style={{
             ...dialogStyles.body,
@@ -131,7 +136,7 @@ export default function PromptModal({
           {message}
         </div>
 
-        {!hideActions && <div ref={footerRef} style={dialogStyles.footer}>
+        {!hideActions && <div ref={footerRef} data-dialog-footer="true" style={dialogStyles.footer}>
           {onCancel && (
             <button
               data-shortcut-cancel="true"

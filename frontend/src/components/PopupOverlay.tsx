@@ -1,9 +1,10 @@
 import { createPortal } from 'react-dom';
 import { Z_INDEX } from '../constants/zIndex';
-import { useId, useLayoutEffect, useRef, useState } from 'react';
+import { useContext, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent, ReactNode, RefObject } from 'react';
 import { getMessageJumpRegions } from '../utils/messageJumpDisplay';
 import {useWorkbenchPortalTarget} from '../context/WorkbenchPortalContext';
+import { AutoAuthEntryContext } from '../context/AutoAuthEntryContext';
 
 const EDGE_ARROW_COUNT = 25;
 const GUIDE_EDGE_INSET = 12;
@@ -12,10 +13,15 @@ export function MessageJumpOverlay({
   messageId,
   targetElement,
   targetRect,
+  viewportElement,
+  hint = '已定位目标消息',
 }: {
   messageId?: string;
   targetElement: HTMLElement;
   targetRect: DOMRect;
+  /** Limit review prompts to their own pane so simultaneous prompts cannot overlap. */
+  viewportElement?: HTMLElement;
+  hint?: string;
 }) {
   const portalTarget=useWorkbenchPortalTarget();
   const maskId = `jump-mask-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
@@ -47,14 +53,17 @@ export function MessageJumpOverlay({
         (rect.top - bounds.top) / scaleY, rect.width / scaleX, rect.height / scaleY);
       const card = localRect(targetElement.getBoundingClientRect());
       const viewport = window.visualViewport;
+      const visible = localRect(new DOMRect(viewport?.offsetLeft ?? 0, viewport?.offsetTop ?? 0,
+        viewport?.width ?? width, viewport?.height ?? height));
+      const scope = viewportElement ? localRect(viewportElement.getBoundingClientRect()) : visible;
+      const left = Math.max(visible.left, scope.left), top = Math.max(visible.top, scope.top);
+      const right = Math.min(visible.right, scope.right), bottom = Math.min(visible.bottom, scope.bottom);
       const next = {
         width, height,
-        left: ((viewport?.offsetLeft ?? 0) - bounds.left) / scaleX,
-        top: ((viewport?.offsetTop ?? 0) - bounds.top) / scaleY,
-        viewportWidth: (viewport?.width ?? width) / scaleX,
-        viewportHeight: (viewport?.height ?? height) / scaleY,
+        left, top, viewportWidth: Math.max(0, right - left), viewportHeight: Math.max(0, bottom - top),
         // Aim at the selected card/hit area, not the union with distant relations.
-        centerX: card.left + card.width / 2, centerY: card.top + card.height / 2,
+        centerX: viewportElement ? (Math.max(card.left, left) + Math.min(card.right, right)) / 2 : card.left + card.width / 2,
+        centerY: viewportElement ? (Math.max(card.top, top) + Math.min(card.bottom, bottom)) / 2 : card.top + card.height / 2,
         regions: targetElement.isConnected
           ? getMessageJumpRegions(targetElement, messageId ?? targetElement.dataset.msgid ?? '')
             .map(region => ({ ...region, rect: localRect(region.rect) })) : [],
@@ -78,6 +87,7 @@ export function MessageJumpOverlay({
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
     observer?.observe(targetElement);
     observer?.observe(layer);
+    if (viewportElement) observer?.observe(viewportElement);
     const canvas = targetElement.closest('[data-jump-canvas]');
     if (canvas) observer?.observe(canvas);
     window.addEventListener('scroll', schedule, true);
@@ -93,7 +103,7 @@ export function MessageJumpOverlay({
       viewport?.removeEventListener('scroll', schedule);
       viewport?.removeEventListener('resize', schedule);
     };
-  }, [messageId, targetElement, targetRect]);
+  }, [messageId, targetElement, targetRect, viewportElement]);
 
   if (!targetElement.isConnected) return null;
 
@@ -103,6 +113,7 @@ export function MessageJumpOverlay({
       aria-hidden="true"
       data-message-jump-overlay="true"
       data-message-jump-target={messageId ?? targetElement.getAttribute('data-msgid') ?? undefined}
+      data-message-jump-scope={viewportElement?.dataset.comparisonViewport}
       width={geometry.width} height={geometry.height}
       viewBox={`0 0 ${geometry.width} ${geometry.height}`}
       style={{
@@ -115,10 +126,13 @@ export function MessageJumpOverlay({
         <rect width={geometry.width} height={geometry.height} fill="white" />
         {geometry.regions.map(({ rect, ids }, index) => <rect key={index} data-message-jump-region={ids}
           x={rect.left} y={rect.top} width={rect.width} height={rect.height} fill="black" />)}
-      </mask></defs>
+      </mask>
+        {viewportElement && <clipPath id={`${maskId}-scope`}><rect x={geometry.left} y={geometry.top}
+          width={geometry.viewportWidth} height={geometry.viewportHeight} /></clipPath>}
+      </defs>
       {/* Keep the backdrop, guides, hint and openings in the same painted
           viewport instead of mixing CSS viewport units with an SVG mask. */}
-      <g data-message-jump-layer="true" mask={`url(#${maskId})`}>
+      <g data-message-jump-layer="true" mask={`url(#${maskId})`} clipPath={viewportElement ? `url(#${maskId}-scope)` : undefined}>
         <rect data-message-jump-backdrop="true" width={geometry.width} height={geometry.height} fill="var(--ink-rgba-0-0-0-0-42)" />
         <path className="popup-guides" fill="none" stroke="var(--ink-rgba-250-204-21-0-5)" strokeWidth="2" strokeDasharray="11 9" strokeLinecap="round"
           d={Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
@@ -131,8 +145,8 @@ export function MessageJumpOverlay({
             ].map(([x, y]) => `M${x},${y}L${geometry.centerX},${geometry.centerY}`).join(' ');
           }).join(' ')} />
         <g data-message-jump-hint="true" transform={`translate(${geometry.left + geometry.viewportWidth / 2},${geometry.top + 16})`}>
-          <rect x="-58" width="116" height="30" rx="4" fill="var(--ink-rgba-23-23-23-0-92)" stroke="var(--ink-rgba-250-204-21-0-7)" />
-          <text y="15" textAnchor="middle" dominantBaseline="central" fill="var(--ink-fde68a)" fontSize="13" fontWeight="600">已定位目标消息</text>
+          <rect x={-(hint.length * 13 + 25) / 2} width={hint.length * 13 + 25} height="30" rx="4" fill="var(--ink-rgba-23-23-23-0-92)" stroke="var(--ink-rgba-250-204-21-0-7)" />
+          <text y="15" textAnchor="middle" dominantBaseline="central" fill="var(--ink-fde68a)" fontSize="13" fontWeight="600">{hint}</text>
         </g>
       </g>
     </svg>
@@ -159,6 +173,7 @@ export default function PopupOverlay({
   onClick,
 }: PopupOverlayProps) {
   const portalTarget=useWorkbenchPortalTarget();
+  const autoAuthEntry = useContext(AutoAuthEntryContext);
   const overlayRef = useRef<HTMLDivElement>(null);
   const [geometry, setGeometry] = useState(() => ({
     left: window.visualViewport?.offsetLeft ?? 0,
@@ -173,6 +188,9 @@ export default function PopupOverlay({
   const geometryRef = useRef(geometry);
 
   useLayoutEffect(() => {
+    const panel = contentRef.current;
+    const previousPanelMarker = panel?.getAttribute('data-dialog-panel');
+    panel?.setAttribute('data-dialog-panel', 'true');
     const updateGeometry = () => {
       const overlay = overlayRef.current;
       const content = contentRef.current;
@@ -207,6 +225,8 @@ export default function PopupOverlay({
     window.visualViewport?.addEventListener('resize', updateGeometry);
     window.visualViewport?.addEventListener('scroll', updateGeometry);
     return () => {
+      if (previousPanelMarker === null) panel?.removeAttribute('data-dialog-panel');
+      else if (previousPanelMarker !== undefined) panel?.setAttribute('data-dialog-panel', previousPanelMarker);
       observer?.disconnect();
       window.removeEventListener('resize', updateGeometry);
       window.visualViewport?.removeEventListener('resize', updateGeometry);
@@ -221,6 +241,9 @@ export default function PopupOverlay({
     <div
       data-popup-overlay="true"
       data-prompt-modal={dataPromptModal ? 'true' : undefined}
+      data-auth-entry-modal={autoAuthEntry ? 'true' : undefined}
+      hidden={autoAuthEntry?.suspended || undefined}
+      aria-hidden={autoAuthEntry?.suspended || undefined}
       ref={overlayRef}
       style={{
         position: 'fixed', left: 0, top: 0, right: 0, bottom: 0,

@@ -33,7 +33,10 @@ function addUnique(map: Map<string, Set<string>>, targetId: string, sourceId: st
 
 /** Share one scope and one metric definition between the user and message leaderboards. */
 export function buildLeaderboardMetrics(messages: DemoMessage[], edges: DemoEdge[], relations: Relation[], users: User[]) {
-  const rankedMessages = [...new Map(messages.map(message => [message.id, message])).values()];
+  // Grant distributions are bookkeeping, rather than messages sent by their recipients.
+  const rankedMessages = [...new Map(messages.map(message => [message.id, message])).values()]
+    .filter(message => message.authorId !== 'system'
+      || !dataParts(message).some(value => value.source === 'grant' && Array.isArray(value.allocations)));
   const messageById = new Map(rankedMessages.map(message => [message.id, message]));
   const rankedIds = new Set(rankedMessages.map(message => message.id));
   const incomingReferences = new Map<string, Set<string>>();
@@ -42,7 +45,8 @@ export function buildLeaderboardMetrics(messages: DemoMessage[], edges: DemoEdge
   const roundTargets = new Map(messages.filter(message => message.kind === 'round' && message.settlementTargetId)
     .map(message => [String(message.roundPayload?.roundId ?? message.id), message.settlementTargetId!]));
   const stanceStakes = new Map<string, number>();
-  const rechargeIncome = new Map<string, number>();
+  const rechargeContributions = new Map(users.map(user => [user.username, finiteNumber(user.rechargeContribution)]));
+  const usageContributions = new Map(users.map(user => [user.username, finiteNumber(user.usageContribution)]));
   const idToName = new Map(users.map(user => [user.id, user.username]));
   for (const relation of relations) idToName.set(relation.createdBy.id, relation.createdBy.username);
   for (const message of rankedMessages) if (message.authorId) idToName.set(message.authorId, message.author);
@@ -78,27 +82,10 @@ export function buildLeaderboardMetrics(messages: DemoMessage[], edges: DemoEdge
     if (rankedIds.has(edge.from.messageId)) addUnique(outgoingReferences, edge.from.messageId, edge.relationMessageId);
   }
 
-  const rechargeProposals = new Set(relations.filter(relation =>
-    relation.payload?.operationType === 'RECHARGE'
-    || relation.parts?.some(part => part.type === 'relation' && part.relation === 'recharge')
-  ).map(relation => relation.id));
-
-  for (const message of messages) {
+  for (const message of rankedMessages) {
     const payload = message.roundPayload;
     const data = dataParts(message);
     const distribution = data.find(value => typeof value.source === 'string' && Array.isArray(value.allocations));
-    // Income comes from executed allocations, never from a pending recharge proposal.
-    if (distribution?.source === 'grant') {
-      const inputs = record(distribution.inputs);
-      if (typeof inputs?.proposalId === 'string' && rechargeProposals.has(inputs.proposalId)) {
-        for (const allocation of distribution.allocations as unknown[]) {
-          const entry = record(allocation);
-          if (typeof entry?.userId !== 'string') continue;
-          const name = idToName.get(entry.userId) ?? entry.userId;
-          rechargeIncome.set(name, (rechargeIncome.get(name) ?? 0) + finiteNumber(entry.amount));
-        }
-      }
-    }
     if (message.kind !== 'round' && message.kind !== 'round_result') continue;
     if (distribution && distribution.source !== 'wager') continue;
     const inputs = record(distribution?.inputs);
@@ -120,5 +107,5 @@ export function buildLeaderboardMetrics(messages: DemoMessage[], edges: DemoEdge
     }
   }
 
-  return { rankedMessages, sendAuthors, incomingReferences, outgoingReferences, settlements, stanceStakes, rechargeIncome, idToName };
+  return { rankedMessages, sendAuthors, incomingReferences, outgoingReferences, settlements, stanceStakes, rechargeContributions, usageContributions, idToName };
 }

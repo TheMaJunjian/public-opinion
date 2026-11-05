@@ -1,6 +1,10 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import MessagePagination from '../components/MessagePagination';
+import MessageWindowStatus from '../components/MessageWindowStatus';
+import { createWorkbenchDrawingTasks, WorkbenchDrawingContext } from '../context/WorkbenchDrawingContext';
+import { useMessageWindow } from '../hooks/useMessageWindow';
+import type { DemoMessage } from '../utils/modelBridge';
 
 beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -41,6 +45,37 @@ it('observes the graph boundary rather than the bottom of the reserved full canv
   expect(onMore).toHaveBeenCalledOnce(); panel.remove();
 });
 
+it('resumes visible batches after classification drawing finishes without scrolling or reentering', async () => {
+  const tasks = createWorkbenchDrawingTasks();
+  const messages: DemoMessage[] = Array.from({ length: 120 }, (_, index) => ({
+    id: `message-${index}`, author: '用户', kind: 'normal', content: '', createdAt: new Date(index * 1000).toISOString(),
+  }));
+  const edges: [] = [];
+  function Classification() {
+    const window = useMessageWindow(messages, edges, true, 'last-classification', []);
+    return <>
+      <MessageWindowStatus loadedCount={window.messages.length} totalCount={window.totalCount}
+        loading={window.loading} />
+      <MessagePagination parent="last-classification" loadedCount={window.messages.length} hasMore={window.hasMore}
+        loading={window.loading} showLoadingNotice={false} panelRef={{ current: null }} onMore={window.more} onError={vi.fn()} />
+    </>;
+  }
+  render(<WorkbenchDrawingContext.Provider value={tasks}><Classification /></WorkbenchDrawingContext.Provider>);
+  vi.spyOn(screen.getByText(/^当前已显示 50 条消息/), 'getBoundingClientRect').mockReturnValue(rect(100));
+  await tick();
+  expect(screen.getByText(/当前已显示 50 条消息/)).toBeInTheDocument();
+  expect(screen.queryByRole('status', { name: '消息加载进度' })).toBeNull();
+  act(() => tasks.setBlocking(false));
+  let sawLoading = false;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    await tick();
+    sawLoading ||= !!screen.queryByRole('status', { name: '消息加载进度' })?.textContent?.includes('/ 120 条');
+  }
+  expect(sawLoading).toBe(true);
+  expect(screen.getByText(/当前已显示 120 条消息/)).toHaveTextContent('当前范围已全部显示');
+  expect(screen.queryByRole('status', { name: '消息加载进度' })).toBeNull();
+});
+
 it('stops repeated automatic attempts after a failure and cancels scheduled work on unmount', async () => {
   const onMore = vi.fn().mockRejectedValue(new Error('绘制失败')), onError = vi.fn();
   const props = { parent: 'root', loadedCount: 50, hasMore: true, loading: false, panelRef: { current: null }, onMore, onError };
@@ -51,4 +86,25 @@ it('stops repeated automatic attempts after a failure and cancels scheduled work
   view.unmount();
   const second = render(<MessagePagination {...props} parent="other" />);
   second.unmount(); await tick(); expect(onMore).toHaveBeenCalledOnce();
+});
+
+it('shows loading as a zero-height notice without manufacturing message cards or reserving geometry', () => {
+  const view = render(<MessagePagination parent="root" loadedCount={50} hasMore loading panelRef={{ current: null }} onMore={vi.fn()} onError={vi.fn()} />);
+  expect(screen.getByRole('status')).toHaveTextContent('正在加载消息');
+  const notice = view.container.querySelector<HTMLElement>('[data-message-loading-notice]')!;
+  expect(notice.style.height).toBe('0px'); expect(notice.style.position).toBe('sticky');
+  expect(view.container.querySelector('[data-msgid]')).toBeNull();
+  view.rerender(<MessagePagination parent="root" loadedCount={100} hasMore={false} loading={false} panelRef={{ current: null }} onMore={vi.fn()} onError={vi.fn()} />);
+  expect(screen.queryByRole('status')).toBeNull();
+  expect(screen.getByText(/当前已显示 100 条消息/)).toBeInTheDocument();
+});
+
+it('offers an explicit retry after a failed automatic load', async () => {
+  const onMore = vi.fn().mockRejectedValueOnce(new Error('connection')).mockResolvedValue(undefined);
+  render(<MessagePagination parent="root" loadedCount={50} hasMore loading={false} panelRef={{ current: null }} onMore={onMore} onError={vi.fn()} />);
+  vi.spyOn(screen.getByText(/^当前已显示/), 'getBoundingClientRect').mockReturnValue(rect(100));
+  await tick(); expect(screen.getByRole('alert')).toHaveTextContent('消息加载失败');
+  fireEvent.click(screen.getByRole('button', { name: '重试加载消息' }));
+  await tick(); expect(onMore).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole('alert')).toBeNull();
 });

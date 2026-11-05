@@ -123,6 +123,13 @@ try {
   assert.ok(registered.headers['set-cookie'][0].includes('Secure'));
   const cookie=registered.headers['set-cookie'][0].split(';')[0];
   const headers={cookie,'x-csrf-token':registered.body.csrf};
+  assert.equal(registered.body.account.available,0);
+  let usage=await request('/api/ui/points/activity','POST',{action:'start'},headers);
+  for(let earned=0;earned<2;earned++){
+    await new Promise(resolve=>setTimeout(resolve,usage.body.remainingMs+50));
+    usage=await request('/api/ui/points/activity','POST',{action:'input',roundId:usage.body.roundId},headers);
+    assert.equal(usage.status,200);assert.equal(usage.body.awarded,true);
+  }
   assert.equal((await request('/api/messages','POST',{requestId:randomUUID(),parts:[{id:'text',type:'text',text:'blocked'}]},{cookie})).status,403);
   const created=await request('/api/messages','POST',{requestId:randomUUID(),recommendation:1,parts:[{id:'text',type:'text',text:'production smoke persistence'}]},headers);
   assert.equal(created.status,201);

@@ -12,7 +12,7 @@ import {relationTypeName} from '../utils/graphTextSelection';
 import {getMessageTypeLabel} from '../utils/messageDisplay';
 import {createDisplayHintWindow,type DisplayHintWindow} from '../pages/workbench/model/displayHintWindow';
 import {createCurrentContainerLookup} from '../pages/workbench/model/displayHintContainers';
-import {applyReadingVersions,createReadingVersionHistory,knownReadingBodyVersions,readingVersionChoices,readingVersionLabel,type ReadingVersionHistory} from '../pages/workbench/model/readingVersions';
+import {applyReadingVersions,createReadingVersionHistory,indexKnownReadingBodyVersions,readingVersionChoices,readingVersionLabel,type ReadingVersionHistory} from '../pages/workbench/model/readingVersions';
 import {computeCorrectionVersions,computeGloballySuppressedRelIds} from '../utils/modelBridge';
 import MessageReadingVersions,{type ReadingVersionAction} from './MessageReadingVersions';
 import {captureReadingVersionPosition} from '../utils/readingVersionPosition';
@@ -27,6 +27,7 @@ import MessageTime from './MessageTime';
 import {CurrentBodyComparison} from './CorrectionComparisonPopup';
 import {ComparisonReadingContext} from './ComparisonReadingContext';
 import {createComparisonBasis,isComparisonRead} from '../pages/workbench/model/comparisonReading';
+import {displayChoiceBasis} from '../pages/workbench/model/displayChoiceBasis';
 import {useWorkbenchPortalTarget} from '../context/WorkbenchPortalContext';
 
 type ViewMessage = (messageId: string,event: MouseEvent,record: boolean,affectedId?:string) => void;
@@ -38,6 +39,7 @@ const DisplayHintsContext = createContext<{data:ReturnType<typeof deriveDisplayH
   onReadVisit?: (id:string,tasks:ReadingTask[])=>void;
   influenceVisits:InfluenceVisit[];setInfluenceVisits:Dispatch<SetStateAction<InfluenceVisit[]>>;
   windowState:DisplayHintWindow;windowScope:string;currentContainerId?:string|null;currentContainers:ReturnType<typeof createCurrentContainerLookup>;versionHistory:ReadingVersionHistory;readingInput:ReadingInput;
+  knownBodyVersions:ReadonlyMap<string,readonly BodyVersion[]>;
   navigateVersion:(messageId:string,action:ReadingVersionAction,anchor:HTMLElement|null)=>void;
   versionIdentity:(messageId:string,value:string)=>string|undefined;
   versionContent:(messageId:string,value:string)=>string|undefined}|null>(null);
@@ -138,7 +140,7 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
   const originalVersion=bodyVersion(messageId,context.input.personalEffect.msgMap.get(messageId)?.revision??1);
   const choices=readingVersionChoices(context.input.personalEffect.msgMap.get(messageId)?.content??'',context.input.corrections.get(messageId)?.current,context.data.recommendedCorrections.get(messageId)?.current,context.data.personalCorrectionChoices.has(messageId),versions,originalVersion);
   const frozen=Object.values(context.versionHistory.getSnapshot().get(messageId)?.frozen??{}).flatMap(version=>version.bodyVersion?[version.bodyVersion]:[]);
-  for(const version of [...knownReadingBodyVersions(messageId,context.input.readingMarks??[],context.input.messages),...frozen]){
+  for(const version of [...context.knownBodyVersions.get(messageId)??[],...frozen]){
     const identity=bodyVersionKey(version);
     if(!choices.some(choice=>choice.identity===identity)&&!(version.corrections.length===0&&version.revision===(context.input.personalEffect.msgMap.get(messageId)?.revision??1)))choices.push({value:identity,identity,label:`历史正文 ${choices.length}（基础 ${version.revision}，${version.corrections.length} 个更正）`,content:context.versionContent(messageId,identity)??'' ,sameAs:[]});
   }
@@ -157,11 +159,12 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
   const personallyActive=hint.personalActive;
   const statisticallyActive=hint.recommendedActive;
   const selectionDiffers=personallyActive!==statisticallyActive;
-  const effectiveStatus=personallyActive?'选择显示':'选择不显示';
+  const effectiveStatus=hint.hasPersonalChoice?(personallyActive?'选择显示':'选择不显示'):'无选择，与推荐相同';
   const recommendedStatus=statisticallyActive?'推荐显示':'推荐不显示';
   const readComparison=match.readChanged===undefined?'暂无上次已阅记录':match.readChanged?'与上次已阅不同':'与上次已阅一致';
-  const comparisonStatus=selectionDiffers?'本消息在选择与推荐下的显示不同':'本消息在选择与推荐下的显示相同';
-  const lines=[reading,hint.selectionChanged?'本次正文或显示选择变化待确认':'',readComparison,effectiveStatus,recommendedStatus,comparisonStatus,relatedReading,memberReading,otherVersionReading]
+  const comparisonStatus=hint.hasPersonalChoice?(selectionDiffers?'本消息在选择与推荐下的显示不同':'本消息在选择与推荐下的显示相同'):'无选择，与推荐相同';
+  const choiceBasis=expanded&&(selectionDiffers||hint.different)?displayChoiceBasis(context.input,context.data,messageId):undefined;
+  const lines=[reading,hint.selectionChanged?'本次正文或显示选择变化待确认':'',readComparison,effectiveStatus,recommendedStatus,hint.hasPersonalChoice?comparisonStatus:'',relatedReading,memberReading,otherVersionReading]
     .filter((line):line is string=>!!line),title=lines.join('；');
   const markerColor=statisticallyActive?'var(--ink-86efac)':'var(--ink-fca5a5)';
   const readingState=hint.unread?'unread':relatedCount||hint.unreadMemberCount||hint.otherVersionUnreadCount?'related-unread':match.readChanged?'changed':'read';
@@ -327,7 +330,7 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
         <span style={{flex:1}}>消息 · 【{getMessageTypeLabel(message)}】 {messageId}{hint.unread?'（待阅）':''}</span>
         {!!versions.length&&<button type="button" data-comparison-reading={comparisonRead?'read':'unread'} title={comparisonRead?'本版本对比已阅，可再次查看':'查看原文与当前版本正文对比'}
           style={{...(comparisonRead?disabledActionStyle:actionStyle),cursor:'pointer'}} onClick={()=>setComparison({before:message?.content??'',after:hint.displayed.content,version:comparisonVersion,basis:comparisonBasis})}>对比</button>}
-        {context.onMarkRead&&<button type="button" aria-label={confirmationLabel} title={confirmationLabel}
+        {context.onMarkRead&&<button type="button" aria-label={confirmationLabel} title={confirmationLabel} data-reading-confirm-action={confirmationPending?'pending':'read'}
           style={{...(confirmationBlocked?disabledActionStyle:actionStyle),flexShrink:0}} disabled={confirmationBlocked} onClick={()=>void markRead(plan)}>
           {busy===messageId?'保存中…':'已阅'}
         </button>}
@@ -414,7 +417,7 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
       <span>消息状态与影响</span>
       <button type="button" className="workbench-popover-close" aria-label="关闭消息提示" onClick={closeHint} style={{...actionStyle,fontSize:10}}>关闭</button>
     </div>
-    <section aria-label="消息信息" style={{display:'grid',gap:5,marginBottom:8,paddingBottom:6,borderBottom:'1px solid var(--line-334155)'}}>
+    <section aria-label="消息信息" style={{display:'grid',gap:5,marginBottom:8,paddingTop:4,paddingBottom:6,borderBottom:'1px solid var(--line-334155)'}}>
       {message&&<>
         <MessageAuthors message={message} prefix="作者：" showSelfStake stakePlacement="inline"/>
         <div style={{display:'flex',gap:6,alignItems:'baseline'}}>发送时间：<MessageTime value={message.createdAt}/></div>
@@ -425,14 +428,14 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
     <div hidden={!sectionOpen('status')}>
     {!!versions.length&&<div style={{color:'var(--ink-94a3b8)',fontSize:10,marginBottom:5}}>正在查看：{versionLabel}</div>}
     <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) auto minmax(0,1fr)',alignItems:'center',columnGap:10,rowGap:4}}>
-      <span style={{textAlign:'left'}}>{hint.unread?reading:'消息'}</span>
+      <span data-reading-status={hint.unread?'unread':'read'} style={{textAlign:'left'}}>{reading}</span>
       <span role="img" aria-label={match.readChanged===undefined?'暂无上次已阅记录可比较':match.readChanged?'当前显示与上次已阅不同':'当前显示与上次已阅一致'}
         style={{color:match.readChanged===undefined?'var(--ink-94a3b8)':match.readChanged?'var(--ink-fbbf24)':'var(--ink-86efac)',fontSize:16,fontWeight:600}}>
         {match.readChanged===undefined?'—':match.readChanged?'≠':'='}
       </span>
       <span>{readComparison}</span>
     </div>
-    <div role="group" aria-label={selectionDiffers?'选择与推荐不一致':'选择与推荐一致'}
+    <div role="group" aria-label={hint.hasPersonalChoice?(selectionDiffers?'选择与推荐不一致':'选择与推荐一致'):'无选择，与推荐相同'}
       style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) auto minmax(0,1fr)',alignItems:'center',columnGap:10,marginTop:4}}>
       <span style={{textAlign:'left'}}>{effectiveStatus}</span>
       <span role="img" aria-label={comparisonStatus} style={{color:selectionDiffers?'var(--ink-7dd3fc)':'var(--ink-94a3b8)',fontSize:16,fontWeight:600}}>{selectionDiffers?'≠':'='}</span>
@@ -441,6 +444,22 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
     {context.onReadNavigate&&<button type="button" style={{marginTop:6,fontSize:11}} onClick={()=>context.onReadNavigate?.(messageId)}>追溯并阅读此消息</button>}
     </div>
     </section>
+    {choiceBasis&&(selectionDiffers||choiceBasis.personal.length>0)&&<section aria-label="选择与推荐的差异依据" data-display-choice-basis
+      style={{marginTop:8,padding:6,border:'1px solid var(--line-36516b)',borderRadius:4,display:'grid',gap:5}}>
+      {sectionHeading('choice-basis','选择与推荐的差异依据','var(--ink-7dd3fc-2)')}
+      <div hidden={!sectionOpen('choice-basis')}>
+      {([{label:'当前选择依据',entries:choiceBasis.personal},{label:'推荐依据',entries:choiceBasis.recommended}] as const).map((group,index)=><div key={group.label}
+        style={{marginTop:index?6:0,paddingTop:index?6:0,borderTop:index?'1px solid var(--line-334155)':undefined}}>
+        <div style={{color:'var(--ink-94a3b8)',fontSize:10}}>{group.label}</div>
+        {group.entries.length?group.entries.map(entry=><div key={entry.id} style={{display:'grid',gap:1,marginTop:3}}>
+          <span style={{color:'var(--ink-94a3b8)',fontSize:10}}>{entry.label}</span>
+          {entry.id===messageId?<span style={{overflowWrap:'anywhere'}}>【{getMessageTypeLabel(message)}】{entry.id}（本消息）</span>
+            :<button type="button" aria-label={`查看${group.label} ${entry.id}`} style={influenceLinkStyle}
+              onClick={event=>{openPinned();rememberScroll();context.onView(entry.id,event,true);}}>【{getMessageTypeLabel(context.input.personalEffect.msgMap.get(entry.id))}】{entry.id}</button>}
+        </div>):<div style={{color:'var(--ink-94a3b8)',fontSize:10}}>暂无可定位的依据消息。</div>}
+      </div>)}
+      </div>
+    </section>}
     {readingDetails}
     {!hint.unread&&context.onMarkRead&&<button type="button" style={{...actionStyle,marginTop:6}} disabled={!!busy} onClick={()=>void markUnread()}>将此消息标为未阅</button>}
     {context.input.readingMarks?.some(mark=>mark.messageId===messageId&&mark.unknownContext)&&<div style={{marginTop:6,color:'var(--ink-94a3b8)'}}>保留有历史确认记录，原版本或确认范围未明确。</div>}
@@ -484,6 +503,9 @@ export function MessageDisplayHintsProvider({input:sourceInput,onView,onMarkRead
   const versions=useSyncExternalStore(versionHistory.subscribe,versionHistory.getSnapshot);
   const recommendedCorrections=useMemo(()=>sourceInput.recommendedCorrections??computeCorrectionVersions(sourceInput.messages,sourceInput.edges,computeGloballySuppressedRelIds(sourceInput.edges,sourceInput.messages)),[sourceInput.recommendedCorrections,sourceInput.messages,sourceInput.edges]);
   const input=useMemo(()=>({...sourceInput,recommendedCorrections,...(providedVersions?{}:{displayCorrections:applyReadingVersions(sourceInput.displayCorrections??sourceInput.corrections,versions,sourceInput.messages,recommendedCorrections,sourceInput.corrections)})}),[sourceInput,providedVersions,versions,recommendedCorrections]);
+  const knownBodyVersions=useMemo(()=>parent&&parent.input.messages===input.messages&&parent.input.readingMarks===input.readingMarks
+    ?parent.knownBodyVersions:indexKnownReadingBodyVersions(input.readingMarks??[],input.messages),
+    [input.messages,input.readingMarks,parent?.input.messages,parent?.input.readingMarks,parent?.knownBodyVersions]);
   const data=useMemo(()=>deriveDisplayHints(input),[input]);
   const versionContent=useCallback((messageId:string,value:string)=>{
     const hint=data.hints.get(messageId);
@@ -500,38 +522,42 @@ export function MessageDisplayHintsProvider({input:sourceInput,onView,onMarkRead
     return correctionVersionIdentity(versionHistory.getSnapshot().get(messageId)?.frozen?.[value]??input.corrections.get(messageId)?.versions.find(version=>version.correctionId===value),original);
   },[input,recommendedCorrections,versionHistory]);
   const navigateVersion=useCallback((messageId:string,action:ReadingVersionAction,anchor:HTMLElement|null)=>{
-    const restore=captureReadingVersionPosition(anchor),before=versionHistory.getSnapshot();
-    if(typeof action==='string')versionHistory[action](messageId,value=>versionContent(messageId,value),value=>versionIdentity(messageId,value));
+    const updateVersion=(update:()=>void)=>{
+      // Capture at the actual change, including after an asynchronous historical-body load.
+      const restore=captureReadingVersionPosition(anchor),before=versionHistory.getSnapshot();
+      update();
+      if(before===versionHistory.getSnapshot())return;
+      cancelPosition.current();
+      const task=startPositioning();let frame=0,paintFrame=0;
+      cancelPosition.current=()=>{cancelAnimationFrame(frame);cancelAnimationFrame(paintFrame);task.cancel();};
+      const finish=()=>task.run(()=>{restore();task.complete();});
+      if(task.afterLayout)task.afterLayout(finish);
+      else frame=requestAnimationFrame(()=>{paintFrame=requestAnimationFrame(finish);});
+    };
+    if(typeof action==='string')updateVersion(()=>versionHistory[action](messageId,value=>versionContent(messageId,value),value=>versionIdentity(messageId,value)));
     else {
       const content=versionContent(messageId,action.select);
       if(action.select==='freeze'){
         const source=input.personalEffect.msgMap.get(messageId),current=(input.displayCorrections??input.corrections).get(messageId)?.current;
         if(!source)return;
         const version=current?.bodyVersion??bodyVersion(messageId,source.revision??1);
-        const freeze=(snapshot:CoreMessage)=>{versionHistory.freeze(messageId,{...current,snapshot,bodyVersion:version,correctionId:current?.correctionId??bodyVersionKey(version),targetId:messageId,baseContent:current?.baseContent??source.content,content:textOf(snapshot),valid:current?.valid??false,appliedCorrectionIds:version.corrections.map(c=>c.messageId),createdAt:source.createdAt});setVersionError(null);};
+        const freeze=(snapshot:CoreMessage)=>{updateVersion(()=>versionHistory.freeze(messageId,{...current,snapshot,bodyVersion:version,correctionId:current?.correctionId??bodyVersionKey(version),targetId:messageId,baseContent:current?.baseContent??source.content,content:textOf(snapshot),valid:current?.valid??false,appliedCorrectionIds:version.corrections.map(c=>c.messageId),createdAt:source.createdAt}));setVersionError(null);};
         try{freeze(materializeBodyVersion(version,(id,revision)=>{const item=input.personalEffect.msgMap.get(id);return item?.parts&&item.revision===revision?item as unknown as CoreMessage:undefined;}));}
         catch{void api.resolveBodyVersion(version).then(({message})=>freeze(message)).catch(reason=>setVersionError(reason instanceof Error?reason.message:'上下文待补齐'));}
         return;
       }
       if(action.select.startsWith('body:2:')&&content===undefined){
-        const version=knownReadingBodyVersions(messageId,input.readingMarks??[],input.messages).find(version=>bodyVersionKey(version)===action.select);
+        const version=knownBodyVersions.get(messageId)?.find(version=>bodyVersionKey(version)===action.select);
         if(!version)return;
-        const freeze=(snapshot:CoreMessage)=>versionHistory.freeze(messageId,{snapshot,bodyVersion:version,correctionId:action.select,targetId:messageId,baseContent:textOf(snapshot),content:textOf(snapshot),valid:false,appliedCorrectionIds:version.corrections.map(c=>c.messageId),createdAt:snapshot.createdAt});
+        const freeze=(snapshot:CoreMessage)=>updateVersion(()=>versionHistory.freeze(messageId,{snapshot,bodyVersion:version,correctionId:action.select,targetId:messageId,baseContent:textOf(snapshot),content:textOf(snapshot),valid:false,appliedCorrectionIds:version.corrections.map(c=>c.messageId),createdAt:snapshot.createdAt}));
         try{freeze(materializeBodyVersion(version,(id,revision)=>{const item=input.personalEffect.msgMap.get(id);return item?.parts&&item.revision===revision?item as unknown as CoreMessage:undefined;}));}
         catch{void api.resolveBodyVersion(version).then(({message})=>{freeze(message);setVersionError(null);}).catch(reason=>setVersionError(reason instanceof Error?reason.message:'上下文待补齐'));}
         return;
       }
       if(content===undefined)return;
-      versionHistory.select(messageId,action.select,true);
+      updateVersion(()=>versionHistory.select(messageId,action.select,true));
     }
-    if(before===versionHistory.getSnapshot())return;
-    cancelPosition.current();
-    const task=startPositioning();let frame=0,paintFrame=0;
-    cancelPosition.current=()=>{cancelAnimationFrame(frame);cancelAnimationFrame(paintFrame);task.cancel();};
-    const finish=()=>task.run(()=>{restore();task.complete();});
-    if(task.afterLayout)task.afterLayout(finish);
-    else frame=requestAnimationFrame(()=>{paintFrame=requestAnimationFrame(finish);});
-  },[versionHistory,startPositioning,versionContent,data,input]);
+  },[versionHistory,startPositioning,versionContent,data,input,knownBodyVersions]);
   const effect=input.displayEffect??input.personalEffect;
   const currentContainers=useMemo(()=>createCurrentContainerLookup(effect,currentContainerId),[effect,currentContainerId]);
   const readingInput=useMemo(()=>({...input,marks:input.readingMarks,corrections:input.displayCorrections??input.corrections,effectiveCorrections:input.corrections,memberships:effect.memberships,
@@ -553,7 +579,7 @@ export function MessageDisplayHintsProvider({input:sourceInput,onView,onMarkRead
     const unique=new Map(marks.map(mark=>[JSON.stringify([mark.messageId,mark.scope,mark.key,mark.eventId,mark.resultKey,mark.version]),mark]));
     await onMarkRead([...unique.values()]);
   },[onMarkRead]);
-  const context=useMemo(()=>({data,input,onView:viewInfluence,onMarkRead:onMarkRead?confirmRead:undefined,onReadNavigate:onReadNavigate?readNavigate:undefined,onReadVisit:onReadNavigate,influenceVisits,setInfluenceVisits,readingError,windowState,windowScope,currentContainerId,currentContainers,versionHistory,readingInput,navigateVersion,versionContent,versionIdentity}),[data,input,viewInfluence,onMarkRead,confirmRead,onReadNavigate,readNavigate,influenceVisits,setInfluenceVisits,readingError,windowState,windowScope,currentContainerId,currentContainers,versionHistory,versions,readingInput,navigateVersion,versionContent,versionIdentity]);
+  const context=useMemo(()=>({data,input,onView:viewInfluence,onMarkRead:onMarkRead?confirmRead:undefined,onReadNavigate:onReadNavigate?readNavigate:undefined,onReadVisit:onReadNavigate,influenceVisits,setInfluenceVisits,readingError,windowState,windowScope,currentContainerId,currentContainers,versionHistory,readingInput,knownBodyVersions,navigateVersion,versionContent,versionIdentity}),[data,input,viewInfluence,onMarkRead,confirmRead,onReadNavigate,readNavigate,influenceVisits,setInfluenceVisits,readingError,windowState,windowScope,currentContainerId,currentContainers,versionHistory,versions,readingInput,knownBodyVersions,navigateVersion,versionContent,versionIdentity]);
   const [versionError,setVersionError]=useState<string|null>(null);
   const comparisonBasis=useMemo(()=>createComparisonBasis(input),[input]);
   const comparisonReading=useMemo(()=>({marks:input.readingMarks??[],onMarkRead:context.onMarkRead,basisFor:comparisonBasis}),[input.readingMarks,context.onMarkRead,comparisonBasis]);

@@ -1,5 +1,6 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { describe, beforeEach, expect, it, vi } from 'vitest';
+import { act, configure, fireEvent, getConfig, render, screen, waitFor, within } from '@testing-library/react';
+import { StrictMode } from 'react';
+import { afterAll, describe, beforeEach, expect, it, vi } from 'vitest';
 import MessageWorkbenchPage from '../pages/MessageWorkbenchPage';
 import { prepareCommandBatch, queueCommand } from '../api/commandBatch';
 import type { ExportData } from '../api/client';
@@ -11,8 +12,21 @@ import GestureShortcutManager from '../components/GestureShortcutManager';
 import { WORKBENCH_DRAWING_TIMEOUT_MS } from '../context/WorkbenchDrawingContext';
 import {bodyVersion,messageReadingKey} from '@gonglun/core';
 import {discussionMessages,discussionEdges} from './discussion-fixture';
-import {convertMessagesToDemoModel} from '../utils/modelBridge';
+import {convertMessagesToDemoModel, type DemoEdge} from '../utils/modelBridge';
 import {deriveReadingProgress,influenceReadingMarks} from '../pages/workbench/model/readingProgress';
+import { getZhihuDisplayFields, getZhihuInactiveRelationIds, getZhihuLocalRelations, getZhihuReplyRelations, prepareZhihuForViewing, serializeZhihuViewingData } from '../utils/zhihuArchive';
+import { serializeGonglunZhihuViewingData } from '../utils/zhihuGonglunExport';
+import { validateExportForViewing } from '../utils/exportArchive';
+import * as exportViewerCache from '../utils/exportViewerCache';
+import { setTheme } from '../theme/theme';
+import { BrowserRouter, HashRouter, Route, Routes } from 'react-router-dom';
+
+// These full-workbench scenarios include real layout frames and native history traversal.
+// Allow the UI to settle under parallel test load without weakening its behavior checks.
+const previousAsyncTimeout = getConfig().asyncUtilTimeout;
+configure({ asyncUtilTimeout: 5000 });
+vi.setConfig({ testTimeout: 15_000 });
+afterAll(() => { configure({ asyncUtilTimeout: previousAsyncTimeout }); vi.resetConfig(); });
 
 const { mockApi, mockNavigate, mockGraphView, graphRendering, viewerRoute } = vi.hoisted(() => {
   const mockApi = {
@@ -91,7 +105,7 @@ const { mockApi, mockNavigate, mockGraphView, graphRendering, viewerRoute } = vi
   });
   return { mockApi, mockNavigate: vi.fn(), mockGraphView: vi.fn(), graphRendering: { actual: false,
     tasks: null as ReturnType<typeof import('../context/WorkbenchDrawingContext')['createWorkbenchDrawingTasks']> | null,
-  }, viewerRoute: { archive: null as ExportData | null, key: '', query: '' } };
+  }, viewerRoute: { archive: null as ExportData | null, key: '', query: '', nativeRouter: false } };
 });
 
 const catalogHarness = vi.hoisted(() => ({ callbacks: null as any, data: null as any,
@@ -127,10 +141,10 @@ vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
   return {
     ...actual,
-    useParams: () => viewerRoute.archive ? {} : ({ messageId: 'classification-1' }),
-    useNavigate: () => mockNavigate,
-    useLocation: () => ({ pathname: viewerRoute.archive ? '/viewer' : '/messages/classification-1', state: viewerRoute.archive ? { exportData: viewerRoute.archive } : null, key: viewerRoute.key, search: '', hash: '' }),
-    useSearchParams: () => [new URLSearchParams(viewerRoute.query), (next: URLSearchParams) => { viewerRoute.query = next.toString(); }] as const,
+    useParams: () => viewerRoute.nativeRouter ? actual.useParams() : viewerRoute.archive ? {} : ({ messageId: 'classification-1' }),
+    useNavigate: () => viewerRoute.nativeRouter ? actual.useNavigate() : mockNavigate,
+    useLocation: () => viewerRoute.nativeRouter ? actual.useLocation() : ({ pathname: viewerRoute.archive ? '/viewer' : '/messages/classification-1', state: viewerRoute.archive ? { exportData: viewerRoute.archive } : null, key: viewerRoute.key, search: '', hash: '' }),
+    useSearchParams: () => viewerRoute.nativeRouter ? actual.useSearchParams() : [new URLSearchParams(viewerRoute.query), (next: URLSearchParams) => { viewerRoute.query = next.toString(); }] as const,
   };
 });
 vi.mock('../components/GraphView', async () => {
@@ -233,6 +247,16 @@ function messageCanvas() {
   return within(document.querySelector<HTMLElement>('[data-workbench-left-panel]')!);
 }
 
+async function moveBrowserHistory(delta: number, toolbar?: '返回' | '前进') {
+  await act(async () => {
+    const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }));
+    if (toolbar) fireEvent.click(screen.getByRole('button', { name: toolbar }));
+    else window.history.go(delta);
+    if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(0);
+    await popped;
+  });
+}
+
 async function jumpToMessageId(id:string) {
   let input=screen.queryByRole('textbox',{name:'消息 ID'});
   if(!input){fireEvent.click(await screen.findByRole('button',{name:'跳转'}));input=screen.getByRole('textbox',{name:'消息 ID'});}
@@ -243,6 +267,13 @@ async function jumpToMessageId(id:string) {
 
 describe('rejected child container boundaries and single-side comparison',()=>{
   const latest=()=>mockGraphView.mock.lastCall![0];
+  const selectComparisonTarget = async (id: string) => {
+    await waitForWorkbenchIdle();
+    const card = document.querySelector<HTMLElement>(`[data-workbench-left-panel] [data-msgid="${id}"]:not([data-rel-overlay])`);
+    expect(card).not.toBeNull();
+    fireEvent.click(card!);
+    await waitFor(() => expect(screen.getByRole('button', { name: '审阅' })).toBeEnabled());
+  };
   const visibleGraphMessages = () => latest().messages.filter((message: Message) => !latest().visibleMessageIds || latest().visibleMessageIds.has(message.id));
   const scrollToNextStructure = async () => {
     await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
@@ -329,6 +360,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
       expect(latest().messages).toHaveLength(53);
       expect(visibleGraphMessages()).toHaveLength(50);
+      expect(screen.queryByRole('status', { name: '消息加载进度' })).toBeNull();
       act(() => catalogHarness.callbacks.onProgress({ ready: false, count: 0, syncing: true }));
       expect(visibleGraphMessages()).toHaveLength(50);
       act(() => catalogHarness.callbacks.onReady(catalogHarness.data));
@@ -336,6 +368,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       await waitFor(() => expect(visibleGraphMessages().some((message: Message) => message.id === 'remote-51')).toBe(true));
       expect(mockApi.getWorkbenchSnapshot.mock.calls.some(([query]) => query.ids?.includes('remote-51'))).toBe(false);
       expect(visibleGraphMessages()).toHaveLength(53);
+      expect(screen.queryByRole('status', { name: '消息加载进度' })).toBeNull();
       expect(screen.queryByRole('button', { name: '加载更多消息' })).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: '过滤' }));
       fireEvent.click(screen.getByRole('button', { name: '按发送者' }));
@@ -349,7 +382,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     } finally { view.unmount(); mockApi.getWorkbenchSnapshot.mockImplementation(original); catalogHarness.callbacks = null; }
   });
 
-  it('keeps whole organizations in both presentations and restores the table page after entering a classification', async () => {
+  it('pages organizations chronologically in both presentations and restores the table page after entering a classification', async () => {
     const original = mockApi.getWorkbenchSnapshot.getMockImplementation()!;
     const peers = Array.from({ length: 150 }, (_, index) => makeMessage(`peer-${index}`, `同层 ${index}`));
     const children = Array.from({ length: 65 }, (_, index) => makeMessage(`child-${index}`, `分类内部 ${index}`));
@@ -373,12 +406,14 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       act(() => catalogHarness.callbacks.onReady({ snapshot: full, projected: projectWorkbenchSnapshot(full), rows: { userRows: [], messageRows: [] } }));
       await waitFor(() => expect(latest()?.messages.some((message: Message) => message.id === 'frame')).toBe(true));
       const graphIds = visibleGraphMessages().map((message: Message) => message.id);
-      expect(graphIds).toEqual(expect.arrayContaining(['frame', 'peer-0', 'peer-149', 'A']));
+      expect(graphIds).toEqual(expect.arrayContaining(['frame', 'peer-0', 'A']));
+      expect(graphIds).toHaveLength(50);
+      expect(graphIds).not.toContain('peer-149');
       expect(graphIds.some((id: string) => id.startsWith('child-'))).toBe(false);
       fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
       const row = (id: string) => document.querySelector<HTMLElement>(`[data-workbench-left-panel] [data-msgid="${id}"]`);
       await waitFor(() => expect(row('frame')).not.toBeNull());
-      expect(row('peer-0')).not.toBeNull(); expect(row('peer-149')).not.toBeNull();
+      expect(row('peer-0')).not.toBeNull(); expect(row('peer-149')).toBeNull();
       expect(row('child-0')).toBeNull();
       await scrollToNextStructure();
       const visibleIds = () => [...document.querySelectorAll('[data-workbench-left-panel] [data-msgid]')].map(element => element.getAttribute('data-msgid'));
@@ -753,8 +788,8 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       expect(toggle).toHaveAttribute('aria-expanded','false');
       fireEvent.click(toggle);
       const group=within(within(screen.getByRole('dialog',{name:'其他相关消息：1'})).getByRole('group',{name:side==='source'?'发出的关联':'指向本消息的关联'}));
-      expect(group.getByRole('button',{name:/选择相关.*消息部件/})).toHaveTextContent('cross');
-      fireEvent.click(group.getByRole('button',{name:/选择相关.*消息部件/}));
+      expect(group.getByRole('button',{name:/选择相关.*消息/})).toHaveTextContent('cross');
+      fireEvent.click(group.getByRole('button',{name:/选择相关.*消息/}));
       await act(async()=>fireEvent.click(group.getByRole('button',{name:'查看'})));
       expect(screen.getByRole('spinbutton',{name:'向上追溯距离'})).toHaveValue(1);
       expectTraceOrigin('cross');
@@ -779,6 +814,47 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       expect(screen.getByRole('button',{name:viewMode==='list'?'切换为消息图':'切换为消息表'})).toBeInTheDocument();
       expect(mockApi.createRelation).not.toHaveBeenCalled();
     }finally{graphRendering.actual=false;}
+  });
+
+  it.each([['REPLY','回复'],['AGREE','支持'],['DISAGREE','反驳'],['RECOMMEND','推荐'],['ARCHIVE','冷藏']])(
+    'views the original %s edge from its summary without leaving discussion layout',async(type,label)=>{
+    const relation=(id:string,relationType:string,sourceMessageId:string,target:string):Relation=>({id,relationType,sourceMessageId,
+      targetRefs:[{kind:'message',messageId:target}],createdAt:'2026-01-01',createdBy:makeUser()});
+    mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'测试分类'});
+    mockApi.getMessages.mockResolvedValue({data:[makeMessage('source','关系来源正文'),makeMessage('target','目标正文'),makeMessage('detail','对关系的回复正文') ]});
+    mockApi.getRelations.mockResolvedValue({data:[relation('original',type,'source','target'),
+      ...(['RECOMMEND','ARCHIVE'].includes(type)?[]:[relation('detail-reply','REPLY','detail','original')])]});
+    graphRendering.actual=true;
+    const view=render(<MessageWorkbenchPage/>);
+    try{
+      const summary=(await screen.findAllByRole('button',{name:`汇总${label}：1`})).find(button=>button.dataset.jumpMsgids==='original')!;
+      await waitForWorkbenchIdle();
+      expect(latest().discussionView.mode).toBe('discussion');
+      fireEvent.click(summary);
+      const row=screen.getByRole('dialog').querySelector<HTMLElement>('[data-related-relation-id="original"]')!;
+      await act(async()=>fireEvent.click(within(row).getByRole('button',{name:'查看'})));
+      await waitForWorkbenchIdle();
+      expectTraceOrigin('original');
+      expect(latest().discussionView.mode).toBe('discussion');
+      const panel=document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      expect(panel.querySelector('[data-discussion-region]')).not.toBeNull();
+      expect(panel.querySelector('[data-directed-edge-label="original"]')).not.toBeNull();
+      for(const id of ['source','target'])expect(panel.querySelector(`[data-msgid="${id}"]`)).not.toBeNull();
+      if(type==='ARCHIVE'||type==='RECOMMEND'){
+        expect(panel.querySelector('.themed-message[data-msgid="original"]')).toBeNull();
+        expect(panel.querySelector('[data-msgid="original"]')).not.toBeNull();
+      }
+      fireEvent.click(screen.getAllByRole('button',{name:`汇总${label}：1`}).find(button=>button.dataset.jumpMsgids==='original')!);
+      const viewedRow=screen.getByRole('dialog').querySelector<HTMLElement>('[data-related-relation-id="original"]')!;
+      expect(viewedRow).toHaveAttribute('data-view-target','true');
+      expect(within(viewedRow).getByRole('button',{name:/^消息状态与影响 original：/})).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button',{name:'关闭其他相关消息'}));
+      fireEvent.click(screen.getByRole('button',{name:'退出查看'}));
+      await waitForWorkbenchIdle();
+      expect(latest().discussionView.mode).toBe('discussion');
+      expect(screen.getAllByRole('button',{name:`汇总${label}：1`}).some(button=>button.dataset.jumpMsgids==='original')).toBe(true);
+      expect(mockApi.createRelation).not.toHaveBeenCalled();
+    }finally{view.unmount();graphRendering.actual=false;}
   });
 
   it('loads the other endpoint for a directly opened scope and discards it on exiting related view',async()=>{
@@ -935,13 +1011,14 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       const rect = card.getBoundingClientRect(), viewport = panel.getBoundingClientRect();
       expect(rect.top).toBeGreaterThanOrEqual(viewport.top);
       expect(rect.bottom).toBeLessThanOrEqual(viewport.bottom);
-      expect(panel.scrollTop).toBeCloseTo(2460);
+      // Reveal the card's bottom with the smallest scroll; leave already-visible space intact.
+      expect(panel.scrollTop).toBeCloseTo(2600 + 120 - panel.clientHeight);
       await waitFor(() => expect(document.querySelector('[data-message-jump-target="join-B"]')).toBeNull());
       const retained = panel.querySelector<HTMLElement>('[data-msgid="join-B"]:not([data-rel-overlay])')!;
       expect(retained).toBeVisible();
       expect(retained.getBoundingClientRect().top).toBeGreaterThanOrEqual(viewport.top);
       expect(retained.getBoundingClientRect().bottom).toBeLessThanOrEqual(viewport.bottom);
-      expect(panel.scrollTop).toBeCloseTo(2460);
+      expect(panel.scrollTop).toBeCloseTo(2600 + 120 - panel.clientHeight);
       expect(mockApi.createRelation).not.toHaveBeenCalled();
     } finally { geometry.mockRestore(); graphRendering.actual = false; }
   });
@@ -993,38 +1070,134 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       expect(screen.queryByText('加入记录临时分类（1）')).toBeNull();
       const destinationMode=screen.queryByRole('button',{name:'切换为消息表'})?'graph':'list';
       const destinationFilters=filterState(),destinationScroll=write(200);
-      const back=()=>fireEvent.click(screen.getByRole('button',{name:'返回'}));
-      const forward=()=>fireEvent.click(screen.getByRole('button',{name:'前进'}));
+      const back=()=>moveBrowserHistory(-1,'返回');
+      const forward=()=>moveBrowserHistory(1,'前进');
       const assertRecords=async()=>{
         expect(screen.getByText('加入记录临时分类（1）')).toBeInTheDocument();
         expect(screen.getByRole('button',{name:joinMode==='list'?'切换为消息图':'切换为消息表'})).toBeInTheDocument();
         expect(filterState()).toEqual([false]);
         await ready();await waitFor(()=>expect(read()).toEqual(joinScroll));
       };
-      back();await assertRecords();
-      back();
+      await back();await assertRecords();
+      await back();
       expect(screen.queryByText('加入记录临时分类（1）')).toBeNull();
       expect(screen.getByRole('button',{name:mode==='list'?'切换为消息图':'切换为消息表'})).toBeInTheDocument();
       expect(filterState()).toEqual([true]);
       await ready();await waitFor(()=>expect(read()).toEqual(originScroll));
-      forward();await assertRecords();
-      forward();await ready();await waitFor(()=>expect(read()).toEqual(destinationScroll));
+      await forward();await assertRecords();
+      await forward();await ready();await waitFor(()=>expect(read()).toEqual(destinationScroll));
       expect(filterState()).toEqual(destinationFilters);
       expect(screen.getByRole('button',{name:destinationMode==='list'?'切换为消息图':'切换为消息表'})).toBeInTheDocument();
       expect(screen.getByRole('button',{name:'前进'})).toBeDisabled();
       // Reverse before the viewport restore paints: preserve its intended scroll.
-      back();forward();await ready();await waitFor(()=>expect(read()).toEqual(destinationScroll));
-      back();await assertRecords();
+      await back();await forward();await ready();await waitFor(()=>expect(read()).toEqual(destinationScroll));
+      await back();await assertRecords();
       fireEvent.click(screen.getByRole('button',{name:'退出临时分类'}));
       await ready();await waitFor(()=>expect(read()).toEqual(originScroll));
       expect(screen.getByRole('button',{name:'前进'})).toBeDisabled();
-      back();await assertRecords();
+      await back();await assertRecords();
       expect(mockApi.getWorkbenchSnapshot).toHaveBeenCalledTimes(requests);
       expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();
     }finally{
       graphRendering.actual=false;dimensions.forEach(spy=>spy.mockRestore());
       if(scrollingElement)Object.defineProperty(document,'scrollingElement',scrollingElement);
       else Reflect.deleteProperty(document,'scrollingElement');
+    }
+  });
+
+  it.each(['graph','list'] as const)('shares native browser and toolbar history across category entry and exit from %s without losing the draft', async mode => {
+    fixture('CLASSIFY', true);
+    const response = await mockApi.getRelations();
+    mockApi.getRelations.mockResolvedValue({ data: response.data.filter((relation: Relation) => relation.id !== 'against-C') });
+    const dimensions = [
+      vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(5000),
+      vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(3000),
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600),
+      vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(600),
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400)),
+    ];
+    graphRendering.actual = true;
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitFor(() => expect(latest()?.messages.some((message: Message) => message.id === 'A')).toBe(true));
+      await waitForWorkbenchIdle();
+      if (mode === 'list') { fireEvent.click(screen.getByRole('button', { name: '切换为消息表' })); await waitForWorkbenchIdle(); }
+      const draft = screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）');
+      fireEvent.change(draft, { target: { value: '进入和退出分类后继续编辑' } });
+      const address = window.location.href;
+      const panel = document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      const position = () => [panel.scrollTop, panel.scrollLeft];
+      const setPosition = (top: number, left: number) => { panel.scrollTop = top; panel.scrollLeft = left; return position(); };
+      const enter = async (id: string) => {
+        fireEvent.doubleClick(panel.querySelector(`[data-msgid="${id}"]:not([data-rel-overlay])`)!);
+        await waitForWorkbenchIdle();
+      };
+      const rootPosition = setPosition(730, 90);
+      await enter('A');
+      const categoryPosition = setPosition(300, 60);
+      await enter('C');
+      const childPosition = setPosition(950, 110);
+      await moveBrowserHistory(-1);
+      await waitForWorkbenchIdle();
+      expect(position()).toEqual(categoryPosition);
+      expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('A');
+      await moveBrowserHistory(1, '前进');
+      await waitForWorkbenchIdle();
+      expect(position()).toEqual(childPosition);
+      expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('C');
+      await moveBrowserHistory(-1);
+      await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button', { name: '退出分类' }));
+      await waitForWorkbenchIdle();
+      expect(position()).toEqual(rootPosition);
+      await moveBrowserHistory(-1);
+      await waitForWorkbenchIdle();
+      expect(position()).toEqual(categoryPosition);
+      expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('A');
+      expect(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）')).toBe(draft);
+      expect(draft).toHaveValue('进入和退出分类后继续编辑');
+      expect(window.location.href).toBe(address);
+      expect(mockApi.createMessage).not.toHaveBeenCalled();
+      expect(mockApi.createRelation).not.toHaveBeenCalled();
+    } finally { view.unmount(); graphRendering.actual = false; dimensions.forEach(spy => spy.mockRestore()); }
+  });
+
+  it.each([false, true])('keeps the same offline archive when browser state is cloned during traversal (hash router=%s)', async hash => {
+    const member = { ...makeMessage('offline-member', '文件中的正文'), authorId: 'user-1', author: 'tester' };
+    const category = { ...makeMessage('offline-category', ''), kind: 'RELATION' as const, relationType: 'CLASSIFY',
+      targetRefs: [{ kind: 'message' as const, messageId: member.id }], relationPayload: { title: '本地分类' }, authorId: 'user-1', author: 'tester' };
+    const archive: ExportData = { formatVersion: 1, exportedAt: '', scope: { messageId: null, title: '本机文件' },
+      view: { username: 'tester', mode: 'graph', classificationId: null, messageFilter: { hideJoin: true, hideSettlement: true }, homeFilter: null, cleanFilters: [] },
+      messages: [member, category], relations: [{ id: category.id, relationType: 'CLASSIFY', sourceMessageId: null, targetRefs: category.targetRefs,
+        payload: category.relationPayload, createdAt: category.createdAt, authorId: 'user-1', author: 'tester', supersededBy: null }] };
+    window.history.replaceState({ usr: { exportData: archive, viewerInstanceKey: 'local-file' }, key: 'local-file', idx: 1 }, '', hash ? '/#/viewer' : '/viewer');
+    // Native browsers structured-clone history state; jsdom otherwise reuses the same object.
+    const push = window.history.pushState.bind(window.history), replace = window.history.replaceState.bind(window.history);
+    const pushSpy = vi.spyOn(window.history, 'pushState').mockImplementation((state, title, url) => push(structuredClone(state), title, url));
+    const replaceSpy = vi.spyOn(window.history, 'replaceState').mockImplementation((state, title, url) => replace(structuredClone(state), title, url));
+    viewerRoute.nativeRouter = true;
+    graphRendering.actual = true;
+    const Router = hash ? HashRouter : BrowserRouter;
+    const view = render(<Router><Routes><Route path="/viewer" element={<MessageWorkbenchPage />} /></Routes></Router>);
+    try {
+      await waitFor(() => expect(latest()?.messages.some((message: Message) => message.id === category.id)).toBe(true));
+      await waitForWorkbenchIdle();
+      const workbench = view.container.querySelector('.workbench-shell');
+      await act(async () => latest().onMessageDoubleClick(event(), category.id));
+      await waitForWorkbenchIdle();
+      expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('本地分类');
+      await moveBrowserHistory(-1);
+      await waitForWorkbenchIdle();
+      expect(screen.queryByRole('button', { name: '退出分类' })).toBeNull();
+      await moveBrowserHistory(1);
+      await waitForWorkbenchIdle();
+      expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('本地分类');
+      expect(view.container.querySelector('.workbench-shell')).toBe(workbench);
+      expect(mockApi.getWorkbenchSnapshot).not.toHaveBeenCalled();
+    } finally {
+      view.unmount(); viewerRoute.nativeRouter = false; graphRendering.actual = false;
+      pushSpy.mockRestore(); replaceSpy.mockRestore();
+      window.history.replaceState(null, '', '/');
     }
   });
 
@@ -1247,18 +1420,18 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       const left=document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
       left.scrollTop=350;
       await act(async()=>latest().onJoinFilterClick('C','outgoing'));
-      fireEvent.click(screen.getByRole('button',{name:'返回'}));
+      await moveBrowserHistory(-1,'返回');
       expect(latest().comparisonSingle).toBe(true);
       await waitFor(()=>expect(left.scrollTop).toBe(350));
-      fireEvent.click(screen.getByRole('button',{name:'前进'}));
+      await moveBrowserHistory(1,'前进');
       expect(screen.getByText('被加入记录临时分类（1）')).toBeInTheDocument();
-      fireEvent.click(screen.getByRole('button',{name:'返回'}));
+      await moveBrowserHistory(-1,'返回');
       fireEvent.click(screen.getByRole('button',{name:'退出查看'}));
       expect(latest().comparisonSingle).toBe(false);
       expect(latest().rejectedContainerIds.has('C')).toBe(true);
       expect(latest().messages.map((message:Message)=>message.id)).toContain('B');
       expect(screen.getByRole('button',{name:'前进'})).toBeDisabled();
-      fireEvent.click(screen.getByRole('button',{name:'返回'}));
+      await moveBrowserHistory(-1,'返回');
       expect(latest().comparisonSingle).toBe(true);
       fireEvent.click(screen.getByRole('button',{name:'退出查看'}));
       expect(latest().comparisonSingle).toBe(false);
@@ -1442,56 +1615,236 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     expect(screen.queryByTestId('graph-view')).toBeNull();
   });
 
+  it('paints loading feedback before opening a category and includes native stance counts in its chooser',async()=>{
+    fixture();
+    const original=await mockApi.getRelations();
+    mockApi.getRelations.mockResolvedValue({data:original.data.filter((relation:Relation)=>relation.id!=='against-C').map((relation:Relation)=>relation.id==='C'?{
+      ...relation,state:{messageId:'C',revision:1,supportCount:1,oppositionCount:0,recommendationTotal:0,suppressed:false},
+    }:relation)});
+    render(<MessageWorkbenchPage/>);
+    await waitForWorkbenchIdle();
+    let opening:Promise<void>|undefined;
+    act(()=>{opening=latest().onMessageDoubleClick(event(),'A');});
+    expect(document.querySelector('[aria-busy="true"]')).not.toBeNull();
+    await act(async()=>{await opening;});
+    await waitForWorkbenchIdle();
+    fireEvent.click(screen.getByRole('button',{name:'对比'}));
+    await selectComparisonTarget('C');
+    expect(screen.getByRole('button',{name:'审阅'})).toBeEnabled();
+  });
+
+  it('retains the comparison chooser list and scroll position when selecting different messages',async()=>{
+    fixture();
+    const original=await mockApi.getRelations();
+    mockApi.getRelations.mockResolvedValue({data:[...original.data,{
+      id:'agree-A',relationType:'AGREE',sourceMessageId:null,targetRefs:[{kind:'message',messageId:'A'}],
+      createdAt:'2024-01-01T00:00:00Z',createdBy:makeUser(),
+    }]});
+    render(<MessageWorkbenchPage/>);
+    await waitForWorkbenchIdle();
+    await act(async()=>latest().onMessageDoubleClick(event(),'A'));
+    await waitForWorkbenchIdle();
+    fireEvent.click(screen.getByRole('button',{name:'对比'}));
+    await waitForWorkbenchIdle();
+    const panel=document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+    const list=panel.querySelector('[data-virtual-message-list]')!;
+    const cards=new Map(['A','C'].map(id=>[id,panel.querySelector(`[data-msgid="${id}"]:not([data-rel-overlay])`)]));
+    expect(list).not.toBeNull();
+    panel.scrollTop=180;panel.scrollLeft=24;
+    for(const id of ['C','A','C']){
+      await selectComparisonTarget(id);
+      await waitForWorkbenchIdle();
+      expect(screen.getByRole('button',{name:`暂存消息 ${id}`})).toBeInTheDocument();
+      expect(panel.querySelector('[data-virtual-message-list]')).toBe(list);
+      expect(panel.querySelector(`[data-msgid="${id}"]:not([data-rel-overlay])`)).toBe(cards.get(id));
+      expect(panel.scrollTop).toBe(180);
+      expect(panel.scrollLeft).toBe(24);
+    }
+  });
+
   it('can select a rejected container in the original comparison list and review both sides',async()=>{
     fixture();render(<MessageWorkbenchPage/>);
     await waitFor(()=>expect(latest()?.rejectedContainerIds.has('C')).toBe(true));
     await act(async()=>latest().onMessageDoubleClick(event(),'A'));
     fireEvent.click(screen.getByRole('button',{name:'对比'}));
-    const entry=await screen.findAllByText('C');
-    fireEvent.click(entry[0]);
+    await selectComparisonTarget('C');
     fireEvent.click(screen.getByRole('button',{name:'审阅'}));
     await waitFor(()=>expect(latest().comparisonPair).toBe(true));
     expect(latest().comparisonAgreeMessages.map((message:Message)=>message.id)).toContain('C');
-    expect(latest().comparisonAgreeMessages.map((message:Message)=>message.id)).not.toContain('B');
+    expect(latest().comparisonAgreeMessages.map((message:Message)=>message.id)).toContain('B');
+    expect(latest().comparisonAgreeContext.expandedFrameIds).toEqual(new Set(['A','C']));
+    expect(latest().comparisonDisagreeContext.expandedFrameIds).toEqual(new Set(['A']));
     expect(latest().comparisonDisagreeMessages.map((message:Message)=>message.id)).toContain('B');
     expect(latest().comparisonAgreeContext.rejectedContainerIds.has('C')).toBe(false);
     expect(latest().comparisonDisagreeContext.rejectedContainerIds.has('C')).toBe(true);
     expect(mockApi.createRelation).not.toHaveBeenCalled();
   });
 
-  it('preserves voted relation eligibility while finding nested targets hidden from the root canvas',async()=>{
+  it('restores the selected candidate and chooser viewport after every review',async()=>{
+    fixture();render(<MessageWorkbenchPage/>);
+    await waitForWorkbenchIdle();
+    await act(async()=>latest().onMessageDoubleClick(event(),'A'));
+    await waitForWorkbenchIdle();
+    fireEvent.click(screen.getByRole('button',{name:'对比'}));
+    await selectComparisonTarget('C');await waitForWorkbenchIdle();
+    const panel=document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+    for(const [key,value] of Object.entries({clientHeight:400,scrollHeight:4000,clientWidth:500,scrollWidth:2000})){
+      Object.defineProperty(panel,key,{configurable:true,value});
+    }
+    const list=panel.querySelector('[data-virtual-message-list]');
+    for(const top of [1200,700]){
+      panel.scrollTop=top;panel.scrollLeft=125;
+      fireEvent.click(screen.getByRole('button',{name:'审阅'}));
+      await waitForWorkbenchIdle();expect(latest().comparisonPair).toBe(true);
+      await act(async()=>latest().onMessageClick(event(),'B'));
+      panel.scrollTop=0;panel.scrollLeft=0;
+      fireEvent.click(screen.getByRole('button',{name:'返回对比消息'}));
+      await waitForWorkbenchIdle();
+      expect(panel.scrollTop).toBe(top);expect(panel.scrollLeft).toBe(125);
+      expect(panel.querySelector('[data-virtual-message-list]')).toBe(list);
+      expect(panel.querySelector('[data-msgid="C"]')).toHaveAttribute('aria-label','消息 C，已选中');
+      expect(screen.getByRole('button',{name:'暂存消息 C'})).toBeInTheDocument();
+      expect(screen.getByRole('button',{name:'审阅'})).toBeEnabled();
+    }
+  });
+
+  it.each(['graph', 'list'])('limits comparison candidates to the entering root or classification view in %s',async mode=>{
     fixture('CLASSIFY',true);
     const original=await mockApi.getRelations();
     const extra=(id:string,relationType:string,target:string):Relation=>({id,relationType,sourceMessageId:null,targetRefs:[{kind:'message',messageId:target}],createdAt:'2024-01-01T00:00:00Z',createdBy:makeUser()});
-    mockApi.getRelations.mockResolvedValue({data:[...original.data,
-      extra('voted-reference','REFERENCE','B'),extra('agree-reference','AGREE','voted-reference'),
-      extra('unvoted-reference','REFERENCE','B'),extra('agree-join','AGREE','join-B'),
+    mockApi.getMessages.mockResolvedValue({data:[makeMessage('B','A 内的 B'),makeMessage('reason','引用说明')]});
+    mockApi.getRelations.mockResolvedValue({data:[...original.data.map((relation:Relation)=>relation.id==='A'?{
+      ...relation,targetRefs:[...relation.targetRefs,{kind:'message',messageId:'reason'}],
+    }:relation),
+      extra('agree-A','AGREE','A'),
+      {...extra('voted-reference','REFERENCE','B'),sourceMessageId:'reason'},extra('agree-reference','AGREE','voted-reference'),
+      {...extra('unvoted-reference','REFERENCE','B'),sourceMessageId:'reason'},extra('agree-join','AGREE','join-B'),
     ]});
     render(<MessageWorkbenchPage/>);
     await waitFor(()=>expect(latest()?.messages.some((message:Message)=>message.id==='A')).toBe(true));
     expect(latest().messages.map((message:Message)=>message.id)).not.toContain('C');
+    if(mode==='list')fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));
+    await waitForWorkbenchIdle();
     fireEvent.click(screen.getByRole('button',{name:'对比'}));
-    expect(screen.getByText('选择对比消息（2）')).toBeInTheDocument();
+    await waitForWorkbenchIdle();
+    expect(screen.getByText(/^选择对比消息/).textContent).toBe('选择对比消息（1）');
     expect(screen.queryByRole('button',{name:'退出临时分类'})).toBeNull();
-    expect(document.querySelector('[data-msgid="A"]')).toBeNull();
+    expect(document.querySelector('[data-msgid="A"]')).not.toBeNull();
+    expect(document.querySelector('[data-msgid="C"]')).toBeNull();
+    expect(document.querySelector('[data-msgid="voted-reference"]')).toBeNull();
+    fireEvent.click(screen.getAllByRole('button',{name:'退出对比'})[0]);
+    await waitForWorkbenchIdle();
+    await act(async()=>latest().onMessageDoubleClick(event(),'A'));
+    await waitForWorkbenchIdle();
+    fireEvent.click(screen.getByRole('button',{name:'对比'}));
+    await waitForWorkbenchIdle();
+    expect(screen.getByText(/^选择对比消息/).textContent).toBe('选择对比消息（4）');
+    expect(document.querySelector('[data-msgid="A"]')).not.toBeNull();
     expect(document.querySelector('[data-msgid="C"]')).not.toBeNull();
-    expect(document.querySelector('[data-msgid="join-B"]')).toBeNull();
+    expect(document.querySelector('[data-msgid="join-B"]')).not.toBeNull();
     expect(document.querySelector('[data-msgid="voted-reference"]')).not.toBeNull();
     expect(document.querySelector('[data-msgid="unvoted-reference"]')).toBeNull();
     expect(document.querySelector('[data-msgid="B"]')).toBeNull();
-    fireEvent.click(screen.getAllByText('C')[0]);
+    await selectComparisonTarget('C');
     fireEvent.click(screen.getByRole('button',{name:'审阅'}));
     await waitFor(()=>expect(latest().comparisonPair).toBe(true));
     expect(latest().comparisonTargetId).toBe('C');
     expect(latest().comparisonAgreeMessages.map((message:Message)=>message.id)).toContain('C');
     expect(latest().comparisonDisagreeMessages.map((message:Message)=>message.id)).toContain('B');
     fireEvent.click(screen.getByRole('button',{name:'返回对比消息'}));
-    expect(screen.getByText('选择对比消息（2）')).toBeInTheDocument();
+    expect(screen.getByText('选择对比消息（4）')).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole('button',{name:'退出对比'})[0]);
-    await waitFor(()=>expect(latest().comparisonPair).toBe(false));
-    expect(latest().messages.map((message:Message)=>message.id)).not.toContain('B');
-    expect(screen.getByRole('button',{name:'退出分类'}).parentElement).toHaveTextContent('测试分类');
+    await waitForWorkbenchIdle();
+    expect(screen.queryByRole('button',{name:'返回对比消息'})).toBeNull();
+    if(mode==='graph')expect(latest().messages.map((message:Message)=>message.id)).toContain('B');
+    else expect(document.querySelector('[data-workbench-left-panel] [data-msgid="B"]')).not.toBeNull();
+    expect(screen.getByRole('button',{name:'退出分类'}).parentElement).toHaveTextContent('A');
     expect(mockApi.createRelation).not.toHaveBeenCalled();
+  });
+
+  it('reviews a voted JOIN with rendered category frames on both sides and restores the entering view', async () => {
+    fixture('CLASSIFY', true);
+    const original = await mockApi.getRelations();
+    const join = original.data.find((relation: Relation) => relation.id === 'join-B')!;
+    mockApi.getRelations.mockResolvedValue({ data: [
+      ...original.data.filter((relation: Relation) => relation.id !== 'against-C'),
+      { ...join, id: 'previous-join', sourceMessageId: 'A', createdAt: '2023-01-01' },
+      { ...join, id: 'vote-join', relationType: 'AGREE', sourceMessageId: null,
+        targetRefs: [{ kind: 'message', messageId: 'join-B' }] },
+    ] });
+    graphRendering.actual = true;
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitForWorkbenchIdle();
+      await act(async () => latest().onMessageDoubleClick(event(), 'A'));
+      await waitForWorkbenchIdle();
+      await act(async () => latest().onMessageDoubleClick(event(), 'C'));
+      await waitForWorkbenchIdle();
+      const originalIds = latest().messages.map((message: Message) => message.id);
+      fireEvent.click(screen.getByRole('button', { name: '对比' }));
+      await selectComparisonTarget('join-B');
+      expect(screen.getByText('选择对比消息（1）')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: '审阅' }));
+      await waitForWorkbenchIdle();
+      expect(latest().comparisonTargetId).toBe('join-B');
+      expect(latest().comparisonAgreeContext.joinStatusByMessage.get('join-B')).toBe('valid');
+      expect(latest().comparisonDisagreeContext.joinStatusByMessage.get('previous-join')).toBe('valid');
+      for (const [side, owner] of [['agree', 'C'], ['disagree', 'A']]) {
+        const panel = view.container.querySelector(`[data-comparison-view="${side}"]`)!;
+        expect(panel.querySelectorAll('[data-msgid="B"]:not([data-rel-overlay])')).toHaveLength(1);
+        for (const id of ['A', 'C']) expect(panel.querySelector(`[data-frame-visual="${id}"]`)).not.toBeNull();
+        const edges = side === 'agree' ? latest().comparisonAgreeEdges : latest().comparisonDisagreeEdges;
+        expect(edges.filter((edge: DemoEdge) => edge.to.messageId === 'B').map((edge: DemoEdge) => edge.relationMessageId)).toEqual([owner]);
+      }
+      fireEvent.click(screen.getByRole('button', { name: '返回对比消息' }));
+      await waitForWorkbenchIdle();
+      expect(screen.getByText('选择对比消息（1）')).toBeInTheDocument();
+      fireEvent.click(screen.getAllByRole('button', { name: '退出对比' })[0]);
+      await waitForWorkbenchIdle();
+      expect(latest().messages.map((message: Message) => message.id)).toEqual(originalIds);
+      expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('C');
+      expect(mockApi.createMessage).not.toHaveBeenCalled(); expect(mockApi.createRelation).not.toHaveBeenCalled();
+    } finally { view.unmount(); graphRendering.actual = false; }
+  });
+
+  it.each(['content', 'outside', 'field'])('does not review a retained %s selection outside the current candidates', async selection => {
+    fixture();
+    const original = await mockApi.getRelations();
+    const outside: Relation = { ...makeRelation(), id: 'outside-choice', relationType: 'CLASSIFY', sourceMessageId: null,
+      targetRefs: [], payload: { title: '其他分类' } };
+    const vote: Relation = { ...makeRelation(), id: 'vote-outside', relationType: 'AGREE', sourceMessageId: null,
+      targetRefs: [{ kind: 'relation', relationId: outside.id }] };
+    mockApi.getRelations.mockResolvedValue({ data: [...original.data, outside, vote] });
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitForWorkbenchIdle();
+      if (selection === 'outside') await act(async () => latest().onMessageClick(event(), outside.id));
+      await act(async () => latest().onMessageDoubleClick(event(), 'A'));
+      await waitForWorkbenchIdle();
+      if (selection === 'content') await act(async () => latest().onMessageClick(event(), 'B'));
+      if (selection === 'field') act(() => window.dispatchEvent(new CustomEvent(PART_SELECTION_EVENT, {
+        detail: { reference: { messageId: 'C', revision: 1, partId: 'body' }, label: '正文' },
+      })));
+      const selected = latest().draftUnits;
+      expect(selected).toHaveLength(1);
+      fireEvent.click(screen.getByRole('button', { name: '对比' }));
+      await waitForWorkbenchIdle();
+      expect(screen.getByText('选择对比消息（1）')).toBeInTheDocument();
+      expect(document.querySelector('[data-workbench-left-panel] [data-msgid="outside-choice"]')).toBeNull();
+      expect(screen.getByRole('button', { name: '审阅' })).toBeDisabled();
+      fireEvent.click(screen.getByRole('button', { name: '审阅' }));
+      expect(screen.queryByRole('button', { name: '返回对比消息' })).toBeNull();
+      expect(latest().draftUnits).toEqual(selected);
+      await selectComparisonTarget('C');
+      fireEvent.click(screen.getByRole('button', { name: '审阅' }));
+      await waitForWorkbenchIdle();
+      expect(latest().comparisonPair).toBe(true);
+      expect(latest().comparisonTargetId).toBe('C');
+      expect(screen.queryByRole('button', { name: '退出分类' })).toBeNull();
+      expect(latest().comparisonAgreeContext.expandedFrameIds.has('A')).toBe(true);
+      expect(mockApi.createMessage).not.toHaveBeenCalled();
+      expect(mockApi.createRelation).not.toHaveBeenCalled();
+    } finally { view.unmount(); }
   });
 
   it('explains an empty chooser when no relation has a vote',async()=>{
@@ -1503,7 +1856,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     fireEvent.click(screen.getByRole('button',{name:'对比'}));
     expect(screen.getByText('选择对比消息（0）')).toBeInTheDocument();
     expect(screen.getByText('没有可对比的消息')).toBeInTheDocument();
-    expect(screen.getByText('仅列出已有赞同或反对记录的关系消息，不含加入、结算等消息。')).toBeInTheDocument();
+    expect(screen.getByText('仅列出当前视图内已有赞同或反对记录、且会改变显示效果的关系消息。')).toBeInTheDocument();
     expect(document.querySelector('[data-msgid="A"]')).toBeNull();
   });
 
@@ -1519,7 +1872,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     fireEvent.click(screen.getByRole('button',{name:'对比'}));
     expect(screen.queryByRole('region',{name:'单侧对比'})).toBeNull();
     expect(latest().draftUnits).toEqual(selection);
-    fireEvent.click(screen.getAllByText('C')[0]);
+    await selectComparisonTarget('C');
     fireEvent.click(screen.getByRole('button',{name:'审阅'}));
     await waitFor(()=>expect(latest().comparisonPair).toBe(true));
     fireEvent.click(screen.getByRole('button',{name:'退出对比'}));
@@ -1534,7 +1887,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();
   });
 
-  it('uses the full comparison agree side and ordinary classification navigation without a separate viewer hierarchy',async()=>{
+  it('shares the assumed membership state while paired review expands paths and single-side preview retains ordinary navigation',async()=>{
     fixture();
     const original=await mockApi.getRelations();
     mockApi.getMessages.mockResolvedValue({data:[makeMessage('B','A 内的 B'),makeMessage('neighbor','同层邻居'),makeMessage('outside','外层消息')]});
@@ -1552,28 +1905,35 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     const selection=latest().draftUnits;
     fireEvent.click(screen.getByRole('button',{name:'对比'}));
     expect(latest().draftUnits).toEqual(selection);
-    fireEvent.click((await screen.findAllByText('C'))[0]);
+    await selectComparisonTarget('C');
     fireEvent.click(screen.getByRole('button',{name:'审阅'}));
     await waitFor(()=>expect(latest().comparisonPair).toBe(true));
-    const agreeInA={messages:latest().comparisonAgreeMessages,edges:latest().comparisonAgreeEdges,context:latest().comparisonAgreeContext};
-    fireEvent.click(screen.getByRole('button',{name:'退出分类'}));
-    const agreeInP={messages:latest().comparisonAgreeMessages,edges:latest().comparisonAgreeEdges,context:latest().comparisonAgreeContext};
-    fireEvent.click(screen.getByRole('button',{name:'退出分类'}));
-    const agreeAtRoot={messages:latest().comparisonAgreeMessages,edges:latest().comparisonAgreeEdges,context:latest().comparisonAgreeContext};
+    const comparisonSide = () => {
+      const { getMemberCounts: _counts, expandedFrameIds, crossCanvasRelations: _cross, ...context } = latest().comparisonAgreeContext;
+      expect(expandedFrameIds).toEqual(new Set(['P','A','C']));
+      expect(latest().comparisonAgreeMessages.map((message:Message)=>message.id)).toContain('B');
+      for (const messages of [latest().comparisonAgreeMessages, latest().comparisonDisagreeMessages]) {
+        expect(messages.some((message:Message) => ['neighbor', 'outside'].includes(message.id))).toBe(false);
+      }
+      return context;
+    };
+    const agreeInA=comparisonSide();
+    expect(latest().comparisonScopeHeader).toBeUndefined();
+    expect(screen.queryByRole('button',{name:'退出分类'})).toBeNull();
     fireEvent.click(screen.getByRole('button',{name:'退出对比'}));
     await act(async()=>latest().onRelatedMessageNavigate('C'));
-    const single=()=>({messages:latest().messages,edges:latest().edges,context:{relatedMessages:latest().relatedMessages,relatedEdges:latest().relatedEdges,rejectedContainerIds:latest().rejectedContainerIds,rejectedRelationIds:latest().rejectedRelationIds,joinStatusByMessage:latest().joinStatusByMessage,joinEffectSourcesByMessage:latest().joinEffectSourcesByMessage,crossCanvasRelations:latest().crossCanvasRelations}});
+    const single=()=>({relatedMessages:latest().relatedMessages,relatedEdges:latest().relatedEdges,rejectedContainerIds:latest().rejectedContainerIds,rejectedRelationIds:latest().rejectedRelationIds,joinStatusByMessage:latest().joinStatusByMessage,joinEffectSourcesByMessage:latest().joinEffectSourcesByMessage});
     expect(single()).toEqual(agreeInA);
     expect(latest().messages.map((message:Message)=>message.id)).toContain('neighbor');
     expect(screen.queryByRole('button',{name:'返回上层查看'})).toBeNull();
     expect(screen.getByRole('button',{name:'退出分类'}).parentElement).toHaveTextContent('A');
     fireEvent.click(screen.getByRole('button',{name:'退出分类'}));
-    expect(single()).toEqual(agreeInP);
+    expect(single()).toEqual(agreeInA);
     expect(latest().messages.map((message:Message)=>message.id)).not.toContain('C');
     expect(latest().messages.map((message:Message)=>message.id)).not.toContain('B');
     expect(screen.getByRole('button',{name:'退出分类'}).parentElement).toHaveTextContent('P');
     fireEvent.click(screen.getByRole('button',{name:'退出分类'}));
-    expect(single()).toEqual(agreeAtRoot);
+    expect(single()).toEqual(agreeInA);
     expect(latest().messages.map((message:Message)=>message.id)).not.toContain('C');
     expect(latest().messages.map((message:Message)=>message.id)).not.toContain('B');
     expect(latest().messages.map((message:Message)=>message.id)).toContain('outside');
@@ -1583,7 +1943,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     fireEvent.click(screen.getByRole('button',{name:'退出分类'}));
     fireEvent.click(screen.getByRole('button',{name:'对比'}));
     fireEvent.click(screen.getAllByRole('button',{name:'退出对比'})[0]);
-    expect(single()).toEqual(agreeAtRoot);
+    expect(single()).toEqual(agreeInA);
     expect(latest().messages.map((message:Message)=>message.id)).not.toContain('C');
     expect(latest().messages.map((message:Message)=>message.id)).not.toContain('B');
     fireEvent.click(screen.getByRole('button',{name:'退出查看'}));
@@ -2066,7 +2426,7 @@ describe('directed reading and continuous traces',()=>{
       fireEvent.click(screen.getByText('范围外及筛选隐藏的待阅内容'));
       fireEvent.click(screen.getByRole('button',{name:/临时显示并阅读.*N$/}));await waitForWorkbenchIdle();
       expectReadingPath(['N']);
-      expect(document.querySelector('[data-workbench-left-panel] [data-msgid="N"]:not([data-rel-overlay])')).not.toBeNull();
+      await waitFor(()=>expect(document.querySelector('[data-workbench-left-panel] [data-msgid="N"]:not([data-rel-overlay])')).not.toBeNull());
       fireEvent.click(screen.getByRole('button',{name:'已读并继续'}));await waitForWorkbenchIdle();
       expect(mockApi.markReading.mock.calls.flatMap(([marks]:any)=>marks).some((mark:any)=>mark.messageId==='N'&&mark.scope==='message')).toBe(true);
       expectReadingPath(['N']);
@@ -2081,10 +2441,11 @@ describe('directed reading and continuous traces',()=>{
     const {view,geometry}=await setup([correction]);
     try{
       await traceB();
+      await visitReading('N');
       fireEvent.click(screen.getByRole('button',{name:'切换消息 N 的版本'}));
       fireEvent.click(screen.getByRole('radio',{name:'原文'}));
       const close=screen.queryByRole('button',{name:'关闭版本选择'});if(close)fireEvent.click(close);
-      await visitReading('N');
+      await waitForWorkbenchIdle();
       expect(readingCurrentMessage('N')).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button',{name:'已读并继续'}));await waitForWorkbenchIdle();
       expect(mockApi.markReading).toHaveBeenCalledOnce();
@@ -2168,7 +2529,10 @@ describe('directed reading and continuous traces',()=>{
       fireEvent.click(screen.getByRole('button',{name:'阅读后退'}));await waitForWorkbenchIdle();
       expectReadingPath(['B']);expect(ids()).toEqual(['A','B','D','F','N']);
       expect(latest().draftUnits.map((unit:any)=>unit.messageId)).toEqual(['B']);
+      // Offscreen cards are virtualized. Revisit N before checking its shared read status.
+      await visitReading('N');
       expect(document.querySelector('[data-display-hint="N"]')?.getAttribute('data-reading-body')).toBe('read');
+      expect(mockApi.markReading).toHaveBeenCalledOnce();
     }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;mockApi.getReadingState.mockResolvedValue({marks:[]});}
   });
   it('automatically retraces each reading message downward without adding duplicate history',async()=>{
@@ -2301,6 +2665,103 @@ describe('MessageWorkbenchPage composer refresh', () => {
     mockApi.getScope.mockResolvedValue(scope);
     mockApi.getMessages.mockResolvedValue({ data: [makeMessage('msg-1', '第一条'), makeMessage('msg-2', '第二条')] });
     mockApi.getRelations.mockResolvedValue({ data: [makeRelation()] });
+  });
+
+  it('excludes voted text and delegation bodies from comparison and blocks a retained delegation selection', async () => {
+    const originals = [receivedMessage('msg-1', '来源正文'), receivedMessage('msg-2', '目标正文')];
+    const delegation: Relation = { ...receivedRelation(), id: 'delegation', relationType: 'DELEGATION', sourceMessageId: null, targetRefs: [],
+      parts: [{ id: 'body', type: 'text', text: '委托内容' }], payload: { delegationKind: 'CREATE', rewardAmount: 10 } };
+    const reference: Relation = { ...receivedRelation(), id: 'reference', relationType: 'REFERENCE', sourceMessageId: 'msg-1',
+      targetRefs: [{ kind: 'message', messageId: 'msg-2' }] };
+    const vote = (id: string, target: string): Relation => ({ ...receivedRelation(), id, relationType: 'AGREE', sourceMessageId: null,
+      targetRefs: [{ kind: 'message', messageId: target }] });
+    const relations = [delegation, reference, vote('vote-text', 'msg-1'), vote('vote-delegation', delegation.id), vote('vote-reference', reference.id)];
+    const records: Message[] = relations.map(relation => ({ ...receivedMessage(relation.id, relation.id === delegation.id ? '委托内容' : ''),
+      kind: 'RELATION', relationType: relation.relationType, relSourceId: relation.sourceMessageId ?? undefined,
+      targetRefs: relation.targetRefs, relationPayload: relation.payload, parts: relation.parts }));
+    const snapshotLoader = mockApi.getWorkbenchSnapshot.getMockImplementation()!;
+    mockApi.getWorkbenchSnapshot.mockResolvedValue({ scope: { messageId: 'classification-1', title: '测试分类' },
+      messages: [...originals, ...records], relations, users: [makeUser(), participant], stakes: {}, tagCounts: {}, attentionUsers: {},
+      sequence: 1, hasMore: false, nextCursor: null });
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）'); await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button', { name: '切换为消息表' })); await waitForWorkbenchIdle();
+      fireEvent.click(view.container.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="delegation"]')!);
+      fireEvent.click(screen.getByRole('button', { name: '对比' })); await waitForWorkbenchIdle();
+      expect(screen.getByText('选择对比消息（1）')).toBeInTheDocument();
+      expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="delegation"]')).toBeNull();
+      expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="msg-1"]')).toBeNull();
+      expect(screen.getByRole('button', { name: '审阅' })).toBeDisabled();
+      fireEvent.click(view.container.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="reference"]')!);
+      expect(screen.getByRole('button', { name: '审阅' })).toBeEnabled();
+      expect(mockApi.createMessage).not.toHaveBeenCalled(); expect(mockApi.createRelation).not.toHaveBeenCalled();
+    } finally { view.unmount(); mockApi.getWorkbenchSnapshot.mockImplementation(snapshotLoader); }
+  });
+
+  it('reviews a text correction with different bodies and does not invent a personal opposition', async () => {
+    localStorage.setItem('token', 'test-token');
+    const original: Message = { ...receivedMessage('msg-1', '好玩吗？'), revision: 1, parts: [{ id: 'body', type: 'text', text: '好玩吗？' }] };
+    const reference = { messageId: original.id, revision: 1, partId: 'body', range: { start: 2, end: 4 } };
+    const correction: Relation = { ...receivedRelation(), id: 'correction-under-review', revision: 1,
+      relationType: 'CORRECT', sourceMessageId: null,
+      targetRefs: [{ kind: 'text-fragment', messageId: original.id, text: '吗？', hash: 'range', reference }],
+      payload: { correctionKind: 'TEXT', correctionBeforeContent: '好玩吗？', correctionAfterContent: '好玩1111', correctionValue: '1111' },
+      parts: [{ id: 'corrected-body', type: 'text', text: '好玩1111' },
+        { id: 'relation', type: 'relation', relation: 'correct', roles: { target: [{ id: 'target', reference }] } }],
+      state: { messageId: 'correction-under-review', revision: 1, suppressed: true, supportCount: 0, oppositionCount: 1, recommendationTotal: 0 } };
+    const opposition: Relation = { ...receivedRelation(), id: 'public-opposition', relationType: 'DISAGREE', sourceMessageId: null,
+      targetRefs: [{ kind: 'relation', relationId: correction.id }] };
+    const relationMessage = (relation: Relation): Message => ({ ...receivedMessage(relation.id, ''), kind: 'RELATION',
+      revision: relation.revision, relationType: relation.relationType, targetRefs: relation.targetRefs,
+      relationPayload: relation.payload, parts: relation.parts, state: relation.state });
+    const snapshotLoader = mockApi.getWorkbenchSnapshot.getMockImplementation()!;
+    mockApi.getWorkbenchSnapshot.mockResolvedValue({ scope: { messageId: 'classification-1', title: '测试分类' },
+      messages: [original, relationMessage(correction), relationMessage(opposition)], relations: [correction, opposition],
+      users: [makeUser(), participant], stakes: {}, tagCounts: {}, attentionUsers: {}, sequence: 1, hasMore: false, nextCursor: null });
+    graphRendering.actual = true;
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）'); await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button', { name: '切换消息 msg-1 的版本' }));
+      expect(screen.getByRole('dialog')).toHaveTextContent('当前用户尚未选择');
+      fireEvent.click(screen.getByRole('button', { name: '关闭版本选择' }));
+      fireEvent.click(screen.getByRole('button', { name: '切换为消息表' })); await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button', { name: '对比' })); await waitForWorkbenchIdle();
+      const record = view.container.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="correction-under-review"]')!;
+      expect(within(record).getByText('当前未生效')).toBeInTheDocument();
+      expect(within(record).queryByText('你已反对 · 点赞同恢复')).toBeNull();
+      fireEvent.click(record);
+      await waitFor(() => expect(screen.getByRole('button', { name: '审阅' })).toBeEnabled());
+      fireEvent.click(screen.getByRole('button', { name: '审阅' })); await waitForWorkbenchIdle();
+      const body = (side: string) => view.container.querySelector<HTMLElement>(`[data-comparison-view="${side}"] [data-msgid="msg-1"] [data-message-part-id="body"]`);
+      expect(body('agree')).toHaveTextContent('好玩1111');
+      expect(body('disagree')).toHaveTextContent('好玩吗？');
+      expect(within(view.container.querySelector<HTMLElement>('[data-comparison-view="agree"]')!).getByText('✏更正 1/1')).toBeInTheDocument();
+      expect(within(view.container.querySelector<HTMLElement>('[data-comparison-view="disagree"]')!).getByText('✏更正 0/1')).toBeInTheDocument();
+      expect(mockGraphView.mock.lastCall![0].comparisonAgreeCorrectionVersions.get(original.id).current.appliedCorrectionIds).toEqual([correction.id]);
+      expect(mockGraphView.mock.lastCall![0].comparisonDisagreeCorrectionVersions.get(original.id).current).toBeUndefined();
+      expect(mockApi.createMessage).not.toHaveBeenCalled(); expect(mockApi.createRelation).not.toHaveBeenCalled();
+    } finally { view.unmount(); graphRendering.actual = false; mockApi.getWorkbenchSnapshot.mockImplementation(snapshotLoader); }
+  }, 15000);
+
+  it('opens a conflicting JOIN basis in its record category with its statistics controls',async()=>{
+    const parent=(id:string):Relation=>({...makeRelation(),id,relationType:'CLASSIFY',sourceMessageId:null,targetRefs:[],payload:{title:id,independentMemberships:true},createdBy:participant});
+    const old:Relation={...makeRelation(),id:'old-choice',relationType:'JOIN',sourceMessageId:'A',targetRefs:[{kind:'message',messageId:'msg-1'}],createdAt:'2024-01-01T00:00:01Z'};
+    const next:Relation={...old,id:'recommended-choice',sourceMessageId:'B',createdBy:participant,createdAt:'2024-01-01T00:00:02Z'};
+    mockApi.getRelations.mockResolvedValue({data:[parent('A'),parent('B'),old,next]});
+    const view=render(<MessageWorkbenchPage/>);
+    await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+    await act(async()=>mockGraphView.mock.lastCall![0].onJoinFilterClick('B','outgoing'));
+    const listSwitch=screen.queryByRole('button',{name:'切换为消息表'});if(listSwitch)fireEvent.click(listSwitch);await waitForWorkbenchIdle();
+    const current=view.container.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="recommended-choice"]')!;
+    fireEvent.click(within(current).getByRole('button',{name:/^显示提示 recommended-choice：/}));
+    fireEvent.click(screen.getByRole('button',{name:'查看当前选择依据 old-choice'}));
+    await waitFor(()=>expect(screen.getByText('加入记录临时分类（2）')).toBeInTheDocument());
+    const chosen=view.container.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="old-choice"]')!;
+    expect(chosen).not.toBeNull();expect(within(chosen).getByTitle('真假仲裁')).toBeVisible();
+    expect(screen.queryByRole('button',{name:'退出查看'})).toBeNull();
+    expect(screen.getByText('当前未选择任何候选。')).toBeInTheDocument();
   });
 
   it.each(['agree','disagree','recommend','tag'] as const)('opens %s records in a temporary category and restores the previous view',async type=>{
@@ -2636,7 +3097,8 @@ describe('MessageWorkbenchPage composer refresh', () => {
       fireEvent.click(screen.getByRole('button',{name:'发送'}));
       await waitFor(()=>expect(mockApi.createRelation).toHaveBeenCalledOnce());
       if(failure==='always'){
-        await screen.findByRole('button',{name:'退出查看'},{timeout:5000});
+        // Exhaust both the original positioning attempt and its fallback before asserting the result.
+        await screen.findByRole('button',{name:'退出查看'},{timeout:10_000});
         await waitForWorkbenchIdle();
         expect(fallbackCount()).toBe(beforeFallbacks+1);
         expect(document.querySelector(`[data-message-jump-target="${sentId}"]`)).toBeNull();
@@ -3037,7 +3499,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       await waitFor(()=>expect(screen.getByRole('button',{name:'返回'})).toBeEnabled());
       await waitForWorkbenchIdle();
       expect(screen.queryByRole('tooltip')).toBeNull();
-      fireEvent.click(screen.getByRole('button',{name:'返回'}));
+      await moveBrowserHistory(-1,'返回');
       await waitForWorkbenchIdle();
       const restored=await screen.findByRole('tooltip');
       expect(view.container.querySelector('[data-workbench-left-panel] [data-workbench-view-cache]')?.firstElementChild).toBe(retained);
@@ -3069,7 +3531,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       const stream=mockApi.subscribeChanges.mock.results.at(-1)?.value as unknown as EventSource;
       await act(async()=>{stream.onmessage?.(new MessageEvent('message'));});
       await waitFor(()=>expect(view.container.querySelector('.workbench-right-panel')).toHaveTextContent('新增 1 条'));
-      fireEvent.click(screen.getByRole('button',{name:'返回'}));await waitForWorkbenchIdle();
+      await moveBrowserHistory(-1,'返回');await waitForWorkbenchIdle();
       await waitFor(()=>expect(left.querySelector('[data-msgid="live-new"]')).toHaveTextContent('同步收到的新正文'));
       expect(left.querySelector('[data-workbench-view-cache]')!.firstElementChild).toBe(retained);
       expect(screen.getByRole('button',{name:/^显示提示 live-target：/})).toHaveAttribute('data-reading-impact-count','2');
@@ -3230,6 +3692,69 @@ describe('MessageWorkbenchPage composer refresh', () => {
       expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();expect(mockApi.castVote).not.toHaveBeenCalled();
     }finally{view.unmount();graphRendering.actual=false;}
   },15000);
+  it.each(['graph', 'list'] as const)('keeps a migrated classification name while double-clicking and correcting it in %s mode', async mode => {
+    localStorage.setItem('token', 'test-token');
+    const title = '图书馆开放时间', description = '建立关系：CLASSIFY；目标：msg-1';
+    const container: Relation = { ...makeRelation(), id: 'legacy-container', revision: 1, relationType: 'CLASSIFY', sourceMessageId: null,
+      targetRefs: [{ kind: 'message', messageId: 'msg-1' }], payload: { title, independentMemberships: true },
+      parts: [{ id: 'body', type: 'text', text: description },
+        { id: 'relation', type: 'relation', relation: 'classify', roles: { members: [{ id: 'member', reference: { messageId: 'msg-1' } }] } },
+        { id: 'data', type: 'data', value: { title, kind: 'RELATION', legacyTopicId: 'old-topic' } }] };
+    const snapshotLoader = mockApi.getWorkbenchSnapshot.getMockImplementation()!;
+    mockApi.getRelations.mockResolvedValue({ data: [container] });
+    mockApi.getWorkbenchSnapshot.mockResolvedValue({ scope: { messageId: 'classification-1', title: '测试分类' },
+      messages: [makeMessage('msg-1', '成员'), { ...makeMessage(container.id, description), kind: 'RELATION', revision: 1,
+        relationType: container.relationType, targetRefs: container.targetRefs, relationPayload: container.payload, parts: container.parts }],
+      relations: [container], users: [makeUser()], stakes: {}, tagCounts: {}, attentionUsers: {}, sequence: 1, hasMore: false, nextCursor: null });
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
+    graphRendering.actual = true;
+    const view = render(<StrictMode><MessageWorkbenchPage /></StrictMode>);
+    try {
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+      await waitForWorkbenchIdle();
+      if (mode === 'list') fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button', { name: /^更正$/ }));
+      const card = view.container.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="legacy-container"]:not([data-rel-overlay])')!;
+      const exits = screen.queryAllByRole('button', { name: '退出分类' }).length;
+      expect(card).toHaveTextContent(title);
+      const titleBody = within(card).getByText(title);
+      fireEvent.mouseDown(titleBody, { button: 0, detail: 1 });
+      fireEvent.mouseUp(titleBody, { button: 0, detail: 1 });
+      fireEvent.click(titleBody, { button: 0, detail: 1 });
+      expect(titleBody.isConnected).toBe(true);
+      if (mode === 'graph') expect(mockGraphView.mock.lastCall![0].draftUnits).toEqual([{ messageId: container.id, selection: { kind: 'whole' } }]);
+      fireEvent.mouseDown(titleBody, { button: 0, detail: 2 });
+      // A real browser selects a word before dispatching the second click.
+      const nativeWord = document.createRange(); nativeWord.setStart(titleBody.firstChild!, 0); nativeWord.setEnd(titleBody.firstChild!, 3);
+      window.getSelection()!.removeAllRanges(); window.getSelection()!.addRange(nativeWord);
+      expect(window.getSelection()!.toString()).toBe('图书馆');
+      fireEvent.mouseUp(titleBody, { button: 0, detail: 2 });
+      fireEvent.click(titleBody, { button: 0, detail: 2 });
+      fireEvent.doubleClick(titleBody, { button: 0, detail: 2 });
+      expect(card).toHaveTextContent(title);
+      expect(card).not.toHaveTextContent('建立关系');
+      expect(screen.queryAllByRole('button', { name: '退出分类' })).toHaveLength(exits);
+      expect(within(card).getByText('拖选文字即可选择片段，或点击已有高亮片段')).toBeInTheDocument();
+      expect(mockGraphView.mock.lastCall![0].draftUnits).toEqual([]);
+      const body = card.querySelector<HTMLElement>('[data-message-part-id="data"]')!;
+      expect(body.textContent).toBe(title);
+      const range = document.createRange(); range.setStart(body.firstChild!, 3); range.setEnd(body.firstChild!, 5);
+      window.getSelection()!.addRange(range);
+      fireEvent.mouseUp(body, { detail: 1 });
+      expect(window.getSelection()!.toString()).toBe('开放');
+      fireEvent.change(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）'), { target: { value: '闭馆' } });
+      fireEvent.click(screen.getByRole('button', { name: /^发送$/ }));
+      const confirm = await screen.findByRole('button', { name: '确认发送更正' });
+      expect([...confirm.closest('[role="dialog"]')!.querySelectorAll('pre')].map(node => node.textContent)).toEqual([title, '图书馆闭馆时间']);
+      expect(mockApi.createRelation).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: '取消' }));
+      fireEvent.click(screen.getByRole('button', { name: '清空' }));
+      expect(within(card).queryByText('拖选文字即可选择片段，或点击已有高亮片段')).toBeNull();
+      expect(window.getSelection()!.toString()).toBe('');
+    } finally { window.getSelection()?.removeAllRanges(); view.unmount(); geometry.mockRestore(); graphRendering.actual = false; mockApi.getWorkbenchSnapshot.mockImplementation(snapshotLoader); }
+  });
+
   it.each(['CLASSIFY', 'SUMMARY'].flatMap(type => ['graph', 'list'].flatMap(mode => (['TEXT'] as const).map(correctionKind => ({ type, mode, correctionKind })))))(
     'displays a body correction of $type from $mode ($correctionKind), restores the original on personal rejection and keeps correction history', async ({ type, mode, correctionKind }) => {
     localStorage.setItem('token', 'test-token');
@@ -4387,25 +4912,32 @@ describe('MessageWorkbenchPage composer refresh', () => {
       }] }));
       return result;
     });
-    render(<MessageWorkbenchPage />);
-    await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
-    await act(async () => mockGraphView.mock.lastCall![0].onMessageClick({ button: 0, stopPropagation: vi.fn() }, inner.id));
-    fireEvent.click(screen.getByRole('button', { name: '分类' }));
-    const textarea = screen.getByPlaceholderText('输入分类名称（不能为空）');
-    fireEvent.change(textarea, { target: { value: '外层分类' } });
-    fireEvent.click(screen.getByRole('button', { name: '发送' }));
-    await waitFor(() => expect(mockApi.createRelation).toHaveBeenCalledWith('classification-1', expect.objectContaining({
-      relationType: 'CLASSIFY', targetRefs: [expect.objectContaining({ kind: 'relation', relationId: inner.id, reference: { messageId: inner.id,context:{kind:'MESSAGE'} } })],
-    })));
-    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
-    fireEvent.click(screen.getByRole('button', { name: '查看被加入消息（1条）' }));
-    expect(screen.getByText('被加入记录临时分类（1）')).toBeInTheDocument();
-    expect(document.querySelector('[data-msgid="join-inner"]')).not.toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: '退出临时分类' }));
-    fireEvent.doubleClick(messageCanvas().getByText(outer.id));
-    fireEvent.click(screen.getByRole('button', { name: '查看加入消息（1条）' }));
-    expect(screen.getByText('加入记录临时分类（1）')).toBeInTheDocument();
-    expect(document.querySelector('[data-msgid="join-inner"]')).not.toBeNull();
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
+    graphRendering.actual = true;
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
+      await act(async () => mockGraphView.mock.lastCall![0].onMessageClick({ button: 0, stopPropagation: vi.fn() }, inner.id));
+      fireEvent.click(screen.getByRole('button', { name: '分类' }));
+      const textarea = screen.getByPlaceholderText('输入分类名称（不能为空）');
+      fireEvent.change(textarea, { target: { value: '外层分类' } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(mockApi.createRelation).toHaveBeenCalledWith('classification-1', expect.objectContaining({
+        relationType: 'CLASSIFY', targetRefs: [expect.objectContaining({ kind: 'relation', relationId: inner.id, reference: { messageId: inner.id,context:{kind:'MESSAGE'} } })],
+      })));
+      await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button', { name: '查看被加入消息（1条）' }));
+      expect(screen.getByText('被加入记录临时分类（1）')).toBeInTheDocument();
+      expect(document.querySelector('[data-msgid="join-inner"]')).not.toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: '退出临时分类' }));
+      fireEvent.doubleClick(messageCanvas().getByText(outer.id));
+      await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button', { name: '查看加入消息（1条）' }));
+      expect(screen.getByText('加入记录临时分类（1）')).toBeInTheDocument();
+      expect(document.querySelector('[data-msgid="join-inner"]')).not.toBeNull();
+    } finally { view.unmount(); geometry.mockRestore(); graphRendering.actual = false; }
   });
 
   it('opens the new classification’s generated JOINs immediately from its received send result', async () => {
@@ -4988,6 +5520,7 @@ describe('MessageWorkbenchPage deeply nested classify → classify → merge', (
     expect(screen.queryByText('分类 rel-inner')).not.toBeInTheDocument();
 
     fireEvent.doubleClick(messageCanvas().getByText('rel-middle'));
+    await waitForWorkbenchIdle();
 
     const exitButton = await screen.findByRole('button', { name: '退出分类' });
     fireEvent.click(exitButton);
@@ -5469,6 +6002,7 @@ describe('MessageWorkbenchPage CLASSIFY classification with CORRECT-related mess
     });
 
     fireEvent.doubleClick(screen.getByText('rel-classify'));
+    await waitForWorkbenchIdle();
 
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
@@ -5696,9 +6230,9 @@ describe('MessageWorkbenchPage trace container frame projection', () => {
     const latest = () => mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
     const ids = () => latest().messages.map((item: { id: string }) => item.id);
     // Enter B first, just as selecting E from its containing classification.
-    act(() => latest().onMessageDoubleClick({ stopPropagation: vi.fn() }, 'A'));
+    await act(async () => latest().onMessageDoubleClick({ stopPropagation: vi.fn() }, 'A'));
     await waitFor(() => expect(ids()).toContain('B'));
-    act(() => latest().onMessageDoubleClick({ stopPropagation: vi.fn() }, 'B'));
+    await act(async () => latest().onMessageDoubleClick({ stopPropagation: vi.fn() }, 'B'));
     await waitFor(() => expect(ids()).toContain('E'));
     act(() => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'E'));
     fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
@@ -5994,6 +6528,7 @@ describe('MessageWorkbenchPage exit classify classification restores base view',
       await waitFor(() => expect(panel.querySelector('[data-msgid="rel-classify"]')).not.toBeNull());
       panel.scrollTop = 480; panel.scrollLeft = 90;
       fireEvent.doubleClick(panel.querySelector('[data-msgid="rel-classify"]')!);
+      await waitForWorkbenchIdle();
       await waitFor(() => expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('测试分类'));
       panel.scrollTop = 150; panel.scrollLeft = 20;
       fireEvent.click(screen.getByRole('button', { name: '退出分类' }));
@@ -6027,6 +6562,7 @@ describe('MessageWorkbenchPage exit classify classification restores base view',
       const latest=()=>mockGraphView.mock.lastCall![0];
       if(originalMode==='list')fireEvent.doubleClick(screen.getByText('rel-classify'));
       else await act(async()=>latest().onMessageDoubleClick({button:0,stopPropagation:vi.fn()},'rel-classify'));
+      await waitForWorkbenchIdle();
       expect(left.scrollTop).toBe(0);
       expect(page.scrollTop).toBe(0);
       // Changes made inside the category must not replace its origin snapshot.
@@ -6071,6 +6607,7 @@ describe('MessageWorkbenchPage exit classify classification restores base view',
 
     // Enter the classify classification
     fireEvent.doubleClick(screen.getByText('rel-classify'));
+    await waitForWorkbenchIdle();
 
     // Classification view: classified messages visible, classification card hidden, unclassified hidden
     await waitFor(() => {
@@ -6099,6 +6636,7 @@ describe('MessageWorkbenchPage exit classify classification restores base view',
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => expect(screen.getByText('rel-classify')).toBeInTheDocument());
     fireEvent.doubleClick(screen.getByText('rel-classify'));
+    await waitForWorkbenchIdle();
     await waitFor(() => expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0));
 
     const classifyProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
@@ -6379,8 +6917,28 @@ describe('MessageWorkbenchPage rapid mixed view navigation', () => {
         return readScroll();
       };
       const enter = async (id: string) => {
-        if (currentMode === 'graph') await act(async () => latest().onMessageDoubleClick(event(), id));
+        if (!hold) {
+          if (currentMode === 'graph') await act(async () => latest().onMessageDoubleClick(event(), id));
+          else fireEvent.doubleClick(left.querySelector(`[data-msgid="${id}"]`)!);
+          await waitForWorkbenchIdle();
+          return;
+        }
+        // Let the new category's preparation paint while retaining later scroll
+        // callbacks. Holding every frame would deadlock the navigation itself.
+        let opening: void | Promise<void> = undefined;
+        if (currentMode === 'graph') act(() => { opening = latest().onMessageDoubleClick(event(), id); });
         else fireEvent.doubleClick(left.querySelector(`[data-msgid="${id}"]`)!);
+        const type = id === 'outer' ? outerType : innerType;
+        const entered = () => screen.queryByRole('button', { name: type === 'SUMMARY' ? '退出总结' : '退出分类' })?.parentElement?.textContent?.includes(`${id}标题`);
+        for (let count = 0; count < 20 && !entered(); count++) {
+          await act(async () => {
+            await new Promise<void>(resolve => nativeFrame(() => resolve()));
+            const callbacks = [...held.values()]; held.clear();
+            callbacks.forEach(callback => callback(performance.now()));
+          });
+        }
+        expect(entered()).toBe(true);
+        await act(async () => { await opening; });
       };
       const select = async (id: string) => {
         if (currentMode === 'graph') await act(async () => latest().onMessageClick(event(), id));
@@ -6428,9 +6986,12 @@ describe('MessageWorkbenchPage rapid mixed view navigation', () => {
       let resumes = 0;
       const resume = async (changed = false) => {
         const before = mockApi.getWorkbenchSnapshot.mock.calls.length;
+        const pausedScroll = readScroll();
         act(() => { hidden = true; document.dispatchEvent(new Event('visibilitychange')); });
         await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); });
-        expect(held.size).toBeGreaterThan(0);
+        // Backgrounding cancels paint callbacks; the positioning task waits until visible again.
+        expect(graphRendering.tasks!.pending).toBeGreaterThan(0);
+        expect(readScroll()).toEqual(pausedScroll);
         expect(mockApi.getWorkbenchSnapshot).toHaveBeenCalledTimes(before);
         const previousSequence = sequence;
         if (changed && !offline) sequence++;
@@ -6580,6 +7141,7 @@ describe('MessageWorkbenchPage nested classification and summary view history', 
       left.scrollTop = 650;
       if (mode === 'graph') await act(async () => mockGraphView.mock.lastCall![0].onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, 'inner'));
       else fireEvent.doubleClick(within(left).getByText('inner'));
+      await waitForWorkbenchIdle();
       expect(header()).toHaveTextContent('inner保存的标题');
       fireEvent.click(screen.getByRole('button', { name: mode === 'graph' ? '切换为消息表' : '切换为消息图' }));
       act(() => { hidden = true; document.dispatchEvent(new Event('visibilitychange')); });
@@ -6700,6 +7262,7 @@ describe('MessageWorkbenchPage nested classification and summary view history', 
         expectVisibleOnce(scope.id);
         if (currentMode === 'graph') await act(async () => latest().onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, scope.id));
         else fireEvent.doubleClick(within(left).getByText(scope.id));
+        await waitForWorkbenchIdle();
         expect(header()).toHaveTextContent(scope.title);
         expect(screen.getByRole('button', { name: scope.type === 'SUMMARY' ? '退出总结' : '退出分类' })).toBeInTheDocument();
         await setMode(currentMode === 'graph' ? 'list' : 'graph');
@@ -6726,6 +7289,7 @@ describe('MessageWorkbenchPage nested classification and summary view history', 
       for (const [depth, scope] of scopes.entries()) {
         if (currentMode === 'graph') await act(async () => latest().onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, scope.id));
         else fireEvent.doubleClick(within(left).getByText(scope.id));
+        await waitForWorkbenchIdle();
         expectVisibleOnce(members[depth + 1], `${members[depth + 1]}后台更新正文`);
       }
       // Exit again before the preceding layer's restoration has had a frame to
@@ -6901,6 +7465,7 @@ describe('MessageWorkbenchPage CLASSIFY targeting arrange with nested CORRECT', 
     });
 
     fireEvent.doubleClick(screen.getByText('rel-classify'));
+    await waitForWorkbenchIdle();
 
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
@@ -7049,10 +7614,12 @@ describe('MessageWorkbenchPage comparison classify projection', () => {
     ] });
   });
 
-  it('keeps classify contents hidden on agree and releases them on disagree', async () => {
+  it('expands classify contents in the agree frame and releases them without that frame on disagree', async () => {
     HTMLElement.prototype.scrollIntoView = vi.fn();
     render(<MessageWorkbenchPage />);
     await waitFor(() => expect(mockApi.getScope).toHaveBeenCalledWith('classification-1'));
+    await screen.findByRole('button', { name: '对比' });
+    await waitForWorkbenchIdle();
 
     fireEvent.click(screen.getByRole('button', { name: '对比' }));
     await waitFor(() => expect(screen.getAllByText('rel-classify-preview').length).toBeGreaterThan(0));
@@ -7065,13 +7632,16 @@ describe('MessageWorkbenchPage comparison classify projection', () => {
       const disagreeIds = new Set((props.comparisonDisagreeMessages ?? []).map((message: { id: string }) => message.id));
       expect(props.autoCenterMessageId).toBe('rel-classify-preview');
       expect(agreeIds.has('rel-classify-preview')).toBe(true);
-      expect(agreeIds.has('inside-a')).toBe(false);
+      expect(agreeIds.has('inside-a')).toBe(true);
+      expect(agreeIds.has('inside-b')).toBe(true);
+      expect(props.comparisonAgreeContext.expandedFrameIds.has('rel-classify-preview')).toBe(true);
+      expect(props.comparisonDisagreeContext.expandedFrameIds.has('rel-classify-preview')).toBe(false);
       expect(agreeIds.has('rel-join-preview')).toBe(false);
       expect(agreeIds.has('round-preview')).toBe(false);
       expect(props.comparisonDisagreeSuppressedRelIds.has('rel-classify-preview')).toBe(true);
       expect(props.comparisonDisagreeSuppressedRelIds.has('rel-annotation-preview')).toBe(true);
-      expect(disagreeIds.has('rel-classify-preview')).toBe(false);
-      expect(disagreeIds.has('rel-annotation-preview')).toBe(true);
+      expect(disagreeIds.has('rel-classify-preview')).toBe(true);
+      expect(disagreeIds.has('rel-annotation-preview')).toBe(false);
       expect((props.comparisonDisagreeEdges ?? []).some((edge: { relationMessageId: string }) => edge.relationMessageId === 'rel-classify-preview')).toBe(false);
       expect((props.comparisonDisagreeEdges ?? []).some((edge: { relationMessageId: string }) => edge.relationMessageId === 'rel-annotation-preview')).toBe(false);
       expect(disagreeIds.has('inside-a')).toBe(true);
@@ -7081,19 +7651,33 @@ describe('MessageWorkbenchPage comparison classify projection', () => {
     });
   });
 
-  it('enters the containing classify when reviewing an owned relation message', async () => {
+  it('reviews an owned relation only after entering its classification view', async () => {
     HTMLElement.prototype.scrollIntoView = vi.fn();
     render(<MessageWorkbenchPage />);
     await waitFor(() => expect(mockApi.getScope).toHaveBeenCalledWith('classification-1'));
+    await screen.findByRole('button', { name: '对比' });
+    await waitForWorkbenchIdle();
 
     fireEvent.click(screen.getByRole('button', { name: '对比' }));
-    await waitFor(() => expect(screen.getByText('rel-annotation-preview')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('rel-annotation-preview'));
+    await waitForWorkbenchIdle();
+    expect(document.querySelector('[data-workbench-left-panel] [data-msgid="rel-annotation-preview"]')).toBeNull();
+    expect(screen.getByText('选择对比消息（1）')).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: '退出对比' })[0]);
+    await waitForWorkbenchIdle();
+    await act(async () => mockGraphView.mock.lastCall![0].onMessageDoubleClick({ stopPropagation: vi.fn() }, 'rel-classify-preview'));
+    await waitForWorkbenchIdle();
+    fireEvent.click(screen.getByRole('button', { name: '对比' }));
+    await waitForWorkbenchIdle();
+    const card = document.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="rel-annotation-preview"]:not([data-rel-overlay])');
+    expect(card).not.toBeNull();
+    fireEvent.click(card!);
+    await waitFor(() => expect(screen.getByRole('button', { name: '审阅' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: '审阅' }));
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: '退出分类' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '退出分类' })).toBeNull();
       const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      expect(props.comparisonAgreeContext.expandedFrameIds.has('rel-classify-preview')).toBe(true);
       const agreeIds = new Set((props.comparisonAgreeMessages ?? []).map((message: { id: string }) => message.id));
       const disagreeIds = new Set((props.comparisonDisagreeMessages ?? []).map((message: { id: string }) => message.id));
       expect(props.autoCenterMessageId).toBe('rel-annotation-preview');
@@ -7130,6 +7714,8 @@ describe('MessageWorkbenchPage comparison classify projection', () => {
     ] });
     render(<MessageWorkbenchPage />);
     await waitFor(() => expect(mockApi.getScope).toHaveBeenCalledWith('classification-1'));
+    await screen.findByRole('button', { name: '对比' });
+    await waitForWorkbenchIdle();
 
     fireEvent.click(screen.getByRole('button', { name: '对比' }));
     await waitFor(() => expect(screen.getByText('rel-reference')).toBeInTheDocument());
@@ -7162,6 +7748,54 @@ describe('unified send preview integration',()=>{
     mockApi.createRelation.mockImplementation(async(parent,body)=>queueCommand('/relations',{method:'POST',body:JSON.stringify({...body,parentMessageId:parent})}));
     mockApi.previewCommandBatch.mockImplementation(async prepared=>({snapshots:[{...snapshot,messages:[],sequence:2}],baseSequence:1,messageIds:prepared.envelope.commands.map((command:{id:string})=>command.id)}));
     mockApi.confirmCommandPreview.mockResolvedValue({snapshots:[{...snapshot,messages:[],sequence:2}]});
+  });
+
+  it.each(['draft', 'target'].flatMap(collection => ['whole-first', 'fragment-first'].map(order => ({ collection, order }))))(
+    'blocks conflicting correction targets in $collection ($order) while retaining both reference targets', async ({ collection, order }) => {
+    const view = render(<MessageWorkbenchPage />), latest = () => mockGraphView.mock.lastCall![0];
+    try {
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+      await waitForWorkbenchIdle();
+      const selectWhole = () => act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'msg-1'));
+      const selectFragment = () => act(async () => window.dispatchEvent(new CustomEvent(PART_SELECTION_EVENT, {
+        detail: { reference: { messageId: 'msg-1', revision: 1, partId: 'body', range: { start: 0, end: 1 } }, label: '原' },
+      })));
+      if (order === 'whole-first') { await selectWhole(); await selectFragment(); }
+      else { await selectFragment(); await selectWhole(); }
+      const selected = latest().draftUnits;
+      expect(selected).toHaveLength(2);
+      if (collection === 'target') fireEvent.click(screen.getByRole('button', { name: '加入目标集合' }));
+      fireEvent.change(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）'), { target: { value: '修改后的正文' } });
+      fireEvent.click(screen.getByRole('button', { name: '更正' }));
+      expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: '预览' })).toBeDisabled();
+      expect(screen.getByText('更正每次只能选择一个目标，请移除多余的整条消息、字段或片段')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      expect(mockApi.createMessage).not.toHaveBeenCalled();
+      expect(mockApi.createRelation).not.toHaveBeenCalled();
+      if (collection === 'draft') expect(latest().draftUnits).toEqual(selected);
+      else expect(screen.getAllByRole('button', { name: /^目标消息 / })).toHaveLength(2);
+
+      fireEvent.click(screen.getByRole('button', { name: '引用' }));
+      expect(screen.getByRole('button', { name: '发送' })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: '预览' }));
+      await waitFor(() => expect(mockApi.previewCommandBatch).toHaveBeenCalledOnce());
+      const prepared = mockApi.previewCommandBatch.mock.calls[0][0];
+      const targets = prepared.envelope.commands.flatMap((command: { body: { relationType?: string; targetRefs?: unknown[] } }) =>
+        command.body.relationType === 'REFERENCE' ? command.body.targetRefs ?? [] : []);
+      expect(targets).toHaveLength(2);
+      expect(targets).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'message', messageId: 'msg-1', reference: expect.objectContaining({ messageId: 'msg-1' }) }),
+        expect.objectContaining({ kind: 'text-fragment', messageId: 'msg-1', reference: expect.objectContaining({ messageId: 'msg-1', revision: 1, partId: 'body', range: { start: 0, end: 1 } }) }),
+      ]));
+      fireEvent.click(screen.getByRole('button', { name: '退出预览' }));
+      fireEvent.click(screen.getByRole('button', { name: '更正' }));
+      expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
+      if (collection === 'draft') fireEvent.click(screen.getByRole('button', { name: '删除整条' }));
+      else fireEvent.click(within(screen.getByRole('button', { name: '目标消息 msg-1::whole' }).closest('li')!).getByRole('button', { name: '删除' }));
+      expect(screen.getByRole('button', { name: '发送' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: '预览' })).toBeEnabled();
+    } finally { view.unmount(); }
   });
 
   it('updates a JOIN preview against live membership rather than its own simulated placement',async()=>{
@@ -7271,4 +7905,482 @@ describe('unified send preview integration',()=>{
       expect(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）')).toHaveValue('');
     }finally{view.unmount();}
   });
+});
+
+describe('Zhihu local workbench', () => {
+  it('opens compact Zhihu source files in the editable Zhihu workbench and saves native messages', async () => {
+    vi.clearAllMocks(); localStorage.clear(); setTheme('opus-paper');
+    const { zhihu: _source, ...native } = prepareZhihuForViewing({ format: 'gonglun-zhihu-archive', version: 1,
+      items: [{ id: '10', type: 'answer', text: '' }], comments: [
+        { id: '1', sourceId: '1', threadId: 'answer:10', text: '', parentCommentId: null, rootCommentId: '1' },
+        { id: '2', sourceId: '2', threadId: 'answer:10', text: '', parentCommentId: null, rootCommentId: '2' }] });
+    viewerRoute.archive = { ...native, viewerUsername: '本地整理者', source: { provider: 'zhihu', version: 1, scope: 'own', ownerId: 'fixture-owner', ownerUrl: null } } as ExportData;
+    viewerRoute.key = 'native-zhihu-mode-regression';
+    const saved = vi.spyOn(exportViewerCache, 'saveLastExportPersistent').mockResolvedValue();
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitForWorkbenchIdle();
+      expect(screen.getByText('知乎文档阅览')).toBeInTheDocument();
+      expect(screen.queryByText('公论文档阅览')).toBeNull();
+      expect(screen.queryByText('当前用户')).toBeNull();
+      await enterAnswerType(view.container);
+      const latest = () => mockGraphView.mock.lastCall![0];
+      await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'zhihu:comment:answer%3A10:2'));
+      fireEvent.click(screen.getByRole('button', { name: '加入来源集合' }));
+      await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'zhihu:comment:answer%3A10:1'));
+      fireEvent.click(screen.getByRole('button', { name: '加入目标集合' }));
+      expect(screen.getByRole('button', { name: '发送' })).toBeEnabled();
+      const graph = screen.getByTestId('graph-view');
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
+      const next = saved.mock.calls[0][0];
+      expect(next).not.toHaveProperty('zhihu');
+      expect(next.messages.some(message => message.parts?.some(part => part.id === 'local-origin'))).toBe(true);
+      expect(screen.getByTestId('graph-view')).toBe(graph);
+      expect(mockApi.createMessage).not.toHaveBeenCalled(); expect(mockApi.createRelation).not.toHaveBeenCalled();
+    } finally { view.unmount(); viewerRoute.archive = null; viewerRoute.key = ''; saved.mockRestore(); }
+  });
+
+  async function enterAnswerType(container: HTMLElement, actual = false) {
+    const id = 'zhihu:type:answer';
+    if (actual) {
+      const card = await waitFor(() => {
+        const element = container.querySelector<HTMLElement>(`[data-workbench-left-panel] [data-msgid="${id}"]:not([data-rel-overlay])`);
+        expect(element).not.toBeNull();
+        return element!;
+      });
+      expect(card).toHaveTextContent('回答');
+      fireEvent.doubleClick(card);
+    } else {
+      const latest = () => mockGraphView.mock.lastCall![0];
+      expect(latest().messages.some((message: { id: string }) => message.id === id)).toBe(true);
+      await act(async () => latest().onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, id));
+    }
+    await waitForWorkbenchIdle();
+    expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('回答');
+  }
+
+  it('saves local agreement through the original source, target and send controls without server actions', async () => {
+    vi.clearAllMocks(); localStorage.clear(); setTheme('opus-paper');
+    const original = prepareZhihuForViewing({ format: 'gonglun-zhihu-archive', version: 1,
+      items: [{ id: '10', type: 'answer', text: '' }],
+      comments: [
+        { id: '1', sourceId: '1', threadId: 'answer:10', text: '', rootCommentId: '1', parentCommentId: null },
+        { id: '2', sourceId: '2', threadId: 'answer:10', text: '', rootCommentId: '1', parentCommentId: null },
+      ] });
+    viewerRoute.archive = original;
+    const cached = vi.spyOn(exportViewerCache, 'loadCachedExport').mockResolvedValue(null);
+    const saved = vi.spyOn(exportViewerCache, 'saveLastExportPersistent').mockResolvedValue();
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitForWorkbenchIdle();
+      await enterAnswerType(view.container);
+      fireEvent.click(screen.getByRole('button', { name: '赞同' }));
+      const latest = () => mockGraphView.mock.lastCall![0];
+      const source = 'zhihu:comment:answer%3A10:2', target = 'zhihu:comment:answer%3A10:1';
+      await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, source));
+      fireEvent.click(screen.getByRole('button', { name: '加入来源集合' }));
+      await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, target));
+      fireEvent.click(screen.getByRole('button', { name: '加入目标集合' }));
+      expect(screen.getByRole('button', { name: '发送' })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
+      const next = saved.mock.calls[0][0] as ReturnType<typeof prepareZhihuForViewing>;
+      const agreement = next.relations.find(relation => relation.relationType === 'AGREE')!;
+      expect(agreement).toMatchObject({ sourceMessageId: source, sourceRefs: [{ messageId: source }],
+        targetRefs: [expect.objectContaining({ reference: { messageId: target } })] });
+      expect(next.zhihu.archive).toEqual(original.zhihu.archive);
+      const reopened = prepareZhihuForViewing(JSON.parse(serializeZhihuViewingData(next)));
+      expect(reopened.relations.find(relation => relation.id === agreement.id)).toMatchObject(agreement);
+      await waitFor(() => expect(latest().edges.some((edge: { relationType: string }) => edge.relationType === 'agree')).toBe(true));
+      expect(mockApi.createMessage).not.toHaveBeenCalled();
+      expect(mockApi.createRelation).not.toHaveBeenCalled();
+      expect(mockApi.previewCommandBatch).not.toHaveBeenCalled();
+      expect(mockApi.confirmCommandPreview).not.toHaveBeenCalled();
+    } finally {
+      view.unmount(); viewerRoute.archive = null; viewerRoute.key = '';
+      cached.mockRestore(); saved.mockRestore();
+    }
+  });
+
+  it('saves a local width correction through the native controls and restores its width after reopening', async () => {
+    vi.clearAllMocks(); localStorage.clear(); setTheme('opus-paper');
+    const original = prepareZhihuForViewing({ format: 'gonglun-zhihu-archive', version: 1,
+      items: [{ id: '10', type: 'answer', text: '结构测试正文', completeness: { body: 'complete' } }], comments: [] });
+    const itemId = 'zhihu:item:answer:10';
+    viewerRoute.archive = original;
+    const cached = vi.spyOn(exportViewerCache, 'loadCachedExport').mockResolvedValue(null);
+    const saved = vi.spyOn(exportViewerCache, 'saveLastExportPersistent').mockResolvedValue();
+    graphRendering.actual = true;
+    let view = render(<MessageWorkbenchPage />);
+    try {
+      await waitForWorkbenchIdle(); await enterAnswerType(view.container, true);
+      const card = () => view.container.querySelector<HTMLElement>(`[data-workbench-left-panel] [data-msgid="${itemId}"]:not([data-rel-overlay])`)!;
+      fireEvent.click(card());
+      fireEvent.click(screen.getByRole('button', { name: '更正' }));
+      fireEvent.click(screen.getByRole('button', { name: '宽度调整' }));
+      const width = screen.getByRole('spinbutton', { name: '消息卡宽度' });
+      expect(width.closest('.workbench-composer-section')).not.toBeNull();
+      expect(screen.queryByText(/^选择有效关系/)).toBeNull();
+      fireEvent.change(width, { target: { value: '800' } });
+      expect(screen.getByRole('button', { name: '发送' })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(card()).toHaveStyle({ width: '800px' }));
+      const next = saved.mock.calls[0][0] as ReturnType<typeof prepareZhihuForViewing>;
+      expect(next.zhihu.archive).toEqual(original.zhihu.archive);
+      const widthId = next.zhihu.localOperations.messages.find(message => message.correctionKind === 'WIDTH')!.id;
+      expect(next.messages.find(message => message.id === widthId)?.relationPayload).toMatchObject({ correctionWidth: 800 });
+      const reopened = validateExportForViewing(JSON.parse(serializeGonglunZhihuViewingData(next))).data;
+      view.unmount(); viewerRoute.archive = reopened; viewerRoute.key = 'width-reopened';
+      view = render(<MessageWorkbenchPage />); await waitForWorkbenchIdle();
+      await waitFor(() => expect(card()).toHaveStyle({ width: '800px' }));
+      expect(mockApi.createMessage).not.toHaveBeenCalled(); expect(mockApi.createRelation).not.toHaveBeenCalled();
+      expect(mockApi.getWorkbenchSnapshot).not.toHaveBeenCalled(); expect(mockApi.previewCommandBatch).not.toHaveBeenCalled();
+    } finally { view.unmount(); graphRendering.actual = false; viewerRoute.archive = null; viewerRoute.key = ''; cached.mockRestore(); saved.mockRestore(); }
+  }, 15_000);
+  it('fills missing question fields through native correction controls, reopens Gonglun format and withdraws the supplement', async () => {
+    vi.clearAllMocks(); localStorage.clear(); setTheme('opus-paper');
+    const original = prepareZhihuForViewing({ format: 'gonglun-zhihu-archive', version: 1,
+      items: [{ id: '10', type: 'answer', text: '', completeness: { body: 'complete' }, question: { id: '20', title: '' } }], comments: [] });
+    const questionId = Object.entries(original.zhihu.byMessageId).find(([, meta]) => meta.kind === 'question')![0];
+    original.view = { username: null, mode: 'graph', classificationId: null,
+      messageFilter: { hideJoin: true, hideSettlement: true }, homeFilter: null, cleanFilters: [] };
+    viewerRoute.archive = original;
+    const cached = vi.spyOn(exportViewerCache, 'loadCachedExport').mockResolvedValue(null);
+    const saved = vi.spyOn(exportViewerCache, 'saveLastExportPersistent').mockResolvedValue();
+    graphRendering.actual = true;
+    let view = render(<MessageWorkbenchPage />);
+    try {
+      await waitForWorkbenchIdle();
+      expect(view.container.querySelector(`[data-workbench-left-panel] [data-msgid="${questionId}"]`)).toBeNull();
+      await enterAnswerType(view.container, true);
+      const question = await waitFor(() => {
+        const card = view.container.querySelector<HTMLElement>(`[data-workbench-left-panel] [data-msgid="${questionId}"]:not([data-rel-overlay])`);
+        expect(card).not.toBeNull();
+        return card!;
+      });
+      fireEvent.doubleClick(question);
+      await waitForWorkbenchIdle();
+      expect(view.container.querySelector('[data-zhihu-question-description]')).toHaveTextContent('问题描述未取得');
+      fireEvent.click(screen.getByText(/缺失或待确认的内容（/));
+      await waitFor(() => expect(view.container.querySelector(`[data-missing-message="${questionId}"]`)).not.toBeNull());
+      const missing = (field: string) => view.container.querySelector(`[data-missing-message="${questionId}"][data-missing-field="${field}"] button`)!;
+      fireEvent.click(missing('body'));
+      expect(screen.getByRole('button', { name: '更正' })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByRole('combobox', { name: '更正字段' })).toHaveValue('body');
+      const textarea = screen.getByPlaceholderText('输入更正后的问题描述（保留原文）');
+      expect(textarea.closest('.workbench-composer-section')).not.toBeNull();
+      fireEvent.change(textarea, { target: { value: '本地测试描述\n第二行' } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(view.container.querySelector('[data-zhihu-question-description]')).toHaveTextContent('本地测试描述'));
+      expect(view.container.querySelector('[data-zhihu-question-description]')).toHaveTextContent('本地补充');
+      expect(view.container.querySelector('[data-zhihu-question-description]')).toHaveTextContent('原文件未取得问题描述');
+      fireEvent.click(missing('title'));
+      expect(screen.getByRole('combobox', { name: '更正字段' })).toHaveValue('title');
+      fireEvent.change(screen.getByPlaceholderText('输入更正后的问题标题（保留原文）'), { target: { value: '本地测试标题' } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(saved).toHaveBeenCalledTimes(2));
+      expect(screen.getByText('标题 · 本地补充')).toBeInTheDocument();
+      const supplemented = saved.mock.calls[1][0] as ReturnType<typeof prepareZhihuForViewing>;
+      expect(supplemented.zhihu.archive).toEqual(original.zhihu.archive);
+      const file = JSON.parse(serializeGonglunZhihuViewingData(supplemented));
+      expect(file.format).toBe('gonglun-view-3');
+      const reopened = validateExportForViewing(file).data as ReturnType<typeof prepareZhihuForViewing>;
+      expect(getZhihuDisplayFields(reopened, questionId)).toMatchObject({ title: '本地测试标题', body: '本地测试描述\n第二行' });
+      view.unmount(); viewerRoute.archive = reopened; viewerRoute.key = 'question-supplement-reopened';
+      view = render(<MessageWorkbenchPage />); await waitForWorkbenchIdle();
+      expect(view.container.querySelector('[data-zhihu-question-description]')).toHaveTextContent('本地测试描述');
+      const correctionId = getZhihuDisplayFields(reopened, questionId).bodyCorrectionId!;
+      await act(async () => mockGraphView.mock.lastCall![0].onMessageClick({ button: 0, stopPropagation: vi.fn() }, correctionId));
+      fireEvent.click(screen.getByRole('button', { name: '反对' }));
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(saved).toHaveBeenCalledTimes(3));
+      await waitFor(() => expect(view.container.querySelector('[data-zhihu-question-description]')).toHaveTextContent('问题描述未取得'));
+      expect(screen.getByText('标题 · 本地补充')).toBeInTheDocument();
+      expect(getZhihuInactiveRelationIds(saved.mock.calls.at(-1)![0] as ReturnType<typeof prepareZhihuForViewing>).has(correctionId)).toBe(true);
+      expect((saved.mock.calls[2][0] as ReturnType<typeof prepareZhihuForViewing>).zhihu.archive).toEqual(original.zhihu.archive);
+      expect(mockApi.createMessage).not.toHaveBeenCalled(); expect(mockApi.createRelation).not.toHaveBeenCalled();
+      expect(mockApi.previewCommandBatch).not.toHaveBeenCalled(); expect(mockApi.getWorkbenchSnapshot).not.toHaveBeenCalled();
+      expect(mockApi.getPointsBalance).not.toHaveBeenCalled();
+    } finally { view.unmount(); graphRendering.actual = false; viewerRoute.archive = null; viewerRoute.key = ''; cached.mockRestore(); saved.mockRestore(); }
+  }, 15_000);
+  it.each(['graph-edge', 'list-row', 'list-badge', 'list-badge-target'] as const)('opposes a reply selected from actual %s UI without requiring an extra staging action', async route => {
+    vi.clearAllMocks(); localStorage.clear(); setTheme('opus-paper');
+    const original = prepareZhihuForViewing({ format: 'gonglun-zhihu-archive', version: 1,
+      items: [{ id: '10', type: 'answer', text: '' }], comments: ['1', '2'].map(id => ({
+        id, sourceId: id, threadId: 'answer:10', text: '', rootCommentId: id, parentCommentId: null,
+      })) });
+    viewerRoute.archive = original;
+    const reply = getZhihuReplyRelations(original)[0], other = getZhihuReplyRelations(original)[1];
+    const cached = vi.spyOn(exportViewerCache, 'loadCachedExport').mockResolvedValue(null);
+    const saved = vi.spyOn(exportViewerCache, 'saveLastExportPersistent').mockResolvedValue();
+    graphRendering.actual = true;
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitForWorkbenchIdle();
+      if (route !== 'graph-edge') { fireEvent.click(screen.getByRole('button', { name: '切换为消息表' })); await waitForWorkbenchIdle(); }
+      const surface = view.container.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      const selector = route === 'graph-edge' ? `[data-directed-edge-label="${reply.id}"]` : `[data-msgid="${reply.id}"]`;
+      expect(surface.querySelector(selector)).toBeNull();
+      expect(surface.querySelector('[data-msgid="zhihu:comment:answer%3A10:1"]')).toBeNull();
+      await enterAnswerType(view.container, true);
+      await waitFor(() => expect(surface.querySelector(selector)).not.toBeNull());
+      const row = surface.querySelector<HTMLElement>(selector)!;
+      if (route.startsWith('list-badge')) {
+        const badge = row.querySelector<HTMLElement>('[data-skin-type-label]')!;
+        expect(badge).toHaveTextContent('回复');
+        expect(badge).not.toHaveAttribute('data-message-reference');
+        expect(badge).not.toHaveAttribute('role');
+        fireEvent.click(badge);
+      } else fireEvent.click(row);
+      if (route === 'graph-edge') expect(mockGraphView.mock.lastCall![0].draftUnits).toContainEqual({ messageId: reply.id, selection: { kind: 'whole' } });
+      if (route === 'list-badge-target') fireEvent.click(screen.getByRole('button', { name: '加入目标集合' }));
+      fireEvent.click(screen.getByRole('button', { name: '反对' }));
+      expect(screen.getByRole('button', { name: '发送' })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(surface.querySelector(selector)).toBeNull());
+      const next = saved.mock.calls[0][0] as ReturnType<typeof prepareZhihuForViewing>;
+      expect(getZhihuInactiveRelationIds(next).has(reply.id)).toBe(true);
+      expect(getZhihuInactiveRelationIds(next).has(other.id)).toBe(false);
+      expect(next.zhihu.archive).toEqual(original.zhihu.archive);
+      expect(surface.querySelector('[data-msgid="zhihu:comment:answer%3A10:1"]')).not.toBeNull();
+      expect(surface.querySelector(route === 'graph-edge' ? `[data-directed-edge-label="${other.id}"]` : `[data-msgid="${other.id}"]`)).not.toBeNull();
+      expect(getZhihuInactiveRelationIds(prepareZhihuForViewing(JSON.parse(serializeZhihuViewingData(next)))).has(reply.id)).toBe(true);
+      expect(mockApi.createRelation).not.toHaveBeenCalled(); expect(mockApi.createMessage).not.toHaveBeenCalled();
+      expect(mockApi.getWorkbenchSnapshot).not.toHaveBeenCalled(); expect(mockApi.previewCommandBatch).not.toHaveBeenCalled();
+    } finally { view.unmount(); graphRendering.actual = false; viewerRoute.archive = null; viewerRoute.key = ''; cached.mockRestore(); saved.mockRestore(); }
+  }, 15_000);
+  it.each([{ name: '分类', type: 'CLASSIFY', text: '结构测试分类' }, { name: '总结', type: 'SUMMARY', text: '结构测试总结' },
+    { name: '归并', type: 'MERGE', text: '' }, { name: '排列', type: 'ARRANGE', text: '' }])('creates, reopens, extends and opposes local $name through shared controls', async ({ name, type, text }) => {
+    vi.clearAllMocks(); localStorage.clear(); setTheme('opus-paper');
+    const original = prepareZhihuForViewing({ format: 'gonglun-zhihu-archive', version: 1,
+      items: [{ id: '10', type: 'answer', text: '' }], comments: ['1', '2', '3'].map(id => ({
+        id, sourceId: id, threadId: 'answer:10', text: '', rootCommentId: id, parentCommentId: null,
+      })) });
+    viewerRoute.archive = original;
+    const cached = vi.spyOn(exportViewerCache, 'loadCachedExport').mockResolvedValue(null);
+    const saved = vi.spyOn(exportViewerCache, 'saveLastExportPersistent').mockResolvedValue();
+    let view = render(<MessageWorkbenchPage />);
+    const latest = () => mockGraphView.mock.lastCall![0];
+    const comment = (id: string) => `zhihu:comment:answer%3A10:${id}`;
+    const select = async (id: string) => { await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, id)); };
+    try {
+      await waitForWorkbenchIdle();
+      await enterAnswerType(view.container);
+      await select(comment('2')); await select(comment('1'));
+      fireEvent.click(screen.getByRole('button', { name: '加入目标集合' }));
+      fireEvent.click(screen.getByRole('button', { name }));
+      if (text) fireEvent.change(screen.getByPlaceholderText(type === 'CLASSIFY' ? '输入分类名称（不能为空）' : '输入总结内容（不能为空）'), { target: { value: text } });
+      if (type === 'ARRANGE') fireEvent.click(screen.getByRole('button', { name: '横' }));
+      expect(screen.getByRole('button', { name: '发送' }).closest('.workbench-composer-section')).not.toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
+      const reopened = prepareZhihuForViewing(JSON.parse(serializeZhihuViewingData(saved.mock.calls[0][0] as ReturnType<typeof prepareZhihuForViewing>)));
+      const organization = getZhihuLocalRelations(reopened).find(record => record.relationType === type)!;
+      expect(organization?.targetMessageIds).toEqual([comment('2'), comment('1')]);
+      if (type === 'ARRANGE') expect((reopened.messages.find(message => message.id === organization.id)?.relationPayload as { targetLayout?: string })?.targetLayout).toBe('single-row');
+      view.unmount(); viewerRoute.archive = reopened; viewerRoute.key = 'organization-reopened';
+      view = render(<MessageWorkbenchPage />); await waitForWorkbenchIdle();
+      await select(organization.id);
+      fireEvent.click(screen.getByRole('button', { name: '加入来源集合' }));
+      await select(comment('3')); fireEvent.click(screen.getByRole('button', { name: '加入目标集合' }));
+      fireEvent.click(screen.getByRole('button', { name }));
+      expect(screen.getByPlaceholderText('加入已有容器消息，此处不可输入')).toHaveAttribute('readonly');
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(saved).toHaveBeenCalledTimes(2));
+      const extended = saved.mock.calls[1][0] as ReturnType<typeof prepareZhihuForViewing>;
+      expect(getZhihuLocalRelations(extended).find(record => record.id === organization.id)?.targetMessageIds).toEqual([comment('2'), comment('1'), comment('3')]);
+      await waitForWorkbenchIdle();
+      await select(organization.id);
+      fireEvent.click(screen.getByRole('button', { name: '加入目标集合' }));
+      fireEvent.click(screen.getByRole('button', { name: '反对' })); fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(saved).toHaveBeenCalledTimes(3));
+      await waitForWorkbenchIdle();
+      expect(getZhihuInactiveRelationIds(saved.mock.calls.at(-1)![0] as ReturnType<typeof prepareZhihuForViewing>).has(organization.id)).toBe(true);
+      expect(latest().messages.some((message: { id: string }) => message.id === organization.id)).toBe(false);
+      expect(latest().messages.some((message: { id: string }) => message.id === comment('3'))).toBe(true);
+      expect(latest().edges.some((edge: { relationMessageId: string }) => edge.relationMessageId === organization.id)).toBe(false);
+      fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      await waitForWorkbenchIdle();
+      expect(view.container.querySelector(`[data-workbench-left-panel] [data-msgid="${organization.id}"]`)).toBeNull();
+      expect(view.container.querySelector(`[data-workbench-left-panel] [data-msgid="${comment('3')}"]`)).not.toBeNull();
+      expect((saved.mock.calls[2][0] as ReturnType<typeof prepareZhihuForViewing>).zhihu.archive).toEqual(original.zhihu.archive);
+      expect(screen.getByRole('button', { name: '赞同' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '预览' })).toBeNull();
+      expect(screen.queryByText('投入与费用')).toBeNull();
+      expect(mockApi.createMessage).not.toHaveBeenCalled(); expect(mockApi.createRelation).not.toHaveBeenCalled();
+      expect(mockApi.getWorkbenchSnapshot).not.toHaveBeenCalled(); expect(mockApi.previewCommandBatch).not.toHaveBeenCalled();
+    } finally { view.unmount(); viewerRoute.archive = null; viewerRoute.key = ''; cached.mockRestore(); saved.mockRestore(); }
+  }, 15_000);
+  it('keeps Gonglun document viewing separate and read only', async () => {
+    vi.clearAllMocks(); localStorage.clear(); setTheme('gpt');
+    viewerRoute.archive = { formatVersion: 1, exportedAt: '', scope: { messageId: null, title: '' },
+      messages: [{ ...makeMessage('saved', ''), authorId: 'user-1', author: 'tester' }], relations: [] };
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitForWorkbenchIdle();
+      expect(screen.getByText('公论文档阅览')).toBeInTheDocument();
+      expect(screen.queryByRole('region', { name: '知乎本地回复关系' })).toBeNull();
+      expect(screen.queryByRole('button', { name: '发送' })).toBeNull();
+      expect(screen.queryByRole('button', { name: '回复' })).toBeNull();
+      expect(screen.queryByRole('button', { name: '加入来源集合' })).toBeNull();
+      expect(screen.queryByRole('button', { name: '预览' })).toBeNull();
+      expect(screen.queryByText('投入与费用')).toBeNull();
+      expect(mockApi.getWorkbenchSnapshot).not.toHaveBeenCalled();
+      expect(mockApi.createMessage).not.toHaveBeenCalled();
+      expect(mockApi.createRelation).not.toHaveBeenCalled();
+    } finally { view.unmount(); viewerRoute.archive = null; viewerRoute.key = ''; }
+  });
+  it.each(['gpt', 'opus-paper'] as const)('uses existing graph selections, relation buttons and send controls in %s without server actions', async theme => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    setTheme(theme);
+    // Empty bodies are technical structure fixtures, not generated discussion samples.
+    viewerRoute.archive = prepareZhihuForViewing({ format: 'gonglun-zhihu-archive', version: 1,
+      owner: { id: 'fixture-owner', name: '技术测试账号' },
+      items: [{ id: '10', type: 'answer', text: '' }],
+      comments: [
+        { id: '1', sourceId: '1', threadId: 'answer:10', text: '', rootCommentId: '1', parentCommentId: null },
+        { id: '2', sourceId: '2', threadId: 'answer:10', text: '', rootCommentId: '1', parentCommentId: null },
+      ],
+    });
+    const cached = vi.spyOn(exportViewerCache, 'loadCachedExport').mockResolvedValue(null);
+    const saved = vi.spyOn(exportViewerCache, 'saveLastExportPersistent').mockResolvedValue();
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitForWorkbenchIdle();
+      expect(screen.getByRole('region', { name: '知乎本地回复关系' })).toBeInTheDocument();
+      expect(screen.getByText('知乎文档阅览')).toBeInTheDocument();
+      expect(screen.queryByPlaceholderText('输入一条新文本消息（支持自由换行）')).toBeNull();
+      expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: '发送' }).closest('.desk-submit-bar')).not.toBeNull();
+      expect(screen.getByRole('button', { name: '发送' })).toHaveAttribute('data-guide-send', 'true');
+      expect(screen.getByRole('button', { name: '发送' })).not.toHaveAttribute('data-shortcut-confirm');
+      expect(screen.queryByRole('radio')).toBeNull();
+      expect(screen.queryByRole('button', { name: '预览' })).toBeNull();
+      expect(screen.queryByText('投入与费用')).toBeNull();
+      expect(screen.getByRole('button', { name: '更正' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '分类' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '赞同' })).toBeInTheDocument();
+      expect(view.container.querySelector('.desk-send-balance')).toBeNull();
+      expect(screen.getByRole('button', { name: '下载阅览文件' })).toBeInTheDocument();
+      const latest = () => mockGraphView.mock.lastCall![0];
+      await enterAnswerType(view.container);
+      await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'zhihu:comment:answer%3A10:2'));
+      await waitFor(() => expect(screen.getByRole('button', { name: '加入来源集合' })).toBeEnabled());
+      await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'zhihu:comment:answer%3A10:2'));
+      expect(screen.getByRole('button', { name: '加入来源集合' })).toBeDisabled();
+      await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'zhihu:comment:answer%3A10:2'));
+      fireEvent.click(screen.getByRole('button', { name: '加入来源集合' }));
+      await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'zhihu:comment:answer%3A10:1'));
+      await waitFor(() => expect(screen.getByRole('button', { name: '加入目标集合' })).toBeEnabled());
+      fireEvent.click(screen.getByRole('button', { name: '加入目标集合' }));
+      const beforeLocalSave = screen.getByTestId('graph-view');
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(latest().edges).toHaveLength(2));
+      expect(screen.getByTestId('graph-view')).toBe(beforeLocalSave);
+      expect(mockNavigate).not.toHaveBeenCalled();
+      await act(async () => latest().onCanvasBlankClick());
+      expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
+      const created = saved.mock.calls[0][0];
+      const reply = getZhihuReplyRelations(created as ReturnType<typeof prepareZhihuForViewing>).find(record => record.sourceMessageId === 'zhihu:comment:answer%3A10:2')!;
+      await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'zhihu:comment:answer%3A10:2'));
+      fireEvent.click(screen.getByRole('button', { name: '加入来源集合' }));
+      await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'zhihu:comment:answer%3A10:1'));
+      fireEvent.click(screen.getByRole('button', { name: '加入目标集合' }));
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(saved).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(latest().edges).toHaveLength(3));
+      const repeated = getZhihuReplyRelations(saved.mock.calls[1][0] as ReturnType<typeof prepareZhihuForViewing>).filter(record => record.sourceMessageId === 'zhihu:comment:answer%3A10:2');
+      expect(repeated).toHaveLength(2); expect(repeated.every(record => record.active)).toBe(true);
+      const other = repeated.find(record => record.id !== reply.id)!;
+      await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, reply.id));
+      fireEvent.click(screen.getByRole('button', { name: '加入目标集合' }));
+      fireEvent.click(screen.getByRole('button', { name: '反对' }));
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(saved).toHaveBeenCalledTimes(3));
+      expect(getZhihuInactiveRelationIds(saved.mock.calls.at(-1)![0] as ReturnType<typeof prepareZhihuForViewing>).has(reply.id)).toBe(true);
+      await waitFor(() => expect(latest().rejectedRelationIds.has(reply.id)).toBe(true));
+      expect(latest().messages.some((message: { id: string }) => message.id === reply.id)).toBe(false);
+      expect(latest().edges.some((edge: { relationMessageId: string }) => edge.relationMessageId === reply.id)).toBe(false);
+      expect(latest().edges.some((edge: { relationMessageId: string }) => edge.relationMessageId === other.id)).toBe(true);
+      expect(latest().messages.some((message: { id: string }) => message.id === 'zhihu:comment:answer%3A10:2')).toBe(true);
+      const restored = saved.mock.calls[2][0] as ReturnType<typeof prepareZhihuForViewing>;
+      expect(restored.zhihu.archive).toEqual((viewerRoute.archive as ReturnType<typeof prepareZhihuForViewing>).zhihu.archive);
+      const reopened = prepareZhihuForViewing(JSON.parse(serializeZhihuViewingData(restored)));
+      expect(getZhihuInactiveRelationIds(reopened).has(reply.id)).toBe(true);
+      expect(getZhihuReplyRelations(reopened).find(record => record.id === other.id)?.active).toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      await waitForWorkbenchIdle();
+      expect(view.container.querySelector(`[data-workbench-left-panel] [data-msgid="${reply.id}"]`)).toBeNull();
+      expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="zhihu:comment:answer%3A10:2"]')).not.toBeNull();
+      await act(async () => latest().onCanvasBlankClick());
+      expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
+      expect(mockApi.getWorkbenchSnapshot).not.toHaveBeenCalled();
+      expect(mockApi.getPointsBalance).not.toHaveBeenCalled();
+      expect(mockApi.getCurrentRules).not.toHaveBeenCalled();
+      expect(mockApi.getReadingState).not.toHaveBeenCalled();
+      expect(mockApi.createMessage).not.toHaveBeenCalled();
+      expect(mockApi.createRelation).not.toHaveBeenCalled();
+      expect(mockApi.previewCommandBatch).not.toHaveBeenCalled();
+      expect(mockApi.confirmCommandPreview).not.toHaveBeenCalled();
+    } finally {
+      view.unmount(); viewerRoute.archive = null; viewerRoute.key = '';
+      cached.mockRestore(); saved.mockRestore();
+    }
+  }, 15_000);
+});
+
+describe('Zhihu activity local reading', () => {
+  it('reads a collection original through author, type and article categories without a reference jump or API', async () => {
+    vi.clearAllMocks(); localStorage.clear(); setTheme('opus-paper');
+    const actor = { id: 'fixture-collector', name: '技术收藏者' }, author = { id: 'fixture-author', name: '技术原作者' };
+    // Empty target body and protocol fields only; this is not a discussion sample.
+    const original = prepareZhihuForViewing({ format: 'gonglun-zhihu-archive', version: 1, owner: actor,
+      items: [{ id: '10', type: 'article', text: '', author, completeness: { body: 'complete', comments: 'complete' } }], comments: [],
+      activitySource: { version: 1, scope: 'collections', events: [{ id: 'collections:a:1', sourceId: '1', identity: 'source', kind: 'collection-item', actor,
+        verb: 'collect', actionText: null, type: 'collection-item', target: { id: '10', type: 'article', url: 'https://zhuanlan.zhihu.com/p/10', author },
+        folderId: 'a', createdAt: null, createdAtText: null, sourceUrl: 'https://www.zhihu.com/collection/a', capturedAt: '2026-11-01T01:00:00Z' }],
+        folders: [{ id: 'a', title: '技术收藏夹', description: '', creator: actor, createdAt: null, updatedAt: null, isPublic: null, itemCount: 1,
+          url: 'https://www.zhihu.com/collection/a', sourceUrl: 'https://www.zhihu.com/collection/a', capturedAt: '2026-11-01T01:00:00Z' }],
+        coverage: { scope: 'collections', status: 'complete', pagesComplete: true, allHistoryComplete: false, reason: '', currentEventIds: ['collections:a:1'], currentFolderIds: ['a'] }, unparsedRecords: [] } });
+    original.view = { username: null, mode: 'graph', classificationId: null,
+      messageFilter: { hideJoin: true, hideSettlement: true }, homeFilter: null, cleanFilters: [] };
+    const targetId = 'zhihu:item:article:10', sourceSnapshot = JSON.stringify(original.zhihu.archive);
+    viewerRoute.archive = original; viewerRoute.key = 'collection-offline-reference'; graphRendering.actual = true;
+    const cached = vi.spyOn(exportViewerCache, 'loadCachedExport').mockResolvedValue(null);
+    const saved = vi.spyOn(exportViewerCache, 'saveLastExportPersistent').mockResolvedValue();
+    const view = render(<MessageWorkbenchPage />);
+    const card = (id: string) => waitFor(() => {
+      const element = view.container.querySelector<HTMLElement>(`[data-workbench-left-panel] [data-msgid="${id}"]:not([data-rel-overlay])`);
+      expect(element, `Missing ${id}; visible: ${[...view.container.querySelectorAll('[data-workbench-left-panel] [data-msgid]')].map(node => node.getAttribute('data-msgid')).join(',')}`).not.toBeNull(); return element!;
+    });
+    try {
+      await waitForWorkbenchIdle();
+      fireEvent.doubleClick(await card('zhihu:source:collections')); await waitForWorkbenchIdle();
+      fireEvent.doubleClick(await card('zhihu:folder:a')); await waitForWorkbenchIdle();
+      expect(view.container.querySelector(`[data-workbench-left-panel] [data-msgid="${targetId}"]`)).toBeNull();
+      const authorCategory = original.relations.find(relation => /^zhihu:author-category:[^:]+$/.test(relation.id))!.id;
+      const authorCard = await card(authorCategory); expect(authorCard).toHaveTextContent('技术原作者');
+      fireEvent.doubleClick(authorCard); await waitForWorkbenchIdle();
+      fireEvent.doubleClick(await card(`${authorCategory}:type:article`)); await waitForWorkbenchIdle();
+      fireEvent.doubleClick(await card('zhihu:article:10')); await waitForWorkbenchIdle();
+      const originalCard = await card(targetId);
+      fireEvent.click(originalCard);
+      const originalInfo = await screen.findByText('选中消息的原始信息');
+      expect(originalInfo.closest('details')).toHaveTextContent('技术原作者');
+      expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('文章（标题未取得）');
+      expect(JSON.stringify(original.zhihu.archive)).toBe(sourceSnapshot);
+      expect(saved).not.toHaveBeenCalled();
+      expect(mockApi.getWorkbenchSnapshot).not.toHaveBeenCalled(); expect(mockApi.getMessageContext).not.toHaveBeenCalled();
+      expect(mockApi.getPointsBalance).not.toHaveBeenCalled(); expect(mockApi.createMessage).not.toHaveBeenCalled();
+      expect(mockApi.createRelation).not.toHaveBeenCalled(); expect(mockApi.previewCommandBatch).not.toHaveBeenCalled();
+    } finally {
+      view.unmount(); graphRendering.actual = false; viewerRoute.archive = null; viewerRoute.key = ''; cached.mockRestore(); saved.mockRestore();
+    }
+  }, 15_000);
 });

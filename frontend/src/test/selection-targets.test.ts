@@ -115,6 +115,24 @@ describe('classification boundaries for agreement on an organization', () => {
 });
 
 describe('visible element selection preserves its exact target',()=>{
+  it.each(['draft', 'target'])('preserves conflicting correction targets in the %s collection for validation', collection => {
+    const context = { msgMap, promoteCompleteContainerSelections: vi.fn() };
+    const fragment: UnitSelection = { messageId: 'a', selection: { kind: 'text', start: 0, len: 2, text: '正文' } };
+    const field = element('group');
+    const edge: UnitSelection = { messageId: 'group', selection: { kind: 'edge', edgeId: 'group-edge' } };
+    for (const selected of [[whole('a'), fragment], [fragment, whole('a')], [whole('group'), field], [whole('group'), edge]]) {
+      const draft = collection === 'draft' ? selected : [], targets = collection === 'target' ? selected : [];
+      expect(resolveEffectiveTargetUnits(context, draft, targets, 'correct')).toEqual(selected);
+    }
+    expect(context.promoteCompleteContainerSelections).not.toHaveBeenCalled();
+  });
+
+  it('preserves whole-message and fragment reference targets together', () => {
+    const fragment: UnitSelection = { messageId: 'a', selection: { kind: 'text', start: 0, len: 2, text: '正文' } };
+    const selected = [whole('a'), fragment];
+    expect(resolveEffectiveTargetUnits({ msgMap, promoteCompleteContainerSelections: vi.fn() }, selected, [], 'reference')).toEqual(selected);
+  });
+
   it('attaches corrections to their target and references to their source, rejecting independent membership',()=>{
     const correct:Relation={...relation,id:'correction',relationType:'CORRECT',sourceMessageId:'other',targetRefs:[{kind:'message',messageId:'a'}]};
     const reference:Relation={...correct,id:'reference',relationType:'REFERENCE',sourceMessageId:'b'};

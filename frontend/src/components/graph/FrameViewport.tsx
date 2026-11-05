@@ -23,14 +23,22 @@ function FrameDimension({label,value,min,onChange}:{label:string;value:number;mi
     onBlur={event=>{const next=event.currentTarget.valueAsNumber;if(Number.isFinite(next))onChange(Math.max(min,next));setDraft(null);}}
     style={{width:66,padding:'2px 3px',border:'1px solid var(--line-475569)',borderRadius:3,background:'var(--surface-111827)',color:'var(--ink-e2e8f0)'}}/>;
 }
-export function FrameViewportTools({id,size,natural,onChange,full=false,onToggleFull}:{id:string;size?:FrameViewSize;natural:FrameViewSize;onChange:(value:FrameViewSize|undefined)=>void;full?:boolean;onToggleFull?:()=>void}){
-  const [open,setOpen]=useState(false),value=size??natural;
-  return <div data-frame-size-controls={id} onClick={stop} onDoubleClick={stop} onMouseDown={stop} onMouseUp={stop} onKeyDown={stop} style={{fontSize:10,color:'var(--ink-cbd5e1)',cursor:'default',display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
-    {onToggleFull&&<button type="button" aria-label={`${full?'恢复':'完全展开'}框架 ${id}`} aria-pressed={full} onClick={onToggleFull}>{full?'恢复框架':'完全展开'}</button>}
-    {!full&&<button type="button" aria-label={`调整框架大小 ${id}`} aria-expanded={open} onClick={()=>setOpen(!open)}>调整大小</button>}
-    {!full&&open&&<><label>宽 <FrameDimension label={`框架宽度 ${id}`} min={240} value={value.width} onChange={width=>onChange({...value,width})}/></label>
+export function FrameViewportTools({id,size,natural,onChange,full=false,onToggleFull,collapsed=false,onToggleCollapsed,headerHidden=false,onToggleHeader,compactTitle}:{id:string;size?:FrameViewSize;natural:FrameViewSize;onChange:(value:FrameViewSize|undefined)=>void;full?:boolean;onToggleFull?:()=>void;collapsed?:boolean;onToggleCollapsed?:()=>void;headerHidden?:boolean;onToggleHeader?:()=>void;compactTitle?:string}){
+  const value=size??natural;
+  return <div data-frame-size-controls={id} data-frame-compact-toolbar={headerHidden||undefined} onClick={stop} onDoubleClick={stop} onMouseDown={stop} onMouseUp={stop} onKeyDown={stop} style={{fontSize:11,color:'var(--ink-cbd5e1)',cursor:'default',display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',
+    ...(headerHidden?{padding:'5px 8px',minHeight:36,boxSizing:'border-box',border:'1px solid var(--line-444)',borderRadius:6,background:'var(--surface-1f1f1f)'}:{})}}>
+    {headerHidden&&<span data-frame-compact-title="true" title={`${compactTitle??'框架'}\n${id}`} style={{flex:'1 1 100px',minWidth:0,maxWidth:'28ch',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontWeight:600}}>{compactTitle??'框架'}</span>}
+    {onToggleHeader&&<button type="button" aria-label={`${headerHidden?'显示':'隐藏'}上方消息卡 ${id}`} aria-pressed={headerHidden} onClick={onToggleHeader}>{headerHidden?'显示上方消息卡':'隐藏上方消息卡'}</button>}
+    {onToggleCollapsed&&<button type="button" aria-label={`${collapsed?'展开':'收起'}下方框架 ${id}`} aria-expanded={!collapsed} onClick={onToggleCollapsed}>{collapsed?'展开下方框架':'收起下方框架'}</button>}
+    {!collapsed&&onToggleFull&&<button type="button" aria-label={`${full?'还原尺寸':'完全展开'} ${id}`} aria-pressed={full}
+      title={full?'恢复展开前的框架尺寸和滚动位置':'按全部内容的大小显示框架，不限制宽高'} onClick={onToggleFull}>{full?'还原尺寸':'完全展开'}</button>}
+    {!collapsed&&<button type="button" aria-label={`自适应尺寸 ${id}`} disabled={!size&&!full} title="清除自定宽高，按当前视图空间自动安排框架尺寸"
+      onClick={()=>{if(full)onToggleFull?.();onChange(undefined);}}>自适应尺寸</button>}
+    {!collapsed&&!full&&!headerHidden&&<div role="group" aria-label={`框架尺寸 ${id}`} style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',flexBasis:'100%',paddingTop:4}}>
+      <label>宽 <FrameDimension label={`框架宽度 ${id}`} min={240} value={value.width} onChange={width=>onChange({...value,width})}/></label>
       <label>高 <FrameDimension label={`框架高度 ${id}`} min={120} value={value.height} onChange={height=>onChange({...value,height})}/></label>
-      <button type="button" disabled={!size} onClick={()=>onChange(undefined)}>恢复自适应</button><span>仅本次查看</span></>}
+      <span title="也可以拖动框架边缘调整宽高">仅本次查看</span>
+    </div>}
   </div>;
 }
 

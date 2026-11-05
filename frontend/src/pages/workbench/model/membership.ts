@@ -2,6 +2,7 @@ import type { Relation, TargetRef } from '../../../types';
 import type { DemoEdge } from '../../../utils/modelBridge';
 import { resolveMemberships, type MembershipAction } from '@gonglun/core';
 import type { JoinEffectSource } from './joinDisplay';
+import { createSourceNavigationDeclarations } from './sourceNavigation';
 
 export type JoinStatus = 'valid' | 'rejected' | 'container-rejected' | 'superseded' | 'inactive' | 'retired';
 export const JOIN_STATUS_LABELS: Record<JoinStatus, string> = {
@@ -190,13 +191,14 @@ export function getEffectiveJoinByTarget(
 /** Keep container frame edges only for their currently effective JOIN members. */
 export function filterContainerEdgesByEffectiveJoins(
   edges: DemoEdge[],
-  relations: Pick<Relation, 'id' | 'relationType' | 'sourceMessageId' | 'targetRefs'>[],
+  relations: (Pick<Relation, 'id' | 'relationType' | 'sourceMessageId' | 'targetRefs'> & Partial<Pick<Relation, 'payload' | 'state'>>)[],
   effectiveJoinRelationIds: Set<string>,
   displayWinners?: ReadonlyMap<string,string>,
 ): DemoEdge[] {
   const containerTypes = new Set(['CLASSIFY', 'SUMMARY', 'ARRANGE', 'MERGE']);
   const members=new Map(relations.filter(relation=>containerTypes.has(relation.relationType.toUpperCase())).map(relation=>[relation.id,new Set(relation.targetRefs.map(ref=>ref.kind==='relation'?ref.relationId:ref.messageId))]));
   const winners = displayWinners??getEffectiveJoinByTarget(relations.filter(relation => relation.relationType.toUpperCase() !== 'JOIN' || effectiveJoinRelationIds.has(relation.id)),new Set(),new Set());
+  const retainsSourceDeclaration=createSourceNavigationDeclarations(relations,winners);
   const joined=new Set<string>(),owners=new Map<string,Set<string>>();
   for(const join of relations) if(join.relationType.toUpperCase()==='JOIN') for(const ref of join.targetRefs) {
     const id=ref.kind==='relation'?ref.relationId:ref.messageId;
@@ -209,6 +211,7 @@ export function filterContainerEdgesByEffectiveJoins(
     if(!containerTypes.has(edge.relationType.toUpperCase()))return true;
     const target=edge.to.messageId;
     if(owners.get(target)?.has(edge.relationMessageId))return true;
+    if(members.get(edge.relationMessageId)?.has(target)&&retainsSourceDeclaration(edge.relationMessageId,target))return true;
     return !joined.has(target)&&members.get(edge.relationMessageId)?.has(target)===true;
   });
 
@@ -260,6 +263,27 @@ export function getJoinRelationsForMessage(messageId: string, relations: Relatio
       )
     )
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+/** Index the same records once for every target; repeated refs still count one JOIN. */
+export function indexJoinRelationsByTarget(relations: readonly Relation[]): Map<string, Relation[]> {
+  const result = new Map<string, Relation[]>();
+  for (const relation of relations) {
+    if (relation.relationType?.toUpperCase() !== 'JOIN' || !relation.sourceMessageId) continue;
+    const targets = new Set<string>();
+    for (const ref of relation.targetRefs) {
+      const id = ref.kind === 'relation' ? ref.relationId : ref.messageId;
+      if (targets.has(id)) continue;
+      targets.add(id);
+      const records = result.get(id) ?? [];
+      records.push(relation);
+      result.set(id, records);
+    }
+  }
+  // Sorting each target's original input-order list preserves the existing
+  // stable tie behavior, including legacy records with an invalid date.
+  for (const records of result.values()) records.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  return result;
 }
 
 /**

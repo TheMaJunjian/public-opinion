@@ -244,13 +244,18 @@ export async function viewsFor(store: Store, messages: Message[], parent?: strin
 export function paginate<T>(data: T[], query: RecordData, max = 200) { const page = Math.max(1, Number(query.page) || 1), limit = Math.min(max, Math.max(1, Number(query.limit) || 50)); return { data: data.slice((page - 1) * limit, page * limit), pagination: { page, limit, total: data.length, totalPages: Math.ceil(data.length / limit) } }; }
 async function queryUsers(store: Store, ids?: string[]): Promise<UserView[]> {
     if (ids && !ids.length) return [];
-    return (await store.db.prepare('SELECT u.id,u.name,u.founder,u."createdAt" FROM users u' + (ids ? ' WHERE u.id=ANY($1::text[])' : '') + ' ORDER BY u.position').all(...(ids ? [ids] : [])))
-        .map(row => ({ id: String(row.id), name: String(row.name), username: String(row.name), founder: !!row.founder, createdAt: String(row.createdAt ?? '') }));
+    return (await store.db.prepare(`SELECT u.id,u.name,u.founder,u."createdAt",COALESCE(p."totalEarned",0) AS "usageContribution",
+        COALESCE((SELECT SUM(l.amount) FROM ledger l WHERE l."userId"=u.id AND l.reason='公开发放贡献点'
+          AND l.position>COALESCE((SELECT (value::jsonb->>'ledgerPosition')::bigint FROM settings WHERE key='usage-points-start'),0)),0) AS "rechargeContribution"
+        FROM users u LEFT JOIN usage_points p ON p."userId"=u.id` + (ids ? ' WHERE u.id=ANY($1::text[])' : '') + ' ORDER BY u.position').all(...(ids ? [ids] : [])))
+        .map(row => ({ id: String(row.id), name: String(row.name), username: String(row.name), founder: !!row.founder, createdAt: String(row.createdAt ?? ''),
+            usageContribution: Number(row.usageContribution), rechargeContribution: Number(row.rechargeContribution) }));
 }
 export const allUsers = (store: Store) => queryUsers(store);
 export const usersFor = (store: Store, ids: string[]) => queryUsers(store, [...new Set(ids)]);
 export async function accountView(store: Store, userId: string) {
-    const account = (await store.account(userId)), rows = (await store.db.prepare("SELECT amount,\"lockedDelta\",reason FROM ledger WHERE \"userId\"=$1 ORDER BY position").all(userId));
+    const start = await store.setting<{ledgerPosition:number}>('usage-points-start');
+    const account = (await store.account(userId)), rows = (await store.db.prepare("SELECT amount,\"lockedDelta\",reason FROM ledger WHERE \"userId\"=$1 AND position>$2 ORDER BY position").all(userId, start.ledgerPosition));
     const sum = (fn: (row: RecordData) => number) => rows.reduce((total, row) => total + fn(row), 0);
     const bets = new Map((await store.db.prepare("SELECT id,amount FROM bets WHERE \"userId\"=$1").all(userId)).map(row => [String(row.id), Number(row.amount)])), latest = new Map<string, RecordData>();
     for (const row of (await store.db.prepare("SELECT body FROM rounds WHERE (body::jsonb #>> '{status}')='settled' ORDER BY position").all())) {

@@ -225,6 +225,30 @@ it('does not resize a maximum-width right panel when clicking the splitter or mo
   expect(dependencies.setSplitterActive).toHaveBeenLastCalledWith(false);
 });
 
+it.each([1, 0.8])('shrinks the right panel when reversing a drag after narrowing an overflowing page (scale=%s)', scale => {
+  const row = document.createElement('div'), splitter = document.createElement('div');
+  row.append(splitter); document.body.append(row);
+  Object.defineProperty(row, 'offsetWidth', { value: 2400 });
+  row.getBoundingClientRect = () => new DOMRect(0, 0, 2400 * scale, 800);
+  splitter.getBoundingClientRect = () => new DOMRect(1800 * scale, 0, 12 * scale, 800);
+  splitter.setPointerCapture = vi.fn();
+  const dependencies: Parameters<typeof handleSplitterPointerDown>[0] = {
+    setSplitterActive: vi.fn(), panelContainerRef: { current: row }, splitterDragRef: { current: null },
+    MIN_LEFT_PX: 560, MIN_RIGHT_PX: 280, MAX_RIGHT_PX: 700, BASE_WIDTH: 1024,
+    getMinimumContainerWidth: () => 1280, setContainerWidth: vi.fn(), setLeftFlex: vi.fn(), TOTAL_FLEX: 4,
+  };
+  const start = 1806 * scale;
+  handleSplitterPointerDown(dependencies, { preventDefault: vi.fn(), currentTarget: splitter, pointerId: 1, clientX: start } as unknown as Parameters<typeof handleSplitterPointerDown>[1]);
+  const move = (delta: number) => document.dispatchEvent(Object.assign(new Event('pointermove'), { pointerId: 1, clientX: start + delta * scale }));
+  move(-800);
+  expect(dependencies.setContainerWidth).toHaveBeenLastCalledWith(1712);
+  move(-700);
+  // The right edge stays put: only the right pane changes from 700 to 600 px.
+  expect(dependencies.setContainerWidth).toHaveBeenLastCalledWith(1712);
+  expect(dependencies.setLeftFlex).toHaveBeenLastCalledWith(4 * 1100 / 1700);
+  document.dispatchEvent(Object.assign(new Event('pointerup'), { pointerId: 1 }));
+});
+
 it('keeps splitter dragging in layout pixels when the interface is scaled', () => {
   const row = document.createElement('div'), splitter = document.createElement('div');
   row.append(splitter); document.body.append(row);

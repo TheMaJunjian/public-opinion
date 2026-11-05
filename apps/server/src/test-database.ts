@@ -29,10 +29,13 @@ export function newTestSchema(): string {
   return schema;
 }
 
-export async function createTestApp(options: { settlementTickMs?: number; databaseSchema?: string } = {}) {
+export async function createTestApp(options: { settlementTickMs?: number; databaseSchema?: string; initialGrant?: number } = {}) {
   const databaseSchema = options.databaseSchema ?? newTestSchema();
   if (!schemas.has(databaseSchema)) throw new Error('测试只能访问本轮创建的 schema');
-  const app = await createApp({ settlementTickMs: 60_000, ...options, databaseSchema, databaseUrl: testDatabaseUrl() });
+  const {initialGrant = 1000, ...appOptions} = options;
+  const app = await createApp({ settlementTickMs: 60_000, ...appOptions, databaseSchema, databaseUrl: testDatabaseUrl() });
+  // Existing economic scenarios use a funded fixture; production registration starts at zero.
+  await app.store.transaction(async () => app.store.set('rules', { ...await app.store.rules(), initialGrant }));
   resources.push(app);
   return app;
 }

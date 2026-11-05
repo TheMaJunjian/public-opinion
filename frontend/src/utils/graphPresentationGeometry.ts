@@ -16,6 +16,8 @@ export const EDGE_HINT_W = 16;
 export const EDGE_LABEL_HINT_GAP = 2;
 // Selected cards must escape the ordinary card layer and cover paths and their hit areas.
 export const GRAPH_CARD_LAYER = 1;
+export const GRAPH_EDGE_PATH_LAYER = 11;
+export const GRAPH_EDGE_LABEL_LAYER = 12;
 export const GRAPH_SELECTED_CARD_LAYER = 16;
 
 export function getEdgeDecorationLeft(label: Rect, hasHint = true): number {
@@ -34,7 +36,7 @@ export const TAG_MAX_LABEL_CHARS = 20; // max characters shown in a tag label ba
 export const TAG_HIT_PAD = 14;  // extra transparent padding around tag hit area so tags are easy to click even when overlapping frames (> FRAME_PAD=12 so tag hit area fully covers frame border strip overlap)
 export const TAG_HIT_PAD_X = 4; // keep adjacent decoration columns independently clickable
 
-/** Annotation controls sit over the card's upper-right corner; badges use a separate column. */
+/** Annotations fold above the upper-right corner; votes fold beside that corner. */
 export function getAnnotationPlacement(box: Rect, voteWidth = 0) {
   const right = box.x + box.width;
   const toggle = { x: right - EDGE_HINT_W - DEC_RIGHT_GAP, y: Math.max(0, box.y - EDGE_HINT_W - DEC_GAP), width: EDGE_HINT_W, height: EDGE_HINT_W };
@@ -116,8 +118,8 @@ export function unionBoxes(boxes: LayoutBox[]): LayoutBox | null {
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
-export function getGroupHeaderHeight(measuredHeights: Record<string, number>, relMsgId: string): number {
-  return Math.max(GROUP_HEADER_HEIGHT, measuredHeights[relMsgId] ?? GROUP_HEADER_HEIGHT);
+export function getGroupHeaderHeight(measuredHeights: Record<string, number>, relMsgId: string, minimum = GROUP_HEADER_HEIGHT): number {
+  return Math.max(minimum, measuredHeights[relMsgId] ?? minimum);
 }
 
 export function getGroupHeaderRect(frameRect: Rect, height = GROUP_HEADER_HEIGHT): Rect {

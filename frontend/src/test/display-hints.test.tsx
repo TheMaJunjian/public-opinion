@@ -15,6 +15,7 @@ import {readingMarksFor,deriveReadingProgress,influenceReadingMarks} from '../pa
 import type {ReadingMark} from '@gonglun/core';
 import {withFixtureReadingMarks} from './readingFixture';
 import {WorkbenchDrawingContext,createWorkbenchDrawingTasks} from '../context/WorkbenchDrawingContext';
+import {displayChoiceBasis} from '../pages/workbench/model/displayChoiceBasis';
 
 function expandEffects(){
   for(const button of screen.queryAllByRole('button',{name:/^展开(?:未阅|已阅)影响/}))fireEvent.click(button);
@@ -36,6 +37,92 @@ function fixture(records:Message[],relations:Relation[],readStatus=new Map<strin
 }
 
 describe('computed display hints',()=>{
+  it.each([false,true])('labels the recommendation as no personal choice when public opposition is %s',opposed=>{
+    const input=fixture([],[rel('m','CLASSIFY'),...(opposed?[rel('public-opposition','DISAGREE',['m'])]:[])]);
+    expect(deriveDisplayHints(input).hints.get('m')).toMatchObject({hasPersonalChoice:false});
+    render(<MessageDisplayHintsProvider input={input} onView={vi.fn()}><MessageDisplayMarker messageId="m"/></MessageDisplayHintsProvider>);
+    const marker=screen.getByRole('button',{name:/显示提示 m：/});
+    expect(marker).toHaveAccessibleName(/无选择，与推荐相同/);
+    fireEvent.click(marker);
+    const status=screen.getByRole('group',{name:'无选择，与推荐相同'});
+    expect(status).toHaveTextContent('无选择，与推荐相同');
+    expect(status).toHaveTextContent(opposed?'推荐不显示':'推荐显示');
+    expect(status).not.toHaveTextContent(opposed?'选择不显示':'选择显示');
+  });
+
+  it('distinguishes an explicit personal choice from an identical recommendation',()=>{
+    const input=fixture([text('m')],[rel('my-approval','AGREE',['m'],null,'2026-01-02','alice')]);
+    expect(deriveDisplayHints(input).hints.get('m')).toMatchObject({hasPersonalChoice:true});
+    render(<MessageDisplayHintsProvider input={input} onView={vi.fn()}><MessageDisplayMarker messageId="m"/></MessageDisplayHintsProvider>);
+    fireEvent.click(screen.getByRole('button',{name:/显示提示 m：/}));
+    const status=screen.getByRole('group',{name:'选择与推荐一致'});
+    expect(status).toHaveTextContent('选择显示');expect(status).not.toHaveTextContent('无选择');
+  });
+
+  it('recognizes an authored JOIN choice and its competing records without changing membership',()=>{
+    const relations=[rel('A','CLASSIFY'),rel('B','CLASSIFY'),rel('old','JOIN',['m'],'A','2026-01-02','alice'),rel('new','JOIN',['m'],'B','2026-01-03')];
+    relations[0].createdBy=user('alice');
+    const input=fixture([text('m')],relations),data=deriveDisplayHints(input);
+    expect(input.personalEffect.joinByTarget.get('m')).toBe('old');
+    expect(data.hints.get('old')).toMatchObject({hasPersonalChoice:true,personalActive:true,recommendedActive:false});
+    expect(data.hints.get('new')).toMatchObject({hasPersonalChoice:true,personalActive:false,recommendedActive:true});
+    const onView=vi.fn();
+    render(<MessageDisplayHintsProvider input={input} onView={onView}><MessageDisplayMarker messageId="new"/></MessageDisplayHintsProvider>);
+    fireEvent.click(screen.getByRole('button',{name:/显示提示 new：/}));
+    const basis=screen.getByRole('region',{name:'选择与推荐的差异依据'});
+    expect(basis).toHaveTextContent('当前采用的加入记录');expect(basis).toHaveTextContent('推荐采用的加入记录');
+    expect(within(basis).queryByRole('button',{name:'查看当前选择依据 A'})).toBeNull();
+    fireEvent.click(within(basis).getByRole('button',{name:'查看当前选择依据 old'}));
+    expect(onView).toHaveBeenCalledWith('old',expect.anything(),true);
+    expect(displayHintDestination(input,'old',true)).toEqual({kind:'related',id:'old'});
+    expect(displayChoiceBasis(input,data,'A')).toMatchObject({personal:[{id:'old'}],recommended:[{id:'new'}]});
+    const visitor={...input,username:'visitor',personalEffect:deriveContainerEffect({...input,username:'visitor',stakeCounts:{}})};
+    expect(deriveDisplayHints(visitor).hints.get('new')).toMatchObject({hasPersonalChoice:false,personalActive:true,recommendedActive:true});
+  });
+
+  it('recognizes a correction decision affected by a personal choice of its competing version',()=>{
+    const mine=rel('mine','CORRECT',['m']),publicVersion=rel('public','CORRECT',['m'],null,'2026-01-03');
+    mine.payload={correctionBeforeContent:'原文',correctionAfterContent:'个人版本'};
+    publicVersion.payload={correctionBeforeContent:'原文',correctionAfterContent:'推荐版本'};
+    publicVersion.state={messageId:'public',revision:1,suppressed:false,supportCount:3,oppositionCount:0,recommendationTotal:0};
+    const input=fixture([text('m','原文')],[mine,publicVersion,rel('choice','AGREE',['mine'],null,'2026-01-04','alice')]);
+    expect(deriveDisplayHints(input).hints.get('public')).toMatchObject({hasPersonalChoice:true,personalActive:false,recommendedActive:true});
+    render(<MessageDisplayHintsProvider input={input} onView={vi.fn()}><MessageDisplayMarker messageId="public"/></MessageDisplayHintsProvider>);
+    fireEvent.click(screen.getByRole('button',{name:/显示提示 public：/}));
+    const basis=screen.getByRole('region',{name:'选择与推荐的差异依据'});
+    expect(within(basis).getByRole('button',{name:'查看当前选择依据 mine'})).toBeVisible();
+    expect(within(basis).getByRole('button',{name:'查看当前选择依据 choice'})).toBeVisible();
+    expect(basis).toHaveTextContent('推荐采用的更正');
+  });
+
+  it('links a personal opposition that differs from the public outcome to its actual message',()=>{
+    const target=rel('target','CLASSIFY');
+    target.state={messageId:'target',revision:1,suppressed:false,supportCount:5,oppositionCount:1,recommendationTotal:0};
+    const input=fixture([],[target,rel('my-opposition','DISAGREE',['target'],null,'2026-01-03','alice')]),onView=vi.fn();
+    expect(deriveDisplayHints(input).hints.get('target')).toMatchObject({personalActive:false,recommendedActive:true});
+    render(<MessageDisplayHintsProvider input={input} onView={onView}><MessageDisplayMarker messageId="target"/></MessageDisplayHintsProvider>);
+    fireEvent.click(screen.getByRole('button',{name:/显示提示 target：/}));
+    const basis=screen.getByRole('region',{name:'选择与推荐的差异依据'});
+    expect(basis).toHaveTextContent('反对消息');
+    fireEvent.click(within(basis).getByRole('button',{name:'查看当前选择依据 my-opposition'}));
+    expect(onView).toHaveBeenCalledWith('my-opposition',expect.anything(),true);
+  });
+
+  it('uses the executed JOIN component decision as its basis even when public opposition later matches',()=>{
+    const old=rel('old','JOIN',['m'],'A'),next=rel('new','JOIN',['m'],'B','2026-01-03');
+    next.revision=1;next.parts=[{id:'join',type:'relation',relation:'member-of',roles:{}}];
+    const opposition=rel('my-component-opposition','DISAGREE',['new'],null,'2026-01-04','alice');
+    opposition.executedStance={partId:'relation',sourceRevision:1,target:{messageId:'new',revision:1,partId:'join'},side:'con'};
+    const base=fixture([text('m')],[rel('A','CLASSIFY'),rel('B','CLASSIFY'),old,next,opposition]);
+    const counts={old:{truth:{pro:1,con:0},value:{pro:0,con:0}},new:{truth:{pro:5,con:1},value:{pro:0,con:0}}};
+    const input={...base,personalEffect:deriveContainerEffect({...base,stakeCounts:counts})},data=deriveDisplayHints(input);
+    expect(data.hints.get('new')).toMatchObject({personalActive:false,recommendedActive:true,hasPersonalChoice:true});
+    expect(displayChoiceBasis(input,data,'new').personal).toContainEqual({id:'my-component-opposition',label:'反对消息'});
+    counts.new.truth.con=10;
+    const matching={...base,personalEffect:deriveContainerEffect({...base,stakeCounts:counts})};
+    expect(deriveDisplayHints(matching).hints.get('new')).toMatchObject({personalActive:false,recommendedActive:false,hasPersonalChoice:true});
+  });
+
   it('lists received JOIN records only among members, without duplicating them or the container in automatic influences',async()=>{
     const input=fixture([text('member')],[rel('outer','CLASSIFY'),rel('container','CLASSIFY'),
       rel('parent-join','JOIN',['container'],'outer'),rel('member-join','JOIN',['member'],'container')]);
@@ -297,7 +384,7 @@ describe('computed display hints',()=>{
     fireEvent.click(within(tooltip).getByRole('button',{name:'查看被加入目标 member'}));
     expect(onView).toHaveBeenCalledWith('member',expect.anything(),false);
   });
-  it('restores the version anchor only after asynchronous graph measurements finish',async()=>{
+  it('keeps the viewport scroll after asynchronous version layout finishes',async()=>{
     const input=fixture([text('m','原文')],[{...rel('c','CORRECT',['m']),payload:{correctionBeforeContent:'原文',correctionAfterContent:'更正'}}]);
     const tasks=createWorkbenchDrawingTasks(),view=render(<WorkbenchDrawingContext.Provider value={tasks}>
       <MessageDisplayHintsProvider input={input} onView={vi.fn()}><div data-workbench-left-panel="true" style={{overflow:'auto'}}><MessageDisplayMarker messageId="m"/></div></MessageDisplayHintsProvider>
@@ -311,9 +398,11 @@ describe('computed display hints',()=>{
     layoutTop=1000;
     await act(async()=>{await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));});
     expect(pane.scrollTop).toBe(200);
+    // Simulate native scroll anchoring while the graph finishes its measurements.
+    pane.scrollTop=800;
     act(()=>measurement.release());
-    await waitFor(()=>expect(pane.scrollTop).toBe(800));
-    expect(marker.getBoundingClientRect().top).toBe(200);
+    await waitFor(()=>expect(pane.scrollTop).toBe(200));
+    expect(marker.getBoundingClientRect().top).toBe(800);
     await waitFor(()=>expect(tasks.pending).toBe(0));
   });
   it('uses the active nested path after a frame moves, rather than its historical JOIN or a rejected frame',()=>{
@@ -394,7 +483,7 @@ describe('computed display hints',()=>{
     const explanation=within(tooltip).getByText(`消息 · 【${label}】 container`),confirm=within(tooltip).getByRole('button',{name:'当前消息已阅'});
     expect(confirm).toBeDisabled();
     expect(explanation.compareDocumentPosition(confirm)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(within(tooltip).getByText('选择显示')).toHaveStyle({textAlign:'left'});
+    expect(within(tooltip).getByText('无选择，与推荐相同')).toHaveStyle({textAlign:'left'});
     expect(onView).not.toHaveBeenCalled();expect(onMarkRead).not.toHaveBeenCalled();
   });
   it('confirms listed annotation, placement and reply effects without reading their bodies',async()=>{
@@ -769,7 +858,7 @@ describe('shared display markers',()=>{
     expect(onMarkRead).toHaveBeenCalledOnce();
     const message=screen.getByRole('region',{name:'消息阅读确认'});
     expect(message).toHaveTextContent('消息 · 【文本】 m');expect(message).not.toHaveTextContent('（已阅）');
-    expect(within(screen.getByRole('tooltip')).queryByText('消息已阅')).toBeNull();
+    expect(within(screen.getByRole('tooltip')).getByText('消息已阅')).toHaveAttribute('data-reading-status','read');
     expect(screen.getByRole('button',{name:/^展开已阅影响/})).toHaveAttribute('aria-expanded','false');
     expect(within(screen.getByRole('region',{name:'相关影响'})).getByText('影响已阅')).not.toBeVisible();
     const changed={...fixture([text('m')],[...input.relations,rel('vote','AGREE',['m'])]),readingMarks:read.readingMarks};view.rerender(element(changed));
@@ -917,7 +1006,7 @@ describe('shared display markers',()=>{
       expect(marker.querySelector('path')).toHaveAttribute('stroke',personal!==statistical?'var(--ink-7dd3fc)':'var(--ink-94a3b8)');
       expect(marker.querySelector('path')).toHaveAttribute('d',`M5 6.5h6M5 9.5h6${personal!==statistical?'M9.5 4.5l-3 7':''}`);
       expect(marker.querySelector('[data-display-hint-mismatch]')).toBeNull();
-      expect(marker).toHaveAccessibleName(new RegExp(`${personal?'选择显示':'选择不显示'}；${statistical?'推荐显示':'推荐不显示'}`));
+      expect(marker).toHaveAccessibleName(new RegExp(`${personal===statistical?'无选择，与推荐相同':personal?'选择显示':'选择不显示'}；${statistical?'推荐显示':'推荐不显示'}`));
       view.unmount();
     });
 
@@ -996,7 +1085,7 @@ describe('shared display markers',()=>{
     const marker=screen.getByRole('button',{name:/显示提示 m：消息待阅/});
     fireEvent.mouseEnter(marker);
     const tooltip=screen.getByRole('tooltip');
-    expect(tooltip).toHaveTextContent('消息待阅');expect(tooltip).toHaveTextContent('选择显示');
+    expect(tooltip).toHaveTextContent('消息待阅');expect(tooltip).toHaveTextContent('无选择，与推荐相同');
     expect(tooltip).toHaveTextContent('推荐显示');expect(tooltip).toHaveTextContent('1 条影响待阅');expect(tooltip).toHaveTextContent('点击展开详情');
     expect(tooltip).toHaveAttribute('data-display-hint-mode','summary');expect(tooltip).toHaveStyle({pointerEvents:'none'});
     expect(within(tooltip).queryByRole('button')).toBeNull();expect(tooltip).not.toHaveTextContent('回复 · reply');
@@ -1011,7 +1100,7 @@ describe('shared display markers',()=>{
     expect(within(details).getByRole('button',{name:'回复 · reply'})).toBeInTheDocument();
     expect(within(details).queryByRole('button',{name:'标记回复 reply 已阅'})).toBeNull();
     expect(details).toHaveTextContent('影响待阅');
-    expect(screen.getByRole('group',{name:'选择与推荐一致'})).toBeInTheDocument();expect(marker).toHaveAttribute('aria-expanded','true');
+    expect(screen.getByRole('group',{name:'无选择，与推荐相同'})).toBeInTheDocument();expect(marker).toHaveAttribute('aria-expanded','true');
     fireEvent.mouseLeave(marker);expect(screen.getByRole('tooltip')).toBeInTheDocument();
     fireEvent.keyDown(marker,{key:'Escape'});expect(screen.queryByRole('tooltip')).toBeNull();
     fireEvent.click(marker);fireEvent.pointerDown(document.body);expect(screen.queryByRole('tooltip')).toBeNull();
@@ -1024,7 +1113,7 @@ describe('shared display markers',()=>{
   it('offers a small View tag and shows consistency only in the existing hint',()=>{
     const input=fixture([text('m')],[]),onView=vi.fn();
     render(<MessageDisplayHintsProvider input={input} onView={onView}><MessageDisplayMarker messageId="m" viewTag/></MessageDisplayHintsProvider>);
-    const tag=screen.getByRole('button',{name:/查看消息 m/});expect(tag).toHaveTextContent('查看');expect(tag.getAttribute('aria-label')).toContain('选择显示');
+    const tag=screen.getByRole('button',{name:/查看消息 m/});expect(tag).toHaveTextContent('查看');expect(tag.getAttribute('aria-label')).toContain('无选择，与推荐相同');
     fireEvent.click(tag);expect(onView).toHaveBeenCalledWith('m',expect.anything(),true);expect(screen.queryByRole('dialog')).toBeNull();
   });
 
@@ -1037,6 +1126,6 @@ describe('shared display markers',()=>{
       onEdgeLabelDoubleClick={noop} onFragmentAnchorClick={noop} isFragmentSelected={()=>false}/></MessageDisplayHintsProvider>);
     expect(screen.getByRole('group',{name:'组织消息 arrangement'})).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button',{name:/显示提示 arrangement/}));expect(noop).not.toHaveBeenCalled();expect(screen.queryByRole('dialog')).toBeNull();
-    expect(screen.getByRole('group',{name:'选择与推荐一致'})).toBeInTheDocument();
+    expect(screen.getByRole('group',{name:'无选择，与推荐相同'})).toBeInTheDocument();
   });
 });

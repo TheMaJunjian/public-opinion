@@ -3,6 +3,7 @@ import PromptModal from '../components/PromptModal';
 import { dialogStyles } from '../components/dialogStyles';
 import { setTheme, useTheme, THEMES } from './theme';
 import ThemeTierPreview from './ThemeTierPreview';
+import AboutLink from '../components/AboutLink';
 
 export default function ThemeSwitcher() {
   const theme = useTheme();
@@ -25,6 +26,7 @@ export default function ThemeSwitcher() {
         </div>
         <div className="stake-tier-guide">
           <p>投入档位：真假押注＋价值押注，正反双方合计。</p>
+          <AboutLink href="/about.html#guide-stake-tiers" className="workbench-help-link" onClick={close}>档位说明 ↗</AboutLink>
           <ThemeTierPreview theme={theme} />
           <p>原版保留原外观。档位只表示投入规模，不代表正确或胜负；推荐投入另计。</p>
         </div>

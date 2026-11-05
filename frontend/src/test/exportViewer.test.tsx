@@ -3,6 +3,8 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import ExportViewerModal, { validateExportForViewing } from '../components/ExportViewerModal';
 import {migrateViewFile} from '../../../apps/migrate/src/migrate-view-file';
+import { prepareExportForViewing } from '../utils/exportArchive';
+import { isZhihuViewingData, serializeZhihuViewingData } from '../utils/zhihuArchive';
 
 const archive = () => ({
   format: 'gonglun-2', formatVersion: 2, scope: { messageId: null, title: '公论' },
@@ -19,6 +21,28 @@ function archiveWithout<K extends keyof ReturnType<typeof archive>>(...keys: K[]
 afterEach(() => { cleanup(); sessionStorage.clear(); });
 
 describe('export viewer verification', () => {
+  it('accepts Zhihu source and reviewed exports in both validation paths without inventing ledger records', async () => {
+    const raw = { format: 'gonglun-zhihu-archive', version: 1, items: [{ id: '10', type: 'answer', text: '' }], comments: [] };
+    const original = structuredClone(raw);
+    const result = validateExportForViewing(raw);
+    expect(isZhihuViewingData(result.data)).toBe(true);
+    expect(result.verification).toContain('知乎导出文件');
+    expect(result.verification).not.toContain('资金守恒');
+    expect(result.data).not.toHaveProperty('changes');
+    expect((await prepareExportForViewing(raw)).data).toEqual(result.data);
+    if (!isZhihuViewingData(result.data)) throw new Error('Expected Zhihu display data');
+    const downloaded = JSON.parse(serializeZhihuViewingData(result.data));
+    expect(validateExportForViewing(downloaded).data).toEqual(result.data);
+    expect(raw).toEqual(original);
+  });
+
+  it('applies normal viewing-filter validation to Zhihu downloads and cached projections', () => {
+    const raw = { format: 'gonglun-zhihu-archive', version: 1, items: [], comments: [] };
+    const data = validateExportForViewing(raw).data;
+    const invalid = { ...data, view: { username: null, mode: 'graph', messageFilter: { hideJoin: false, hideSettlement: true }, homeFilter: null, classificationId: null,
+      cleanFilters: [{ id: 'bad', kind: 'messageType', messageTypes: ['UNKNOWN'] }] } };
+    expect(() => validateExportForViewing(invalid)).toThrow('阅览设置格式无效');
+  });
   it('reopens exported time and message-type filters and rejects invalid time ranges',()=>{
     const view={username:null,mode:'graph',messageFilter:{hideSettlement:true,hideJoin:true},homeFilter:null,classificationId:null,
       cleanFilters:[{id:'time',kind:'time',from:'2026-10-27T10:00',to:'2026-10-27T11:00'},{id:'type',kind:'messageType',messageTypes:['CONTENT']}]};
@@ -102,7 +126,7 @@ describe('export viewer verification', () => {
     const onClose = vi.fn();
     render(<MemoryRouter><ExportViewerModal open onClose={onClose} /></MemoryRouter>);
     fireEvent.change(screen.getByLabelText('选择导出文件'), { target: { files: [new File([JSON.stringify(archive())], '公论.json', { type: 'application/json' })] } });
-    expect(await screen.findByRole('status')).toHaveTextContent('资金守恒校验通过');
+    expect(await screen.findByText(/记录连续性及资金守恒校验通过/)).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: '阅览此文件' })).toBeEnabled();
   });

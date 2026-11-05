@@ -38,16 +38,16 @@ export default function WelfareModal({ open, onClose }: Props) {
       }}
       onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
     >
-      <div ref={contentRef} role="dialog" aria-modal="true" aria-label="福利" style={{
+      <div ref={contentRef} role="dialog" aria-modal="true" aria-label="福利" data-dialog-layout="scroll" style={{
         ...dialogStyles.panel, width: 'min(100%, 470px)', maxHeight: '100%', overflow: 'auto',
       }}>
-        <div style={{
+        <div data-dialog-header="true" style={{
           ...dialogStyles.header, display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         }}>
           <div>福利</div>
-          <button data-shortcut-cancel="true" aria-label="关闭福利" type="button" onClick={onClose} style={dialogStyles.button}>✕</button>
+          <button data-shortcut-cancel="true" data-dialog-close="true" aria-label="关闭福利" type="button" onClick={onClose} style={dialogStyles.button}>✕</button>
         </div>
-        <div style={{ padding: '16px 20px', fontSize: 13, lineHeight: 1.7 }}>
+        <div data-dialog-body="true" style={{ padding: '16px 20px', fontSize: 13, lineHeight: 1.7 }}>
           {welfareLinks.map(({ name, url }) => (
             <div key={url} style={{ marginBottom: 10 }}>
               <span style={{ fontSize: 14 }}>{name}：</span>

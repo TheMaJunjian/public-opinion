@@ -9,11 +9,11 @@ export function getMessageTypeLabel(message: DemoMessage | undefined): string {
   if (['classify', 'summary', 'merge'].includes(message.relationType ?? '')) return getPresentationSpec(message.relationType!).label;
   const specific = getRelationMessageLabel(message);
   if (specific) return specific;
-  if (message.kind === 'relation') return getPresentationSpec(message.relationType ?? 'relation').label;
+  if (message.kind === 'relation') return message.relationType === 'proposal' ? '提案' : getPresentationSpec(message.relationType ?? 'relation').label;
   if (message.kind === 'round' || message.kind === 'round_result') {
     return `${message.roundPayload?.settlementType === 'VALUE' ? '价值' : '真假'}仲裁${message.kind === 'round_result' ? '结算' : ''}`;
   }
-  return ({ normal: '文本', join: '加入', governance: '治理提案', code: '代码', operations: '运营' } as Record<string, string>)[message.kind] ?? '消息';
+  return ({ normal: '文本', join: '加入', governance: '提案', code: '代码', operations: '运营' } as Record<string, string>)[message.kind] ?? '消息';
 }
 
 /** Visible organization text, without the bridge's synthetic target-ID summary. */

@@ -24,12 +24,13 @@ export function isCorrectionProposal(message: { parts?: Part[]; relationPayload?
 
 /** Project readable text for this viewer without changing the stored message or its identity. */
 export function withCorrectionContent(message: DemoMessage, content: string, changes?: CorrectionVersion['changes'],snapshot?:CoreMessage): DemoMessage {
-  if(snapshot)return {...message,content,parts:snapshot.parts,revision:snapshot.revision,...(['classify','summary'].includes(message.relationType??'')?{relationPayload:{...message.relationPayload,title:content}}:{})};
+  const titleFollowsBody = ['classify', 'summary'].includes(message.relationType ?? '') && !message.relationPayload?.separateTitle;
+  if(snapshot)return {...message,content,parts:snapshot.parts,revision:snapshot.revision,...(titleFollowsBody?{relationPayload:{...message.relationPayload,title:content}}:{})};
   if (message.content === content) return message;
   const readable = message.parts?.filter(part => ['text', 'code', 'web'].includes(part.type));
   let offset = 0;
   return { ...message, content,
-    ...(['classify', 'summary'].includes(message.relationType ?? '') ? { relationPayload: { ...message.relationPayload, title: content } } : {}),
+    ...(titleFollowsBody ? { relationPayload: { ...message.relationPayload, title: content } } : {}),
     ...(readable?.length ? { parts: message.parts!.map(part => {
       if (part.type !== 'text' && part.type !== 'code' && part.type !== 'web') return part;
       const original = part.type === 'text' ? part.text : part.type === 'code' ? part.source : part.excerpt || part.url;
@@ -222,6 +223,8 @@ export function demoMessageToRelation(message: DemoMessage): BackendRelation | n
 }
 
 export type DemoEdge = {
+  /** View-only publication order, refreshed when an existing relation is endorsed. */
+  discussionOrder?: Pick<DemoMessage, 'createdAt' | 'sequence'>;
   proposalOnly?: boolean;
   id: string;
   relationMessageId: string;
@@ -581,18 +584,18 @@ export function computeCorrectionVersions(
     if (edge.relationType !== 'correct') continue;
     const correction = msgMap.get(edge.relationMessageId);
     const target = msgMap.get(edge.to.messageId);
-    if (!correction || !target || correction.relationPayload?.correctionKind === 'WIDTH') continue;
+    if (!correction || !target || correction.relationPayload?.correctionKind === 'WIDTH' || correction.relationPayload?.localCorrectionField === 'title') continue;
     const content = correction.relationPayload?.correctionAfterContent ?? correction.relationPayload?.correctionContent ?? correction.content;
     const version: CorrectionVersion = {
       bodyVersion:bodyVersion(target.id,target.revision??1,[{messageId:correction.id,revision:correction.revision??1,kind:correction.relationPayload?.correctionKind==='MEANING'?'MEANING':'TEXT'}]),
-      applicable:!isCorrectionProposal(correction)&&(!edge.to.reference?.revision||!target.revision||edge.to.reference.revision===target.revision),
-      exclusionReason:isCorrectionProposal(correction)?'authorization':edge.to.reference?.revision&&target.revision&&edge.to.reference.revision!==target.revision?'revision':invalidCorrectionIds.has(correction.id)?personal.get(correction.id)?.type==='disagree'?'personal':'public':undefined,
+      applicable:correction.relationPayload?.localCorrectionApplicable!==false&&!isCorrectionProposal(correction)&&(!edge.to.reference?.revision||!target.revision||edge.to.reference.revision===target.revision),
+      exclusionReason:correction.relationPayload?.localCorrectionApplicable===false?'address':isCorrectionProposal(correction)?'authorization':edge.to.reference?.revision&&target.revision&&edge.to.reference.revision!==target.revision?'revision':invalidCorrectionIds.has(correction.id)?personal.get(correction.id)?.type==='disagree'?'personal':'public':undefined,
       correctionKind: correction.relationPayload?.correctionKind ?? 'TEXT',
       correctionId: correction.id,
       targetId: rootTarget(edge.to.messageId),
       baseContent: correction.relationPayload?.correctionBeforeContent ?? target.content,
       content,
-      valid: !edge.proposalOnly && !isCorrectionProposal(correction) && (!invalidCorrectionIds.has(correction.id) || correction.id === options.previewCorrectionId)
+      valid: correction.relationPayload?.localCorrectionApplicable!==false && !edge.proposalOnly && !isCorrectionProposal(correction) && (!invalidCorrectionIds.has(correction.id) || correction.id === options.previewCorrectionId)
         && ((edge.to.reference?.revision) === undefined || target.revision === undefined
           || (edge.to.reference?.revision) === target.revision),
       createdAt: correction.createdAt,
@@ -741,7 +744,7 @@ export function unitSelectionToTargetRef(
   return { kind: 'relation', relationId: unit.messageId, part: 'label', reference };
 }
 
-export function unitSelectionToReference(unit: UnitSelection, msgMap: Map<string, DemoMessage>): Reference {
+export function unitSelectionToReference(unit: UnitSelection, msgMap: ReadonlyMap<string, Pick<DemoMessage, 'bodyVersion' | 'revision' | 'parts'>>): Reference {
   if (unit.reference) return structuredClone(unit.reference);
   const message = msgMap.get(unit.messageId);
   const reference: Reference = { messageId: unit.messageId };
@@ -943,25 +946,11 @@ export function computeUserSuppressedRelIds(
   for (const e of edges) {
     if (e.relationType !== 'agree' && e.relationType !== 'disagree') continue;
 
-    // Determine author.
-    let author: string | undefined;
-    const fromMsg = msgMap.get(e.from.messageId);
-    if (fromMsg) {
-      author = fromMsg.author;
-    } else if (e.from.messageId.startsWith('anon:')) {
-      const relMsg = msgMap.get(e.relationMessageId);
-      author = relMsg?.author;
-    }
+    // A native stance belongs to its publisher, even when an older source body is its evidence.
+    const publication = stancePublication(e, msgMap);
+    const author = publication?.author;
     if (!author || author !== currentUsername) continue;
-
-    // Determine time.
-    let time = 0;
-    if (fromMsg) {
-      time = new Date(fromMsg.createdAt).getTime();
-    } else {
-      const relMsg = msgMap.get(e.relationMessageId);
-      time = relMsg ? new Date(relMsg.createdAt).getTime() : 0;
-    }
+    const time = publication ? new Date(publication.createdAt).getTime() : 0;
 
     // Walk the chain to the ultimate target.
     const resolved = resolveDisplayedStance(e, msgMap, stanceMap);
@@ -1011,23 +1000,10 @@ export function computeUserActiveStanceRelIds(
   for (const e of edges) {
     if (e.relationType !== 'agree' && e.relationType !== 'disagree') continue;
 
-    let author: string | undefined;
-    const fromMsg = msgMap.get(e.from.messageId);
-    if (fromMsg) {
-      author = fromMsg.author;
-    } else if (e.from.messageId.startsWith('anon:')) {
-      const relMsg = msgMap.get(e.relationMessageId);
-      author = relMsg?.author;
-    }
+    const publication = stancePublication(e, msgMap);
+    const author = publication?.author;
     if (!author || author !== currentUsername) continue;
-
-    let time = 0;
-    if (fromMsg) {
-      time = new Date(fromMsg.createdAt).getTime();
-    } else {
-      const relMsg = msgMap.get(e.relationMessageId);
-      time = relMsg ? new Date(relMsg.createdAt).getTime() : 0;
-    }
+    const time = publication ? new Date(publication.createdAt).getTime() : 0;
 
     const resolved = resolveDisplayedStance(e, msgMap, stanceMap);
     const ultimateTarget = resolved ? resolved.targetKey??resolved.targetId : e.to.messageId;
@@ -1085,23 +1061,10 @@ export function computeUserOverriddenStanceRelIds(
   for (const e of edges) {
     if (e.relationType !== 'agree' && e.relationType !== 'disagree') continue;
 
-    let author: string | undefined;
-    const fromMsg = msgMap.get(e.from.messageId);
-    if (fromMsg) {
-      author = fromMsg.author;
-    } else if (e.from.messageId.startsWith('anon:')) {
-      const relMsg = msgMap.get(e.relationMessageId);
-      author = relMsg?.author;
-    }
+    const publication = stancePublication(e, msgMap);
+    const author = publication?.author;
     if (!author || author !== currentUsername) continue;
-
-    let time = 0;
-    if (fromMsg) {
-      time = new Date(fromMsg.createdAt).getTime();
-    } else {
-      const relMsg = msgMap.get(e.relationMessageId);
-      time = relMsg ? new Date(relMsg.createdAt).getTime() : 0;
-    }
+    const time = publication ? new Date(publication.createdAt).getTime() : 0;
 
     const resolved = resolveDisplayedStance(e, msgMap, stanceMap);
     const ultimateTarget = resolved ? resolved.targetKey??resolved.targetId : e.to.messageId;

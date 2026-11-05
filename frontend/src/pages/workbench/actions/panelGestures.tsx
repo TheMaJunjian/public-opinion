@@ -33,13 +33,15 @@ export function handleSplitterPointerDown(dependencies: HandleSplitterPointerDow
     ? (splitterRect.left - containerRect.left) / scale
     : 0;
   splitterDragRef.current = { startX: e.clientX, startLeftPx, containerW };
+  let moved = false;
   function onPointerMove(ev: PointerEvent) {
     if (ev.pointerId !== pointerId) return;
     if (!splitterDragRef.current || !panelContainerRef.current) return;
     const pointerDelta = ev.clientX - splitterDragRef.current.startX;
     // A click (including small pointer jitter) must not normalize the current
     // layout, especially while the right panel is already at its width limit.
-    if (Math.abs(pointerDelta) < 3) return;
+    if (!moved && Math.abs(pointerDelta) < 3) return;
+    moved = true;
     const dx = pointerDelta / scale;
     const desiredLeftPx = Math.max(MIN_LEFT_PX, splitterDragRef.current.startLeftPx + dx);
     const naturalRightPx = splitterDragRef.current.containerW - 12 - desiredLeftPx;
@@ -49,6 +51,9 @@ export function handleSplitterPointerDown(dependencies: HandleSplitterPointerDow
         ? Math.max(BASE_WIDTH, Math.min(splitterDragRef.current.containerW, desiredLeftPx + MAX_RIGHT_PX + 12))
         : splitterDragRef.current.containerW;
     const effectiveNextWidth = Math.max(nextWidth, getMinimumContainerWidth());
+    // A previous move may have narrowed the overflowing page. Reversal must
+    // resize within that current width before pushing the right edge outward.
+    splitterDragRef.current.containerW = effectiveNextWidth;
     setContainerWidth(nextWidth);
     setLeftFlex(TOTAL_FLEX * desiredLeftPx / (effectiveNextWidth - 12));
   }

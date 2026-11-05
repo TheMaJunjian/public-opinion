@@ -47,7 +47,7 @@ export function materializeBodyVersion(version:BodyVersion,resolve:BodyResolver)
     const target=targets?.[0]?.reference;
     const after=correction.parts.find(part=>part.id==='corrected-body'&&part.type==='text');
     if(targets?.length!==1||!target||target.messageId!==base.id||target.revision!==base.revision||!target.partId||target.memberId
-      ||data.correctionKind==='WIDTH'||(data.correctionKind??'TEXT')!==entry.kind||after?.type!=='text'
+      ||data.localCorrectionApplicable===false||data.correctionKind==='WIDTH'||(data.correctionKind??'TEXT')!==entry.kind||after?.type!=='text'
       ||data.correctionBeforeContent!==before)throw new Error('更正不属于该正文基础版本');
     let offset=0,found=false;
     for(const part of base.parts){

@@ -13,18 +13,19 @@ export default function VirtualMessageList({ ids, pinned, children }: {
   const { boxes, height } = useMemo(() => {
     let top = 0;
     const boxes: Record<string, Box> = {};
-    for (const id of ids) {
-      const height = heights[id] ?? 86;
+    for (const [index, id] of ids.entries()) {
+      const height = heights[id] ?? (index === ids.length - 1 ? 86 : 92);
       boxes[id] = { x: 0, y: top, width: 1, height };
-      top += height + 6;
+      top += height;
     }
-    return { boxes, height: Math.max(0, top - 6) };
+    return { boxes, height: top };
   }, [ids, heights]);
   const virtual = useVirtualMessageMounts(surface, ids, boxes, heights, pinned, true);
   return <div ref={surface} data-virtual-message-list="true" style={{ position: 'relative', height, width: '100%' }}>
     {ids.filter(id => virtual.mounted.has(id)).map(id => <div key={id} data-measure-id={id} data-measure-min-height="1"
       ref={element => { refs.current[id] = element; }} aria-hidden={!virtual.isOnscreen(id) || undefined}
-      style={{ position: 'absolute', top: boxes[id].y, left: 0, width: '100%', visibility: virtual.isOnscreen(id) ? undefined : 'hidden' }}>
+      // Include theme spacing in the measured row so virtual positions follow it.
+      style={{ position: 'absolute', top: boxes[id].y, left: 0, width: '100%', paddingBottom: id === ids[ids.length - 1] ? 0 : 'var(--message-list-row-gap, 6px)', visibility: virtual.isOnscreen(id) ? undefined : 'hidden' }}>
       {children(id)}
     </div>)}
   </div>;

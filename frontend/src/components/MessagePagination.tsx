@@ -1,21 +1,26 @@
-import { useEffect, useRef, type RefObject } from 'react';
+import { useContext, useEffect, useRef, useState, type RefObject } from 'react';
+import { WorkbenchDrawingContext } from '../context/WorkbenchDrawingContext';
 
 interface Props {
   parent: string;
   loadedCount: number;
   hasMore: boolean;
   loading: boolean;
+  showLoadingNotice?: boolean;
   panelRef: RefObject<HTMLDivElement>;
   onMore: (parent: string) => Promise<void>;
   onError: (message: string) => void;
 }
 
-/** Follow the last mounted structure, even when the full graph reserves more canvas below it. */
-export default function MessagePagination({ parent, loadedCount, hasMore, loading, panelRef, onMore, onError }: Props) {
+/** Follow the last mounted message, even when the graph reserves more canvas below it. */
+export default function MessagePagination({ parent, loadedCount, hasMore, loading, showLoadingNotice = true, panelRef, onMore, onError }: Props) {
+  const tasks = useContext(WorkbenchDrawingContext);
   const footerRef = useRef<HTMLDivElement>(null);
   const inFlight = useRef<Promise<void> | null>(null);
   const failed = useRef(false);
-  useEffect(() => { failed.current = false; }, [parent]);
+  const [error, setError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
+  useEffect(() => { failed.current = false; setError(null); }, [parent]);
   useEffect(() => {
     if (!hasMore || loading || !loadedCount) return;
     const panel = panelRef.current;
@@ -24,11 +29,11 @@ export default function MessagePagination({ parent, loadedCount, hasMore, loadin
     let disposed = false;
     let frame = 0;
     const more = () => {
-      if (disposed || failed.current || inFlight.current || document.hidden) return;
+      if (disposed || failed.current || inFlight.current || document.hidden || tasks?.blocking || tasks?.failure) return;
       const promise = onMore(parent);
       inFlight.current = promise;
       void promise.catch(error => {
-        if (!disposed) { failed.current = true; onError(error instanceof Error ? error.message : '消息加载失败'); }
+        if (!disposed) { failed.current = true; const message = error instanceof Error ? error.message : '消息加载失败'; setError(message); onError(message); }
       }).finally(() => { if (inFlight.current === promise) inFlight.current = null; });
     };
     const check = () => {
@@ -46,18 +51,29 @@ export default function MessagePagination({ parent, loadedCount, hasMore, loadin
       if (entries.some(entry => entry.isIntersecting)) check();
     }, { root: panel, rootMargin: '400px' }) : null;
     observer?.observe(boundary);
+    const unsubscribe = tasks?.subscribe(check);
     check();
     window.addEventListener('scroll', check, { passive: true, capture: true });
     window.addEventListener('resize', check, { passive: true });
     document.addEventListener('visibilitychange', check);
     return () => {
       disposed = true; cancelAnimationFrame(frame); observer?.disconnect();
+      unsubscribe?.();
       window.removeEventListener('scroll', check, true);
       window.removeEventListener('resize', check);
       document.removeEventListener('visibilitychange', check);
     };
-  }, [parent, loadedCount, hasMore, loading, panelRef, onMore, onError]);
-  return <div ref={footerRef} style={{ padding: 16, textAlign: 'center', color: 'var(--ink-94a3b8)', fontSize: 12 }}>
-    当前已显示 {loadedCount} 条消息。{loading ? '正在准备消息…' : hasMore ? '向下浏览将自动显示后续结构。' : '当前范围已全部显示。'}
-  </div>;
+  }, [parent, loadedCount, hasMore, loading, panelRef, onMore, onError, retry, tasks]);
+  return <>
+    <div ref={footerRef} style={{ padding: 16, textAlign: 'center', color: 'var(--ink-94a3b8)', fontSize: 12 }}>
+      当前已显示 {loadedCount} 条消息。{hasMore ? '继续浏览将按时间显示后续消息。' : loading ? '' : '当前范围已全部显示。'}
+    </div>
+    {(loading && showLoadingNotice || error) && <div data-message-loading-notice style={{ position: 'sticky', bottom: 8, height: 0, zIndex: 26, pointerEvents: 'none' }}>
+      <div role={error ? 'alert' : 'status'} aria-live="polite" style={{ position: 'absolute', bottom: 0, left: 12, maxWidth: 'calc(100% - 24px)', padding: '6px 10px',
+        borderRadius: 4, background: 'var(--surface-141414)', color: 'var(--ink-94a3b8)', fontSize: 12, pointerEvents: error ? 'auto' : 'none' }}>
+        {error ? `消息加载失败：${error}` : '正在加载消息…'}
+        {error && <button type="button" onClick={() => { failed.current = false; setError(null); setRetry(value => value + 1); }} style={{ marginLeft: 8 }}>重试加载消息</button>}
+      </div>
+    </div>}
+  </>;
 }

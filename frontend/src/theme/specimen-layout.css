@@ -1,4 +1,5 @@
-.desk-section-number, .desk-section-title, .desk-fee-breakdown, .desk-send-balance, .desk-new-title { display: none; }
+.desk-section-number, .desk-fee-breakdown, .desk-send-balance, .desk-new-title { display: none; }
+.desk-section-title { display: flex; align-items: center; width: 100%; font-weight: 600; font-size: 14px; margin-bottom: 8px; }
 .desk-submit-bar { display: contents; }
 .desk-send-preview-status { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; flex: 1 0 100%; width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--line-fbbf24); border-radius: 6px; background: var(--surface-1a1a1a); font-size: 12px; }
 .desk-send-preview-status strong { color: var(--ink-fbbf24); white-space: nowrap; }
@@ -57,4 +58,4 @@
 .theme-frame-example svg { width: 100%; overflow: visible; }
 .theme-frame-caption { position: absolute; inset: 22px 24px; color: var(--text-primary); font-size: 12px; }
 .theme-frame-caption div { border-top: 1px solid var(--border-default); margin-top: 10px; padding-top: 8px; }
-:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .popup-backdrop-flow { display: none; }
+:root[data-appearance='gpt-arena'] .popup-backdrop-flow { display: none; }

@@ -1,8 +1,11 @@
-import { BrowserRouter, HashRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Route } from 'react-router-dom';
 import { Suspense, lazy, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import AuthEntryGate from './components/AuthEntryGate';
 import { InterfaceZoomContext } from './context/InterfaceZoomContext';
 import Navbar from './components/Navbar';
+import AboutViewer from './components/AboutViewer';
+import RetainedAppRoutes from './components/RetainedAppRoutes';
 import AppUpdateNotice from './components/AppUpdateNotice';
 import OperationFeedback from './components/OperationFeedback';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -19,6 +22,14 @@ const ExportViewerModal = lazy(() => import('./components/ExportViewerModal'));
 const TutorialModal = lazy(() => import('./components/TutorialModal'));
 const WelfareModal = lazy(() => import('./components/WelfareModal'));
 const GuideOverlay = lazy(() => import('./components/GuideOverlay'));
+const UnavailableLinkPage = lazy(() => import('./pages/UnavailableLinkPage'));
+
+function OnlineWorkbenchRoute() {
+  const { user, loading } = useAuth();
+  if (loading) return <PageLoadingPrompt />;
+  if (!user) return <HomePage />;
+  return <WorkbenchStartup><MessageWorkbenchPage /></WorkbenchStartup>;
+}
 
 function AppContent() {
   useSkinMotion();
@@ -30,6 +41,12 @@ function AppContent() {
   const [interfaceZoom, setInterfaceZoom] = useState(1);
   const appRootRef = useRef<HTMLDivElement>(null);
   const Router = window.location.protocol === 'file:' || import.meta.env.PROD ? HashRouter : BrowserRouter;
+
+  useEffect(() => {
+    const openViewer = () => setViewerOpen(true);
+    window.addEventListener('open-export-viewer', openViewer);
+    return () => window.removeEventListener('open-export-viewer', openViewer);
+  }, []);
 
   useLayoutEffect(() => {
     const updateVisibleHeight = () => {
@@ -124,16 +141,20 @@ function AppContent() {
             guideEnabled={guideEnabled}
           />
           <main className="flex-1 flex flex-col min-w-0">
-            <Suspense fallback={routeFallback}>
-              <Routes>
-                <Route path="/login" element={<LoginPage />} />
-                <Route path="/register" element={<RegisterPage />} />
-                <Route path="/" element={<HomePage />} />
-                <Route path="/messages" element={<WorkbenchStartup><MessageWorkbenchPage /></WorkbenchStartup>} />
-                <Route path="/messages/:messageId" element={<WorkbenchStartup><MessageWorkbenchPage /></WorkbenchStartup>} />
-                <Route path="/viewer" element={<WorkbenchStartup><MessageWorkbenchPage /></WorkbenchStartup>} />
-              </Routes>
-            </Suspense>
+            <AuthEntryGate>
+              <Suspense fallback={routeFallback}>
+                <RetainedAppRoutes>
+                  <Route path="/login" element={<LoginPage />} />
+                  <Route path="/register" element={<RegisterPage />} />
+                  <Route path="/" element={<HomePage />} />
+                  <Route path="/messages" element={<OnlineWorkbenchRoute />} />
+                  <Route path="/messages/:messageId" element={<OnlineWorkbenchRoute />} />
+                  <Route path="/viewer" element={<WorkbenchStartup><MessageWorkbenchPage /></WorkbenchStartup>} />
+                  <Route path="/topics/*" element={<UnavailableLinkPage legacyTopic />} />
+                  <Route path="*" element={<UnavailableLinkPage />} />
+                </RetainedAppRoutes>
+              </Suspense>
+            </AuthEntryGate>
           </main>
           {viewerOpen && (
             <Suspense fallback={null}>
@@ -166,6 +187,7 @@ function AppContent() {
             </Suspense>
           )}
         </div>
+        <AboutViewer appRoot={appRootRef} />
       </InterfaceZoomContext.Provider>
     </Router>
   );

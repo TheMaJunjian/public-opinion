@@ -7,6 +7,19 @@ import {getGroupHeaderRect} from '../utils/graphPresentationGeometry';
 const message=(id:string):DemoMessage=>({id,kind:'normal',author:'a',createdAt:'2026-01-01',content:id});
 const frame=(id:string,members:string[],children:string[]=[]):FrameBlock=>({relMsgId:id,cardIds:new Set([...members,...children]),directCardIds:new Set(members),childRelMsgIds:children,isMerge:false,hasGroupHeader:true,targetLayout:'single-row'});
 describe('temporary frame viewports',()=>{
+  it.each([false,true])('folds nested members without promoting them to roots (discussion=%s)',discussionLayout=>{
+    const members=[message('first'),message('second'),message('outside')];
+    const input={normals:members,allMessages:members,edges:[],colOf:{},maxCol:0,measuredHeights:{},measuredWidths:{},discussionLayout,
+      frameViewSizes:{outer:{width:900,height:600},inner:{width:800,height:500}},
+      frameBlocks:[frame('outer',[],['inner']),frame('inner',['first','second'])]};
+    const expanded=computeSceneLayout(input),folded=computeSceneLayout({...input,collapsedFrameIds:new Set(['outer'])});
+    expect(Object.keys(folded.layout)).toEqual(['outside']);
+    expect(Object.keys(folded.frameRects)).toEqual(['outer']);
+    expect(new Set(folded.hiddenAtomIds)).toEqual(new Set(['first','second','inner']));
+    expect(folded.frameRects.outer.height).toBeLessThan(expanded.frameRects.outer.height);
+    expect(folded.frameViewportSizes.outer).toBeUndefined();
+    expect(computeSceneLayout({...input,collapsedFrameIds:new Set()})).toEqual(expanded);
+  });
   it('fully expands the only traced classification when every displayed message is inside it',()=>{
     const members=Array.from({length:10},(_,index)=>message(`member-${index}`));
     const group={...message('group'),kind:'relation' as const,relationType:'classify' as const};
@@ -176,13 +189,14 @@ describe('temporary frame viewports',()=>{
     expect(after.extent('leaf',after.layout.leaf)).toEqual(after.layout.leaf);
     for(const id of ['inner','outer'])expect(after.frameRects[id]).toMatchObject(sizes[id as keyof typeof sizes]);
   });
-  it('centers an oversized message within a small viewport and clamps the requested scroll',()=>{
+  it('reveals the beginning of an oversized message within a small viewport without moving its visible horizontal start',()=>{
     const layout={leaf:{x:50,y:900,width:320,height:1000}},frames={group:{x:20,y:100,width:240,height:120}};
     const contents={group:{...frames.group,width:400,height:2000}},blocks=[frame('group',['leaf'])],sizes={group:{width:240,height:120}};
     const views=projectFrameViewports(layout,frames,contents,blocks,sizes,{}),next=views.reveal(['leaf']);
     const after=projectFrameViewports(layout,frames,contents,blocks,sizes,next),box=after.layout.leaf,viewport=after.viewports.group;
-    expect(box.x+box.width/2).toBe(viewport.x+viewport.width/2);
-    expect(box.y+box.height/2).toBe(viewport.y+viewport.height/2);
+    expect(next.group.left).toBe(0);
+    expect(box.x).toBe(layout.leaf.x);
+    expect(box.y).toBe(viewport.y);
     expect(after.frameRects.group).toEqual(frames.group);
   });
 });

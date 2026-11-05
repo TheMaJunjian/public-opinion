@@ -11,6 +11,12 @@ export function isRejectedRelation(message:DemoMessage|undefined,ids?:ReadonlySe
  return !!message&&message.kind==='relation'&&['edge-label','inline-badge','decoration-label'].includes(getPresentationSpec(message.relationType??'').kind)
   &&!!(ids?ids.has(message.id):message.state?.suppressed);
 }
+/** Truth votes on content never remove its card. Only inactive relationship
+ * presentations can be hidden, unless their rejected record has its own card. */
+export function hiddenInactiveRelationIds(messages: readonly DemoMessage[], inactiveIds: ReadonlySet<string>) {
+ return new Set(messages.filter(message=>message.kind==='relation'&&inactiveIds.has(message.id)
+  &&!isRejectedRelation(message,inactiveIds)).map(message=>message.id));
+}
 /** Retain rejected organization records beside the messages released from them.
  * Pure votes and round records already have graph presentations.
  */

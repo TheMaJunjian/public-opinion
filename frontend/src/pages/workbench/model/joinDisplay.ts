@@ -4,6 +4,7 @@ import { buildStanceTargetMap, computePublicStanceStats, resolveDisplayedStance,
 
 export type JoinStakeCounts = Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }>;
 export type JoinEffectSource = 'personal' | 'recommended';
+export type JoinChoiceSource = { messageId: string; type: 'agree' | 'disagree'; creation: boolean };
 type Choice = { joinId: string; order: number; previous?: Choice };
 type Event = { id: string; time: number; sequence: number; targetId: string; side: 'agree' | 'disagree'; join?: Relation; creation?: boolean };
 const containers = new Set(['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE']);
@@ -135,5 +136,7 @@ export function resolveJoinDisplay(input: {
     const joinId = joinForAction.get(action.id)!, sources = sourcesByJoin.get(joinId) ?? new Set<JoinEffectSource>();
     sources.add(sourceForAction.get(action.id)!); sourcesByJoin.set(joinId,sources);
   }
-  return { byTarget: new Map([...resolved.effective].map(([id, action]) => [id, joinForAction.get(action.id)!])), sourcesByJoin, suppressed: excluded };
+  const choiceSourcesByMessage = new Map<string, JoinChoiceSource>(events.filter(event=>msgMap.has(event.id))
+    .map(event=>[event.targetId,{messageId:event.id,type:event.side,creation:!!event.creation}]));
+  return { byTarget: new Map([...resolved.effective].map(([id, action]) => [id, joinForAction.get(action.id)!])), sourcesByJoin, suppressed: excluded,choiceSourcesByMessage };
 }

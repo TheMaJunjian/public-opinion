@@ -18,6 +18,7 @@ import MessageConnections from './MessageConnections';
 import OperationLogView from './OperationLogView';
 import StagedMessageLabel from './StagedMessageLabel';
 import StanceReadingReminder from './StanceReadingReminder';
+import AboutLink from './AboutLink';
 const StanceHistoryPanel = lazy(() => import('./StanceHistoryPanel'));
 const AuditLogView = lazy(() => import('./AuditLogView'));
 const RevenuePanel = lazy(() => import('./RevenuePanel'));
@@ -33,6 +34,49 @@ interface DraftGroup {
   wholeSelected: boolean;
   wholeUnits: UnitSelection[];
   fragments: UnitSelection[];
+}
+export interface LocalSendControls {
+  enabled: boolean;
+  onSend: () => void;
+  hint: string;
+  feedback?: ReactNode;
+  composer?: {
+    content: string;
+    onContentChange: (value: string) => void;
+    placeholder: string;
+    readOnly?: boolean;
+    disabled?: boolean;
+    direction?: 'vertical' | 'horizontal';
+    onDirectionChange?: (direction: 'vertical' | 'horizontal') => void;
+    settings?: ReactNode;
+    secondaryChoices?: { options: string[]; value: string; onChange: (value: string) => void; label: (value: string) => string };
+    widthAdjustment?: { width: number; onChange: (width: number) => void };
+  };
+}
+
+function ComposerTextInput({ content, onContentChange, placeholder, readOnly = false }: {
+  content: string; onContentChange: (value: string) => void; placeholder: string; readOnly?: boolean;
+}) {
+  return <textarea data-guide-message-input="true"
+    style={{ width: '100%', minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: '1px solid var(--line-555)', background: readOnly ? 'var(--surface-1a1a1a)' : 'var(--surface-222)', color: readOnly ? 'var(--ink-666)' : 'var(--ink-eee)', fontSize: 13, resize: 'vertical' }}
+    placeholder={placeholder} value={content} readOnly={readOnly} onChange={event => !readOnly && onContentChange(event.target.value)} />;
+}
+
+function SecondaryRelationChoices({ options, value, onChange, label }: {
+  options: string[]; value: string; onChange: (type: string) => void; label: (type: string) => string;
+}) {
+  return <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, flexWrap: 'wrap' }}>
+    <span style={{ opacity: 0.85 }}>附加关系：</span>
+    {options.map(type => <button className="workbench-action" key={type} aria-pressed={value === type} onClick={() => onChange(type)}
+      style={{ padding: '2px 8px', borderRadius: 4, border: '1px solid var(--line-666)', background: value === type ? 'var(--surface-0b84ff)' : 'var(--surface-222)', color: value === type ? 'var(--ink-fff)' : 'var(--ink-rgba-255-255-255-0-7)', cursor: 'pointer' }}>{label(type)}</button>)}
+  </div>;
+}
+
+function ComposerSection({ children }: { children: ReactNode }) {
+  return <div className="workbench-composer-section" style={{ border: '1px solid var(--line-444)', borderRadius: 6, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div className="workbench-section-heading" style={{ fontWeight: 600 }}><span className="desk-section-number">04</span><span className="desk-new-title">正文与附加设置</span><span className="desk-legacy-title">输入框（消息与关系设置）</span><AboutLink href="/about.html#guide-composer" className="workbench-help-link" aria-label="正文与附加设置帮助" title="正文与附加设置帮助">?</AboutLink></div>
+    {children}
+  </div>;
 }
 
 interface WorkbenchPanelProps {
@@ -54,6 +98,8 @@ interface WorkbenchPanelProps {
   previewNotice?: string;
   singleSideReview?: { title: string; kind?:'container'|'correction'|'relation'; onExit: () => void };
   isViewerMode?: boolean;
+  localReplyEditor?: (renderSend: (controls: LocalSendControls) => ReactNode) => ReactNode;
+  hideViewerUser?: boolean;
   viewerUsers?: User[];
   viewerUsername?: string;
   onViewerUsernameChange?: (username: string) => void;
@@ -177,6 +223,7 @@ interface WorkbenchPanelProps {
   // Comparison review
   comparisonMode?: boolean;
   comparisonTargetId?: string | null;
+  comparisonTargetIds?: ReadonlySet<string>;
   comparisonSide?: 'agree' | 'disagree';
   comparisonReviewed?: boolean;
   onComparisonSideChange?: (side: 'agree' | 'disagree') => void;
@@ -248,15 +295,15 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
     overflowWrap: "anywhere" as const,
   };
 
-  const renderSendControls = () => (
+  const renderSendControls = (local?: LocalSendControls) => (
     <>
-      <div className="desk-section-title"><span className="desk-section-number">05</span>投入与费用</div>
-      {showContributionControls && <div data-contribution-policy="true" style={{display:'flex',alignItems:'baseline',gap:8,fontSize:11,color:'var(--ink-94a3b8)',whiteSpace:'nowrap'}}>
+      <div className="desk-section-title"><span className="desk-section-number">05</span>{local ? '本地发送' : '投入与费用'}<AboutLink href="/about.html#guide-costs" className="workbench-help-link" aria-label="投入与费用帮助" title="投入与费用帮助">?</AboutLink></div>
+      {!local && showContributionControls && <div data-contribution-policy="true" style={{display:'flex',alignItems:'baseline',gap:8,fontSize:11,color:'var(--ink-94a3b8)',whiteSpace:'nowrap'}}>
         <span style={{flexShrink:0}}>协议费 {p.stakeFeeAmountRef.current} 点/条</span>
         <span>每条消息的真假、价值至少一项大于 0</span>
       </div>}
-      <div className="desk-send-controls" data-guide-contribution-consumption={p.totalConsumption ? 'true' : undefined} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        {showContributionControls && <>
+      <div className="desk-send-controls" data-guide-contribution-consumption={!local && p.totalConsumption ? 'true' : undefined} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        {!local && showContributionControls && <>
           {p.contributionGroups.map(group=><div key={group.type} data-contribution-type={group.type} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 6px',border:'1px solid var(--line-444)',borderRadius:4}}>
             <span style={{fontSize:11}}>{group.label}消息 × {group.count}</span>
             {(['truth','value'] as const).map(field=><label key={field} style={{fontSize:11}}>{field==='truth'?'真假':'价值'}
@@ -282,53 +329,75 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           </dl>}
         </>}
         <div className="desk-submit-bar">
-        {p.sendPreview?.active && <div className="desk-send-preview-status" data-send-preview="true" role="status">
+        {!local && p.sendPreview?.active && <div className="desk-send-preview-status" data-send-preview="true" role="status">
           <strong>{p.sendPreview.uncertain ? '发送结果待核对' : '发送预览 · 尚未发送'}</strong>
           <span>{p.sendPreview.uncertain ? '请再次确认以核对结果，当前输入会保留。' : p.sendPreview.stale ? '输入或消息已有变化，请更新预览。' : '可继续编辑，确认发送后才会发布。'}</span>
         </div>}
-        <span className="desk-send-balance">预计 {p.totalConsumption?.total ?? '—'} 点 · 可用 {p.availablePoints} 点</span>
-        {p.sendPreview && (p.sendPreview.active || p.sendPreview.phase !== 'idle') && <button type="button" disabled={p.sendPreview.phase === 'sending'} onClick={p.sendPreview.onCancel}
+        {!local && <span className="desk-send-balance">预计 {p.totalConsumption?.total ?? '—'} 点 · 可用 {p.availablePoints} 点</span>}
+        {!local && p.sendPreview && (p.sendPreview.active || p.sendPreview.phase !== 'idle') && <button className="workbench-action" type="button" disabled={p.sendPreview.phase === 'sending'} onClick={p.sendPreview.onCancel}
           style={{padding:'4px 12px',borderRadius:4,border:'1px solid var(--line-666)',background:'var(--surface-333)',color:'var(--ink-eee)'}}>退出预览</button>}
-        {p.sendPreview && <button type="button" disabled={!p.sendPreview.canPrepare || p.sendPreview.phase !== 'idle'}
+        {!local && p.sendPreview && <button className="workbench-action" type="button" disabled={!p.sendPreview.canPrepare || p.sendPreview.phase !== 'idle'}
           onClick={() => void p.sendPreview?.onPreview()} style={{padding:'4px 12px',borderRadius:4,border:'1px solid var(--line-666)',background:'var(--surface-333)',color:'var(--ink-eee)'}}>
           {p.sendPreview.active ? '更新预览' : '预览'}
         </button>}
         <DrawingReady>{drawingReady=>{
-          const enabled=!p.isPreviewMode && (!p.sendPreview || p.sendPreview.phase === 'idle') && (p.sendPreview?.active ? p.sendPreview.ready && drawingReady : p.singleButtonEnabled);
-          return <button data-guide-send="true" data-guide-text-message-send="true" onClick={() => { window.dispatchEvent(new Event('guide-send-selected')); p.handleQuickSendAndRelateFromDraftTargets(); }} disabled={!enabled}
+          const enabled=local ? local.enabled && !p.isPreviewMode : !p.isPreviewMode && (!p.sendPreview || p.sendPreview.phase === 'idle') && (p.sendPreview?.active ? p.sendPreview.ready && drawingReady : p.singleButtonEnabled);
+          return <button className="workbench-action" data-guide-send="true" data-guide-text-message-send="true" onClick={() => { if (local) { local.onSend(); return; } window.dispatchEvent(new Event('guide-send-selected')); p.handleQuickSendAndRelateFromDraftTargets(); }} disabled={!enabled}
           style={{ padding: "4px 14px", borderRadius: 4, border: "1px solid var(--line-666)", background: enabled ? "var(--surface-0b84ff)" : "var(--surface-333)", color: enabled ? "var(--ink-fff)" : "var(--ink-777)", cursor: enabled ? "pointer" : "default", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
-          {p.sendPreview?.active ? '确认发送' : '发送'}
+          {!local && p.sendPreview?.active ? '确认发送' : '发送'}
         </button>;}}</DrawingReady>
-        <span className="desk-send-hint" data-duplicates-validation={p.singleButtonLabel === p.sendValidationLabel || undefined} style={{ fontSize: 11, color: "var(--ink-fff)" }}>{p.singleButtonLabel}</span>
+        <span className="desk-send-hint" data-duplicates-validation={!local && p.singleButtonLabel === p.sendValidationLabel || undefined} style={{ fontSize: 11, color: "var(--ink-fff)" }}>{local ? local.hint : p.singleButtonLabel}</span>
         </div>
       </div>
-      {p.sendValidationLabel
+      {!local && (p.sendValidationLabel
         ? <div style={{ color: "var(--ink-fbbf24)", fontSize: 11, marginTop: 4 }}>{p.sendValidationLabel}</div>
-        : p.sendError && <div style={{ color: "var(--ink-f87171)", fontSize: 11, marginTop: 4 }}>{p.sendError}</div>}
-      {p.sendWarning && <div style={{ color: "var(--ink-fbbf24)", fontSize: 11, marginTop: 4 }}>⚠️ {p.sendWarning}</div>}
-      <StanceReadingReminder relationType={p.relationType} secondaryRelationType={p.secondaryRelationType} targetIds={(p.draftUnits.length?p.draftUnits:p.targetUnits).map(unit=>unit.messageId)}/>
+        : p.sendError && <div style={{ color: "var(--ink-f87171)", fontSize: 11, marginTop: 4 }}>{p.sendError}</div>)}
+      {!local && p.sendWarning && <div style={{ color: "var(--ink-fbbf24)", fontSize: 11, marginTop: 4 }}>⚠️ {p.sendWarning}</div>}
+      {local?.feedback}
+      {!local && <StanceReadingReminder relationType={p.relationType} secondaryRelationType={p.secondaryRelationType} targetIds={(p.draftUnits.length?p.draftUnits:p.targetUnits).map(unit=>unit.messageId)}/>}
     </>
   );
+  const renderMessageConnections = () => p.lastClickedMessageId && messageMap.has(p.lastClickedMessageId) && !isSettlementRecord(messageMap.get(p.lastClickedMessageId)) && <section aria-label="消息关联" data-selected-message-connections={p.lastClickedMessageId}
+    style={{padding:8,border:'1px solid var(--line-475569)',borderRadius:6,fontSize:12}}>
+    <div>当前消息：<MessageReferenceControl messageId={p.lastClickedMessageId} type={getMessageTypeLabel(messageMap.get(p.lastClickedMessageId))}
+      summary={getMessageCardContent(messageMap.get(p.lastClickedMessageId))} onNavigate={p.onNavigateToMessage} wholeMessage={false}/></div>
+    <MessageConnections key={p.lastClickedMessageId} messageId={p.lastClickedMessageId} messages={p.messages} edges={p.edges} defaultOpen onNavigate={p.onNavigateToMessage}/>
+  </section>;
+  const renderLocalComposer = (controls: LocalSendControls) => <><ComposerSection>
+    {controls.composer && <fieldset disabled={controls.composer.disabled} style={{ border: 0, padding: 0, margin: 0, minWidth: 0, display: 'grid', gap: 6 }}>
+      {controls.composer.secondaryChoices && <SecondaryRelationChoices {...controls.composer.secondaryChoices} />}
+      {controls.composer.direction && <SecondaryRelationChoices options={['vertical', 'horizontal']} value={controls.composer.direction}
+        onChange={direction => { if (direction === 'vertical' || direction === 'horizontal') controls.composer?.onDirectionChange?.(direction); }} label={p.secondaryRelationLabel} />}
+      {controls.composer.widthAdjustment && <CardWidthEditor {...controls.composer.widthAdjustment} />}
+      {controls.composer.settings}
+      {!controls.composer.widthAdjustment && <ComposerTextInput content={controls.composer.content} onContentChange={controls.composer.onContentChange}
+        placeholder={controls.composer.placeholder} readOnly={controls.composer.readOnly} />}
+    </fieldset>}
+    {renderSendControls(controls)}
+  </ComposerSection>{renderMessageConnections()}</>;
   const isComparison = !p.singleSideReview && Boolean(p.comparisonMode || p.comparisonReviewed);
   const comparisonDraft = p.draftUnits.length === 1 && p.draftUnits[0].selection.kind === 'whole'
     ? p.draftUnits[0]
     : null;
   const comparisonTarget = p.messages.find(message => message.id === (p.comparisonTargetId ?? comparisonDraft?.messageId ?? null));
-  const comparisonCanReview = Boolean(comparisonDraft && comparisonTarget);
+  const comparisonCanReview = Boolean(comparisonDraft && comparisonTarget
+    && isWholeMessageSelection(comparisonDraft, comparisonDraft.messageId)
+    && comparisonDraft.messageId === comparisonTarget.id && p.comparisonTargetIds?.has(comparisonDraft.messageId));
   const renderComparisonHeader = () => isComparison && (
     <div style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ fontWeight: 600 }}>对比审阅</div>
       <div style={{ fontSize: 12, opacity: 0.8 }}>{comparisonTarget ? `当前目标：${comparisonTarget.author} · ${comparisonTarget.content || comparisonTarget.id}` : "请在左侧选择目标消息"}</div>
-      {!p.comparisonReviewed && <button disabled={!comparisonCanReview} onClick={p.onComparisonReview} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid var(--line-38bdf8)", background: "var(--surface-123047)", color: "var(--ink-7dd3fc)", cursor: comparisonCanReview ? "pointer" : "default", opacity: comparisonCanReview ? 1 : 0.5 }}>
+      <div style={{ fontSize: 12, opacity: 0.8 }}>一次审阅一条消息，两侧展开受影响消息所在的分类框架。</div>
+      {!p.comparisonReviewed && <button className="workbench-action" disabled={!comparisonCanReview} onClick={p.onComparisonReview} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid var(--line-38bdf8)", background: "var(--surface-123047)", color: "var(--ink-7dd3fc)", cursor: comparisonCanReview ? "pointer" : "default", opacity: comparisonCanReview ? 1 : 0.5 }}>
         审阅
       </button>}
       {p.comparisonReviewed && p.isViewerMode && <div style={{ padding: "6px 8px", border: "1px solid var(--line-475569)", borderRadius: 4, background: "var(--surface-111827)", color: "var(--ink-cbd5e1)", fontSize: 12 }}>
-        当前为只读对比审阅状态，可查看赞同后与反对后的结构，不支持发送关系或消息。
+        {p.localReplyEditor ? '当前为本地阅览，可在下方建立回复、组织或反对关系，不会发布到公论。' : '当前为只读对比审阅状态，可查看赞同后与反对后的结构，不支持发送关系或消息。'}
       </div>}
-      {p.comparisonReviewed && <button onClick={p.onReturnToComparisonCategory} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid var(--line-38bdf8)", background: "var(--surface-123047)", color: "var(--ink-7dd3fc)", cursor: "pointer" }}>
+      {p.comparisonReviewed && <button className="workbench-action" onClick={p.onReturnToComparisonCategory} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid var(--line-38bdf8)", background: "var(--surface-123047)", color: "var(--ink-7dd3fc)", cursor: "pointer" }}>
         返回对比消息
       </button>}
-      <button onClick={p.onExitComparison} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-eee)", cursor: "pointer" }}>
+      <button className="workbench-action" onClick={p.onExitComparison} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-eee)", cursor: "pointer" }}>
         退出对比
       </button>
     </div>
@@ -336,7 +405,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
 
   return (
     <>
-    {p.sendPreview && <SendPreviewProgress phase={p.sendPreview.phase} active={p.sendPreview.active}/>}
+    {!p.isViewerMode && p.sendPreview && <SendPreviewProgress phase={p.sendPreview.phase} active={p.sendPreview.active}/>}
     <WorkbenchScrollViewport ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="workbench-right-panel" role="region" aria-label="发言与关系操作" tabIndex={-1} onTouchStart={handlePanelTouchStart} onTouchMove={handlePanelTouchMove} onTouchEnd={handlePanelTouchEnd} onTouchCancel={handlePanelTouchEnd} data-guide-right-panel="true" data-workbench-scroll-panel="true" data-workbench-panel-surface="true" style={viewportStyle}>
     <div className="workbench-operation-panel" data-workbench-panel-content="true" style={panelStyle}>
       {p.singleSideReview && <div role="region" aria-label="单侧对比" style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -355,13 +424,13 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
       <RecentWorkbenchViews ownerKey={p.viewCacheOwner??p.scopeMessageId} viewKey={p.traceReadingControls?'reading':'none'} limit={2}>
         {p.traceReadingControls}
       </RecentWorkbenchViews>
-      {(p.singleSideReview || p.canExitTrace) && <button onClick={p.canExitTrace ? p.exitAllTrace : p.singleSideReview?.onExit}
+      {(p.singleSideReview || p.canExitTrace) && <button className="workbench-action" onClick={p.canExitTrace ? p.exitAllTrace : p.singleSideReview?.onExit}
         style={{ padding: '5px 8px', borderRadius: 4, border: '1px solid var(--line-666)', background: 'var(--surface-333)', color: 'var(--ink-eee)', cursor: 'pointer' }}
         title={p.canExitTrace ? '退出全部追溯并恢复进入第一次追溯前的现场' : '退出当前查看'}>{p.singleSideReview || p.isRelatedView ? '退出查看' : '退出追溯'}</button>}
       {p.isViewerMode && <div style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <span style={{ fontWeight: 600 }}>阅览操作</span>
-          <label style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ink-cbd5e1)", fontSize: 12 }}>
+          <span style={{ fontWeight: 600 }}>{p.localReplyEditor ? '知乎文档阅览' : '公论文档阅览'}</span>
+          {!p.localReplyEditor && !p.hideViewerUser && <label style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ink-cbd5e1)", fontSize: 12 }}>
             当前用户
             <input
               list="viewer-user-options"
@@ -373,9 +442,9 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
             <datalist id="viewer-user-options">
               {(p.viewerUsers ?? []).map(viewer => <option key={viewer.id} value={viewer.username} />)}
             </datalist>
-          </label>
+          </label>}
         </div>
-        <button onClick={p.onExitViewer} style={{ width: "100%", boxSizing: "border-box", padding: "5px 12px", borderRadius: 4, border: "1px solid var(--line-f59e0b)", background: "var(--surface-2a1a00)", color: "var(--ink-f59e0b)", fontSize: 12, cursor: "pointer" }}>退出阅览</button>
+        <button className="workbench-action" onClick={p.onExitViewer} style={{ width: "100%", boxSizing: "border-box", padding: "5px 12px", borderRadius: 4, border: "1px solid var(--line-f59e0b)", background: "var(--surface-2a1a00)", color: "var(--ink-f59e0b)", fontSize: 12, cursor: "pointer" }}>退出阅览</button>
       </div>}
       {renderComparisonHeader()}
       {p.isPreviewMode && !p.singleSideReview && (
@@ -385,14 +454,14 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
       )}
       <div data-guide-selection-staging="true" className="desk-staging" data-empty={p.draftUnits.length === 0 && !p.activeTextSelectId} style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8 }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, alignItems: "center" }}>
-          <div style={{ fontWeight: 600 }}><span className="desk-section-number">01</span>选择暂存区</div>
+          <div style={{ fontWeight: 600 }}><span className="desk-section-number">01</span>选择暂存区<AboutLink href="/about.html#guide-selection" className="workbench-help-link" aria-label="选择暂存区帮助" title="选择暂存区帮助">?</AboutLink></div>
           <div style={{ display: "flex", gap: 8, fontSize: 12 }}>
-            <button onClick={p.clearDraftAll} disabled={p.draftUnits.length === 0 && !p.activeTextSelectId}
+            <button className="workbench-action" onClick={p.clearDraftAll} disabled={p.draftUnits.length === 0 && !p.activeTextSelectId}
               style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.draftUnits.length === 0 && !p.activeTextSelectId ? "var(--surface-333)" : "var(--surface-444)", color: p.draftUnits.length === 0 && !p.activeTextSelectId ? "var(--ink-777)" : "var(--ink-fff)", cursor: p.draftUnits.length === 0 && !p.activeTextSelectId ? "default" : "pointer" }}>
               清空
             </button>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <button onClick={() => { const selWhole = p.getSelectedWholeMessageIds(); if (selWhole.length > 0) p.enterTraceMultiple(selWhole, { replace: false }); else if (p.lastClickedMessageId) p.enterTrace(p.lastClickedMessageId, { replace: false }); }} disabled={!p.canSetTrace}
+              <button className="workbench-action" onClick={() => { const selWhole = p.getSelectedWholeMessageIds(); if (selWhole.length > 0) p.enterTraceMultiple(selWhole, { replace: false }); else if (p.lastClickedMessageId) p.enterTrace(p.lastClickedMessageId, { replace: false }); }} disabled={!p.canSetTrace}
                 style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.canSetTrace ? "var(--surface-444)" : "var(--surface-333)", color: p.canSetTrace ? "var(--ink-fff)" : "var(--ink-777)", cursor: p.canSetTrace ? "pointer" : "default" }}>
                 设为追溯消息
               </button>
@@ -404,10 +473,10 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           {(['up','down'] as const).map(side=>{const name=side==='up'?'向上':'向下',value=p.traceDepths?.[side]??DEFAULT_TRACE_DEPTHS[side];
             return <label key={side} style={{display:'flex',alignItems:'center',gap:5,fontSize:12}}>
               {name}（{side==='up'?'前因／依据':'后续／影响'}）
-              <button type="button" aria-label={`减少${name}追溯距离`} disabled={value===0} onClick={()=>p.onTraceDepthChange?.(side,value-1)}>−</button>
+              <button className="workbench-action" type="button" aria-label={`减少${name}追溯距离`} disabled={value===0} onClick={()=>p.onTraceDepthChange?.(side,value-1)}>−</button>
               <input type="number" aria-label={`${name}追溯距离`} min={0} max={8} value={value} onChange={event=>p.onTraceDepthChange?.(side,Number(event.target.value))}
                 style={{width:45,padding:'3px 4px',background:'var(--surface-222)',color:'var(--ink-fff)',border:'1px solid var(--line-666)',borderRadius:4}}/>
-              <button type="button" aria-label={`增加${name}追溯距离`} disabled={value===8} onClick={()=>p.onTraceDepthChange?.(side,value+1)}>+</button>
+              <button className="workbench-action" type="button" aria-label={`增加${name}追溯距离`} disabled={value===8} onClick={()=>p.onTraceDepthChange?.(side,value+1)}>+</button>
             </label>;})}
           <span style={{fontSize:11,color:'var(--ink-94a3b8)'}}>0 为关闭该方向，最大 8</span>
         </div>}
@@ -420,7 +489,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
               <li key={`DG-${g.messageId}`} style={{ borderBottom: "1px solid var(--line-333)", paddingBottom: 6, marginBottom: 6 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                   <StagedMessageLabel messageId={g.messageId} message={messageMap.get(g.messageId)} onNavigate={p.onNavigateToMessage} wholeMessage={g.wholeSelected} status={g.wholeSelected ? '已选择整条' : `已选择 ${g.fragments.length} 处`} />
-                  {g.wholeSelected && <button onClick={() => g.wholeUnits.forEach(p.removeUnitFromDraft)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-eee)", cursor: "pointer" }}>删除整条</button>}
+                  {g.wholeSelected && <button className="workbench-action" onClick={() => g.wholeUnits.forEach(p.removeUnitFromDraft)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-eee)", cursor: "pointer" }}>删除整条</button>}
                 </div>
                 {g.fragments.length > 0 && (
                   <ul style={{ listStyle: "disc", marginLeft: 18, marginTop: 2, marginBottom: 0 }}>
@@ -431,7 +500,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                           <StagedMessageLabel messageId={u.messageId} message={messageMap.get(u.messageId)} wholeMessage={false}
                             content={u.selection.kind === 'text' ? u.selection.text : label}
                             ariaLabel={`暂存片段 ${p.selKey(u)}`} onNavigate={p.onNavigateToMessage} status={u.selection.kind === 'text' ? '已选择片段' : '已选择消息部件'} />
-                          <button onClick={() => p.removeUnitFromDraft(u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-eee)", cursor: "pointer", flex: "0 0 auto" }}>删除片段</button>
+                          <button className="workbench-action" onClick={() => p.removeUnitFromDraft(u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-eee)", cursor: "pointer", flex: "0 0 auto" }}>删除片段</button>
                         </li>
                       );
                     })}
@@ -442,14 +511,14 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           </ul>
         )}
 
-        {!p.isViewerMode && <div className="desk-staging-actions" style={{ marginTop: 6, display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 8 }}>
-          <button onClick={() => p.commitDraftTo("source")} disabled={p.draftUnits.length === 0} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.draftUnits.length === 0 ? "var(--surface-333)" : "var(--surface-444)", color: p.draftUnits.length === 0 ? "var(--ink-777)" : "var(--ink-fff)", cursor: p.draftUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>加入来源集合</button>
-          <button onClick={() => p.commitDraftTo("target")} disabled={p.draftUnits.length === 0} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.draftUnits.length === 0 ? "var(--surface-333)" : "var(--surface-444)", color: p.draftUnits.length === 0 ? "var(--ink-777)" : "var(--ink-fff)", cursor: p.draftUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>加入目标集合</button>
+        {(!p.isViewerMode || p.localReplyEditor) && <div className="desk-staging-actions" style={{ marginTop: 6, display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 8 }}>
+          <button className="workbench-action" onClick={() => p.commitDraftTo("source")} disabled={p.draftUnits.length === 0} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.draftUnits.length === 0 ? "var(--surface-333)" : "var(--surface-444)", color: p.draftUnits.length === 0 ? "var(--ink-777)" : "var(--ink-fff)", cursor: p.draftUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>加入来源集合</button>
+          <button className="workbench-action" onClick={() => p.commitDraftTo("target")} disabled={p.draftUnits.length === 0} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.draftUnits.length === 0 ? "var(--surface-333)" : "var(--surface-444)", color: p.draftUnits.length === 0 ? "var(--ink-777)" : "var(--ink-fff)", cursor: p.draftUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>加入目标集合</button>
         </div>}
       </div>
 
-      {!p.isViewerMode && <div className="desk-endpoints" data-empty={p.sourceUnits.length === 0 && p.targetUnits.length === 0} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <div className="desk-section-title"><span className="desk-section-number">02</span>来源 ⟶ 目标</div>
+      {(!p.isViewerMode || p.localReplyEditor) && <div className="desk-endpoints" data-empty={p.sourceUnits.length === 0 && p.targetUnits.length === 0} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div className="desk-section-title"><span className="desk-section-number">02</span>来源 ⟶ 目标<AboutLink href="/about.html#guide-endpoints" className="workbench-help-link" aria-label="来源与目标帮助" title="来源与目标帮助">?</AboutLink></div>
         <div style={{ flex: 1, border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, minWidth: 0 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600, marginBottom: 4 }}>
             <span>来源集合</span>
@@ -461,7 +530,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                 <li key={p.selKey(u)} style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
                   <StagedMessageLabel messageId={u.messageId} message={messageMap.get(u.messageId)} ariaLabel={`来源消息 ${p.selKey(u)}`} wholeMessage={isWholeMessageSelection(u,u.messageId)}
                     content={collectionContent(u)} />
-                  <button onClick={() => p.removeUnitFrom("source", u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-eee)", cursor: "pointer" }}>删除</button>
+                  <button className="workbench-action" onClick={() => p.removeUnitFrom("source", u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-eee)", cursor: "pointer" }}>删除</button>
                 </li>
               ))}
             </ul>
@@ -478,13 +547,14 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                 <li key={p.selKey(u)} style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
                   <StagedMessageLabel messageId={u.messageId} message={messageMap.get(u.messageId)} ariaLabel={`目标消息 ${p.selKey(u)}`} wholeMessage={isWholeMessageSelection(u,u.messageId)}
                     content={collectionContent(u)} />
-                  <button onClick={() => p.removeUnitFrom("target", u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-eee)", cursor: "pointer" }}>删除</button>
+                  <button className="workbench-action" onClick={() => p.removeUnitFrom("target", u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-eee)", cursor: "pointer" }}>删除</button>
                 </li>
               ))}
             </ul>
           )}
         </div>
       </div>}
+      {p.isViewerMode && p.localReplyEditor && <>{p.relationChoices}{p.localReplyEditor(renderLocalComposer)}</>}
       {!p.isViewerMode && p.draftUnits.length > 0 && p.targetUnits.length > 0 && (
         <div style={{ border: "1px solid var(--line-b45309)", borderRadius: 4, padding: "6px 8px", background: "var(--surface-3b2708)", color: "var(--ink-fbbf24)", fontSize: 12 }}>
           候选区和目标集合同时有内容。发送前请将候选区移入目标集合，或清空其中一方。
@@ -493,8 +563,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
 
       {!p.isViewerMode && <>
         {p.relationChoices}
-        <div className="workbench-composer-section" style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-          <div className="workbench-section-heading" style={{ fontWeight: 600 }}><span className="desk-section-number">04</span><span className="desk-new-title">正文与附加设置</span><span className="desk-legacy-title">输入框（消息与关系设置）</span></div>
+        <ComposerSection>
           {p.hasSecondaryRelationSelector && (() => {
             const opts = p.relationType === "reply"
               ? ["none", "question", "answer"]
@@ -510,17 +579,8 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                         ? ["create", "fulfill"]
                       : p.correctSecondaryOptions;
             return (
-              <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
-                <span style={{ opacity: 0.85 }}>附加关系：</span>
-                {opts.map(t => (
-                  <button key={t} aria-pressed={p.secondaryRelationType === t} onClick={() => {
-                    p.setSecondaryRelationType(prev => p.relationType === 'correct' ? t : (prev === t && t !== "none") ? "none" : t);
-                  }}
-                    style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.secondaryRelationType === t ? "var(--surface-0b84ff)" : "var(--surface-222)", color: p.secondaryRelationType === t ? "var(--ink-fff)" : "var(--ink-rgba-255-255-255-0-7)", cursor: "pointer" }}>
-                    {p.secondaryRelationLabel(t)}
-                  </button>
-                ))}
-              </div>
+              <SecondaryRelationChoices options={opts} value={p.secondaryRelationType} label={p.secondaryRelationLabel}
+                onChange={type => p.setSecondaryRelationType(previous => p.relationType === 'correct' ? type : (previous === type && type !== 'none') ? 'none' : type)} />
             );
           })()}
           {p.relationType === 'correct' && p.secondaryRelationType === 'width-adjustment' && <CardWidthEditor
@@ -533,7 +593,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
             <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
               <span style={{ opacity: 0.85 }}>标注原因：</span>
               {((p.secondaryRelationType === 'attention' || p.secondaryRelationType === 'block') ? ['YES','NO'] : p.SUB_TYPE_OPTIONS).map(st => (
-                <button key={st || 'none'} aria-pressed={p.subType === st} onClick={() => {
+                <button className="workbench-action" key={st || 'none'} aria-pressed={p.subType === st} onClick={() => {
                   p.setSubType(st);
                 }}
                   style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.subType === st ? (p.secondaryRelationType === "recommend" ? "var(--surface-f59e0b-2)" : "var(--surface-64748b)") : "var(--surface-222)", color: p.subType === st ? "var(--ink-fff)" : "var(--ink-rgba-255-255-255-0-7)", cursor: "pointer" }}>
@@ -586,34 +646,23 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                 : "输入运营公告内容（不能为空，支持 Markdown）")
               : "输入一条新文本消息（支持自由换行）";
             return (
-              <textarea
-                data-guide-message-input="true"
-                style={{ width: "100%", minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid var(--line-555)", background: textAreaDisabled ? "var(--surface-1a1a1a)" : "var(--surface-222)", color: textAreaDisabled ? "var(--ink-666)" : "var(--ink-eee)", fontSize: 13, resize: "vertical" }}
-                placeholder={placeholderText}
-                value={p.joinOnlyAction ? '' : p.newMessageContent}
-                readOnly={textAreaDisabled}
-                onChange={e => !textAreaDisabled && p.setNewMessageContent(e.target.value)}
-              />
+              <ComposerTextInput placeholder={placeholderText} content={p.joinOnlyAction ? '' : p.newMessageContent}
+                readOnly={textAreaDisabled} onContentChange={p.setNewMessageContent} />
             );
           })()}
           {renderSendControls()}
           </div>
-        </div>
+        </ComposerSection>
       </>}
 
-      {p.lastClickedMessageId&&messageMap.has(p.lastClickedMessageId)&&!isSettlementRecord(messageMap.get(p.lastClickedMessageId))&&<section aria-label="消息关联" data-selected-message-connections={p.lastClickedMessageId}
-        style={{padding:8,border:'1px solid var(--line-475569)',borderRadius:6,fontSize:12}}>
-        <div>当前消息：<MessageReferenceControl messageId={p.lastClickedMessageId} type={getMessageTypeLabel(messageMap.get(p.lastClickedMessageId))}
-          summary={getMessageCardContent(messageMap.get(p.lastClickedMessageId))} onNavigate={p.onNavigateToMessage} wholeMessage={false}/></div>
-        <MessageConnections key={p.lastClickedMessageId} messageId={p.lastClickedMessageId} messages={p.messages} edges={p.edges} defaultOpen onNavigate={p.onNavigateToMessage}/>
-      </section>}
+      {!(p.isViewerMode && p.localReplyEditor) && renderMessageConnections()}
 
       {!p.isViewerMode && <>
       {/* Stance History */}
       <div style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, marginTop: 8 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ fontWeight: 600 }}>📋 站队 · 立场 · 表态</div>
-          <button onClick={() => p.setShowStanceHistory(!p.showStanceHistory)}
+          <button className="workbench-action" onClick={() => p.setShowStanceHistory(!p.showStanceHistory)}
             style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.showStanceHistory ? "var(--surface-0b84ff)" : "var(--surface-333)", color: "var(--ink-fff)", cursor: "pointer", fontSize: 12 }}>
             {p.showStanceHistory ? '收起' : '展开'}
           </button>
@@ -627,7 +676,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
       <div style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, marginTop: 8 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ fontWeight: 600 }}>📋 审计日志</div>
-          <button onClick={() => p.setShowAuditLog(!p.showAuditLog)}
+          <button className="workbench-action" onClick={() => p.setShowAuditLog(!p.showAuditLog)}
             style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.showAuditLog ? "var(--surface-0b84ff)" : "var(--surface-333)", color: "var(--ink-fff)", cursor: "pointer", fontSize: 12 }}>
             {p.showAuditLog ? '收起' : '展开'}
           </button>
@@ -641,7 +690,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
       <div style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, marginTop: 8 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ fontWeight: 600 }}>💰 收入</div>
-          <button onClick={() => p.setShowRevenue(!p.showRevenue)}
+          <button className="workbench-action" onClick={() => p.setShowRevenue(!p.showRevenue)}
             style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.showRevenue ? "var(--surface-0b84ff)" : "var(--surface-333)", color: "var(--ink-fff)", cursor: "pointer", fontSize: 12 }}>
             {p.showRevenue ? '收起' : '展开'}
           </button>

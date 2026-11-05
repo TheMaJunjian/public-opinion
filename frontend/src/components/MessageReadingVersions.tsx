@@ -61,9 +61,9 @@ export default function MessageReadingVersions({messageId,choices,displayedConte
       </svg>
       {differsFromRecommendation&&<span data-reading-version-recommendation-difference aria-hidden="true" style={{position:'absolute',right:0,top:0,width:5,height:5,borderRadius:'50%',background:'var(--surface-7dd3fc)',boxShadow:'0 0 0 1px var(--shadow-17202e)'}}/>}
     </button>
-    {open&&createPortal(<div ref={popupRef} id={popupId} role="dialog" aria-label={`消息 ${messageId} 的版本`}
+    {open&&createPortal(<div ref={popupRef} id={popupId} role="dialog" aria-label={`消息 ${messageId} 的版本`} data-reading-version-dialog="true"
       style={{...dialogStyles.panel,position:'fixed',left:position.left,top:position.top,transform:position.above?'translateY(-100%)':undefined,zIndex:10050,width:280,maxWidth:'calc(100vw - 36px)',maxHeight:'calc(100vh - 24px)',overflowY:'auto',padding:'8px 10px',fontSize:11,lineHeight:1.6}}>
-      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,marginBottom:8}}><span>切换阅览版本</span><button type="button" aria-label="关闭版本选择" onClick={close} style={actionStyle}>关闭</button></div>
+      <div className="reading-version-header" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,marginBottom:8}}><span>切换阅览版本</span><button type="button" aria-label="关闭版本选择" onClick={close} style={actionStyle}>关闭</button></div>
       {!hasPersonalChoice&&<div style={{marginBottom:8,color:'var(--ink-94a3b8)'}}>当前用户尚未选择，默认跟随推荐选择。</div>}
       {differsFromRecommendation&&<div style={{marginBottom:8,color:'var(--ink-7dd3fc)'}}>当前正文与推荐显示不同。</div>}
       {(overridden||fixed)&&<div style={{marginBottom:8,color:'var(--ink-fbbf24)'}}>
@@ -76,8 +76,8 @@ export default function MessageReadingVersions({messageId,choices,displayedConte
           return <button key={choice.label} type="button" role="radio" aria-checked={displayed} data-reading-version-choice={choice.value}
             onClick={()=>{if(!displayed||fixed)onNavigate({select:choice.value},markerRef.current);}}
             style={{...actionStyle,display:'flex',alignItems:'center',gap:8,textAlign:'left',padding:'6px 8px',background:displayed?'var(--surface-263e52)':'var(--surface-1b293a)',borderColor:displayed?'var(--line-7dd3fc)':'var(--line-475569)'}}>
-            <span style={{flex:1,minWidth:0}}><span>{choice.label}</span>{!!choice.sameAs.length&&<span style={{display:'block',fontSize:10,color:'var(--ink-94a3b8)'}}>与{choice.sameAs.join('、')}相同</span>}{choices.some(other=>other!==choice&&other.content===choice.content)&&<span style={{display:'block',fontSize:10,color:'var(--ink-94a3b8)'}}>正文相同、来源不同</span>}</span>
-            {displayed&&<span style={{color:'var(--ink-7dd3fc)',fontSize:10}}>显示</span>}
+            <span style={{flex:1,minWidth:0}}><span>{choice.label}</span>{!!choice.sameAs.length&&<span className="reading-version-note" style={{display:'block',fontSize:10,color:'var(--ink-94a3b8)'}}>与{choice.sameAs.join('、')}相同</span>}{choices.some(other=>other!==choice&&other.content===choice.content)&&<span className="reading-version-note" style={{display:'block',fontSize:10,color:'var(--ink-94a3b8)'}}>正文相同、来源不同</span>}</span>
+            {displayed&&<span className="reading-version-current" style={{color:'var(--ink-7dd3fc)',fontSize:10}}>显示</span>}
           </button>;
         })}
       </div>

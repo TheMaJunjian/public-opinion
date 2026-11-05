@@ -120,21 +120,30 @@ describe('versioned part selection through the original composer', () => {
     expect(container.querySelector('[data-message-part-id]')).toBeNull();
   });
 
-  it('selects the visible relationship badge and membership count directly without an inspector', () => {
-    const m = { ...message([body, { id: 'relation', type: 'relation', relation: 'classify', roles: { members: [{ id: 'member-1', reference: { messageId: 'other' } }] } }]), kind: 'relation' as const, relationType: 'classify' as const };
+  it.each(['classify', 'summary', 'merge'] as const)('keeps the %s type and derived member count descriptive', relationType => {
+    const m = { ...message([body, { id: 'relation', type: 'relation', relation: relationType, roles: { members: [{ id: 'member-1', reference: { messageId: 'other' } }] } }]), kind: 'relation' as const, relationType };
     const select = vi.fn((event: Event) => (event as CustomEvent<PartSelectionDetail>).detail), click = vi.fn();
     window.addEventListener(PART_SELECTION_EVENT, select);
     const badge = { messageId: 'm', revision: 3, partId: 'relation' };
-    const selected = referenceToUnit(badge);
-    const { getByRole, container } = render(<MessageCard msg={m} selectedUnits={[selected]} ctx={{ isOrganizationMessage: true, isClassification: true, memberCount: 1 }} onClick={click} />);
+    const selected = referenceToUnit({ ...badge, path: ['roles', 'members'] });
+    const { queryByRole, container } = render(<MessageCard msg={m} selectedUnits={[selected]} ctx={{ isOrganizationMessage: true, isClassification: relationType === 'classify', isSummary: relationType === 'summary', isMerge: relationType === 'merge', memberCount: 1 }} onClick={click} />);
     expect(container.querySelector('details')).toBeNull();
-    fireEvent.click(getByRole('button', { name: '选择分类' }));
-    expect(select.mock.results[0].value.reference).toEqual(badge);
-    expect(getByRole('button', { name: '选择分类' })).toHaveAttribute('aria-pressed', 'true');
+    const typeLabel = container.querySelector('[data-skin-type-label]')!;
+    expect(typeLabel).not.toHaveAttribute('role');
+    expect(typeLabel).not.toHaveAttribute('data-message-reference');
+    expect(typeLabel).not.toHaveAttribute('aria-pressed');
+    fireEvent.click(typeLabel);
+    expect(select).not.toHaveBeenCalled();
+    expect(click).toHaveBeenCalledWith(expect.anything(), 'm');
     expect(isWholeMessageSelection(selected, 'm')).toBe(false);
-    fireEvent.click(getByRole('button', { name: '选择所含消息' }));
-    expect(select.mock.results[1].value.reference).toEqual({ ...badge, path: ['roles', 'members'] });
-    expect(click).not.toHaveBeenCalled();
+    click.mockClear();
+    const memberCount = container.querySelector('[data-message-member-count]')!;
+    expect(memberCount).toHaveTextContent('1 条消息');
+    expect(queryByRole('button', { name: '选择所含消息' })).toBeNull();
+    for (const attribute of ['role', 'tabindex', 'data-message-reference', 'aria-pressed', 'data-gesture-disabled']) expect(memberCount).not.toHaveAttribute(attribute);
+    fireEvent.click(memberCount);
+    expect(select).not.toHaveBeenCalled();
+    expect(click).toHaveBeenCalledWith(expect.anything(), 'm');
     window.removeEventListener(PART_SELECTION_EVENT, select);
     expect(unitSelectionToReference({ messageId: 'm', selection: { kind: 'whole' } }, new Map([[m.id, m]]))).toEqual({ messageId: 'm' });
   });

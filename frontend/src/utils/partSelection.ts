@@ -9,10 +9,12 @@ export function capturePartSelection(container: HTMLElement, message: DemoMessag
   const partElement = startElement?.closest<HTMLElement>('[data-message-part-id]');
   const endPart = endElement?.closest<HTMLElement>('[data-message-part-id]');
   if (partElement !== endPart) return null;
-  if (message.parts && !partElement) return null;
-  const textContainer = partElement && container.contains(partElement) ? partElement : container;
+  // Legacy messages have no parts, but their readable body is still explicit.
+  // Never fall back to the entire card: it also contains generated join hints.
+  const textContainer = partElement ?? (!message.parts ? startElement?.closest<HTMLElement>('.message-card-body') : null);
+  if (!textContainer || !container.contains(textContainer)) return null;
   if (!textContainer.contains(range.startContainer) || !textContainer.contains(range.endContainer)) return null;
-  const text = selection.toString();
+  const text = range.toString();
   if (!text.trim()) return null;
   const before = range.cloneRange();
   before.selectNodeContents(textContainer);
@@ -20,9 +22,10 @@ export function capturePartSelection(container: HTMLElement, message: DemoMessag
   const start = before.toString().length;
   const partId = textContainer.dataset.messagePartId ?? message.parts?.find(part => ['text', 'code', 'web'].includes(part.type))?.id ?? 'content';
   const revision = Number(textContainer.dataset.messageRevision) || message.revision || 1;
+  const path = textContainer.dataset.messagePartPath ? JSON.parse(textContainer.dataset.messagePartPath) : undefined;
   return {
     messageId: message.id,
-    reference: { messageId: message.id, revision, partId, range: { start, end: start + text.length } },
+    reference: { messageId: message.id, revision, partId, ...(path ? { path } : {}), range: { start, end: start + text.length } },
     selection: { kind: 'text', start, len: text.length, text },
   };
 }

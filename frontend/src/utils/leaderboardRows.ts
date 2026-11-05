@@ -7,11 +7,11 @@ export interface UserRow {
   userId: string;
   username: string;
   registeredAt: string;
-  rechargeIncome: number;
+  rechargeContribution: number;
+  usageContribution: number;
   messageCount: number;
   textMessageCount: number;
   relationMessageCount: number;
-  totalIncome: number;
   receivedTruthStake: number;
   receivedStanceStake: number;
   receivedTruthPro: number;
@@ -39,11 +39,6 @@ export interface MessageRow {
   intensity: number;
 }
 
-function getStakeTotal(stake: StakeCountItem | undefined): number {
-  if (!stake) return 0;
-  return stake.truth.pro + stake.truth.con + stake.value.pro + stake.value.con;
-}
-
 export function buildLeaderboardRows(metrics: ReturnType<typeof buildLeaderboardMetrics>, users: User[], stakeCounts: Record<string, StakeCountItem>, messageBettorCounts: Record<string, number>) {
   const nameToId = new Map([...metrics.idToName].map(([id, name]) => [name, id]));
   const userRows = (() => {
@@ -53,11 +48,11 @@ export function buildLeaderboardRows(metrics: ReturnType<typeof buildLeaderboard
         userId: user.id,
         username: user.username,
         registeredAt: user.createdAt,
-        rechargeIncome: 0,
+        rechargeContribution: 0,
+        usageContribution: 0,
         messageCount: 0,
         textMessageCount: 0,
         relationMessageCount: 0,
-        totalIncome: 0,
         receivedTruthStake: 0,
         receivedStanceStake: 0,
         receivedTruthPro: 0,
@@ -75,11 +70,11 @@ export function buildLeaderboardRows(metrics: ReturnType<typeof buildLeaderboard
         userId: knownId,
         username,
         registeredAt: '',
-        rechargeIncome: 0,
+        rechargeContribution: 0,
+        usageContribution: 0,
         messageCount: 0,
         textMessageCount: 0,
         relationMessageCount: 0,
-        totalIncome: 0,
         receivedTruthStake: 0,
         receivedStanceStake: 0,
         receivedTruthPro: 0,
@@ -100,18 +95,15 @@ export function buildLeaderboardRows(metrics: ReturnType<typeof buildLeaderboard
       row.messageCount = row.textMessageCount + row.relationMessageCount;
     }
 
-    for (const [username, amount] of metrics.rechargeIncome) {
-      ensure(username).rechargeIncome += amount;
-    }
+    for (const [username, amount] of metrics.rechargeContributions) ensure(username).rechargeContribution = amount;
+    for (const [username, amount] of metrics.usageContributions) ensure(username).usageContribution = amount;
 
     // This is received stake volume, not an account payout.
     for (const message of metrics.rankedMessages) {
-      const totalStake = getStakeTotal(stakeCounts[message.id]);
       const truthPro = stakeCounts[message.id]?.truth.pro ?? 0;
       const truthCon = stakeCounts[message.id]?.truth.con ?? 0;
       const truthStake = truthPro + truthCon;
       const row = ensure(metrics.sendAuthors.get(message.id) ?? message.author);
-      row.totalIncome += totalStake;
       row.receivedTruthStake += truthStake;
       row.receivedTruthPro += truthPro;
       row.receivedTruthCon += truthCon;
@@ -121,7 +113,6 @@ export function buildLeaderboardRows(metrics: ReturnType<typeof buildLeaderboard
     }
 
     for (const row of byUser.values()) {
-      row.totalIncome += row.rechargeIncome;
       const denom = row.receivedTruthPro + row.receivedTruthCon;
       row.netSupportRate = denom > 0 ? Number((((row.receivedTruthPro - row.receivedTruthCon) / denom) * 100).toFixed(2)) : 0;
     }

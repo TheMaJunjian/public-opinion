@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { Z_INDEX } from '../constants/zIndex';
 import ThemeSwitcher from '../theme/ThemeSwitcher';
 import PointsBadge from './PointsBadge';
+import AboutLink from './AboutLink';
 import { useInterfaceZoom } from '../context/InterfaceZoomContext';
 
 interface NavbarProps {
@@ -68,6 +69,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
           <span className="text-xl font-bold tracking-widest">公论</span>
           <span className="text-xs text-[color:var(--ink-a5b4fc-3)] tracking-wide">一切记录在案，是非自有公论</span>
         </Link>
+        <AboutLink className="text-[color:var(--ink-c7d2fe)] hover:text-[color:var(--ink-fff-2)] text-sm font-medium transition-colors">介绍</AboutLink>
         <button
           type="button"
           data-guide-button="true"
@@ -90,9 +92,9 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
           type="button"
           onClick={onOpenWelfare}
           className="text-[color:var(--ink-c7d2fe)] hover:text-[color:var(--ink-fff-2)] text-sm font-medium transition-colors"
-          title="打开福利"
+          title="打开工具"
         >
-          福利
+          工具
         </button>
       </div>
       <div aria-hidden="true" className="min-w-0 flex-1" />
@@ -103,7 +105,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
             <button
               onClick={onOpenViewer}
               className="text-[color:var(--ink-c7d2fe)] hover:text-[color:var(--ink-fff-2)] text-sm font-medium transition-colors"
-              title="阅览导出的消息文本"
+              title="阅览本机文件"
             >
               阅览
             </button>
@@ -113,7 +115,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
             </span>
             <button
               onClick={handleLogout}
-              className="bg-[color:var(--surface-6366f1)] hover:bg-[color:var(--surface-818cf8)] px-4 py-1.5 rounded text-sm font-medium transition-colors"
+              className="navbar-logout bg-[color:var(--surface-6366f1)] hover:bg-[color:var(--surface-818cf8)] px-4 py-1.5 rounded text-sm font-medium transition-colors"
             >
               退出登录
             </button>
@@ -123,7 +125,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
             <button
               onClick={onOpenViewer}
               className="text-[color:var(--ink-c7d2fe)] hover:text-[color:var(--ink-fff-2)] text-sm font-medium transition-colors"
-              title="阅览导出的消息文本"
+              title="阅览本机文件"
             >
               阅览
             </button>

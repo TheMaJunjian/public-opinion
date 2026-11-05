@@ -1,25 +1,38 @@
+import { comparisonChanges } from '../pages/workbench/projections/comparisonChanges';
+import { focusComparisonDifference } from '../pages/workbench/projections/comparisonFocus';
+import { useEffect } from 'react';
+import { annotationAtReference, oppositeAnnotation } from '@gonglun/core';
 import { stakeAppearanceAttributes, groupStakeAppearanceAttributes } from '../utils/stakeAppearance';
 import StakeTierBadge, { SkinOrnament } from '../theme/StakeTierBadge';
 import { ThemeLabel } from '../theme/ThemeIcon';
 import SettlementMessageContent from './SettlementMessageContent';
 import { isSettlementRecord } from '../utils/modelBridge';
-import { EdgeSkin, EdgeLabelSkin, FrameSkin } from '../theme/GraphSkin';
+import { FrameSkin } from '../theme/GraphSkin';
+import DirectedEdgeVisual, { directedEdgeColor } from './graph/DirectedEdgeVisual';
 import { useGraphOverlays } from '../hooks/useGraphOverlays';
-import { projectGraphScene } from '../utils/graphProjection';
+import { projectGraphScene, manualDiscussionTargets } from '../utils/graphProjection';
+import { discussionBranchKey, projectDiscussionBranches, revealDiscussionBranches, type DiscussionOwnership } from '../pages/workbench/model/discussionBranches';
+import { projectStanceLayoutEdges } from '../utils/stanceLayout';
+import { isDiscussionType } from '../utils/discussionTypes';
+import DiscussionRegions from './graph/DiscussionRegions';
+import DiscussionSummaries from './graph/DiscussionSummaries';
+import { summarizeDiscussionEdges, mergeRelatedGroups } from '../utils/discussionSummaries';
+import { GRAPH_EDGE_PATH_LAYER, GRAPH_EDGE_LABEL_LAYER } from '../utils/graphPresentationGeometry';
+import { computeDiscussionRegionTextStats } from '../utils/discussionRegionStats';
+import type { DiscussionRegionGeometry } from '../utils/discussionLayout';
 import {projectFrameViewports,createFrameClipResolver,frameConnectionVisible,type FrameScroll,type GraphFrameViewState} from '../utils/frameViewports';
 import {useAvailableFrameWidth} from '../hooks/useAvailableFrameWidth';
-import type {FrameViewSize} from '../utils/frameLayout';
+import {computeSceneLayout,type FrameViewSize} from '../utils/frameLayout';
 import {FrameViewportTools,FrameViewportScrollbars,clipFrameScene} from './graph/FrameViewport';
 import { GRAPH_CARD_LAYER, GRAPH_SELECTED_CARD_LAYER, unionLayoutRects, getGroupHeaderHeight, getGroupHeaderRect, getMergeCardHeaderRect, getEdgeDecorationLeft, getDecorationColumnWidth, getAnnotationPlacement, GROUP_HEADER_HEIGHT, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, DEC_ICON_W, EDGE_HINT_W, EDGE_LABEL_HINT_GAP, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_HIT_PAD, TAG_HIT_PAD_X, FRAME_RADIUS, GROUP_FRAME_STROKE, SHOW_SELECTED_ACTUAL_RECTS, INLINE_BADGE_COLOR } from '../utils/graphPresentationGeometry';
-import { unitEquals, selectionIsText, extractTextTargetsForMessage, relationTypeName, buildAnnoTree, renderAnnoNodes } from '../utils/graphTextSelection';
+import { unitEquals, selectionIsText, extractTextTargetsForMessage, buildAnnoTree, renderAnnoNodes } from '../utils/graphTextSelection';
 import React, { useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CardWidthContext, CardWidthHandle } from './graph/CardWidthContext';
 import { effectiveCardWidths } from '../utils/cardWidth';
 import JoinEndpointType from './JoinEndpointType';
 import ViewTargetCorners from './ViewTargetCorners';
 import { useCardHeaderWidths } from '../hooks/useCardHeaderWidths';
-import type { DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge';
-import { getRelationMessageLabel } from '../utils/attachedRelationLabels';
+import type { CorrectionVersion, DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge';
 import { getJoinStatusPresentation, type JoinStatus } from '../pages/workbench/model/membership';
 import type { JoinEffectSource } from '../pages/workbench/model/joinDisplay';
 import { computeCorrectionVersions, isCardMessage } from '../utils/modelBridge';
@@ -28,13 +41,19 @@ import { useCardMeasurements } from '../hooks/useCardMeasurements';
 import { useVirtualMessageMounts, type VirtualMessageRevealDetail } from '../hooks/useVirtualMessageMounts';
 import { intersectsViewport } from '../hooks/useCanvasViewport';
 import { createMessageJumpGroups, registerMessageJumpGroups } from '../utils/messageJumpDisplay';
-import { getMessageProminence, getOrganizationTitle, isBodyCorrection, needsSeparateStanceCard } from '../utils/messageDisplay';
+import { getMessageProminence, getMessageTypeLabel, getOrganizationTitle, isBodyCorrection, needsSeparateStanceCard } from '../utils/messageDisplay';
 import { activateMessageFromKeyboard } from '../utils/messageKeyboard';
 import MessageTextPart from './MessageTextPart';
+import { ReadingTextLinksContext } from './ReadingTextLinksContext';
+import { renderReadingTextLinks } from './ReadingTextLinks';
 import { describeUnit } from '../utils/selectionLabel';
-import { PART_SELECTION_EVENT, isMessageElementSelected, isWholeMessageSelection, messageTypeReference } from '../utils/messageElementSelection';
+import { PART_SELECTION_EVENT, isWholeMessageSelection } from '../utils/messageElementSelection';
 import MessageElement from './MessageElement';
+import MessageCardSelfStake from './MessageCardSelfStake';
+import MessageMemberCount from './MessageMemberCount';
+import type { ContainerOwnership } from '../pages/workbench/model/ownership';
 import ClassificationCard from './graph/ClassificationCard';
+import { COMPACT_FRAME_HEADER_HEIGHT } from '../utils/layout';
 import OrganizationFrameHeader from './graph/OrganizationFrameHeader';
 import HomeFilterBadge from './HomeFilterBadge';
 import { MessageDisplayMarker, MessageDisplayHintsScope } from './MessageDisplayHints';
@@ -45,8 +64,12 @@ import RelatedMessages from './RelatedMessages';
 import CrossCanvasRelatedMessages from './CrossCanvasRelatedMessages';
 import { deriveCrossCanvasRelations } from '../utils/crossCanvasRelations';
 import JoinRecordBadges from './JoinRecordBadges';
-import ComparisonPane, { COMPARISON_HEADER_HEIGHT } from './ComparisonPane';
-import {indexRelatedMessages,isRejectedContainer,isRejectedRelation} from '../utils/relatedMessages';
+import ComparisonPane from './ComparisonPane';
+import WorkbenchScrollViewport from './WorkbenchScrollViewport';
+import { comparisonNavigationTarget, navigateComparisonPane } from '../pages/workbench/actions/comparisonNavigation';
+import type { MessagePulse } from '../pages/workbench/actions/scrollNavigation';
+import { MessageJumpOverlay } from './PopupOverlay';
+import {indexRelatedMessages,isRejectedRelation,hiddenInactiveRelationIds} from '../utils/relatedMessages';
 import { CARD_W, GRID_LEFT, CANVAS_BOTTOM_PAD, CANVAS_RIGHT_PAD, FRAME_PAD, MERGE_CARD_H } from '../utils/layout';
 import { getPresentationSpec, type Relation } from '../types';
 import { noteWorkbenchDrawingProgress, reportWorkbenchDrawingDuration } from '../utils/workbenchActivity';
@@ -60,12 +83,25 @@ export type Rect = { x: number; y: number; width: number; height: number };
 
 
 export interface GraphViewProps {
+  /** Initially expand review frames; local controls may restore bounded views. */
+  expandAllFrames?: boolean;
+  /** Counts come from the complete effective membership snapshot, not visible edges. */
+  getMemberCounts?: ContainerOwnership['memberCounts'];
+  discussionView?: { mode: 'graph' | 'discussion'; collapsed: readonly string[] };
+  onDiscussionViewChange?: (value: { mode: 'graph' | 'discussion'; collapsed: readonly string[] }) => void;
+  onDiscussionBranchCollapse?: (targetId: string) => void;
   pendingMessageIds?: readonly string[];
   decorationExpansion?: {requestId:number;messageIds:readonly string[]};
   highlightedMessageIds?: ReadonlySet<string>;
   frameViewStateRef?: React.MutableRefObject<GraphFrameViewState>;
   frameViewRestoreKey?: number;
   messages: DemoMessage[];
+  correctionVersions?: ReadonlyMap<string, { current?: CorrectionVersion; versions: CorrectionVersion[] }>;
+  cardWidths?: Record<string, number>;
+  comparisonAgreeCardWidths?: GraphViewProps['cardWidths'];
+  comparisonDisagreeCardWidths?: GraphViewProps['cardWidths'];
+  comparisonAgreeCorrectionVersions?: GraphViewProps['correctionVersions'];
+  comparisonDisagreeCorrectionVersions?: GraphViewProps['correctionVersions'];
   visibleMessageIds?: ReadonlySet<string>;
   visibleEdgeIds?: ReadonlySet<string>;
   structureOrder?: string[];
@@ -118,6 +154,8 @@ export interface GraphViewProps {
    */
   onGroupFrameDoubleClick?: (e: React.MouseEvent, relMsgId: string) => void;
   onFrameHeaderDoubleClick?: (e: React.MouseEvent, relMsgId: string) => void;
+  /** False when double-click selects correction text instead of entering a container. */
+  containerEntryEnabled?: boolean;
   /**
    * Single-click on an inline badge (RECOMMEND / ARCHIVE) — selects the relation message.
    * Falls back to onMessageClick if not provided.
@@ -132,6 +170,8 @@ export interface GraphViewProps {
   hideMessageIds?: Set<string>;
   /** In trace mode, these CLASSIFY/SUMMARY IDs render as frames instead of cards. */
   traceExpandedFrameIds?: Set<string>;
+  /** Membership paths opened by comparison, independently of trace navigation. */
+  expandedFrameIds?: ReadonlySet<string>;
   /** Directly traced CLASSIFY/SUMMARY IDs use exclusive card/frame rendering. */
   traceFrameIds?: Set<string>;
   /** Render two aligned comparison projections using the same graph layout. */
@@ -143,11 +183,11 @@ export interface GraphViewProps {
   comparisonDisplay?: 'agree' | 'disagree';
   comparisonRecommendedDisplay?: 'agree' | 'disagree';
   comparisonAgreeMessages?: DemoMessage[];
-  comparisonAgreeContext?: Pick<GraphViewProps,'relatedMessages'|'relatedEdges'|'rejectedContainerIds'|'rejectedRelationIds'|'joinStatusByMessage'|'joinEffectSourcesByMessage'|'crossCanvasRelations'>;
+  comparisonAgreeContext?: Pick<GraphViewProps,'relatedMessages'|'relatedEdges'|'rejectedContainerIds'|'rejectedRelationIds'|'joinStatusByMessage'|'joinEffectSourcesByMessage'|'crossCanvasRelations'|'getMemberCounts'|'expandedFrameIds'>;
   comparisonAgreeEdges?: DemoEdge[];
   comparisonAgreeHideMessageIds?: Set<string>;
   comparisonDisagreeMessages?: DemoMessage[];
-  comparisonDisagreeContext?: Pick<GraphViewProps,'relatedMessages'|'relatedEdges'|'rejectedContainerIds'|'rejectedRelationIds'|'joinStatusByMessage'|'joinEffectSourcesByMessage'|'crossCanvasRelations'>;
+  comparisonDisagreeContext?: Pick<GraphViewProps,'relatedMessages'|'relatedEdges'|'rejectedContainerIds'|'rejectedRelationIds'|'joinStatusByMessage'|'joinEffectSourcesByMessage'|'crossCanvasRelations'|'getMemberCounts'|'expandedFrameIds'>;
   comparisonDisagreeEdges?: DemoEdge[];
   comparisonDisagreeHideMessageIds?: Set<string>;
   comparisonAgreeSuppressedRelIds?: Set<string>;
@@ -186,23 +226,31 @@ export interface GraphViewProps {
 }
 
 const EMPTY_COMPARISON_SUPPRESSED_REL_IDS = new Set<string>();
-const EMPTY_SCENE_LAYOUT = { layout: {} as Record<string, LayoutBox>, frameRects: {} as Record<string, LayoutBox>, frameContentRects:{} as Record<string,LayoutBox>, frameViewportSizes:{} as Record<string,FrameViewSize>, colOf: {} as Record<string, number>, canvasHeight: 0, fullFrameIds: [] as string[] };
+const EMPTY_SCENE_LAYOUT = { layout: {} as Record<string, LayoutBox>, frameRects: {} as Record<string, LayoutBox>, frameContentRects:{} as Record<string,LayoutBox>, frameViewportSizes:{} as Record<string,FrameViewSize>, colOf: {} as Record<string, number>, canvasHeight: 0, fullFrameIds: [] as string[], discussionRegions: [] as DiscussionRegionGeometry[], hiddenAtomIds: [] as string[], discussionParents: {} as Record<string,string>, discussionOwnerRegions: {} as Record<string,string>, discussionRelationTypes: {} as Record<string,string> };
 
 const COMPARISON_CANVAS_EXTRA_RIGHT_PAD = 96;
 
 function ComparisonGraphPair(props: GraphViewProps) {
+  const subject=(props.relatedMessages??props.messages).find(message=>message.id===props.comparisonTargetId);
+  const annotation=subject&&annotationAtReference(subject,{messageId:subject.id});
+  const inverse=annotation&&oppositeAnnotation(annotation);
+  const annotationLabel=(action:NonNullable<typeof annotation>)=>`${({recommend:'推荐',archive:'冷藏',read:'已阅',unread:'未阅',follow:'关注',block:'拉黑'} as Record<string,string>)[action.relation]??action.relation}${action.payload.subType==='NO'?'（否）':action.payload.subType==='YES'?'（是）':''}生效`;
+  const changes = useMemo(() => comparisonChanges(
+    {messages:props.comparisonAgreeMessages??props.messages,edges:props.comparisonAgreeEdges??props.edges,widths:props.comparisonAgreeCardWidths},
+    {messages:props.comparisonDisagreeMessages??props.messages,edges:props.comparisonDisagreeEdges??props.edges,widths:props.comparisonDisagreeCardWidths}),
+    [props.comparisonAgreeMessages,props.comparisonDisagreeMessages,props.comparisonAgreeEdges,props.comparisonDisagreeEdges,props.comparisonAgreeCardWidths,props.comparisonDisagreeCardWidths,props.messages,props.edges]);
+  const [changeIndex,setChangeIndex] = useState(0);
+  const [focusOnly,setFocusOnly] = useState(true);
+  const focusedChange = changes[Math.min(changeIndex,Math.max(0,changes.length-1))];
+  useEffect(()=>{setChangeIndex(0);setFocusOnly(true);},[props.comparisonTargetId]);
   const startPositioning = useWorkbenchDrawingTask('positioning');
-  const startMeasurement = useWorkbenchDrawingTask('measurement');
   const pairRef = useRef<HTMLDivElement | null>(null);
   const agreeViewportRef = useRef<HTMLDivElement | null>(null);
   const disagreeViewportRef = useRef<HTMLDivElement | null>(null);
-  const verticalScrollRef = useRef<HTMLDivElement | null>(null);
-  const horizontalScrollRef = useRef<HTMLDivElement | null>(null);
-  const syncingScrollRef = useRef(false);
+  const [agreePulse, setAgreePulse] = useState<MessagePulse | null>(null);
+  const [disagreePulse, setDisagreePulse] = useState<MessagePulse | null>(null);
   const splitDragRef = useRef<{ startX: number; startAgreeRatio: number } | null>(null);
   const [agreeRatio, setAgreeRatio] = useState(0.5);
-  const [contentSize, setContentSize] = useState({ width: 0, height: 0 });
-  const [scrollHostSize, setScrollHostSize] = useState({ height: 0, viewportHeight: 0 });
 
   useLayoutEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
@@ -210,7 +258,7 @@ function ComparisonGraphPair(props: GraphViewProps) {
       const pair = pairRef.current;
       if (!drag || !pair) return;
       const pairWidth = pair.getBoundingClientRect().width;
-      const availableWidth = Math.max(1, pairWidth - 14 - 16);
+      const availableWidth = Math.max(1, pairWidth - 10 - 16);
       const nextRatio = (drag.startAgreeRatio * availableWidth + event.clientX - drag.startX) / availableWidth;
       setAgreeRatio(Math.max(0.25, Math.min(0.75, nextRatio)));
     };
@@ -228,182 +276,81 @@ function ComparisonGraphPair(props: GraphViewProps) {
     splitDragRef.current = { startX: event.clientX, startAgreeRatio: agreeRatio };
   };
 
-  const setSharedScroll = (top: number, left: number) => {
-    const scrollHost = pairRef.current?.closest('[data-workbench-left-panel]') as HTMLDivElement | null;
-    const viewports = [agreeViewportRef.current, disagreeViewportRef.current].filter(Boolean) as HTMLDivElement[];
-    for (const viewport of viewports) {
-      viewport.scrollTop = 0;
-      viewport.scrollLeft = left;
-    }
-    if (scrollHost) scrollHost.scrollTop = top;
-    if (verticalScrollRef.current) verticalScrollRef.current.scrollTop = top;
-    if (horizontalScrollRef.current) horizontalScrollRef.current.scrollLeft = left;
-  };
-
+  const targetId = focusedChange?.id ?? props.autoCenterMessageId;
+  const agreeMessages = props.comparisonAgreeMessages ?? props.messages;
+  const disagreeMessages = props.comparisonDisagreeMessages ?? props.messages;
+  const agreeEdges = props.comparisonAgreeEdges ?? props.edges;
+  const disagreeEdges = props.comparisonDisagreeEdges ?? props.edges;
+  const agreeHiddenIds = useMemo(() => new Set([...(props.comparisonAgreeMessages ? props.comparisonAgreeHideMessageIds : props.hideMessageIds) ?? [],
+    ...hiddenInactiveRelationIds(agreeMessages, props.comparisonAgreeSuppressedRelIds ?? EMPTY_COMPARISON_SUPPRESSED_REL_IDS)]),
+    [agreeMessages, props.comparisonAgreeMessages, props.comparisonAgreeHideMessageIds, props.hideMessageIds, props.comparisonAgreeSuppressedRelIds]);
+  const disagreeHiddenIds = useMemo(() => new Set([...(props.comparisonDisagreeMessages ? props.comparisonDisagreeHideMessageIds : props.hideMessageIds) ?? [],
+    ...hiddenInactiveRelationIds(disagreeMessages, props.comparisonDisagreeSuppressedRelIds ?? EMPTY_COMPARISON_SUPPRESSED_REL_IDS)]),
+    [disagreeMessages, props.comparisonDisagreeMessages, props.comparisonDisagreeHideMessageIds, props.hideMessageIds, props.comparisonDisagreeSuppressedRelIds]);
+  const focusTargets = useMemo(() => targetId ? {
+    agree: comparisonNavigationTarget(targetId, agreeMessages, [...agreeEdges, ...disagreeEdges], agreeHiddenIds),
+    disagree: comparisonNavigationTarget(targetId, disagreeMessages, [...disagreeEdges, ...agreeEdges], disagreeHiddenIds),
+  } : null, [targetId, agreeMessages, disagreeMessages, agreeEdges, disagreeEdges, agreeHiddenIds, disagreeHiddenIds]);
+  const displayPair = useMemo(() => {
+    const pair = { agree: { messages: agreeMessages, edges: agreeEdges }, disagree: { messages: disagreeMessages, edges: disagreeEdges } };
+    return focusOnly && targetId ? focusComparisonDifference(pair, targetId,
+      [focusTargets?.agree.id, focusTargets?.disagree.id].filter((id): id is string => !!id)) : pair;
+  }, [focusOnly, targetId, agreeMessages, disagreeMessages, agreeEdges, disagreeEdges, focusTargets?.agree.id, focusTargets?.disagree.id]);
+  const sideEdges = useRef({ agree: displayPair.agree.edges, disagree: displayPair.disagree.edges });
+  sideEdges.current = { agree: displayPair.agree.edges, disagree: displayPair.disagree.edges };
   useLayoutEffect(() => {
-    const targetId = props.autoCenterMessageId;
-    const agreeViewport = agreeViewportRef.current;
-    const verticalScroll = verticalScrollRef.current;
-    if (!targetId || !agreeViewport || !verticalScroll) return;
-    const task = startPositioning();
-    const centerTarget = () => {
-      const target = Array.from(agreeViewport.querySelectorAll<HTMLElement>('[data-msgid]'))
-        .find(element => element.getAttribute('data-msgid') === targetId);
-      if (!target) return;
-      const targetRect = target.getBoundingClientRect();
-      const viewportRect = agreeViewport.getBoundingClientRect();
-      const scrollHost = pairRef.current?.closest('[data-workbench-left-panel]') as HTMLDivElement | null;
-      const scrollRect = scrollHost?.getBoundingClientRect() ?? viewportRect;
-      const scrollTop = scrollHost?.scrollTop ?? agreeViewport.scrollTop;
-      const scrollHeight = scrollHost?.scrollHeight ?? contentSize.height;
-      const clientHeight = scrollHost?.clientHeight ?? agreeViewport.clientHeight;
-      const nextTop = Math.max(0, Math.min(
-        scrollTop + targetRect.top - scrollRect.top + targetRect.height / 2 - clientHeight / 2,
-        Math.max(0, scrollHeight - clientHeight),
-      ));
-      const nextLeft = Math.max(0, Math.min(
-        agreeViewport.scrollLeft + targetRect.left - viewportRect.left + targetRect.width / 2 - agreeViewport.clientWidth / 2,
-        Math.max(0, contentSize.width - agreeViewport.clientWidth),
-      ));
-      setSharedScroll(nextTop, nextLeft);
-    };
-    const frame = requestAnimationFrame(() => task.run(() => { centerTarget(); task.complete(); }));
-    task.onCancel(() => cancelAnimationFrame(frame));
-    return () => { cancelAnimationFrame(frame); task.cancel(); };
-  }, [props.autoCenterMessageId, props.messages, props.edges, contentSize, startPositioning]);
-
-  useLayoutEffect(() => {
-    const updateContentSize = () => {
-      const task = startMeasurement();
-      task.run(() => {
-        const scrollHost = pairRef.current?.closest('[data-workbench-left-panel]') as HTMLDivElement | null;
-        const dimensions = [agreeViewportRef.current, disagreeViewportRef.current].map(viewport => ({
-          width: viewport?.scrollWidth ?? 0,
-          height: viewport?.scrollHeight ?? 0,
-        }));
-        setContentSize({
-          width: Math.max(...dimensions.map(dimension => dimension.width), 0),
-          height: Math.max(...dimensions.map(dimension => dimension.height), agreeViewportRef.current?.clientHeight ?? 0),
-        });
-        setScrollHostSize({ height: scrollHost?.scrollHeight ?? 0, viewportHeight: scrollHost?.clientHeight ?? 0 });
-        task.complete();
-      });
-    };
-    updateContentSize();
-    const observer = new ResizeObserver(updateContentSize);
-    if (agreeViewportRef.current) observer.observe(agreeViewportRef.current);
-    if (disagreeViewportRef.current) observer.observe(disagreeViewportRef.current);
-    const scrollHost = pairRef.current?.closest('[data-workbench-left-panel]') as HTMLDivElement | null;
-    if (scrollHost) observer.observe(scrollHost);
-    for (const canvas of [agreeViewportRef.current, disagreeViewportRef.current]
-      .flatMap(viewport => viewport ? Array.from(viewport.querySelectorAll<HTMLElement>('[data-jump-canvas]')) : [])) {
-      observer.observe(canvas);
-    }
-    window.addEventListener('resize', updateContentSize);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener('resize', updateContentSize);
-    };
-  }, [props.messages, props.edges, startMeasurement]);
-
-  useLayoutEffect(() => {
-    const viewports = [agreeViewportRef.current, disagreeViewportRef.current].filter(Boolean) as HTMLDivElement[];
-    const scrollHost = pairRef.current?.closest('[data-workbench-left-panel]') as HTMLDivElement | null;
-    const verticalScroll = verticalScrollRef.current;
-    const horizontalScroll = horizontalScrollRef.current;
-    if (!verticalScroll || !horizontalScroll) return;
-    const getHorizontalMax = (element: HTMLElement) => Math.max(0, element.scrollWidth - element.clientWidth);
-    const getScrollProgress = (element: HTMLElement) => {
-      const max = getHorizontalMax(element);
-      return max > 0 ? element.scrollLeft / max : 0;
-    };
-    const setHorizontalProgress = (progress: number) => {
-      const clampedProgress = Math.max(0, Math.min(1, progress));
-      for (const viewport of viewports) viewport.scrollLeft = getHorizontalMax(viewport) * clampedProgress;
-      horizontalScroll.scrollLeft = getHorizontalMax(horizontalScroll) * clampedProgress;
-    };
-    const syncFromViewport = (source: HTMLDivElement) => {
-      if (syncingScrollRef.current) return;
-      syncingScrollRef.current = true;
-      for (const viewport of viewports) {
-        viewport.scrollTop = 0;
-      }
-      setHorizontalProgress(getScrollProgress(source));
-      if (scrollHost) scrollHost.scrollTop = source.scrollTop;
-      verticalScroll.scrollTop = source.scrollTop;
-      requestAnimationFrame(() => { syncingScrollRef.current = false; });
-    };
-    const syncFromVerticalScroll = () => {
-      if (syncingScrollRef.current) return;
-      syncingScrollRef.current = true;
-      if (scrollHost) scrollHost.scrollTop = verticalScroll.scrollTop;
-      for (const viewport of viewports) viewport.scrollTop = 0;
-      requestAnimationFrame(() => { syncingScrollRef.current = false; });
-    };
-    const syncFromHorizontalScroll = () => {
-      if (syncingScrollRef.current) return;
-      syncingScrollRef.current = true;
-      setHorizontalProgress(getScrollProgress(horizontalScroll));
-      requestAnimationFrame(() => { syncingScrollRef.current = false; });
-    };
-    const handlers = viewports.map(viewport => {
-      const handler = () => syncFromViewport(viewport);
-      viewport.addEventListener('scroll', handler, { passive: true });
-      return [viewport, handler] as const;
+    if (!targetId || !focusTargets) return;
+    const cleanups = (['agree', 'disagree'] as const).flatMap(side => {
+      const viewport = side === 'agree' ? agreeViewportRef.current : disagreeViewportRef.current;
+      const focus = focusTargets[side];
+      return viewport ? [navigateComparisonPane(viewport, focus.id ?? targetId, sideEdges.current[side], startPositioning, !focus.id,
+        side === 'agree' ? setAgreePulse : setDisagreePulse)] : [];
     });
-    const handleScrollHost = () => {
-      if (syncingScrollRef.current) return;
-      syncingScrollRef.current = true;
-      verticalScroll.scrollTop = scrollHost?.scrollTop ?? 0;
-      const source = scrollHost ?? viewports[0];
-      setHorizontalProgress(source ? getScrollProgress(source) : 0);
-      for (const viewport of viewports) viewport.scrollTop = 0;
-      requestAnimationFrame(() => { syncingScrollRef.current = false; });
-    };
-    verticalScroll.addEventListener('scroll', syncFromVerticalScroll, { passive: true });
-    horizontalScroll.addEventListener('scroll', syncFromHorizontalScroll, { passive: true });
-    scrollHost?.addEventListener('scroll', handleScrollHost, { passive: true });
-    return () => {
-      for (const [viewport, handler] of handlers) viewport.removeEventListener('scroll', handler);
-      verticalScroll.removeEventListener('scroll', syncFromVerticalScroll);
-      horizontalScroll.removeEventListener('scroll', syncFromHorizontalScroll);
-      scrollHost?.removeEventListener('scroll', handleScrollHost);
-    };
-  }, []);
+    return () => cleanups.forEach(cleanup => cleanup());
+    // A resize or incidental render must not undo the user's manual scrolling.
+    // Restart only when the reviewed message or either semantic destination changes.
+  }, [props.comparisonTargetId, targetId, focusOnly, focusTargets?.agree.id, focusTargets?.disagree.id, startPositioning]);
 
   const viewportStyle: React.CSSProperties = {
-    flex: '0 0 auto',
-    minWidth: 0,
-    minHeight: 0,
-    overflowX: 'auto',
-    overflowY: 'hidden',
+    flex: '0 0 auto', minWidth: 0, overflowX: 'auto', overflowY: 'auto',
   };
 
   return (
     <div ref={pairRef} data-comparison-pair="true" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 8, width: '100%', minHeight: '100%' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: `${agreeRatio}fr 30px ${1 - agreeRatio}fr`, gap: 8, alignItems: 'stretch' }}>
-      <ComparisonPane side="agree" recommended={props.comparisonRecommendedDisplay === 'agree'}>
-        {props.comparisonScopeHeader}
-        <div ref={agreeViewportRef} data-comparison-viewport="agree" style={viewportStyle}>
-          <GraphView {...props} {...props.comparisonAgreeContext} messages={props.comparisonAgreeMessages ?? props.messages} edges={props.comparisonAgreeEdges ?? props.edges} hideMessageIds={props.comparisonAgreeMessages ? props.comparisonAgreeHideMessageIds : props.hideMessageIds} comparisonPair={false} comparisonSingle={false} comparisonDisplay="agree" comparisonSuppressedRelIds={props.comparisonAgreeSuppressedRelIds} autoCenterMessageId={null} />
-        </div>
+      {agreePulse && <MessageJumpOverlay messageId={agreePulse.messageId} targetElement={agreePulse.element} targetRect={agreePulse.rect}
+        viewportElement={agreeViewportRef.current ?? undefined} hint={focusTargets?.agree.missing ? '此侧不显示该消息' : '已定位当前差异'} />}
+      {disagreePulse && <MessageJumpOverlay messageId={disagreePulse.messageId} targetElement={disagreePulse.element} targetRect={disagreePulse.rect}
+        viewportElement={disagreeViewportRef.current ?? undefined} hint={focusTargets?.disagree.missing ? '此侧不显示该消息' : '已定位当前差异'} />}
+      <div className="comparison-difference-toolbar" aria-label="受影响消息">
+        <span className="comparison-difference-count">{changes.length ? `差异 ${Math.min(changeIndex+1,changes.length)}／${changes.length}` : '当前条件下无显示差异'}</span>
+        <span className="comparison-difference-hint">{focusOnly?'当前消息及必要关联':'仅显示相关消息'}</span>
+        <button type="button" aria-label="只看当前差异" aria-pressed={focusOnly} disabled={!changes.length} onClick={()=>setFocusOnly(value=>!value)}
+          title="保留当前差异、发生变化的成员及两侧归属框架；再次点击恢复全部相关消息">只看当前差异：{focusOnly?'已开启':'已关闭'}</button>
+        <button type="button" disabled={!changeIndex} onClick={()=>setChangeIndex(index=>index-1)}>上一个差异</button>
+        <button type="button" disabled={changeIndex>=changes.length-1} onClick={()=>setChangeIndex(index=>index+1)}>下一个差异</button>
+        {changes.length>0&&<select aria-label="选择受影响消息" value={focusedChange?.id} onChange={event=>setChangeIndex(changes.findIndex(change=>change.id===event.target.value))}>
+          {changes.map(change=><option key={change.id} value={change.id}>【{getMessageTypeLabel(change.message)}】{change.id} · {change.reasons.join('、')} · {change.message.content.slice(0,40)}</option>)}
+        </select>}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: `${agreeRatio}fr 10px ${1 - agreeRatio}fr`, gap: 8, alignItems: 'stretch' }}>
+      <ComparisonPane side="agree" label={annotation&&inverse?annotationLabel(annotation):undefined} recommended={props.comparisonRecommendedDisplay === 'agree'}>
+        {focusedChange&&<div style={{padding:6,fontSize:12}}>{focusedChange.id} · {focusedChange.reasons.join('、')}{focusTargets?.agree.missing?' · 此侧不显示'+(focusTargets.agree.id?'，已定位关联框架或消息':''):''}</div>}
+        <WorkbenchScrollViewport ref={agreeViewportRef} data-comparison-viewport="agree" aria-label="对比左侧" style={viewportStyle}>
+          {targetId&&focusTargets?.agree.missing&&!focusTargets.agree.id&&<div data-comparison-missing={targetId} role="status" style={{padding:12}}>此侧不显示此消息</div>}
+          <GraphView {...props} {...props.comparisonAgreeContext} messages={displayPair.agree.messages} edges={displayPair.agree.edges} correctionVersions={props.comparisonAgreeCorrectionVersions ?? props.correctionVersions} cardWidths={props.comparisonAgreeCardWidths ?? props.cardWidths} invalidCorrectionIds={props.comparisonAgreeSuppressedRelIds ?? props.invalidCorrectionIds} hideMessageIds={props.comparisonAgreeMessages ? props.comparisonAgreeHideMessageIds : props.hideMessageIds} pendingMessageIds={focusTargets?.agree.id?[focusTargets.agree.id]:[]} highlightedMessageIds={new Set(focusTargets?.agree.id?[focusTargets.agree.id]:[])} expandAllFrames comparisonPair={false} comparisonSingle={false} comparisonDisplay="agree" comparisonSuppressedRelIds={props.comparisonAgreeSuppressedRelIds} autoCenterMessageId={null} />
+        </WorkbenchScrollViewport>
       </ComparisonPane>
-      <div data-comparison-divider="true" style={{ minHeight: 0, marginTop: COMPARISON_HEADER_HEIGHT, display: 'grid', gridTemplateColumns: '14px minmax(0, 1fr)', gap: 4, position: 'sticky', top: 0, alignSelf: 'start', height: Math.max(scrollHostSize.viewportHeight, 1), overflow: 'hidden', background: 'var(--surface-2a2a2a)', borderRadius: 4 }}>
-        <div ref={verticalScrollRef} data-comparison-scroll-vertical="true" aria-label="对比视图垂直滚动条" style={{ minHeight: 0, minWidth: 0, height: '100%', overflowY: 'scroll', overflowX: 'hidden', scrollbarGutter: 'stable', borderRadius: 4 }}>
-          <div style={{ height: Math.max(scrollHostSize.height, contentSize.height, 1), width: 1 }} />
-        </div>
-        <div onPointerDown={handleSplitPointerDown} role="separator" aria-label="调整对比视图宽度" style={{ minWidth: 0, cursor: 'col-resize', background: 'var(--surface-3a3a3a)', borderRadius: 4, touchAction: 'none', userSelect: 'none' }} />
-      </div>
-      <ComparisonPane side="disagree" recommended={props.comparisonRecommendedDisplay === 'disagree'}>
-        {props.comparisonScopeHeader}
-        <div ref={disagreeViewportRef} data-comparison-viewport="disagree" style={viewportStyle}>
-          <GraphView {...props} {...props.comparisonDisagreeContext} messages={props.comparisonDisagreeMessages ?? props.messages} edges={props.comparisonDisagreeEdges ?? props.edges} hideMessageIds={props.comparisonDisagreeMessages ? props.comparisonDisagreeHideMessageIds : props.hideMessageIds} comparisonPair={false} comparisonSingle={false} comparisonDisplay="disagree" comparisonSuppressedRelIds={props.comparisonDisagreeSuppressedRelIds} autoCenterMessageId={null} />
-        </div>
+      <div data-comparison-divider="true" onPointerDown={handleSplitPointerDown} role="separator" aria-orientation="vertical" aria-label="调整对比视图宽度"
+        style={{ minWidth: 0, cursor: 'col-resize', background: 'var(--surface-3a3a3a)', borderRadius: 4, touchAction: 'none', userSelect: 'none' }} />
+      <ComparisonPane side="disagree" label={inverse?annotationLabel(inverse):undefined} recommended={props.comparisonRecommendedDisplay === 'disagree'}>
+        {focusedChange&&<div style={{padding:6,fontSize:12}}>{focusedChange.id} · {focusedChange.reasons.join('、')}{focusTargets?.disagree.missing?' · 此侧不显示'+(focusTargets.disagree.id?'，已定位关联框架或消息':''):''}</div>}
+        <WorkbenchScrollViewport ref={disagreeViewportRef} data-comparison-viewport="disagree" aria-label="对比右侧" style={viewportStyle}>
+          {targetId&&focusTargets?.disagree.missing&&!focusTargets.disagree.id&&<div data-comparison-missing={targetId} role="status" style={{padding:12}}>此侧不显示此消息</div>}
+          <GraphView {...props} {...props.comparisonDisagreeContext} messages={displayPair.disagree.messages} edges={displayPair.disagree.edges} correctionVersions={props.comparisonDisagreeCorrectionVersions ?? props.correctionVersions} cardWidths={props.comparisonDisagreeCardWidths ?? props.cardWidths} invalidCorrectionIds={props.comparisonDisagreeSuppressedRelIds ?? props.invalidCorrectionIds} hideMessageIds={props.comparisonDisagreeMessages ? props.comparisonDisagreeHideMessageIds : props.hideMessageIds} pendingMessageIds={focusTargets?.disagree.id?[focusTargets.disagree.id]:[]} highlightedMessageIds={new Set(focusTargets?.disagree.id?[focusTargets.disagree.id]:[])} expandAllFrames comparisonPair={false} comparisonSingle={false} comparisonDisplay="disagree" comparisonSuppressedRelIds={props.comparisonDisagreeSuppressedRelIds} autoCenterMessageId={null} />
+        </WorkbenchScrollViewport>
       </ComparisonPane>
       </div>
-      <div ref={horizontalScrollRef} data-comparison-scroll-horizontal="true" aria-label="对比视图水平滚动条" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 1, opacity: 0, pointerEvents: 'none', overflowX: 'scroll', overflowY: 'hidden' }}>
-        <div style={{ width: Math.max(contentSize.width, 1), height: 1 }} />
-      </div>
+
     </div>
   );
 }
@@ -447,10 +394,61 @@ function GraphViewCanvas(props: GraphViewProps) {
 
   const showJoinRecords=props.showJoinRecords??!!props.joinFilterTargetId;
   const hiddenRecordIds=useMemo(()=>new Set(inputMessages.filter(message=>isSettlementRecord(message)||message.kind==='join'&&!showJoinRecords).map(message=>message.id)),[inputMessages,showJoinRecords]);
-  const messages = useMemo(()=>inputMessages.filter(message=>!hiddenRecordIds.has(message.id)),[inputMessages,hiddenRecordIds]);
-  const relatedByTarget=useMemo(()=>indexRelatedMessages(props.relatedMessages??messages,props.rejectedContainerIds),[props.relatedMessages,messages,props.rejectedContainerIds]);
-  const edges = useMemo(()=>inputEdges.filter(edge=>![edge.relationMessageId,edge.from.messageId,edge.to.messageId].some(id=>hiddenRecordIds.has(id))),[inputEdges,hiddenRecordIds]);
+  const availableMessages = useMemo(()=>inputMessages.filter(message=>!hiddenRecordIds.has(message.id)),[inputMessages,hiddenRecordIds]);
+  const availableEdges = useMemo(()=>inputEdges.filter(edge=>![edge.relationMessageId,edge.from.messageId,edge.to.messageId].some(id=>hiddenRecordIds.has(id))),[inputEdges,hiddenRecordIds]);
+  const [localDiscussionView,setLocalDiscussionView] = useState<{mode:'graph'|'discussion';collapsed:readonly string[]}>({mode:'graph',collapsed:[]});
+  const discussionView = props.discussionView ?? localDiscussionView;
+  const discussionEnabled = discussionView.mode === 'discussion';
+  const [hiddenDiscussionSummaries, setHiddenDiscussionSummaries] = useState<ReadonlySet<string>>(() => new Set());
+  const [discussionHeaderWidths, setDiscussionHeaderWidths] = useState<Readonly<Record<string, number>>>({});
+  const measureDiscussionHeaders = useCallback((widths: Readonly<Record<string, number>>) => setDiscussionHeaderWidths(previous => {
+    let next = previous;
+    for (const [key, width] of Object.entries(widths)) {
+      if (Math.abs((previous[key] ?? 0) - width) <= 1) continue;
+      if (next === previous) next = { ...previous };
+      (next as Record<string, number>)[key] = width;
+    }
+    return next;
+  }), []);
+  const [discussionRelationVisibility, setDiscussionRelationVisibility] = useState<ReadonlyMap<string, boolean>>(() => new Map());
+  const toggleDiscussionSummary = useCallback((key: string) => setHiddenDiscussionSummaries(previous => {
+    const next = new Set(previous);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  }), []);
+  const activeDiscussionCollapsed = useMemo(()=>{
+    if (!discussionEnabled || !discussionView.collapsed.length) return discussionView.collapsed;
+    const manual = manualDiscussionTargets({messages:availableMessages,edges:availableEdges,traceMode:!!props.traceFrameIds?.size});
+    return discussionView.collapsed.filter(key=>{
+      try { return !manual.has(JSON.parse(key)[0]); } catch { return true; }
+    });
+  },[discussionEnabled,discussionView.collapsed,availableMessages,availableEdges,props.traceFrameIds]);
+  const discussionBranches = useMemo(()=>discussionEnabled ? projectDiscussionBranches({
+    messages:availableMessages,edges:availableEdges,collapsed:activeDiscussionCollapsed,deferVisibilityToLayout:true,
+  }) : null,[discussionEnabled,availableMessages,availableEdges,activeDiscussionCollapsed]);
+  // Folding changes the drawing only. Semantic stance chains and original
+  // target addresses always see the complete scene.
+  const messages = availableMessages, edges = availableEdges;
+  const discussionOwnershipRef = useRef<DiscussionOwnership>();
+  const relatedByTarget=useMemo(()=>indexRelatedMessages(props.relatedMessages??availableMessages,props.rejectedContainerIds),[props.relatedMessages,availableMessages,props.rejectedContainerIds]);
+  const changeDiscussionView = useCallback((next:{mode:'graph'|'discussion';collapsed:readonly string[]})=>{
+    setLocalDiscussionView(next);
+    props.onDiscussionViewChange?.(next);
+  },[props.onDiscussionViewChange]);
+  const toggleDiscussionBranch = (key:string) => {
+    const collapsed = new Set(discussionView.collapsed);
+    const collapsing = !collapsed.has(key);
+    if (collapsing) collapsed.add(key); else collapsed.delete(key);
+    const next = {mode:discussionView.mode,collapsed:[...collapsed]};
+    changeDiscussionView(next);
+    if (collapsing) {
+      const targetId = discussionBranches?.groups.find(group => group.key === key)?.targetId;
+      if (targetId) props.onDiscussionBranchCollapse?.(targetId);
+    }
+  };
+  const discussionTargetIds = useMemo(()=>discussionBranches?.textTargetIds??new Set<string>(),[discussionBranches]);
   const widthContext = useContext(CardWidthContext);
+  const readingLinks = useContext(ReadingTextLinksContext);
   const traceFrameIds = props.traceFrameIds ?? new Set<string>();
   // Expanded frame IDs are only meaningful inside an active trace window.
   // Do not let stale expansion state turn the ordinary graph into a trace view.
@@ -458,30 +456,39 @@ function GraphViewCanvas(props: GraphViewProps) {
   // An entering trace can briefly render with the previous expansion state.
   // Only frames belonging to the current trace may be rendered as expanded.
   const traceExpandedFrameIds = useMemo(
-    () => new Set([...(props.traceExpandedFrameIds ?? [])].filter(id=>props.traceFrameIds?.has(id))),
-    [props.traceExpandedFrameIds,props.traceFrameIds],
+    () => new Set([...[...(props.traceExpandedFrameIds ?? [])].filter(id=>props.traceFrameIds?.has(id)),
+      ...props.expandedFrameIds ?? []].filter(id => !props.rejectedContainerIds?.has(id))),
+    [props.traceExpandedFrameIds,props.traceFrameIds,props.expandedFrameIds,props.rejectedContainerIds],
   );
   const comparisonSuppressedRelIds = props.comparisonSuppressedRelIds ?? EMPTY_COMPARISON_SUPPRESSED_REL_IDS;
   const rejectedRelationIds=props.rejectedRelationIds??(comparisonSuppressedRelIds.size?comparisonSuppressedRelIds:undefined);
   const effectiveHideMessageIds = useMemo(() =>new Set([...props.hideMessageIds??[],
-    ...[...comparisonSuppressedRelIds].filter(id=>!isRejectedRelation(messages.find(message=>message.id===id),rejectedRelationIds))]),
-    [props.hideMessageIds,comparisonSuppressedRelIds,rejectedRelationIds,messages]);
+    ...hiddenInactiveRelationIds(messages,comparisonSuppressedRelIds)]),
+    [props.hideMessageIds,comparisonSuppressedRelIds,messages]);
 
   const canvasRef = useRef<HTMLDivElement|null>(null);
   const frameViewKey=props.comparisonDisplay??'main';
   const [frameViewSizes,setFrameViewSizes]=useState<Record<string,FrameViewSize>>(()=>props.frameViewStateRef?.current[frameViewKey]?.sizes??{});
   const [frameScrolls,setFrameScrolls]=useState<Record<string,FrameScroll>>(()=>props.frameViewStateRef?.current[frameViewKey]?.scrolls??{});
-  const [frameFullOverrides,setFrameFullOverrides]=useState<Record<string,boolean>>(()=>props.frameViewStateRef?.current[frameViewKey]?.full??{});
+  const [frameFullOverrides,setFrameFullOverrides]=useState<Record<string,boolean>>(()=>props.expandAllFrames?{}:props.frameViewStateRef?.current[frameViewKey]?.full??{});
+  const [collapsedFrameIds,setCollapsedFrameIds]=useState<Set<string>>(()=>new Set(props.frameViewStateRef?.current[frameViewKey]?.collapsed));
+  const [hiddenFrameHeaderIds,setHiddenFrameHeaderIds]=useState<Set<string>>(()=>new Set(props.frameViewStateRef?.current[frameViewKey]?.hiddenHeaders));
+  const toggleFrameVisibility=(id:string,header=false)=>{
+    (header?setHiddenFrameHeaderIds:setCollapsedFrameIds)(previous=>{
+      const next=new Set(previous);if(next.has(id))next.delete(id);else next.add(id);return next;
+    });
+  };
   const restoredFrameKey=useRef(props.frameViewRestoreKey);
   useLayoutEffect(()=>{
     if(restoredFrameKey.current===props.frameViewRestoreKey)return;
     restoredFrameKey.current=props.frameViewRestoreKey;
     const saved=props.frameViewStateRef?.current[frameViewKey];
-    setFrameViewSizes(saved?.sizes??{});setFrameScrolls(saved?.scrolls??{});setFrameFullOverrides(saved?.full??{});
-  },[props.frameViewRestoreKey,props.frameViewStateRef,frameViewKey]);
+    setFrameViewSizes(saved?.sizes??{});setFrameScrolls(saved?.scrolls??{});setFrameFullOverrides(props.expandAllFrames?{}:saved?.full??{});
+    setCollapsedFrameIds(new Set(saved?.collapsed));setHiddenFrameHeaderIds(new Set(saved?.hiddenHeaders));
+  },[props.frameViewRestoreKey,props.frameViewStateRef,frameViewKey,props.expandAllFrames]);
   useLayoutEffect(()=>{
-    if(props.frameViewStateRef)props.frameViewStateRef.current[frameViewKey]={sizes:frameViewSizes,scrolls:frameScrolls,full:frameFullOverrides};
-  },[props.frameViewStateRef,frameViewKey,frameViewSizes,frameScrolls,frameFullOverrides]);
+    if(props.frameViewStateRef)props.frameViewStateRef.current[frameViewKey]={sizes:frameViewSizes,scrolls:frameScrolls,full:frameFullOverrides,collapsed:[...collapsedFrameIds],hiddenHeaders:[...hiddenFrameHeaderIds]};
+  },[props.frameViewStateRef,frameViewKey,frameViewSizes,frameScrolls,frameFullOverrides,collapsedFrameIds,hiddenFrameHeaderIds]);
   const frameViewsRef=useRef<ReturnType<typeof projectFrameViewports>|null>(null);
   const edgeStartsRef=useRef(new Map<string,{x:number;y:number}>());
   const resizeFrame=useCallback((id:string,value:FrameViewSize|undefined)=>{
@@ -519,7 +526,7 @@ function GraphViewCanvas(props: GraphViewProps) {
     return <button key={`${annotations?'annotation':'decoration'}-toggle-${messageIds[0]}`} type="button"
       data-decoration-toggle={annotations?undefined:messageIds[0]} data-annotation-toggle={annotations?messageIds[0]:undefined} data-rel-overlay="true"
       aria-label={`${expanded?'收起':'显示'}${label} ${messageIds[0]}`} aria-expanded={expanded}
-      title={`${expanded?'收起':'显示'}${annotations?'标注':'赞同／反对'}`}
+      title={`${expanded?'收起':'显示'}${annotations?'标注（推荐、冷藏等）':'表态（赞同、反对）'}`}
       onMouseDown={event=>event.stopPropagation()} onMouseUp={event=>event.stopPropagation()}
       onKeyDown={event=>event.stopPropagation()} onDoubleClick={event=>event.stopPropagation()}
       onClick={event=>{
@@ -547,6 +554,17 @@ function GraphViewCanvas(props: GraphViewProps) {
     ...(widthContext?.editing ? [widthContext.editing.messageId] : []),
     ...(props.comparisonDisplay&&props.comparisonTargetId?[props.comparisonTargetId]:[])]), [expandedFrameIds, revealedFrameIds,props.comparisonDisplay,props.comparisonTargetId,widthContext?.editing?.messageId]);
   const resolveRevealIds = useCallback((ids: string[], detail: VirtualMessageRevealDetail) => {
+    if (discussionEnabled && activeDiscussionCollapsed.length) {
+      // Only explicit navigation targets reopen regions. Attached labels are
+      // mounted for the locator but must not undo a fold of the target's children.
+      const collapsed = revealDiscussionBranches({messages:availableMessages,edges:availableEdges,
+        collapsed:activeDiscussionCollapsed,messageIds:detail.ids,ownership:discussionOwnershipRef.current});
+      if (collapsed.length !== activeDiscussionCollapsed.length) {
+        detail.positioningPending = true;
+        const active = new Set(activeDiscussionCollapsed), retained = new Set(collapsed);
+        changeDiscussionView({...discussionView,collapsed:discussionView.collapsed.filter(key=>!active.has(key)||retained.has(key))});
+      }
+    }
     const targets = new Set(ids);
     const decorationEdges=new Map<string,DemoEdge[]>();
     const relationEdges=new Map<string,DemoEdge[]>();
@@ -563,6 +581,14 @@ function GraphViewCanvas(props: GraphViewProps) {
     const frames = messages.filter(message => message.relationType === 'arrange' && targets.has(message.id)).map(message => message.id);
     const views=frameViewsRef.current;
     if(views){
+      const revealTargets=[...targets].flatMap(id=>[id,...views.ancestors(id)]);
+      const reopen=revealTargets.filter(id=>collapsedFrameIds.has(id)&&!detail.ids.includes(id));
+      const showHeaders=detail.ids.filter(id=>hiddenFrameHeaderIds.has(id));
+      if(reopen.length||showHeaders.length){
+        detail.positioningPending=true;
+        if(reopen.length)setCollapsedFrameIds(previous=>new Set([...previous].filter(id=>!reopen.includes(id))));
+        if(showHeaders.length)setHiddenFrameHeaderIds(previous=>new Set([...previous].filter(id=>!showHeaders.includes(id))));
+      }
       // Reveal an edge's routed start, including a fragment of a tall card,
       // rather than centering the entire source message in every frame.
       const anchorBoxes=new Map<string,LayoutBox>();
@@ -597,6 +623,16 @@ function GraphViewCanvas(props: GraphViewProps) {
           return anchor;
         });
       });
+      // A new review destination reopens only its enclosing frames. A manual
+      // collapse remains in place until navigation actually needs that path.
+      if(props.expandAllFrames){
+        const ancestors=new Set([...anchors,...targets].flatMap(id=>views.ancestors(id)));
+        const reopen=[...ancestors].filter(id=>frameFullOverrides[id]===false);
+        if(reopen.length){
+          detail.positioningPending=true;
+          setFrameFullOverrides(previous=>({...previous,...Object.fromEntries(reopen.map(id=>[id,true]))}));
+        }
+      }
       const next=views.reveal([...new Set(anchors)],anchorBoxes);
       if(Object.entries(next).some(([id,offset])=>views.offsets[id]?.left!==offset.left||views.offsets[id]?.top!==offset.top)){
         detail.positioningPending=true;
@@ -608,19 +644,20 @@ function GraphViewCanvas(props: GraphViewProps) {
     setRevealedFrameIds(previous => previous.length === frames.length && previous.every((id, index) => id === frames[index]) ? previous : frames);
     // Keep jumped-to decorations expanded until the user collapses them.
     return [...new Set([...ids,...revealedDecorations,...revealedAnnotations,...frames])];
-  }, [messages, edges]);
+  }, [messages, edges,discussionEnabled,discussionView,activeDiscussionCollapsed,availableMessages,availableEdges,changeDiscussionView,props.expandAllFrames,frameFullOverrides,collapsedFrameIds,hiddenFrameHeaderIds]);
 
   const { msgMap, edgesByRelMsg, classifyRelMsgIds, relationCardMsgIds, normals,
-    layoutEdges, hiddenTargetIds, correctionsByTargetMsgId, frameBlocks, frameDepthMap,
+    layoutEdges, hiddenTargetIds, correctionsByTargetMsgId: renderedCorrectionsByTargetMsgId, frameBlocks, frameDepthMap,
     correctedEdgeIdsByRelMsg, pipelineCol, pipelineMaxCol } = useMemo(() => projectGraphScene({
-      messages, edges, traceExpandedFrameIds, isTraceWindow,showJoinRecords,standaloneMessageIds:props.standaloneMessageIds,rejectedContainerIds:props.rejectedContainerIds,rejectedRelationIds,hiddenMessageIds:effectiveHideMessageIds,cardFrameIds,
-    }), [messages, edges, traceExpandedFrameIds, isTraceWindow,showJoinRecords,props.standaloneMessageIds,props.rejectedContainerIds,rejectedRelationIds,effectiveHideMessageIds,cardFrameIds]);
+      messages, edges, traceExpandedFrameIds, isTraceWindow,expandedFrameIds:props.expandedFrameIds,showJoinRecords,standaloneMessageIds:props.standaloneMessageIds,rejectedContainerIds:props.rejectedContainerIds,rejectedRelationIds,hiddenMessageIds:effectiveHideMessageIds,cardFrameIds,
+      discussionTargetIds:discussionEnabled?discussionTargetIds:undefined,
+    }), [messages, edges, traceExpandedFrameIds, isTraceWindow,props.expandedFrameIds,showJoinRecords,props.standaloneMessageIds,props.rejectedContainerIds,rejectedRelationIds,effectiveHideMessageIds,cardFrameIds,discussionEnabled,discussionTargetIds]);
   const availableFrameWidth=useAvailableFrameWidth(canvasRef,frameBlocks.some(frame=>frame.hasGroupHeader));
 
   const measuredHeights = useCardMeasurements(canvasRef, cardRefs);
   useWorkbenchDrawingCommit();
   const headerWidths = useCardHeaderWidths(canvasRef);
-  const savedWidths = useMemo(() => widthContext?.widths ?? effectiveCardWidths(messages, edges), [widthContext?.widths, messages, edges]);
+  const savedWidths = useMemo(() => props.cardWidths ?? widthContext?.widths ?? effectiveCardWidths(messages, edges), [props.cardWidths, widthContext?.widths, messages, edges]);
   const measuredWidths = useMemo(() => {
     const result: Record<string, number> = {};
     for (const message of messages) result[message.id] = Math.max(CARD_W, headerWidths[message.id] ?? 0,
@@ -677,35 +714,109 @@ function GraphViewCanvas(props: GraphViewProps) {
   }, [messages]);
 
   const correctionVersionsByTargetMsgId = useMemo(
-    () => computeCorrectionVersions(messages, edges, invalidCorrectionIds),
-    [messages, edges, invalidCorrectionIds],
+    () => props.correctionVersions ?? computeCorrectionVersions(messages, edges, invalidCorrectionIds),
+    [props.correctionVersions, messages, edges, invalidCorrectionIds],
   );
+  const correctionMessagesById = useMemo(() => new Map((props.relatedMessages ?? messages).map(message => [message.id, message])), [props.relatedMessages, messages]);
+  const correctionsByTargetMsgId = useMemo(() => {
+    const records = new Map(renderedCorrectionsByTargetMsgId);
+    if (!props.comparisonDisplay) return records;
+    // Ineffective corrections lose their display edges, but their history and
+    // denominator remain visible on both comparison sides.
+    for (const [targetMsgId, entry] of correctionVersionsByTargetMsgId) {
+      const versions = [...records.get(targetMsgId) ?? []];
+      for (const version of entry.versions) if (!versions.some(record => record.relMsgId === version.correctionId)) {
+        versions.push({ relMsgId: version.correctionId, targetMsgId });
+      }
+      records.set(targetMsgId, versions);
+    }
+    for (const message of correctionMessagesById.values()) {
+      if (message.relationType !== 'correct' || message.relationPayload?.correctionKind !== 'WIDTH') continue;
+      for (const target of message.targetRefs ?? []) {
+        const targetMsgId = target.kind === 'relation' ? target.relationId : target.messageId;
+        const versions = [...records.get(targetMsgId) ?? []];
+        if (!versions.some(record => record.relMsgId === message.id)) versions.push({ relMsgId: message.id, targetMsgId });
+        records.set(targetMsgId, versions);
+      }
+    }
+    return records;
+  }, [renderedCorrectionsByTargetMsgId, correctionVersionsByTargetMsgId, correctionMessagesById, props.comparisonDisplay]);
 
   // Organizations are measured bottom-up once. Their measured dimensions are
   // known before placing the outer scene, so no correction/avoidance passes run.
+  const discussionRegionInputs = useMemo(() => discussionBranches?.groups.map(group => ({ ...group, headerWidth: discussionHeaderWidths[group.key] })),
+    [discussionBranches, discussionHeaderWidths]);
   const layoutJob = useMemo(
     () => ({ kind: 'layout' as const, input: {
       normals, colOf: pipelineCol, measuredHeights, measuredWidths,
       maxCol: pipelineMaxCol, correctedTargetIds: hiddenTargetIds,
-      frameBlocks, frameViewSizes, frameFullOverrides, availableFrameWidth, allMessages: messages, edges: layoutEdges, traceMode: isTraceWindow,
+      frameBlocks, frameViewSizes, frameFullOverrides, collapsedFrameIds, hiddenFrameHeaderIds, expandAllFrames: props.expandAllFrames, availableFrameWidth, allMessages: messages, edges: layoutEdges, traceMode: isTraceWindow,
       structureOrder: props.structureOrder,
+      discussionLayout: discussionEnabled,
+      discussionRegions: discussionRegionInputs,
     } }),
     [normals, pipelineCol, pipelineMaxCol, measuredHeights, measuredWidths,
-      hiddenTargetIds, frameBlocks, frameViewSizes, frameFullOverrides, availableFrameWidth, messages, layoutEdges, isTraceWindow, props.structureOrder],
+      hiddenTargetIds, frameBlocks, frameViewSizes, frameFullOverrides, collapsedFrameIds, hiddenFrameHeaderIds, props.expandAllFrames, availableFrameWidth, messages, layoutEdges, isTraceWindow, props.structureOrder,discussionEnabled,discussionRegionInputs],
   );
-  const sceneLayout = useSceneComputation(layoutJob, true);
+  const sceneLayout = useSceneComputation(layoutJob, true, undefined, computeSceneLayout);
   const naturalScene=sceneLayout??EMPTY_SCENE_LAYOUT;
+  discussionOwnershipRef.current=discussionEnabled&&naturalScene.hiddenAtomIds ? {
+    hiddenAtomIds:naturalScene.hiddenAtomIds,discussionParents:naturalScene.discussionParents??{},discussionOwnerRegions:naturalScene.discussionOwnerRegions??{},
+  } : undefined;
+  const discussionHiddenIds=useMemo(()=>new Set(naturalScene.hiddenAtomIds??[]),[naturalScene]);
   const sceneInstance = useId();
   const sceneRevision = useRef({value:naturalScene,revision:0});
   if (sceneRevision.current.value !== naturalScene) sceneRevision.current = {value:naturalScene,revision:sceneRevision.current.revision+1};
   const effectiveFrameSizes=useMemo(()=>Object.fromEntries(Object.entries({...naturalScene.frameViewportSizes,...frameViewSizes})
-    .filter(([id])=>!naturalScene.fullFrameIds.includes(id))),[naturalScene.frameViewportSizes,naturalScene.fullFrameIds,frameViewSizes]);
+    .filter(([id])=>!naturalScene.fullFrameIds.includes(id)&&!collapsedFrameIds.has(id))),[naturalScene.frameViewportSizes,naturalScene.fullFrameIds,frameViewSizes,collapsedFrameIds]);
   const manualFrameIds=useMemo(()=>new Set(Object.keys(frameViewSizes)),[frameViewSizes]);
   const frameViews=useMemo(()=>projectFrameViewports(naturalScene.layout,naturalScene.frameRects,naturalScene.frameContentRects??{},frameBlocks,effectiveFrameSizes,frameScrolls,CANVAS_RIGHT_PAD,manualFrameIds),[naturalScene,frameBlocks,effectiveFrameSizes,frameScrolls,manualFrameIds]);
   frameViewsRef.current=frameViews;
   const {layout,frameRects:finalFrameRects}=frameViews;
   const frameClipFor=useMemo(()=>createFrameClipResolver(frameViews,edges),[frameViews,edges]);
   const {colOf,canvasHeight}=naturalScene;
+  const discussionTextStats=useMemo(()=>discussionEnabled?computeDiscussionRegionTextStats({
+    messages,parents:naturalScene.discussionParents??{},ownerRegions:naturalScene.discussionOwnerRegions??{},
+    relationTypes:naturalScene.discussionRelationTypes??{},
+    regions:discussionBranches?.groups??[],frameIds:new Set(frameBlocks.map(frame=>frame.relMsgId)),
+  }):new Map(),[discussionEnabled,messages,naturalScene,discussionBranches,frameBlocks]);
+  const discussionRegions = useMemo(()=>discussionEnabled ? (naturalScene.discussionRegions??[]).flatMap(region=>{
+    if (!discussionBranches?.groupsByTarget.has(region.targetId)) return [];
+    const original = naturalScene.layout[region.targetId] ?? naturalScene.frameRects[region.targetId];
+    const displayed = layout[region.targetId] ?? finalFrameRects[region.targetId];
+    if (!original || !displayed) return [];
+    return [{...region,textCounts:discussionTextStats.get(region.key),x:region.x+displayed.x-original.x,y:region.y+displayed.y-original.y}];
+  }) : [],[discussionEnabled,naturalScene,layout,finalFrameRects,discussionBranches,discussionTextStats]);
+  const summaryProjection = useMemo(() => summarizeDiscussionEdges({ messages,
+    edges: discussionEnabled ? edges.filter(edge => (!props.visibleEdgeIds || props.visibleEdgeIds.has(edge.id))
+      && (!props.visibleMessageIds || props.visibleMessageIds.has(edge.to.messageId))) : [],
+    regions: discussionRegions, ownerRegions: naturalScene.discussionOwnerRegions ?? {}, parents: naturalScene.discussionParents ?? {},
+  }), [messages, edges, discussionEnabled, props.visibleEdgeIds, props.visibleMessageIds, discussionRegions, naturalScene]);
+  const discussionSummaryCounts = useMemo(() => new Map(summaryProjection.summaries.map(summary => [summary.region.key, summary.recordIds.length])), [summaryProjection]);
+  const hiddenSummarizedRelationIds = useMemo(() => new Set([...summaryProjection.hiddenRecordIds].filter(id =>
+    !(discussionRelationVisibility.get(id) ?? props.standaloneMessageIds?.has(id) ?? false))),
+    [summaryProjection, discussionRelationVisibility, props.standaloneMessageIds]);
+  const showDiscussionRelation = (id: string, shown: boolean) => {
+    setDiscussionRelationVisibility(previous => new Map(previous).set(id, shown));
+    if (shown && discussionEnabled && activeDiscussionCollapsed.length) {
+      const collapsed = revealDiscussionBranches({ messages, edges, collapsed: activeDiscussionCollapsed, messageIds: [id], ownership: discussionOwnershipRef.current });
+      if (collapsed.length !== activeDiscussionCollapsed.length) {
+        const active = new Set(activeDiscussionCollapsed), retained = new Set(collapsed);
+        changeDiscussionView({ ...discussionView, collapsed: discussionView.collapsed.filter(key => !active.has(key) || retained.has(key)) });
+      }
+    }
+  };
+  const toggleDiscussionRelation = (id: string) => showDiscussionRelation(id, hiddenSummarizedRelationIds.has(id));
+  const viewRelatedRelation = (id: string) => {
+    // The trace's explicit record IDs reveal the original edge without changing
+    // the previous canvas's per-relation display choices.
+    if (props.onRelatedRelationView) setDiscussionRelationVisibility(previous => {
+      if (!previous.has(id)) return previous;
+      const next = new Map(previous); next.delete(id); return next;
+    });
+    else showDiscussionRelation(id, true);
+    (props.onRelatedRelationView ?? onNavigateToMessage)?.(id);
+  };
   useLayoutEffect(()=>{
     const canvas=canvasRef.current;if(!canvas)return;
     const wheel=(event:WheelEvent)=>{
@@ -724,25 +835,47 @@ function GraphViewCanvas(props: GraphViewProps) {
     };
     canvas.addEventListener('wheel',wheel,{passive:false});return()=>canvas.removeEventListener('wheel',wheel);
   },[naturalScene.frameContentRects,scrollFrame]);
-  const visibleNormals = useMemo(() => props.visibleMessageIds ? normals.filter(message => props.visibleMessageIds!.has(message.id)) : normals, [normals, props.visibleMessageIds]);
+  const visibleNormals = useMemo(() => normals.filter(message=>!discussionHiddenIds.has(message.id)&&(!props.visibleMessageIds||props.visibleMessageIds.has(message.id))), [normals, props.visibleMessageIds,discussionHiddenIds]);
   const visibleNormalIds = useMemo(() => visibleNormals.map(message => message.id), [visibleNormals]);
-  const visibleEdges = useMemo(() => props.visibleEdgeIds ? edges.filter(edge => props.visibleEdgeIds!.has(edge.id)) : edges, [edges, props.visibleEdgeIds]);
+  const branchEdgeIds = useMemo(() => {
+    if (!discussionBranches) return null;
+    const ids = new Set(discussionBranches.edgeIds);
+    // Saved folds with no owned text have no entry and must not hide pure votes.
+    const placements = projectStanceLayoutEdges(messages, edges);
+    for (let index = 0; index < edges.length; index++) {
+      const edge = placements[index];
+      if (isDiscussionType(edge.relationType) && !discussionTextStats.get(discussionBranchKey(edge.to.messageId, edge.relationType))?.total) ids.add(edges[index].id);
+    }
+    return ids;
+  }, [discussionBranches, messages, edges, discussionTextStats]);
+  const visibleEdges = useMemo(() => edges.filter(edge=>(!props.visibleEdgeIds||props.visibleEdgeIds.has(edge.id))
+    &&(!branchEdgeIds||branchEdgeIds.has(edge.id))
+    &&![edge.relationMessageId,edge.from.messageId,edge.to.messageId].some(id=>discussionHiddenIds.has(id))), [edges, props.visibleEdgeIds,branchEdgeIds,discussionHiddenIds]);
+  const drawableEdges = useMemo(() => visibleEdges.filter(edge => !summaryProjection.hiddenEdgeIds.has(edge.id)
+    || !hiddenSummarizedRelationIds.has(edge.relationMessageId)), [visibleEdges, summaryProjection, hiddenSummarizedRelationIds]);
+  const hiddenRoutingIds=useMemo(()=>{
+    if(!discussionEnabled)return discussionHiddenIds;
+    const hidden=new Set(discussionHiddenIds),recordIds=new Set(visibleEdges.map(edge=>edge.relationMessageId));
+    const cards=new Set(visibleNormalIds);
+    for(const edge of edges)if(!recordIds.has(edge.relationMessageId)&&!cards.has(edge.relationMessageId)&&!finalFrameRects[edge.relationMessageId])hidden.add(edge.relationMessageId);
+    return hidden;
+  },[discussionEnabled,discussionHiddenIds,visibleEdges,visibleNormalIds,edges,finalFrameRects]);
   const measuredIds = useMemo(() => {
     const frameIds = new Set(visibleEdges.map(edge => edge.relationMessageId));
     return [...visibleNormals.map(message => message.id), ...frameBlocks.filter(frame => (frame.isMerge || frame.hasCardHeader || frame.hasGroupHeader)
-      && (!props.visibleMessageIds || props.visibleMessageIds.has(frame.relMsgId) || frameIds.has(frame.relMsgId))).map(frame => frame.relMsgId)];
-  }, [visibleNormals, visibleEdges, frameBlocks, props.visibleMessageIds]);
+      && !discussionHiddenIds.has(frame.relMsgId) && (!props.visibleMessageIds || props.visibleMessageIds.has(frame.relMsgId) || frameIds.has(frame.relMsgId))).map(frame => frame.relMsgId)];
+  }, [visibleNormals, visibleEdges, frameBlocks, props.visibleMessageIds,discussionHiddenIds]);
   const virtualBoxes = useMemo(() => {
     const boxes = { ...layout };
     for (const frame of frameBlocks) {
       const rect = finalFrameRects[frame.relMsgId];
       if (!rect) continue;
       if (frame.isMerge || frame.hasCardHeader) boxes[frame.relMsgId] = { ...getMergeCardHeaderRect(rect, measuredWidths[frame.relMsgId]), height: measuredHeights[frame.relMsgId] ?? MERGE_CARD_H };
-      else if (frame.hasGroupHeader) boxes[frame.relMsgId] = getGroupHeaderRect(rect, getGroupHeaderHeight(measuredHeights, frame.relMsgId));
+      else if (frame.hasGroupHeader) boxes[frame.relMsgId] = getGroupHeaderRect(rect, getGroupHeaderHeight(measuredHeights, frame.relMsgId, hiddenFrameHeaderIds.has(frame.relMsgId)?COMPACT_FRAME_HEADER_HEIGHT:GROUP_HEADER_HEIGHT));
     }
     for(const [id,box] of Object.entries(boxes))boxes[id]=frameViews.extent(id,box);
     return boxes;
-  }, [layout, finalFrameRects, frameBlocks, measuredHeights, measuredWidths,frameViews]);
+  }, [layout, finalFrameRects, frameBlocks, measuredHeights, measuredWidths,frameViews,hiddenFrameHeaderIds]);
   const virtualPins = useMemo(() => new Set([lastClickedMessageId, activeTextSelectId, settlementOpenMsgId, props.autoCenterMessageId,...(props.pendingMessageIds??[])]
     .filter((id): id is string => !!id)), [lastClickedMessageId, activeTextSelectId, settlementOpenMsgId, props.autoCenterMessageId,props.pendingMessageIds]);
   const revealGroups = useMemo(() => createMessageJumpGroups(messages, edges, new Map(frameBlocks.map(frame => [frame.relMsgId,
@@ -758,21 +891,26 @@ function GraphViewCanvas(props: GraphViewProps) {
       const visible=frameViews.extent(id,box);
       if (!props.visibleMessageIds || props.visibleMessageIds.has(id)) bottom = Math.max(bottom, visible.y + visible.height);
     }
+    for (const region of discussionRegions) if (!props.visibleMessageIds || props.visibleMessageIds.has(region.targetId)) {
+      const visible=frameViews.extent(region.targetId,region);bottom=Math.max(bottom,visible.y+visible.height);
+    }
     return bottom;
-  }, [layout, finalFrameRects, props.visibleMessageIds,frameViews]);
+  }, [layout, finalFrameRects, props.visibleMessageIds,frameViews,discussionRegions]);
   const actualCanvasWidth = useMemo(() => {
     let w = canvasWidth;
     for (const [id,box] of [...Object.entries(layout),...Object.entries(finalFrameRects)]){const visible=frameViews.extent(id,box);w=Math.max(w,visible.x+visible.width+canvasRightPad);}
+    for (const region of discussionRegions){const visible=frameViews.extent(region.targetId,region);w=Math.max(w,visible.x+visible.width+canvasRightPad);}
     return w;
-  }, [canvasWidth, canvasRightPad, layout, finalFrameRects,frameViews]);
+  }, [canvasWidth, canvasRightPad, layout, finalFrameRects,frameViews,discussionRegions]);
   const actualCanvasHeight = useMemo(() => {
     // Reserve geometry in the layout model, not empty scrollable DOM space.
     // End/scrollbar navigation must reach the mounted boundary and load onward.
     if (props.visibleMessageIds) return visibleBottom + CANVAS_BOTTOM_PAD;
     let h = canvasHeight;
     for (const [id,box] of [...Object.entries(layout),...Object.entries(finalFrameRects)]){const visible=frameViews.extent(id,box);h=Math.max(h,visible.y+visible.height+CANVAS_BOTTOM_PAD);}
+    for (const region of discussionRegions){const visible=frameViews.extent(region.targetId,region);h=Math.max(h,visible.y+visible.height+CANVAS_BOTTOM_PAD);}
     return h;
-  }, [canvasHeight, layout, finalFrameRects, props.visibleMessageIds, visibleBottom,frameViews]);
+  }, [canvasHeight, layout, finalFrameRects, props.visibleMessageIds, visibleBottom,frameViews,discussionRegions]);
   const anonCorrectedRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
     for (const e of edges) {
@@ -785,15 +923,25 @@ function GraphViewCanvas(props: GraphViewProps) {
     return ids;
   }, [edges, msgMap]);
 
+  const frameDecorationAnchors=useMemo(()=>Object.fromEntries(Object.entries(finalFrameRects).map(([id,rect])=>{
+    const type=msgMap.get(id)?.relationType;
+    return [id,type==='classify'||type==='summary'
+      ?getGroupHeaderRect(rect,getGroupHeaderHeight(measuredHeights,id,hiddenFrameHeaderIds.has(id)?COMPACT_FRAME_HEADER_HEIGHT:undefined)):rect];
+  })),[finalFrameRects,msgMap,measuredHeights,hiddenFrameHeaderIds]);
   const overlays = useGraphOverlays({
+    frameDecorationAnchors,
+    hiddenMessageIds:hiddenRoutingIds,semanticEdges:edges,
     excludedStanceEdges:props.excludedStanceEdges, visibleDecorationIds, visibleAnnotationIds,
     pendingMeasurements: virtual.pending,
     labelViewport: virtual.viewport, labelRetainedIds: virtual.retained,
-    canvasRef, normalIds: visibleNormalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals: visibleNormals, headerRefs, contentRefs, edges: visibleEdges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, textRefs, actualCanvasWidth, actualCanvasHeight,
+    canvasRef, normalIds: visibleNormalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals: visibleNormals, headerRefs, contentRefs, edges: drawableEdges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, textRefs, actualCanvasWidth, actualCanvasHeight,
   });
   edgeStartsRef.current=new Map();
   for(const positioned of overlays.positionedEdges)if(!edgeStartsRef.current.has(positioned.edge.relationMessageId))edgeStartsRef.current.set(positioned.edge.relationMessageId,positioned.start);
   const { labelBboxes, decorationsByMsgState, relDecByRelMsgState, tagsByRelMsgState } = overlays;
+  const summaryLabelObstacles = useMemo(() => [...Object.values(layout), ...Object.values(labelBboxes),
+    ...(overlays.decorationObstacles ?? []), ...discussionRegions.map(region => ({ ...region, height: region.headerHeight }))],
+    [layout, labelBboxes, overlays.decorationObstacles, discussionRegions]);
   const overlayRetained = useMemo(() => {
     const retained = new Set(virtual.retained);
     // A vote/tag is drawn beside its target. Reveal that decoration even when
@@ -805,19 +953,27 @@ function GraphViewCanvas(props: GraphViewProps) {
   }, [virtual.retained, edgesByRelMsg]);
   const { positionedEdges, decorationRectsState, tagDecorationsByMsg, arrangeFrames, groupFrames, inlineBadgesByMsg, annotationToggleRects } = useMemo(() => {
     const keep = (id: string, rect: Rect) => overlayRetained.has(id) || virtual.mounted.has(id) || intersectsViewport(rect, virtual.viewport, 100);
+    const mountedCards = new Set(mountedNormals.map(message => message.id));
+    const normalIds = new Set(normals.map(message => message.id));
+    const edgeIds = new Set(visibleEdges.map(edge => edge.id));
+    const relationIds = new Set(visibleEdges.map(edge => edge.relationMessageId));
+    // Full geometry is retained for routing. Its existence does not mean the
+    // corresponding message has been revealed or mounted yet.
+    const hostVisible = (id: string) => normalIds.has(id) ? mountedCards.has(id)
+      : !props.visibleMessageIds || props.visibleMessageIds.has(id) || relationIds.has(id);
     return {
-      positionedEdges: overlays.positionedEdges.filter(edge => frameConnectionVisible(frameClipFor,edge.edge,edge.start,edge.end)&&keep(edge.edge.relationMessageId, {
+      positionedEdges: overlays.positionedEdges.filter(edge => edgeIds.has(edge.edge.id)&&frameConnectionVisible(frameClipFor,edge.edge,edge.start,edge.end)&&keep(edge.edge.relationMessageId, {
         x: Math.min(edge.start.x, edge.ctrl.x, edge.end.x, edge.labelX), y: Math.min(edge.start.y, edge.ctrl.y, edge.end.y, edge.labelY),
         width: Math.max(edge.start.x, edge.ctrl.x, edge.end.x, edge.labelX) - Math.min(edge.start.x, edge.ctrl.x, edge.end.x, edge.labelX),
         height: Math.max(edge.start.y, edge.ctrl.y, edge.end.y, edge.labelY) - Math.min(edge.start.y, edge.ctrl.y, edge.end.y, edge.labelY) })),
-      decorationRectsState: overlays.decorationRectsState && Object.fromEntries(Object.entries(overlays.decorationRectsState).filter(([, value]) => keep(value.messageId, value.rect))),
-      tagDecorationsByMsg: Object.fromEntries(Object.entries(overlays.tagDecorationsByMsg).map(([id, groups]) => [id, groups.filter(group => keep(id, group.rect))])),
-      arrangeFrames: overlays.arrangeFrames.map(frame => ({ ...frame, rect: finalFrameRects[frame.relMsgId] ?? frame.rect })).filter(frame => keep(frame.relMsgId, frame.rect)),
-      groupFrames: overlays.groupFrames.filter(frame => keep(frame.relMsgId, finalFrameRects[frame.relMsgId] ?? frame.rect)),
-      inlineBadgesByMsg: new Map([...overlays.inlineBadgesByMsg].map(([id, badges]) => [id, badges.filter(badge => keep(id, badge.rect))])),
-      annotationToggleRects: Object.fromEntries(Object.entries(overlays.annotationToggleRects).filter(([id, rect])=>keep(id,rect))),
+      decorationRectsState: overlays.decorationRectsState && Object.fromEntries(Object.entries(overlays.decorationRectsState).filter(([, value]) => hostVisible(value.messageId)&&keep(value.messageId, value.rect))),
+      tagDecorationsByMsg: Object.fromEntries(Object.entries(overlays.tagDecorationsByMsg).map(([id, groups]) => [id, groups.filter(group => hostVisible(id)&&keep(id, group.rect))])),
+      arrangeFrames: overlays.arrangeFrames.map(frame => ({ ...frame, rect: finalFrameRects[frame.relMsgId] ?? frame.rect })).filter(frame => hostVisible(frame.relMsgId)&&keep(frame.relMsgId, frame.rect)),
+      groupFrames: overlays.groupFrames.filter(frame => hostVisible(frame.relMsgId)&&keep(frame.relMsgId, finalFrameRects[frame.relMsgId] ?? frame.rect)),
+      inlineBadgesByMsg: new Map([...overlays.inlineBadgesByMsg].map(([id, badges]) => [id, badges.filter(badge => hostVisible(id)&&keep(id, badge.rect))])),
+      annotationToggleRects: Object.fromEntries(Object.entries(overlays.annotationToggleRects).filter(([id, rect])=>hostVisible(id)&&keep(id,rect))),
     };
-  }, [overlays, overlayRetained, virtual.mounted, virtual.viewport, finalFrameRects,frameClipFor]);
+  }, [overlays, overlayRetained, virtual.mounted, virtual.viewport, finalFrameRects,frameClipFor,mountedNormals,normals,visibleEdges,props.visibleMessageIds]);
 
   useLayoutEffect(() => {
     reportWorkbenchDrawingDuration(performance.now() - renderStartedAt);
@@ -847,8 +1003,10 @@ function GraphViewCanvas(props: GraphViewProps) {
       ...overlays.positionedEdges.map(positioned => positioned.edge.relationMessageId)]),
     renderedEdges: overlays.positionedEdges.map(positioned => positioned.edge),
   }) : crossCanvasRelations, [props.relatedEdges, visibleNormalIds, effectiveHideMessageIds, overlays, isTraceWindow, traceExpandedFrameIds, crossCanvasRelations]);
-  const renderRelatedConnections = (messageId: string) => <CrossCanvasRelatedMessages groups={relatedConnections?.get(messageId)}
-    messages={relatedCatalog} selectedUnits={draftUnits} onView={props.onRelatedRelationView ?? onNavigateToMessage} />;
+  const renderRelatedConnections = (messageId: string) => <CrossCanvasRelatedMessages groups={mergeRelatedGroups(relatedConnections?.get(messageId), summaryProjection.related.get(messageId))}
+    messages={relatedCatalog} selectedUnits={draftUnits} highlightedMessageIds={props.highlightedMessageIds}
+    summarizedRelationIds={summaryProjection.hiddenRecordIds} hiddenRelationIds={hiddenSummarizedRelationIds}
+    onToggleRelationVisibility={toggleDiscussionRelation} onView={viewRelatedRelation} />;
 
   const selectedMessageIds = useMemo(() => new Set([
     ...draftUnits
@@ -965,8 +1123,10 @@ function GraphViewCanvas(props: GraphViewProps) {
     const fontSize = getMessageProminence(message).cssFontSize;
     const part = message.parts?.find(candidate => candidate.id === partId);
     const text = part?.type === 'text' ? part.text : part?.type === 'web' ? part.excerpt : part?.type === 'code' ? part.source : message.content;
+    const hints = typeof readingLinks === 'object' ? readingLinks.linksForMessage(message.id) : undefined;
+    const display = (content: React.ReactNode) => readingLinks && part?.type !== 'code' ? renderReadingTextLinks(content, text, hints) : content;
     const targets = extractTextTargetsForMessage(message.id, edges, partId, message.revision);
-    if (!targets.length) return <pre style={{margin:0,whiteSpace:"pre-wrap",overflowWrap:"anywhere",fontFamily:part?.type==="code"?"Menlo, Monaco, Consolas, monospace":"var(--font-reading)",lineHeight: 'var(--message-leading)',fontSize}}>{text}</pre>;
+    if (!targets.length) return <pre style={{margin:0,whiteSpace:"pre-wrap",overflowWrap:"anywhere",fontFamily:part?.type==="code"?"Menlo, Monaco, Consolas, monospace":"var(--font-reading)",lineHeight: 'var(--message-leading)',fontSize}}>{display(text)}</pre>;
     const validItems = targets
       .filter(t => t.start >= 0 && t.start + t.len <= text.length && t.len > 0)
       .map(t => ({ start: t.start, end: t.start + t.len, relationType: t.relationType, edgeId: t.edgeId }));
@@ -989,14 +1149,18 @@ function GraphViewCanvas(props: GraphViewProps) {
       (_id, start, len, relationType) => targets.some(target => target.start === start && target.len === len
         && target.relationType === relationType && annotationTargetFragmentHints.has(target.edgeId))
     );
-    return <pre style={{margin:0,whiteSpace:"pre-wrap",overflowWrap:"anywhere",fontFamily:part?.type==="code"?"Menlo, Monaco, Consolas, monospace":"var(--font-reading)",lineHeight: 'var(--message-leading)',fontSize}}>{nodes}</pre>;
+    return <pre style={{margin:0,whiteSpace:"pre-wrap",overflowWrap:"anywhere",fontFamily:part?.type==="code"?"Menlo, Monaco, Consolas, monospace":"var(--font-reading)",lineHeight: 'var(--message-leading)',fontSize}}>{display(nodes)}</pre>;
   }
 
   function renderCorrectionRecords(messageId: string) {
     const records = [...new Set((correctionsByTargetMsgId.get(messageId) ?? []).map(record => record.relMsgId))];
     if (!records.length) return null;
     const latest = records[records.length - 1];
-    const active = records.filter(id => !invalidCorrectionIds?.has(id)).length;
+    const entry = correctionVersionsByTargetMsgId.get(messageId);
+    const active = records.filter(id => {
+      const version = entry?.versions.find(candidate => candidate.correctionId === id);
+      return version ? version.valid && !version.conflicted : !invalidCorrectionIds?.has(id);
+    }).length;
     return <span style={{display:'inline-flex',alignItems:'center'}}><span data-skin-selected={isRelWholeSel(latest)} {...skinForMessage(latest)} data-msgid={latest} data-jump-msgids={records.join(' ')} data-rel-overlay="true"
       data-skin-decoration="correct" title={`更正关系：${latest}；共${records.length}次更正，单击对比原文与当前正文，双击查看历史`}
       onClick={event => { event.stopPropagation(); onInlineBadgeClick?.(event, latest); }}
@@ -1014,9 +1178,19 @@ function GraphViewCanvas(props: GraphViewProps) {
     return role === 'source' ? '来源' : role === 'target' ? '目标' : role === 'source-target' ? '来源/目标' : props.homeReasonByMessageId?.has(messageId) ? '上下文' : null;
   };
   const canvas=(
-    <div ref={canvasRef} data-jump-canvas="true" data-scene-instance={sceneInstance} data-layout-revision={sceneRevision.current.revision} style={{position:"relative",width:actualCanvasWidth,height:actualCanvasHeight,zIndex:0}}
+    <div ref={canvasRef} data-jump-canvas="true" data-discussion-layout={discussionEnabled||undefined} data-scene-instance={sceneInstance} data-layout-revision={sceneRevision.current.revision} style={{position:"relative",width:actualCanvasWidth,height:actualCanvasHeight,zIndex:0}}
       onDoubleClick={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
       {props.visibleMessageIds && <div data-message-window-boundary="true" aria-hidden="true" style={{ position: 'absolute', top: visibleBottom, left: 0, height: 1, width: 1 }} />}
+      <DiscussionRegions regions={discussionRegions.filter(region=>(!props.visibleMessageIds||props.visibleMessageIds.has(region.targetId))
+        &&(!virtual.viewport||intersectsViewport(frameViews.extent(region.targetId,region),virtual.viewport,100)))}
+        onToggle={toggleDiscussionBranch} clipFor={frameViews.clipFor} summaryCounts={discussionSummaryCounts}
+        onHeaderWidthsChange={measureDiscussionHeaders}
+        hiddenSummaryKeys={hiddenDiscussionSummaries} onToggleSummary={toggleDiscussionSummary}/>
+      <DiscussionSummaries summaries={summaryProjection.summaries.filter(summary => (!props.visibleMessageIds || props.visibleMessageIds.has(summary.region.targetId))
+        && !hiddenDiscussionSummaries.has(summary.region.key) && intersectsViewport(summary.region, virtual.viewport, 100))}
+        boxes={{...finalFrameRects,...layout}} labelObstacles={summaryLabelObstacles} messages={relatedCatalog} selectedUnits={draftUnits} highlightedMessageIds={props.highlightedMessageIds}
+        onView={viewRelatedRelation} hiddenRelationIds={hiddenSummarizedRelationIds} onToggleRelationVisibility={toggleDiscussionRelation}
+        clipFor={frameViews.clipFor} width={actualCanvasWidth} height={actualCanvasHeight}/>
       <div data-graph-cards="true" style={{position:"absolute",left:0,top:0,width:actualCanvasWidth,height:actualCanvasHeight}}>
         {mountedNormals.map(msg=><div key={msg.id} aria-hidden={!virtual.isOnscreen(msg.id) || undefined}
           style={{ visibility: virtual.isOnscreen(msg.id) ? undefined : 'hidden', pointerEvents: virtual.isOnscreen(msg.id) ? undefined : 'none' }}>{(() => {
@@ -1026,27 +1200,13 @@ function GraphViewCanvas(props: GraphViewProps) {
           // Hidden targets: corrected targets (replaced by correction source) and
           // summarized targets (covered by summary card). Chained sources remain visible.
           if (hiddenTargetIds.has(msg.id)) return null;
+          const isContainer = ['classify', 'summary', 'merge', 'arrange'].includes(msg.relationType ?? '');
+          const memberCounts = isContainer ? props.getMemberCounts?.(msg.id) : undefined;
 
           // CLASSIFY relation messages are shown as classification cards on the main canvas.
           // SUMMARY messages fall through to normal card rendering below.
           if (msg.kind === "relation" && classifyRelMsgIds.has(msg.id)) {
-            // Count unique text-message targets from ALL edges (not just visible ones).
-            // The graphEdges filter may exclude edges whose targets are hidden (classified),
-            // so we count from the raw edges prop directly. Deduplicate by to.messageId
-            // because secondary relation types create duplicate edges.
-            const targetCount = (() => {
-              const seen = new Set<string>();
-              if(isRejectedContainer(msg,props.rejectedContainerIds)) {
-                for(const ref of [...msg.targetRefs??[],...msg.declaredTargetRefs??[]]) seen.add(ref.kind==='relation'?ref.relationId:ref.messageId);
-                for(const join of joinRelationsBySource?.get(msg.id)??[])for(const ref of join.targetRefs)seen.add(ref.kind==='relation'?ref.relationId:ref.messageId);
-              }
-              for (const e of edges) {
-                if (e.relationMessageId !== msg.id) continue;
-                if (e.to.messageId.startsWith('anon:')) continue;
-                seen.add(e.to.messageId);
-              }
-              return seen.size;
-            })();
+            const targetCount = memberCounts?.total;
             const classificationTitle = getOrganizationTitle(msg, targetCount);
             const relatedJoinRelations = joinRelationsByTarget?.get(msg.id) ?? [];
             const outgoingJoinRelations = joinRelationsBySource?.get(msg.id) ?? [];
@@ -1054,6 +1214,8 @@ function GraphViewCanvas(props: GraphViewProps) {
             const isActive = lastClickedMessageId === msg.id;
             const isClassificationStanceTarget = stanceHighlight?.stanceMsgId === msg.id;
             return <ClassificationCard key={msg.id} msg={msg} selectedUnits={draftUnits} box={box} targetCount={targetCount} title={classificationTitle}
+              canEnter={props.containerEntryEnabled!==false&&!traceFrameIds.has(msg.id)}
+              directMemberCount={memberCounts?.direct}
               correctionRecords={renderCorrectionRecords(msg.id)}
               activeText={activeTextSelectId === msg.id} isWhole={isWhole} isActive={isActive} isStanceTarget={isClassificationStanceTarget}
               homeLabel={homeRoleLabel(msg.id)} homeReason={props.homeReasonByMessageId?.get(msg.id)} stakes={stakeCounts?.[msg.id]}
@@ -1082,7 +1244,7 @@ function GraphViewCanvas(props: GraphViewProps) {
               .map(version => version.correctionId) ?? [],
           );
           for (const badge of uniqueCorrBadges) {
-            const correction = msgMap.get(badge.relMsgId);
+            const correction = msgMap.get(badge.relMsgId) ?? correctionMessagesById.get(badge.relMsgId);
             if (correction?.relationPayload?.correctionKind === 'WIDTH'
               && !(invalidCorrectionIds ? invalidCorrectionIds.has(correction.id) : correction.state?.suppressed)) validCorrectionIds.add(correction.id);
           }
@@ -1111,29 +1273,29 @@ function GraphViewCanvas(props: GraphViewProps) {
 
           // Kind-based styling for governance / code / settlement messages
           const kindMeta = (() => {
-            if (msg.kind === 'join') return { color: 'var(--ink-a78bfa)', label: '加入', bg: 'var(--surface-rgba-167-139-250-0-08)' };
-            if (msg.kind === 'governance') return { color: 'var(--ink-f59e0b)', label: getRelationMessageLabel(msg) ?? '提案', bg: 'var(--surface-rgba-245-158-11-0-08)' };
-            if (msg.kind === 'code')        return { color: 'var(--ink-14b8a6)', label: '代码', bg: 'var(--surface-rgba-20-184-166-0-08)' };
-            if (msg.kind === 'operations')  return { color: 'var(--ink-06b6d4)', label: '📊 运营', bg: 'var(--surface-rgba-6-182-212-0-08)' };
+            const label = getMessageTypeLabel(msg);
+            if (msg.kind === 'join') return { color: 'var(--ink-a78bfa)', label, bg: 'var(--surface-rgba-167-139-250-0-08)' };
+            if (msg.kind === 'governance') return { color: 'var(--ink-f59e0b)', label, bg: 'var(--surface-rgba-245-158-11-0-08)' };
+            if (msg.kind === 'code')        return { color: 'var(--ink-14b8a6)', label, bg: 'var(--surface-rgba-20-184-166-0-08)' };
+            if (msg.kind === 'operations')  return { color: 'var(--ink-06b6d4)', label, bg: 'var(--surface-rgba-6-182-212-0-08)' };
             if (msg.kind === 'relation' && msg.relationType === 'delegation') {
-              const isFulfill = msg.relationPayload?.delegationKind === 'FULFILL';
-              return { color: 'var(--ink-f97316)', label: isFulfill ? '完成委托' : '创建委托', bg: 'var(--surface-rgba-249-115-22-0-1)' };
+              return { color: 'var(--ink-f97316)', label, bg: 'var(--surface-rgba-249-115-22-0-1)' };
             }
             if (msg.kind === 'round') {
               const isValue = (msg as any).roundPayload?.settlementType === 'VALUE';
               return isValue
-                ? { color: 'var(--ink-fcd34d)', label: '💎 结算中', bg: 'var(--surface-rgba-252-211-77-0-08)' }
-                : { color: 'var(--ink-a5b4fc)', label: '⚖️ 结算中', bg: 'var(--surface-rgba-165-180-252-0-08)' };
+                ? { color: 'var(--ink-fcd34d)', label, bg: 'var(--surface-rgba-252-211-77-0-08)' }
+                : { color: 'var(--ink-a5b4fc)', label, bg: 'var(--surface-rgba-165-180-252-0-08)' };
             }
             if (msg.kind === 'round_result') {
               const isValue = (msg as any).roundPayload?.settlementType === 'VALUE';
               return isValue
-                ? { color: 'var(--ink-f59e0b)', label: '💎 已结算', bg: 'var(--surface-rgba-245-158-11-0-12)' }
-                : { color: 'var(--ink-818cf8)', label: '⚖️ 已结算', bg: 'var(--surface-rgba-129-140-248-0-12)' };
+                ? { color: 'var(--ink-f59e0b)', label, bg: 'var(--surface-rgba-245-158-11-0-12)' }
+                : { color: 'var(--ink-818cf8)', label, bg: 'var(--surface-rgba-129-140-248-0-12)' };
             }
-            if (msg.kind === 'relation' && msg.relationType === 'summary') return { color: 'var(--ink-34d399)', label: '总结', bg: 'var(--surface-rgba-52-211-153-0-08)' };
-            if (msg.kind === 'relation') return { color: 'var(--ink-c4b5fd)', label: getRelationMessageLabel(msg) ?? relationTypeName(msg.relationType ?? 'relation'), bg: 'var(--surface-rgba-196-181-253-0-08)' };
-            if (msg.kind === 'normal') return { color: 'var(--ink-94a3b8)', label: '文本', bg: 'var(--surface-rgba-148-163-184-0-08)' };
+            if (msg.kind === 'relation' && msg.relationType === 'summary') return { color: 'var(--ink-34d399)', label, bg: 'var(--surface-rgba-52-211-153-0-08)' };
+            if (msg.kind === 'relation') return { color: 'var(--ink-c4b5fd)', label, bg: 'var(--surface-rgba-196-181-253-0-08)' };
+            if (msg.kind === 'normal') return { color: 'var(--ink-94a3b8)', label, bg: 'var(--surface-rgba-148-163-184-0-08)' };
             return null;
           })();
           const kindBorder = kindMeta ? `3px solid ${kindMeta.color}` : undefined;
@@ -1155,8 +1317,8 @@ function GraphViewCanvas(props: GraphViewProps) {
               {/* Correction badges: for text messages, shown centered in the same header row as author/msgId */}
               <CardWidthHandle messageId={msg.id} />
               <div className="message-card-header" data-card-header="true" ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85}}>
-              <div data-card-header-content="true" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,width:'max-content',minWidth:'100%',whiteSpace:'nowrap'}}>
-                <div style={{flexShrink:0,display:"flex",alignItems:"center",gap:4}}>
+              <div className="message-card-header-row" data-card-header-content="true" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,width:'max-content',minWidth:'100%',whiteSpace:'nowrap'}}>
+                <div className="message-card-type-group" style={{flexShrink:0,display:"flex",alignItems:"center",gap:4}}>
                   {/* For non-text (relation) messages, keep badges left-aligned in header */}
                   {msg.kind!=="normal" && correctionBadge && (
                     <div key={`corr-hdr-${correctionBadge.relMsgId}`}
@@ -1175,11 +1337,12 @@ function GraphViewCanvas(props: GraphViewProps) {
                   )}
                   <StakeTierBadge counts={stakeCounts?.[msg.id]} />
                   {kindMeta && (
-                    <MessageElement reference={messageTypeReference(msg)} selected={isMessageElementSelected(draftUnits, messageTypeReference(msg))} label={kindMeta.label} style={{fontSize:10,fontWeight:700,padding:"2px 6px",borderRadius:4,background:isWhole?"var(--surface-fbbf24)":`color-mix(in srgb, ${kindMeta.color} 13.33%, transparent)`,color:isWhole?"var(--ink-111827)":kindMeta.color,lineHeight:"16px",border:isWhole?"1px solid var(--line-fbbf24)":`1px solid color-mix(in srgb, ${kindMeta.color} 26.67%, transparent)`}}>
+                    <MessageElement data-skin-type-label="true" label={kindMeta.label} style={{fontSize:10,fontWeight:700,padding:"2px 6px",borderRadius:4,background:isWhole?"var(--surface-fbbf24)":`color-mix(in srgb, ${kindMeta.color} 13.33%, transparent)`,color:isWhole?"var(--ink-111827)":kindMeta.color,lineHeight:"16px",border:isWhole?"1px solid var(--line-fbbf24)":`1px solid color-mix(in srgb, ${kindMeta.color} 26.67%, transparent)`}}>
                       <ThemeLabel text={kindMeta.label} />
                     </MessageElement>
                   )}
                   <HomeFilterBadge label={homeRoleLabel(msg.id)} reason={props.homeReasonByMessageId?.get(msg.id)}/>
+                  <MessageCardSelfStake message={msg} />
                 </div>
                 {/* The badge opens the complete correction history; votes belong to each history record. */}
                 {msg.kind==="normal" && correctionBadge && (
@@ -1206,17 +1369,17 @@ function GraphViewCanvas(props: GraphViewProps) {
                     })()}
                   </div>
                 )}
-                <div style={{flexShrink:0,marginLeft:'auto',display:"flex",justifyContent:"flex-end",flexDirection:"column",alignItems:"flex-end"}}>
-                  <span style={{display:'inline-flex',alignItems:'center'}}>
+                <div className="message-card-meta" style={{flexShrink:0,marginLeft:'auto',display:"flex",justifyContent:"flex-end",flexDirection:"column",alignItems:"flex-end"}}>
+                  <span className="message-card-identity" style={{display:'inline-flex',alignItems:'center'}}>
                   {msg.kind === "join" && onNavigateToMessage ? (
-                    <span
+                    <span className="message-card-id"
                       data-rel-overlay="true"
                       onClick={e => { e.stopPropagation(); onNavigateToMessage(msg.id); }}
                       style={{opacity:0.95,fontFamily:"monospace",fontSize:10,color:"var(--ink-93c5fd)",cursor:"pointer",padding:"1px 4px",borderRadius:3,background:"var(--surface-rgba-59-130-246-0-15)",textDecoration:"underline",textUnderlineOffset:2}}
                       title={`跳转到加入消息 ${msg.id} 的当前实际位置`}
-                    >{msg.id}</span>
+                    ><bdi dir="ltr">{msg.id}</bdi></span>
                   ) : (
-                    <span style={{opacity:0.7}}>{msg.id}</span>
+                    <span className="message-card-id" title={msg.id} style={{opacity:0.7}}><bdi dir="ltr">{msg.id}</bdi></span>
                   )}
                   <MessageDisplayMarker messageId={msg.id} />
                   </span>
@@ -1256,6 +1419,9 @@ function GraphViewCanvas(props: GraphViewProps) {
                   : <MessageTextPart message={msg} activeText={activeTextSelectId === msg.id} onMouseUp={onTextMouseUp}>{renderContent(msg)}</MessageTextPart>}
               </div>
               )}
+              {isContainer && <div className="message-card-members" style={{fontSize:12,color:'var(--ink-9ca3af)',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+                <MessageMemberCount total={memberCounts?.total} direct={memberCounts?.direct} showEnterHint={props.containerEntryEnabled!==false&&!traceFrameIds.has(msg.id)&&['classify','summary'].includes(msg.relationType??'')}/>
+              </div>}
               <RelatedMessages rows={relatedByTarget.get(msg.id)} selectedUnits={draftUnits} onNavigate={props.onRelatedMessageNavigate??onNavigateToMessage}/>
               {renderRelatedConnections(msg.id)}
               {renderJoinRecords(msg.id, ['classify','summary','merge','arrange'].includes(msg.relationType ?? ''))}
@@ -1369,7 +1535,7 @@ function GraphViewCanvas(props: GraphViewProps) {
             if (sf.isBlankCorrected) return null;
             const isWhole=isRelWholeSel(sf.relMsgId);
             return (
-              <g key={`supp-frame-${sf.relMsgId}`} data-frame-visual={sf.relMsgId} {...skinForMessage(sf.relMsgId)} data-skin-type="arrange" data-whole-selected={isWhole || undefined}><rect data-jump-visual-msgids={sf.relMsgId} x={sf.rect.x} y={sf.rect.y} width={sf.rect.width} height={sf.rect.height}
+              <g key={`supp-frame-${sf.relMsgId}`} data-frame-visual={sf.relMsgId} data-frame-depth={frameDepthMap.get(sf.relMsgId) ?? 0} {...skinForMessage(sf.relMsgId)} data-skin-type="arrange" data-whole-selected={isWhole || undefined}><rect data-jump-visual-msgids={sf.relMsgId} x={sf.rect.x} y={sf.rect.y} width={sf.rect.width} height={sf.rect.height}
                 rx={FRAME_RADIUS} ry={FRAME_RADIUS}
                 fill={isWhole?"var(--ink-rgba-251-191-36-0-22)":"var(--ink-rgba-130-80-200-0-04)"}
                 stroke={isWhole?"var(--ink-rgba-251-191-36-1)":"var(--ink-rgba-130-80-200-0-55)"}
@@ -1379,16 +1545,16 @@ function GraphViewCanvas(props: GraphViewProps) {
           })}
           {/* GROUP frames (CLASSIFY/MERGE) and REPLACE-OVERLAY (SUMMARY); hidden when blank-corrected */}
           {visibleGroupFrames.map(gf=>{
-            if (gf.isBlankCorrected) return null;
+            if (gf.isBlankCorrected||collapsedFrameIds.has(gf.relMsgId)) return null;
             const isWhole=isRelWholeSel(gf.relMsgId);
             const isReplaceOverlay = gf.relKind === 'replace-overlay';
             const strokeColor = isWhole
               ? 'var(--ink-rgba-251-191-36-1)'
               : (isReplaceOverlay ? (GROUP_FRAME_STROKE[gf.relColor] ?? 'var(--ink-rgba-180-120-0-0-7)') : (GROUP_FRAME_STROKE[gf.relColor] ?? 'var(--ink-rgba-140-140-150-0-55)'));
             const fillColor = isWhole ? 'var(--ink-rgba-251-191-36-0-22)' : isReplaceOverlay ? 'var(--ink-rgba-200-150-0-0-04)' : 'var(--ink-rgba-130-130-140-0-03)';
-            const headerHeight=['classify','summary'].includes(gf.relType)?getGroupHeaderHeight(measuredHeights,gf.relMsgId):0;
+            const headerHeight=['classify','summary'].includes(gf.relType)?getGroupHeaderHeight(measuredHeights,gf.relMsgId,hiddenFrameHeaderIds.has(gf.relMsgId)?COMPACT_FRAME_HEADER_HEIGHT:GROUP_HEADER_HEIGHT):0;
             return (
-              <g key={`gf-${gf.relMsgId}`} data-frame-visual={gf.relMsgId} {...skinForMessage(gf.relMsgId)} data-skin-type={gf.relType} data-whole-selected={isWhole || undefined}><rect data-jump-visual-msgids={gf.relMsgId} x={gf.rect.x} y={gf.rect.y} width={gf.rect.width} height={gf.rect.height}
+              <g key={`gf-${gf.relMsgId}`} data-frame-visual={gf.relMsgId} data-frame-depth={frameDepthMap.get(gf.relMsgId) ?? 0} {...skinForMessage(gf.relMsgId)} data-skin-type={gf.relType} data-whole-selected={isWhole || undefined}><rect data-jump-visual-msgids={gf.relMsgId} x={gf.rect.x} y={gf.rect.y} width={gf.rect.width} height={gf.rect.height}
                 rx={FRAME_RADIUS} ry={FRAME_RADIUS}
                 fill={fillColor} stroke={strokeColor}
                 strokeWidth={isWhole?3:2} strokeDasharray={isReplaceOverlay?undefined:(isWhole?undefined:"6 3")}/>
@@ -1397,14 +1563,11 @@ function GraphViewCanvas(props: GraphViewProps) {
           })}
         </svg>
       )}
-      {/* SVG layer: edge paths and labels (raised above relation overlays to avoid label clipping/occlusion) */}
-      {positionedEdges.length>0&&(
-        <svg width={actualCanvasWidth} height={actualCanvasHeight} style={{position:"absolute",left:0,top:0,zIndex:12,pointerEvents:"none"}}>
+      {/* Ordinary cards < paths/arrowheads < labels < selected cards. */}
+      {positionedEdges.length>0&&(['paths','labels'] as const).map(layer=>(
+        <svg key={layer} data-graph-edge-layer={layer} width={actualCanvasWidth} height={actualCanvasHeight} style={{position:"absolute",left:0,top:0,zIndex:layer==='paths'?GRAPH_EDGE_PATH_LAYER:GRAPH_EDGE_LABEL_LAYER,pointerEvents:"none",overflow:'visible'}}>
           {positionedEdges.map(pe=>{
             const {edge,start,ctrl,end,edgeLabelText,labelX,labelY}=pe;
-            const path=`M ${start.x} ${start.y} Q ${ctrl.x} ${ctrl.y} ${end.x} ${end.y}`;
-            const angle=Math.atan2(end.y-ctrl.y,end.x-ctrl.x),al=7,aa=Math.PI/7;
-            const ax1=end.x-al*Math.cos(angle-aa),ay1=end.y-al*Math.sin(angle-aa),ax2=end.x-al*Math.cos(angle+aa),ay2=end.y-al*Math.sin(angle+aa);
             // Phase 5: Stance highlight edge coloring
             const isStanceEdge = stanceHighlight && (
               (edge.relationType === 'agree' || edge.relationType === 'disagree') &&
@@ -1421,16 +1584,10 @@ function GraphViewCanvas(props: GraphViewProps) {
               ? 'var(--ink-rgba-245-158-11-0-95)'  // gold for evidence edges
               : isStanceEdge
                 ? (edge.relationType === 'agree' ? 'var(--ink-rgba-34-197-94-0-95)' : 'var(--ink-rgba-239-68-68-0-95)')  // brighter green/red for stance edges
-                : edge.relationType === 'annotation' ? 'var(--ink-rgba-255-215-0-0-92)'
-                : edge.relationType === 'reference' ? 'var(--ink-rgba-80-180-255-0-92)'
-                : edge.relationType === 'reply' ? 'var(--ink-rgba-160-255-140-0-72)'
-                : edge.relationType === 'agree' ? 'var(--ink-rgba-2-170-90-0-92)'
-                : edge.relationType === 'disagree' ? 'var(--ink-rgba-210-50-50-0-92)'
-                : 'var(--ink-rgba-120-120-120-0-72)';
+                : directedEdgeColor(edge.relationType);
             const edgeStrokeWidth = (isStanceEdge || isEvidenceEdge) ? 2.0 : edge.relationType === 'reply' ? 1.0 : 1.2;
             const relId=edge.relationMessageId,isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,edge.id);
             const labelOpacity=isWhole||isFrag?1:edge.relationType==="reply"?0.65:0.9;
-            const labelStroke="var(--graph-label-outline)";
             // Blank-corrected: anon-source CORRECT targets a relation message → hide arrow/text, keep bbox for badge
             const isBlankCorrected=anonCorrectedRelMsgIds.has(relId);
             const labelBox = labelBboxes[pe.drawId];
@@ -1439,21 +1596,15 @@ function GraphViewCanvas(props: GraphViewProps) {
                 data-edge-emphasis={isEvidenceEdge ? 'evidence' : undefined}
                 data-label-selection={isWhole ? 'whole' : isFrag ? 'fragment' : undefined}
                 data-jump-visual-msgids={edge.relationMessageId} data-frame-edge-id={edge.id}>
-                {!isBlankCorrected&&<path className="relation-edge-path" d={path} stroke={color} strokeWidth={edgeStrokeWidth} fill="none" strokeDasharray={isEvidenceEdge?"6 3":undefined}/>}
-                {!isBlankCorrected&&<path className="relation-edge-arrow" d={`M ${ax1} ${ay1} L ${end.x} ${end.y} L ${ax2} ${ay2}`} fill={color}/>}
-                {!isBlankCorrected && <EdgeSkin path={path} start={start} end={end} ctrl={ctrl} />}
-                {/* Text always rendered (opacity 0 when blank) so labelBboxes are stable for badge positioning */}
-                {!isBlankCorrected && labelBox && <rect className="graph-edge-label-plate" aria-hidden="true"
-                  x={labelBox.x - 6} y={labelBox.y - 1} width={labelBox.width + 12} height={labelBox.height + 2} rx={3} />}
-                {!isBlankCorrected && labelBox && <EdgeLabelSkin box={labelBox} />}
-                <text className="graph-edge-label-text" ref={el=>{textRefs.current[pe.drawId]=el;}} x={labelX} y={labelY} fill={color} opacity={isBlankCorrected?0:labelOpacity} fontSize="var(--graph-label-size)" textAnchor="middle" dominantBaseline="central" style={{paintOrder:"stroke",stroke:labelStroke,strokeWidth:2,whiteSpace:'pre'} as any}>
-                  {edgeLabelText}
-                </text>
+                <DirectedEdgeVisual layer={layer} relationType={edge.relationType} start={start} ctrl={ctrl} end={end} text={edgeLabelText} labelX={labelX} labelY={labelY}
+                  labelBox={labelBox} color={color} strokeWidth={edgeStrokeWidth} opacity={labelOpacity} hidden={isBlankCorrected}
+                  selection={isWhole?'whole':isFrag?'fragment':undefined}
+                  dashed={!!isEvidenceEdge} textRef={element => { textRefs.current[pe.drawId] = element; }} />
               </g>
             );
           })}
         </svg>
-      )}
+      ))}
 
       {/* Edge label HTML hit areas */}
       {positionedEdges.filter(pe=>!pe.edge.from.messageId.startsWith('anon:')&&getPresentationSpec(pe.edge.relationType).kind==='edge-label'&&!anonCorrectedRelMsgIds.has(pe.edge.relationMessageId)).map(pe=><div key={`start-${pe.drawId}`}
@@ -1667,17 +1818,17 @@ function GraphViewCanvas(props: GraphViewProps) {
                 background:'var(--surface-171324)',color:'var(--ink-c4b5fd)',fontSize:10,cursor:'pointer',pointerEvents:'auto'}}>
               {cardFrameIds.has(sf.relMsgId) ? '▾' : '▸'}
             </button>}
-            {!cardFrameIds.has(sf.relMsgId) && <div data-rel-overlay="true"
+            {!cardFrameIds.has(sf.relMsgId) && <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick}
               style={{position:'absolute',left:x+(sfCorrInfo?100:8)+26,top:y-HH+1,zIndex:frameZ+2,pointerEvents:'auto',background:'var(--surface-101010)',display:'flex',alignItems:'center',gap:6}}>
-              {homeRoleLabel(sf.relMsgId)&&<><MessageElement reference={msgMap.get(sf.relMsgId)&&messageTypeReference(msgMap.get(sf.relMsgId)!)}
-                label="排列" style={{fontSize:10,color:'var(--ink-c4b5fd)'}}>排列</MessageElement><HomeFilterBadge label={homeRoleLabel(sf.relMsgId)} reason={props.homeReasonByMessageId?.get(sf.relMsgId)}/></>}
+              <MessageElement className="graph-frame-type-label"
+                label="排列" style={{fontSize:10,color:'var(--ink-c4b5fd)'}}>排列</MessageElement><HomeFilterBadge label={homeRoleLabel(sf.relMsgId)} reason={props.homeReasonByMessageId?.get(sf.relMsgId)}/>
               <MessageDisplayMarker messageId={sf.relMsgId} />
               {renderCorrectionRecords(sf.relMsgId)}
               {relatedConnections?.has(sf.relMsgId) && <div data-msgid={sf.relMsgId} data-rel-overlay="true">
                 {renderRelatedConnections(sf.relMsgId)}
               </div>}
             </div>}
-            {cardFrameIds.has(sf.relMsgId) && virtual.mounted.has(sf.relMsgId) && <div data-msgid={sf.relMsgId} data-rel-overlay="true" data-frame-header="true" data-skin-frame-header="true" {...skinForMessage(sf.relMsgId)} data-skin-type="arrange" data-skin-selected={isRelWholeSel(sf.relMsgId)}
+            {cardFrameIds.has(sf.relMsgId) && virtual.mounted.has(sf.relMsgId) && <div data-msgid={sf.relMsgId} data-rel-overlay="true" data-frame-header="true" data-frame-depth={frameDepthMap.get(sf.relMsgId) ?? 0} data-skin-frame-header="true" {...skinForMessage(sf.relMsgId)} data-skin-type="arrange" data-skin-selected={isRelWholeSel(sf.relMsgId)}
               data-measure-min-height={MERGE_CARD_H} ref={el => { cardRefs.current[sf.relMsgId] = el; }}
               role="group" tabIndex={0} aria-label={`组织消息 ${sf.relMsgId}`} aria-keyshortcuts="Enter Space Shift+Enter"
               onKeyDown={activateMessageFromKeyboard} onClick={handleClick} onDoubleClick={handleDblClick} title={title}
@@ -1688,11 +1839,11 @@ function GraphViewCanvas(props: GraphViewProps) {
                 border: isRelWholeSel(sf.relMsgId) ? '2px solid var(--line-fbbf24)' : lastClickedMessageId === sf.relMsgId ? '1px solid var(--line-rgba-56-189-248-0-8)' : '1px solid var(--line-444)',
                 outline: lastClickedMessageId === sf.relMsgId ? '1px dashed var(--line-0b84ff)' : 'none',
                 boxShadow: '0 6px 14px var(--shadow-rgba-0-0-0-0-35)' }}>
-              <OrganizationFrameHeader message={msgMap.get(sf.relMsgId)} messageId={sf.relMsgId} kind="arrange"
+              <OrganizationFrameHeader message={msgMap.get(sf.relMsgId)} messageId={sf.relMsgId} kind="arrange" depth={frameDepthMap.get(sf.relMsgId) ?? 0}
                 homeLabel={homeRoleLabel(sf.relMsgId)} homeReason={props.homeReasonByMessageId?.get(sf.relMsgId)}
                 correctionRecords={renderCorrectionRecords(sf.relMsgId)}
                 joinBadges={renderJoinRecords(sf.relMsgId,true,true)}
-                memberCount={new Set((edgesByRelMsg.get(sf.relMsgId) ?? []).filter(edge => !edge.to.messageId.startsWith('anon:')).map(edge => edge.to.messageId)).size}
+                memberCount={props.getMemberCounts?.(sf.relMsgId).total} directMemberCount={props.getMemberCounts?.(sf.relMsgId).direct}
                 selectedUnits={draftUnits} activeText={activeTextSelectId === sf.relMsgId} onTextMouseUp={onTextMouseUp}
                 counts={stakeCounts?.[sf.relMsgId]} openMessageId={settlementOpenMsgId} openType={settlementOpenType}
                 onTruth={onSettlementToggleTruth} onValue={onSettlementToggleValue} />
@@ -1729,9 +1880,12 @@ function GraphViewCanvas(props: GraphViewProps) {
         const handleDblClick=(e: React.MouseEvent)=>{e.stopPropagation();(onGroupFrameDoubleClick??onMessageDoubleClick)(e,gf.relMsgId);};
         const {x,y,width,height}=gf.rect;
         const HH=FRAME_PAD;
-        const groupHeaderRect = getGroupHeaderRect(gf.rect, getGroupHeaderHeight(measuredHeights, gf.relMsgId));
+        const groupHeaderRect = getGroupHeaderRect(gf.rect, getGroupHeaderHeight(measuredHeights, gf.relMsgId,hiddenFrameHeaderIds.has(gf.relMsgId)?COMPACT_FRAME_HEADER_HEIGHT:GROUP_HEADER_HEIGHT));
         const gfZ = 4 + (frameDepthMap.get(gf.relMsgId) ?? 0);
         const isSummaryHeader = gf.relType === "summary";
+        const headerHidden = hiddenFrameHeaderIds.has(gf.relMsgId)&&(gf.relType==='classify'||gf.relType==='summary');
+        const canEnterHeader=props.containerEntryEnabled!==false&&!!props.onFrameHeaderDoubleClick&&(gf.relType==='classify'||gf.relType==='summary');
+        const frameMessage=msgMap.get(gf.relMsgId);
         const headerKindColor = isSummaryHeader ? "var(--ink-34d399)" : "var(--ink-a78bfa)";
         const stripBase: React.CSSProperties={position:"absolute",zIndex:gfZ,cursor:"pointer",pointerEvents:"auto",background:"transparent"};
         const title=(gf.relType === "classify" || gf.relType === "summary")
@@ -1741,7 +1895,7 @@ function GraphViewCanvas(props: GraphViewProps) {
         return (
           <React.Fragment key={`gf-hit-${gf.relMsgId}`}>
             {/* Border strips — omitted when blank-corrected (no visible frame border) */}
-            {!gf.isBlankCorrected&&<>
+            {!gf.isBlankCorrected&&!collapsedFrameIds.has(gf.relMsgId)&&<>
               <div data-msgid={gf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x-HH,top:y-HH,width:width+HH*2,height:HH*2}}/>
               <div data-msgid={gf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
@@ -1773,13 +1927,13 @@ function GraphViewCanvas(props: GraphViewProps) {
               );
             })()}
             {virtual.mounted.has(gf.relMsgId) && (gf.relType === "classify" || gf.relType === "summary" || gf.relType === "merge") && (
-              <div data-msgid={gf.relMsgId} data-rel-overlay="true" data-frame-header="true" data-skin-frame-header="true" {...skinForMessage(gf.relMsgId)} data-skin-type={gf.relType} data-skin-selected={isRelWholeSel(gf.relMsgId)}
-                data-measure-min-height={gf.relType === 'merge' ? MERGE_CARD_H : GROUP_HEADER_HEIGHT}
+              <div key={headerHidden?'controls':'card'} data-msgid={gf.relMsgId} data-rel-overlay="true" data-frame-header="true" data-frame-card-hidden={headerHidden||undefined} data-frame-depth={frameDepthMap.get(gf.relMsgId) ?? 0} data-skin-frame-header={headerHidden?undefined:'true'} {...(headerHidden?{}:skinForMessage(gf.relMsgId))} data-skin-type={headerHidden?undefined:gf.relType} data-skin-selected={isRelWholeSel(gf.relMsgId)}
+                data-measure-min-height={headerHidden?COMPACT_FRAME_HEADER_HEIGHT:gf.relType === 'merge' ? MERGE_CARD_H : GROUP_HEADER_HEIGHT}
                 ref={el => { cardRefs.current[gf.relMsgId] = el; }}
-                role="group" tabIndex={0} aria-label={`组织消息 ${gf.relMsgId}`} aria-keyshortcuts="Enter Space Shift+Enter" onKeyDown={activateMessageFromKeyboard}
+                role="group" tabIndex={0} aria-label={`${headerHidden?'框架控制':'组织消息'} ${gf.relMsgId}`} aria-keyshortcuts="Enter Space Shift+Enter" onKeyDown={activateMessageFromKeyboard}
                 onClick={handleClick}
                 onDoubleClick={e=>props.onFrameHeaderDoubleClick?props.onFrameHeaderDoubleClick(e,gf.relMsgId):handleDblClick(e)}
-                title={gf.relType==='classify'||gf.relType==='summary'?`${gf.relType==='summary'?'总结':'分类'}：${gf.relMsgId}；单击选中，双击进入临时分类`:title}
+                title={gf.relType==='classify'||gf.relType==='summary'?`${gf.relType==='summary'?'总结':'分类'}：${gf.relMsgId}；单击选中${canEnterHeader&&!headerHidden?'，双击进入临时分类':''}`:title}
                 style={{
                   ...(gf.relType === "merge"
                     ? (() => {
@@ -1823,18 +1977,23 @@ function GraphViewCanvas(props: GraphViewProps) {
                   pointerEvents: "auto",
                   userSelect: "none",
                   boxSizing: "border-box",
+                  ...(headerHidden?{minHeight:COMPACT_FRAME_HEADER_HEIGHT,background:'transparent',border:0,boxShadow:'none',outline:'none',padding:0,gap:0}:{}),
                 }}>
-                <OrganizationFrameHeader message={msgMap.get(gf.relMsgId)} messageId={gf.relMsgId} kind={gf.relType} joinBadges={renderJoinRecords(gf.relMsgId,true,true)}
+                {!headerHidden&&<OrganizationFrameHeader message={msgMap.get(gf.relMsgId)} messageId={gf.relMsgId} kind={gf.relType} depth={frameDepthMap.get(gf.relMsgId) ?? 0} joinBadges={renderJoinRecords(gf.relMsgId,true,true)}
+                  canEnter={canEnterHeader}
                   homeLabel={homeRoleLabel(gf.relMsgId)} homeReason={props.homeReasonByMessageId?.get(gf.relMsgId)}
                   correctionRecords={renderCorrectionRecords(gf.relMsgId)}
-                  memberCount={new Set((edgesByRelMsg.get(gf.relMsgId) ?? []).filter(edge => !edge.to.messageId.startsWith('anon:')).map(edge => edge.to.messageId)).size}
+                  memberCount={props.getMemberCounts?.(gf.relMsgId).total} directMemberCount={props.getMemberCounts?.(gf.relMsgId).direct}
                   selectedUnits={draftUnits} activeText={activeTextSelectId === gf.relMsgId} onTextMouseUp={onTextMouseUp}
                   counts={stakeCounts?.[gf.relMsgId]} openMessageId={settlementOpenMsgId} openType={settlementOpenType}
-                  onTruth={onSettlementToggleTruth} onValue={onSettlementToggleValue} />
+                  onTruth={onSettlementToggleTruth} onValue={onSettlementToggleValue} />}
                 {(gf.relType==='classify'||gf.relType==='summary')&&<FrameViewportTools id={gf.relMsgId} size={frameViewSizes[gf.relMsgId]}
+                  compactTitle={headerHidden?`${gf.relType==='summary'?'总结':'分类'} · ${frameMessage?(gf.relType==='summary'&&frameMessage.content||getOrganizationTitle(frameMessage)):gf.relMsgId}`:undefined}
+                  collapsed={collapsedFrameIds.has(gf.relMsgId)} onToggleCollapsed={()=>toggleFrameVisibility(gf.relMsgId)}
+                  headerHidden={headerHidden} onToggleHeader={()=>toggleFrameVisibility(gf.relMsgId,true)}
                   full={naturalScene.fullFrameIds.includes(gf.relMsgId)} onToggleFull={()=>setFrameFullOverrides(previous=>({...previous,[gf.relMsgId]:!naturalScene.fullFrameIds.includes(gf.relMsgId)}))}
                   natural={gf.rect} onChange={size=>resizeFrame(gf.relMsgId,size)}/>}
-                {renderRelatedConnections(gf.relMsgId)}
+                {!headerHidden&&renderRelatedConnections(gf.relMsgId)}
               </div>
             )}
           </React.Fragment>
@@ -1846,8 +2005,9 @@ function GraphViewCanvas(props: GraphViewProps) {
           Icon area: quick-send agree/disagree targeting the arrange relation message.
           Body area: toggle selection of all agree/disagree relation messages on this arrange. */}
       {visibleArrangeFrames.map(sf=>{
-        const sfDecLeft=sf.rect.x+sf.rect.width+DEC_RIGHT_GAP;
-        let sfDecTop=sf.rect.y+DEC_RIGHT_TOP;
+        const anchor=frameDecorationAnchors[sf.relMsgId]??sf.rect;
+        const sfDecLeft=anchor.x+anchor.width+DEC_RIGHT_GAP;
+        let sfDecTop=anchor.y+DEC_RIGHT_TOP;
         const nodes: React.ReactNode[]=[];
         // Shown cards keep an arbitration entry even when offscreen.
         if (onSettlementToggleTruth && cardFrameIds.has(sf.relMsgId) && !virtual.mounted.has(sf.relMsgId)) {
@@ -1904,8 +2064,9 @@ function GraphViewCanvas(props: GraphViewProps) {
       {/* GROUP frame decoration badges — AGREE/DISAGREE badges to the RIGHT of the group frame */}
       {visibleGroupFrames.map(gf=>{
         if (gf.relAgreeCount===0&&gf.relDisagreeCount===0) return null;
-        const gfDecLeft=gf.rect.x+gf.rect.width+DEC_RIGHT_GAP;
-        let gfDecTop=gf.rect.y+DEC_RIGHT_TOP;
+        const anchor=frameDecorationAnchors[gf.relMsgId]??gf.rect;
+        const gfDecLeft=anchor.x+anchor.width+DEC_RIGHT_GAP;
+        let gfDecTop=anchor.y+DEC_RIGHT_TOP;
         const nodes: React.ReactNode[]=[renderDecorationToggle(gf.relMsgId,{position:'absolute',left:gfDecLeft,top:gfDecTop,zIndex:8})];
         for (const kind of ["agree","disagree"] as const) {
           if(!visibleDecorationIds.has(gf.relMsgId))continue;
@@ -2189,7 +2350,7 @@ function GraphViewCanvas(props: GraphViewProps) {
         });
       })}
 
-      {visibleGroupFrames.filter(frame=>(frame.relType==='classify'||frame.relType==='summary')&&!naturalScene.fullFrameIds.includes(frame.relMsgId)).map(frame=><FrameViewportScrollbars key={`viewport-${frame.relMsgId}`}
+      {visibleGroupFrames.filter(frame=>(frame.relType==='classify'||frame.relType==='summary')&&!naturalScene.fullFrameIds.includes(frame.relMsgId)&&!collapsedFrameIds.has(frame.relMsgId)).map(frame=><FrameViewportScrollbars key={`viewport-${frame.relMsgId}`}
         id={frame.relMsgId} rect={frame.rect} content={frameViews.contentRects[frame.relMsgId]??frame.rect}
         scroll={frameViews.offsets[frame.relMsgId]??{left:0,top:0}} resized={!!effectiveFrameSizes[frame.relMsgId]}
         onScroll={value=>scrollFrame(frame.relMsgId,value)} onSize={size=>resizeFrame(frame.relMsgId,size)}/>)}

@@ -17,6 +17,20 @@ beforeEach(async () => {
 });
 afterEach(() => { resetRequestOperations(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
+it('计时操作使用会话校验，独立于消息批次和前台进度，不需要设备签名',async()=>{
+  localStorage.removeItem('privateKey:device:alice');vi.mocked(signPayloadWithPrivateJwk).mockClear();
+  const progress={earned:1,totalEarned:1,roundId:'next',waitSeconds:2,remainingMs:2000,refreshInMs:10000,awarded:true};
+  const fetcher=vi.fn(async()=>new Response(JSON.stringify(progress)));vi.stubGlobal('fetch',fetcher);
+  const committed=vi.fn();
+  await api.withCommandBatch(async()=>{expect(await api.updateUsagePoints({action:'tick',roundId:'first'})).toEqual(progress);},committed);
+  const [url,options]=fetcher.mock.calls[0] as unknown as [string,RequestInit];
+  expect(url).toMatch(/\/ui\/points\/activity$/);
+  expect(options.headers).toMatchObject({'X-CSRF-Token':'csrf'});
+  expect(options.headers).not.toHaveProperty('X-Signature');
+  expect(committed).not.toHaveBeenCalled();expect(signPayloadWithPrivateJwk).not.toHaveBeenCalled();
+  expect(getOperations()).toEqual([]);
+});
+
 it('signs a rehearsal without pending-write state or uncertain-send errors',async()=>{
   const prepared=await api.prepareCommandBatch(async()=>{await api.createMessage('root',{content:'未发送草稿',stakeAmount:1});});
   expect(prepared).not.toBeNull();

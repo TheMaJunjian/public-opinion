@@ -76,7 +76,7 @@
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label { --edge-label-ink: var(--text-secondary); }
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-relation-type='reference'] { --edge-label-ink: var(--graph-label-reference); }
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-relation-type='reply'] { --edge-label-ink: var(--graph-label-reply); }
-:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-relation-type='annotation'] { --edge-label-ink: var(--graph-label-amber); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-relation-type='annotation'] { --edge-label-ink: var(--graph-label-annotation); }
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-relation-type='agree'] { --edge-label-ink: var(--skin-agree); }
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-relation-type='disagree'] { --edge-label-ink: var(--skin-disagree); }
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .graph-edge-label[data-edge-emphasis='evidence'] { --edge-label-ink: var(--graph-label-amber); }
@@ -97,8 +97,10 @@
 }
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-decoration='agree'] { --decoration-ink: var(--skin-agree); border-radius: 3px !important; }
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-decoration='disagree'] { --decoration-ink: var(--skin-disagree); border-radius: 3px !important; }
-:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-operation='orange'] { --decoration-ink: var(--skin-correction); border-bottom: 2px solid var(--skin-correction) !important; }
-:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-operation='slate'] { --decoration-ink: var(--text-secondary); border-bottom: 2px dashed var(--skin-merge) !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-operation='orange'] { --decoration-ink: var(--skin-correction); }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-operation='slate'] { --decoration-ink: var(--text-secondary); }
+:root[data-appearance='gpt-arena'] [data-skin-operation='orange'] { border-bottom: 2px solid var(--skin-correction) !important; }
+:root[data-appearance='gpt-arena'] [data-skin-operation='slate'] { border-bottom: 2px dashed var(--skin-merge) !important; }
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-operation='green'] { --decoration-ink: var(--skin-agree); border-bottom: 2px solid var(--skin-agree) !important; }
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-operation='red'] { --decoration-ink: var(--skin-disagree); border-bottom: 2px solid var(--skin-disagree) !important; }
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-decoration='correct'] {

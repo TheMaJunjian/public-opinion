@@ -120,6 +120,23 @@ it('runs one job at a time, skips superseded requests and never publishes stale 
   unmount(); expect(worker.terminate).toHaveBeenCalledOnce();
 });
 
+it('starts an opened classification immediately instead of waiting for an obsolete scope job', () => {
+  vi.stubGlobal('Worker', FakeWorker);
+  const first = job('root-message'), child = job('classification-message');
+  const view = renderHook(({ input, scope }) => useSceneComputation(input, true, scope), {
+    initialProps: { input: first, scope: 'root' },
+  });
+  const oldWorker = FakeWorker.instances[0], oldRequest = oldWorker.postMessage.mock.calls[0][0];
+  view.rerender({ input: child, scope: 'classification' });
+  expect(oldWorker.terminate).toHaveBeenCalledOnce();
+  const currentWorker = FakeWorker.instances[1];
+  expect(currentWorker.postMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ job: child }));
+  act(() => oldWorker.finish(oldRequest));
+  expect(view.result.current).toBeNull();
+  act(() => currentWorker.finish(currentWorker.postMessage.mock.calls[0][0]));
+  expect(view.result.current?.order).toEqual(['classification-message']);
+});
+
 it('falls back locally when the worker cannot run and releases its drawing ticket', () => {
   vi.stubGlobal('Worker', FakeWorker);
   const tasks = createWorkbenchDrawingTasks(); tasks.setBlocking(false);
@@ -133,6 +150,46 @@ it('falls back locally when the worker cannot run and releases its drawing ticke
   expect(tasks.pending).toBe(0);
   expect(worker.terminate).toHaveBeenCalledOnce();
   unmount();
+});
+
+it.each(['missing', 'startup', 'runtime'] as const)('uses the graph-owned synchronous layout fallback when the worker is %s', failure => {
+  if (failure === 'missing') vi.stubGlobal('Worker', undefined);
+  else if (failure === 'startup') vi.stubGlobal('Worker', class { constructor() { throw new Error('Worker unavailable'); } });
+  else vi.stubGlobal('Worker', FakeWorker);
+  const tasks = createWorkbenchDrawingTasks(); tasks.setBlocking(false);
+  const messages = job('local-layout').input.messages;
+  const input = { kind: 'layout' as const, input: { normals: messages, allMessages: messages, colOf: {}, maxCol: 0, measuredWidths: {}, measuredHeights: {} } };
+  const layoutComputer = vi.fn(computeSceneLayout);
+  const { result, unmount } = renderHook(() => useSceneComputation(input, true, undefined, layoutComputer), {
+    wrapper: ({ children }) => <WorkbenchDrawingContext.Provider value={tasks}>{children}</WorkbenchDrawingContext.Provider>,
+  });
+  if (failure === 'runtime') {
+    expect(layoutComputer).not.toHaveBeenCalled();
+    act(() => FakeWorker.instances[0].onerror());
+  }
+  expect(result.current).toEqual(computeSceneLayout(input.input));
+  expect(layoutComputer).toHaveBeenCalledOnce();
+  expect(tasks.pending).toBe(0);
+  unmount();
+});
+
+it('keeps the default structure fallback synchronous without a graph layout import', () => {
+  vi.stubGlobal('Worker', undefined);
+  const input = job('local-structure');
+  const { result } = renderHook(() => useSceneComputation(input));
+  expect(result.current?.order).toEqual(['local-structure']);
+});
+
+it('does not run the injected graph calculator while the worker succeeds', () => {
+  vi.stubGlobal('Worker', FakeWorker);
+  const messages = job('worker-layout').input.messages;
+  const input = { kind: 'layout' as const, input: { normals: messages, allMessages: messages, colOf: {}, maxCol: 0, measuredWidths: {}, measuredHeights: {} } };
+  const layoutComputer = vi.fn(computeSceneLayout);
+  const { result } = renderHook(() => useSceneComputation(input, false, undefined, layoutComputer));
+  const worker = FakeWorker.instances[0];
+  act(() => worker.finish(worker.postMessage.mock.calls[0][0]));
+  expect(result.current?.layout['worker-layout']).toBeDefined();
+  expect(layoutComputer).not.toHaveBeenCalled();
 });
 
 it('reports worker computation errors through drawing failure instead of waiting indefinitely', () => {

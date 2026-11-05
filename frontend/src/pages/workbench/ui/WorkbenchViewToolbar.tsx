@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, type ComponentProps, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from 'react';
+import { lazy, Suspense, useEffect, useId, useRef, useState, type ComponentProps, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import DeferredWorkbench from '../../../components/DeferredWorkbench';
 import HistoryArrowIcon from '../../../components/HistoryArrowIcon';
 import MessageJumpControl from '../../../components/MessageJumpControl';
@@ -10,6 +10,9 @@ import type { Relation } from '../../../types';
 import type { DemoMessage, UnitSelection } from '../../../utils/modelBridge';
 import { resolveNavigationTargetId } from '../model/navigation';
 import type { ExportData } from '../../../api/client';
+import { copyDiscussionView, type DiscussionView } from '../../../utils/discussionView';
+import { dialogStyles } from '../../../components/dialogStyles';
+import { isNativeZhihuView } from '../../../utils/nativeZhihuView';
 const ExportModal = lazy(() => import('../../../components/ExportModal'));
 const CleanFilterPanel = lazy(() => import('../../../components/CleanFilterPanel'));
 type ViewMode = 'list' | 'graph';
@@ -34,16 +37,60 @@ interface Props {
   scopeHeader?: ReactNode;
   top: number; scopeMessageId: string; exportTitle: string; showAlert: (message: string) => void;
   exportData?: ExportData | null; exportUsername?: string | null;
+  onLocalExport?: (view: NonNullable<ExportData['view']>) => void;
+  discussion?: { value: DiscussionView; onChange: (value: DiscussionView) => void; error: string | null; retry: () => void };
   home: ComponentProps<typeof HomeFilterPanel>; clean: ComponentProps<typeof CleanFilterPanel>; filter: ComponentProps<typeof MessageFilterPanel>;
   view: ViewNavigation; comparison: ComparisonControls;
   correctionFilterTargetId: string | null; onLeaderboard: () => void;
   history?: { canGoBack: boolean; canGoForward: boolean; back: () => void; forward: () => void };
 }
-export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId, exportTitle, exportData, exportUsername, home, clean, filter, view, comparison, correctionFilterTargetId, onLeaderboard, history, onJump }: Props) {
+function LayoutSettings({ value, onChange }: NonNullable<Props['discussion']>) {
+  const [open, setOpen] = useState(false);
+  const container = useRef<HTMLDivElement>(null), trigger = useRef<HTMLButtonElement>(null), id = useId();
+  const close = () => { setOpen(false); trigger.current?.focus({ preventScroll: true }); };
+  useEffect(() => {
+    if (!open) return;
+    container.current?.querySelector<HTMLInputElement>('input:checked')?.focus({ preventScroll: true });
+    const outside = (event: PointerEvent) => { if (!container.current?.contains(event.target as Node)) setOpen(false); };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
+    };
+    document.addEventListener('pointerdown', outside, true);
+    document.addEventListener('keydown', escape, true);
+    return () => {
+      document.removeEventListener('pointerdown', outside, true);
+      document.removeEventListener('keydown', escape, true);
+    };
+  }, [open]);
+  return <div ref={container} style={{ position: 'relative', flexShrink: 0 }}
+    onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }}>
+    <button ref={trigger} type="button" className="workbench-view-toggle" aria-haspopup="dialog" aria-expanded={open}
+      aria-controls={open ? id : undefined} onClick={() => setOpen(current => !current)}>布局设置</button>
+    {open && <div id={id} role="dialog" aria-label="布局设置" onKeyDown={event => event.stopPropagation()}
+      style={{ ...dialogStyles.panel, position: 'absolute', top: '100%', right: 0, marginTop: 4, width: 224, maxWidth: 'calc(100vw - 32px)', padding: 12, zIndex: 100, fontSize: 12 }}>
+      <div role="radiogroup" aria-label="消息图布局" style={{ display: 'grid', gap: 12 }}>
+        {(['discussion', 'graph'] as const).map(mode => <label key={mode} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+          <input type="radio" name={id} value={mode} checked={value.mode === mode}
+            onChange={() => onChange({ ...value, mode })} />
+          {mode === 'discussion' ? '讨论布局（默认）' : '原关系图排布'}
+        </label>)}
+      </div>
+      <button type="button" className="workbench-popover-close" aria-label="关闭布局设置" onClick={close} style={{ marginTop: 12 }}>关闭</button>
+    </div>}
+  </div>;
+}
+export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId, exportTitle, exportData, exportUsername, onLocalExport, discussion, home, clean, filter, view, comparison, correctionFilterTargetId, onLeaderboard, history, onJump }: Props) {
   const {layout}=useThemeSettings();
   const [exportOpen, setExportOpen] = useState(false);
+  const nativeZhihuExport = isNativeZhihuView(exportData);
   const { viewMode, setViewMode, leftPanelRef, viewModeScrollRef, draftUnits, targetUnits, traceCount, currentClassifyRelMsgId, messages, relations, findContainingClassification, exitClassification, enterClassification, scheduleViewNavigation } = view;
   const { singleSideReview, comparisonMode, comparisonReviewed, comparisonTargetId, setComparisonTargetId, onStartComparison } = comparison;
+  const exportView: NonNullable<ExportData['view']> = {
+    username: exportUsername !== undefined ? exportUsername : exportData?.viewerUsername ?? null, mode: viewMode,
+    messageFilter: { ...filter.settings }, homeFilter: home.mode,
+    cleanFilters: clean.filters.map(rule => ({ ...rule })), classificationId: currentClassifyRelMsgId,
+    ...(discussion ? { discussion: copyDiscussionView(discussion.value) } : {}),
+  };
   return (
     <div data-workbench-view-toolbar="true" style={{ flex: "0 0 auto", borderBottom: "1px solid var(--line-333)", background: "var(--surface-141414)", position: "sticky", top, zIndex: Z_INDEX.header - 1 }}>
       <div style={{ padding: 8 }}>
@@ -55,8 +102,8 @@ export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId,
           </div>
         </div>
         <div className="workbench-view-actions" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <button onClick={() => setExportOpen(true)} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-fff)", fontSize: 12, cursor: "pointer", fontWeight: 400 }}>
-            导出
+          <button onClick={() => onLocalExport && !nativeZhihuExport ? onLocalExport(exportView) : setExportOpen(true)} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-fff)", fontSize: 12, cursor: "pointer", fontWeight: 400 }}>
+            {onLocalExport || nativeZhihuExport ? '下载阅览文件' : '导出'}
           </button>
           {layout.messageJump==='clipboard-dialog'&&<MessageJumpControl knownIds={new Set(messages.map(message=>message.id))} onJump={onJump}/>}
           <HomeFilterPanel {...home} />
@@ -79,6 +126,7 @@ export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId,
             排行榜
           </button>
           <div style={{display:'flex',gap:6,alignItems:'center',flexShrink:0}}>
+            {viewMode === 'graph' && discussion && <LayoutSettings {...discussion} />}
             {history && <div role="group" aria-label="浏览历史" style={{display:'flex',gap:4}}>
               {(['back','forward'] as const).map(direction => {
                 const enabled = direction === 'back' ? history.canGoBack : history.canGoForward;
@@ -145,13 +193,12 @@ export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId,
         </div>
       </div>
       </div>
+      {discussion?.error && <div role="alert" style={{ padding: '4px 8px', color: 'var(--ink-f87171)', fontSize: 12 }}>
+        {discussion.error} <button type="button" onClick={discussion.retry}>重试保存布局</button>
+      </div>}
       {scopeHeader}
       {exportOpen && <Suspense fallback={<div role="status">正在打开导出…</div>}><ExportModal onClose={() => setExportOpen(false)} scopeMessageId={scopeMessageId}
-        filename={`${exportTitle}.json`} source={exportData} view={{
-          username: exportUsername !== undefined ? exportUsername : exportData?.viewerUsername ?? null, mode: viewMode,
-          messageFilter: { ...filter.settings }, homeFilter: home.mode,
-          cleanFilters: clean.filters.map(rule => ({ ...rule })), classificationId: currentClassifyRelMsgId,
-        }} /></Suspense>}
+        filename={nativeZhihuExport ? '知乎阅览.json' : `${exportTitle}.json`} source={exportData} view={exportView} /></Suspense>}
     </div>
 
   );

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getMessageCardContent, getMessageProminence, getSummaryCoveredIds, hasActiveDisplayEffect, needsSeparateStanceCard } from '../utils/messageDisplay';
+import { getMessageCardContent, getMessageProminence, getMessageTypeLabel, getSummaryCoveredIds, hasActiveDisplayEffect, needsSeparateStanceCard } from '../utils/messageDisplay';
 import { applyGroupingColumnOverride } from '../utils/graphColumnRules';
 import { buildFrameBlocks } from '../utils/graphOrganizations';
 import { projectStanceLayoutEdges } from '../utils/stanceLayout';
@@ -14,6 +14,18 @@ const summary: DemoMessage = {
 const summaryEdge: DemoEdge = { id: 'cover', relationMessageId: 'summary', relationType: 'summary', relationLabel: '总结', from: { messageId: 'anon:summary', selection: { kind: 'whole' } }, to: { messageId: 'original', selection: { kind: 'whole' }, reference: { messageId: 'original' } } };
 
 describe('message display effects', () => {
+  it('uses the same proposal name for governance and native relations while retaining operation names', () => {
+    const proposals: DemoMessage[] = [
+      { ...message('governance'), kind: 'governance', backendKind: 'GOVERNANCE' },
+      { ...message('native-proposal'), kind: 'relation', relationType: 'proposal' },
+    ];
+    for (const proposal of proposals) {
+      expect(getMessageTypeLabel(proposal)).toBe('提案');
+      expect(getMessageTypeLabel({ ...proposal, relationPayload: { operationType: 'DISTRIBUTE_REVENUE' } })).toBe('分配收入');
+      expect(getMessageTypeLabel({ ...proposal, relationPayload: { operationType: 'TERMINATE_SETTLEMENT' } })).toBe('终止结算');
+    }
+  });
+
   it('uses the settlement target identity in summaries while preserving results and leaving stored content intact',()=>{
     const content='真假仲裁完成：目标消息「第一段\n引用「第二段」；仍是目标正文」；结果：赞成胜出';
     const record:DemoMessage={...message('round'),kind:'round_result',content,settlementTargetId:'target-id',parts:[{id:'body',type:'text',text:content}]};

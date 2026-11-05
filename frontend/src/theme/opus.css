@@ -58,6 +58,7 @@
   --graph-label-reference: #2f4a8a;
   --graph-label-reply: #2e6b4f;
   --graph-label-amber: #805b18;
+  --graph-label-annotation: #7c3fad;
 
   /* Compatibility palette for existing controls. Use semantic tokens above for new UI. */
   --surface-101010: #f6f3ec;

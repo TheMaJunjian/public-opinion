@@ -44,7 +44,7 @@ export function getSelectionFragment(
   const common = range.commonAncestorContainer;
   if (!(common instanceof Node)) return null;
   if (!container.contains(common)) return null;
-  const raw = sel.toString();
+  const raw = range.toString();
   if (raw.trim().length === 0) return null;
   const rawStart = getRangeStartOffsetUTF16(container, range);
   return { start: rawStart, len: raw.length, text: raw };

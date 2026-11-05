@@ -82,6 +82,7 @@ export function createWorkbenchDrawingTasks() {
             if (disposed) return;
             disposed = true;
             listeners.delete(schedule);
+            document.removeEventListener('visibilitychange', schedule);
             cancelAnimationFrame(frame);
             cancelAnimationFrame(paintFrame);
             stopDeadline();
@@ -91,7 +92,7 @@ export function createWorkbenchDrawingTasks() {
             cancelAnimationFrame(paintFrame);
             if (disposed) return;
             if (!pending.has(id) || failure) { dispose(); return; }
-            if (hasLayoutTasks()) return;
+            if (document.hidden || hasLayoutTasks()) return;
             const committedRevision = revision;
             frame = requestAnimationFrame(() => {
               paintFrame = requestAnimationFrame(() => {
@@ -105,6 +106,9 @@ export function createWorkbenchDrawingTasks() {
             if (registration.active) abort({ kind, reason: 'timeout' });
           });
           listeners.add(schedule);
+          // A background tab may not deliver its queued paint callbacks.
+          // Recheck the same task when the tab becomes visible again.
+          document.addEventListener('visibilitychange', schedule);
           registration.onCancel(dispose);
           schedule();
         },
@@ -114,7 +118,13 @@ export function createWorkbenchDrawingTasks() {
     clearFailure() { if (failure) { failure = null; changed(); } },
     get failure() { return failure; },
     committed: changed,
-    setBlocking(value: boolean) { blocking = value; },
+    setBlocking(value: boolean) {
+      if (blocking === value) return;
+      blocking = value;
+      // Resuming interaction must wake deferred pagination without invalidating
+      // the drawing revision that just passed its ready-commit fence.
+      listeners.forEach(listener => listener());
+    },
     get blocking() { return blocking; },
     get revision() { return revision; },
     get pending() { return pending.size; },

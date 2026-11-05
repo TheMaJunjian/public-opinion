@@ -60,7 +60,7 @@ it('keeps fragments as IDs until selected, then shows the selected fragment rath
   fireEvent.click(entry);expect(entry).toHaveTextContent('message-id');expect(entry).not.toHaveTextContent('选中的片段');
 });
 
-it.each(['暂存消息', '暂存片段', '来源消息', '目标消息'])('copies only the message ID on double click in %s while preserving inspection', async label => {
+it.each(['暂存消息', '暂存片段', '来源消息', '目标消息'])('copies the displayed ID or text on double click in %s while preserving inspection', async label => {
   const user = userEvent.setup();
   const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
   const view = render(<StagedMessageLabel messageId={message.id} message={message} content="选中的片段" ariaLabel={`${label} entry`} />);
@@ -73,10 +73,31 @@ it.each(['暂存消息', '暂存片段', '来源消息', '目标消息'])('copie
   await user.click(entry);
   expect(entry).toHaveTextContent('【文本】 选中的片段');
   await user.dblClick(entry);
-  expect(writeText).toHaveBeenLastCalledWith(message.id);
+  expect(writeText).toHaveBeenLastCalledWith('选中的片段');
+  expect(view.getByRole('status')).toHaveTextContent('已复制文本');
   expect(writeText).toHaveBeenCalledTimes(2);
   expect(entry).toHaveAttribute('aria-pressed', 'true');
   expect(entry).toHaveTextContent('【文本】 选中的片段');
+  writeText.mockRestore();
+});
+
+it.each([undefined, '只复制选中的\n片段'])('copies the complete displayed content in navigable entries without truncation, status labels, or a jump (%s)', async fragment => {
+  const user = userEvent.setup(), navigate = vi.fn();
+  const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
+  const fullText = '第一行🙂  保留空格\n' + '很长的消息正文'.repeat(20);
+  const view = render(<StagedMessageLabel messageId={message.id} message={{ ...message, content: fullText }} content={fragment}
+    ariaLabel="待复制条目" status={fragment ? '已选择片段' : '已选择整条'} onNavigate={navigate} wholeMessage={false} />);
+  const type = view.getByRole('button', { name: '待复制条目' }), value = view.getByRole('button', { name: '跳转到待复制条目' });
+  await user.dblClick(value);
+  expect(writeText).toHaveBeenLastCalledWith(message.id);
+  fireEvent.click(type);
+  expect(value).toHaveAttribute('title', expect.stringContaining('双击复制完整文本'));
+  await user.dblClick(value);
+  await new Promise(resolve => setTimeout(resolve, 550));
+  expect(writeText).toHaveBeenLastCalledWith(fragment ?? fullText);
+  expect(writeText).toHaveBeenCalledTimes(2); expect(navigate).not.toHaveBeenCalled();
+  expect(type).toHaveAttribute('aria-pressed', 'true');
+  expect(view.getByRole('status')).toHaveTextContent('已复制文本');
   writeText.mockRestore();
 });
 

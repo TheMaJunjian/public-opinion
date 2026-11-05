@@ -18,9 +18,12 @@ export async function isGeneratedContributionRecord(db:Postgres,message:Message)
   return false;
 }
 export async function minimumContributionCandidates(db:Postgres):Promise<Message[]> {
+  const archived = !!(await db.prepare("SELECT to_regclass('points_archive_rows') AS name").get())?.name;
   const rows=await db.prepare(`SELECT m.body FROM messages m JOIN accounts a ON a."userId"=m."authorId"
     WHERE COALESCE((m.body::jsonb #>> '{spending,recommendation}')::bigint,0)=0
       AND COALESCE((m.body::jsonb #>> '{spending,wager}')::bigint,0)=0
+      ${archived ? `AND NOT EXISTS (SELECT 1 FROM points_archive_rows archive WHERE archive."tableName"='messages'
+        AND archive."archiveId"=(SELECT value::jsonb->>'archiveId' FROM settings WHERE key='usage-points-start') AND archive.body->>'id'=m.id)` : ''}
     ORDER BY m.sequence,m.id`).all();
   const candidates:Message[]=[];
   for(const row of rows){

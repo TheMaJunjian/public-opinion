@@ -84,8 +84,15 @@ export function readingInfluences(input:Pick<ReadingInput,'messages'|'edges'|'re
   const joinedPlacements=new Set<string>();
   for(const relation of input.relations)if(relation.relationType==='JOIN'&&relation.sourceMessageId&&!relation.state?.membershipDisabled)
     for(const ref of relation.targetRefs)joinedPlacements.add(JSON.stringify([relation.sourceMessageId,ref.kind==='relation'?ref.relationId:ref.messageId]));
-  const edgesByEvent=new Map<string,DemoEdge[]>();
-  for(const edge of input.edges){const list=edgesByEvent.get(edge.relationMessageId)??[];list.push(edge);edgesByEvent.set(edge.relationMessageId,list);}
+  const edgesByEvent=new Map<string,DemoEdge[]>(),endpointsByEvent=new Map<string,Map<string,DemoEdge['from']>>();
+  for(const edge of input.edges){
+    const list=edgesByEvent.get(edge.relationMessageId)??[];list.push(edge);edgesByEvent.set(edge.relationMessageId,list);
+    const endpoints=endpointsByEvent.get(edge.relationMessageId)??new Map<string,DemoEdge['from']>();
+    // Match the first endpoint in original edge order, including an endpoint
+    // without context. Do not rescan every member of a large classification.
+    for(const endpoint of [edge.from,edge.to])if(!endpoints.has(endpoint.messageId))endpoints.set(endpoint.messageId,endpoint);
+    endpointsByEvent.set(edge.relationMessageId,endpoints);
+  }
   const correctionTargets=new Map(input.edges.filter(edge=>edge.relationType==='correct'&&!edge.proposalOnly)
     .map(edge=>[edge.relationMessageId,edge.to.messageId]));
   const rootTarget=(id:string)=>{const seen=new Set<string>();while(correctionTargets.has(id)&&!seen.has(id)){seen.add(id);id=correctionTargets.get(id)!;}return id;};
@@ -97,7 +104,7 @@ export function readingInfluences(input:Pick<ReadingInput,'messages'|'edges'|'re
     if(map.get(event)?.relationPayload?.operationType==='TERMINATE_SETTLEMENT'){type='terminate_settlement';key='terminate_settlement:';}
     if(type==='round'||type==='round_result')key=`${type}:`;
     if(correctionTargets.has(event)&&rootTarget(event)===target)versionId=event;
-    const endpoint=(edgesByEvent.get(event)??[]).flatMap(edge=>[edge.from,edge.to]).find(endpoint=>endpoint.messageId===target);
+    const endpoint=endpointsByEvent.get(event)?.get(target);
     const context=versionId?undefined:endpoint?.reference?.context??(resolvedStances.get(event)?.targetId===target?map.get(event)?.executedStance?.target.context:undefined);
     const basisIds=undefined,scopedKey=key;
     const values=byEvent.get(event)??new Map();values.set(JSON.stringify([target,scopedKey]),{type,versionId,basisIds,context});byEvent.set(event,values);
@@ -151,8 +158,14 @@ export function readingInfluences(input:Pick<ReadingInput,'messages'|'edges'|'re
       const target=message.settlementTargetId;
       if(target)add(target,message.id,message.kind,`${message.kind}:`);
     }
-    const existing=[...(byEvent.get(message.id)??[])];
-    for(const versionId of versionsFor(message.id)){
+    const versions=versionsFor(message.id);
+    if(!versions.size)continue;
+    const existingKeys=new Map<string,string>();
+    for(const [encoded] of byEvent.get(message.id)??[]){
+      const [target,key]=JSON.parse(encoded) as [string,string];
+      if(!existingKeys.has(target))existingKeys.set(target,key);
+    }
+    for(const versionId of versions){
       const root=rootTarget(versionId);if(root===versionId)continue;
       // Reuse the event's category, including resolved chained stances.
       const type=message.relationType??message.kind;
@@ -160,7 +173,7 @@ export function readingInfluences(input:Pick<ReadingInput,'messages'|'edges'|'re
       const effectiveType=resolved?.type??type;
       const key=['agree','disagree','recommend','archive','attention','block','tag'].includes(effectiveType)
         ?`${effectiveType}:${effectiveType==='tag'?message.relationPayload?.label??'':''}`
-        :existing.map(([key])=>JSON.parse(key) as [string,string]).find(([target])=>target===versionId)?.[1]??`${effectiveType}:${message.id}`;
+        :existingKeys.get(versionId)??`${effectiveType}:${message.id}`;
       add(root,message.id,effectiveType,key,versionId);
     }
   }
@@ -245,7 +258,7 @@ export function deriveReadingProgress(input:ReadingInput) {
       return !(authoredIds.has(item.messageId)&&(!item.resultKey||!observedOutcomes.has(JSON.stringify([owner,item.key,item.eventId]))))
         &&!acknowledged.has(JSON.stringify([owner,item.key,item.eventId,item.resultKey??'']));
     });
-    const previous=own?.selection,selection=previous?readingSelection(input,message.id,input.displays?.get(message.id)):undefined;
+    const previous=own?.selection,selection=previous?selectionForMessage(input,message,input.displays?.get(message.id)):undefined;
     // Older confirmations used the shared message key here. Their recorded
     // body version still proves which display was seen; do not invent a change.
     const previousVersionKey=previous?.versionKey===messageReadingKey(message.id)?own?.version?bodyVersionKey(own.version):selection?.versionKey:previous?.versionKey;
@@ -278,7 +291,10 @@ export function deriveReadingProgress(input:ReadingInput) {
 }
 
 export function readingSelection(input:ReadingInput,id:string,display?:DisplaySnapshot):NonNullable<ReadingMark['selection']>{
-  const message=input.messages.find(item=>item.id===id)!,entry=input.corrections?.get(id),version=display?.version??displayedBodyVersion(message,entry?.current);
+  return selectionForMessage(input,input.messages.find(item=>item.id===id)!,display);
+}
+function selectionForMessage(input:ReadingInput,message:DemoMessage,display?:DisplaySnapshot):NonNullable<ReadingMark['selection']>{
+  const id=message.id,entry=input.corrections?.get(id),version=display?.version??displayedBodyVersion(message,entry?.current);
   const outcomes=Object.fromEntries((input.effectiveCorrections??input.corrections)?.get(id)?.versions?.map(item=>[item.correctionId,item.exclusionReason??(item.adopted?'adopted':item.valid?'eligible':'excluded')])??[]);
   const signature=displaySignature({content:display?.content??entry?.current?.content??message.content,parentIds:[],memberIds:[],suppressed:false,correctionIds:[]});
   return {versionKey:bodyVersionKey(version),outcomes,signature};

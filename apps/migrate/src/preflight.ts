@@ -11,6 +11,7 @@ import {retainedTargetInvestmentPlan} from './retained-target-investments.js';
 import {legacyAnnotationInvestmentPlan} from './legacy-annotation-investments.js';
 import {readingMessageRemovalPlan} from './remove-reading-messages.js';
 import {containerReadingCleanupPlan} from './cleanup-container-reading-marks.js';
+import {resetMessageContributionPlan} from './reset-message-contributions.js';
 
 /** Read-only planning does not initialize, stamp or rewrite any database. */
 export async function migrationPlan(databaseUrl:string,schema?:string){
@@ -44,7 +45,11 @@ export async function migrationPlan(databaseUrl:string,schema?:string){
       return {userId:row.authorId,messages:Number(row.count),available,total,bodyProtocolAdjustment,netDeduction,balanceAfter:available-netDeduction};
     }))};
     const sharedReadingMarks=tables.has('reading_marks')?Number((await db.prepare("SELECT COUNT(*) AS count FROM reading_marks WHERE body->>'format' IS DISTINCT FROM '3'").get())!.count):0;
+    const pointsStart=tables.has('settings')?await db.prepare("SELECT value FROM settings WHERE key='usage-points-start'").get():undefined;
+    const contributionPointsReset={pending:applied.length<27&&!pointsStart,accounts:counts.accounts??0,
+      archiveBeforeReset:true,dailyRefresh:'00:00 Asia/Shanghai',initialGrant:0};
+    const resetMessageContributions=tables.has('points_archive_rows')&&tables.has('settings')?await resetMessageContributionPlan({db}):undefined;
     return {...identity,schema:db.schema,region:region?JSON.parse(String(region)):null,counts,settlementTargets,valueVoteMessages,annotationStanceMessages,minimumContributions,dependentMemberships,delegationBodies,targetInvestments,retainedTargetInvestments,legacyAnnotationInvestments,
-      readingMessages,containerReadingMarks,simplifiedCorrections,referenceConsumption,sharedReadingMarks,currentVersion:applied.length,pending:DATABASE_MIGRATIONS.slice(applied.length).map((name,index)=>({version:applied.length+index+1,name}))};
+      readingMessages,containerReadingMarks,simplifiedCorrections,referenceConsumption,sharedReadingMarks,contributionPointsReset,resetMessageContributions,currentVersion:applied.length,pending:DATABASE_MIGRATIONS.slice(applied.length).map((name,index)=>({version:applied.length+index+1,name}))};
   });}finally{await db.close();}
 }

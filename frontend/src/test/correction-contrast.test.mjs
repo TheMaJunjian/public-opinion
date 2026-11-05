@@ -38,6 +38,16 @@ const luminance=color=>color.slice(0,3).map(value=>value/255).map(value=>value<=
   .reduce((sum,value,index)=>sum+value*[.2126,.7152,.0722][index],0);
 const contrast=(first,second)=>(Math.max(luminance(first),luminance(second))+.05)/(Math.min(luminance(first),luminance(second))+.05);
 
+it('keeps Opus version changes and amber hint text above 7:1 contrast',()=>{
+  const read=colors(readCss('opus.css')+readCss('opus-dialogs.css'));
+  for(const [ink,surface] of [
+    ['--comparison-before-ink','--comparison-before-change'],
+    ['--comparison-after-ink','--comparison-after-change'],
+    ['--dialog-hint-text','--dialog-hint-surface'],
+    ['--dialog-hint-text','--surface-card'],
+  ]) expect(contrast(read(`var(${ink})`),read(`var(${surface})`)),`${ink} on ${surface}`).toBeGreaterThanOrEqual(7);
+});
+
 function expectReadable(css){
   const read=colors(css),bodies=document.querySelectorAll('pre');expect(bodies.length).toBe(2);
   for(const body of bodies){

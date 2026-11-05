@@ -1,12 +1,16 @@
-import { archiveChangeFingerprint, replayArchive, type Archive, type ArchiveCheckpoint } from '@gonglun/core';
+import { archiveChangeFingerprint, replayArchive, textOf, type Message, type Archive, type ArchiveCheckpoint } from '@gonglun/core';
 import type { ExportData, ExportUpdateData } from '../api/client';
 import {isHomeFilterMode} from '../pages/workbench/model/homeFilter';
 import {CLEAN_MESSAGE_TYPES} from '../types';
+import { isZhihuInput, isZhihuViewingData, prepareZhihuForViewing } from './zhihuArchive';
+import { isDiscussionView } from './discussionView';
+import { isNativeZhihuView } from './nativeZhihuView';
 
 const cleanMessageTypes=new Set<string>(['CONTENT','RELATION',...CLEAN_MESSAGE_TYPES.map(([type])=>type)]);
 
 /** Convert old files locally, on demand, without adding a migration dialog. */
 export async function prepareExportForViewing(input:unknown){
+  if (isZhihuInput(input) || isZhihuViewingData(input)) return validateExportForViewing(input);
   const archive=input as ExportData|null;
   if(archive&&archive.formatVersion>5)throw new Error('文件版本比当前程序更新，请更新程序后再打开');
   const historical=archive&&typeof archive==='object'&&(archive.formatVersion<5
@@ -24,13 +28,14 @@ export async function prepareExportForViewing(input:unknown){
 /** Accept the current view contract; historical conversion belongs to the standalone migrator. */
 export function validateExportForViewing(input: unknown): { data: ExportData; verification: string | null } {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('导出文件格式无效');
-  const archive = input as ExportData;
-  let verification: string | null = null;
+  const zhihu = isZhihuInput(input) || isZhihuViewingData(input);
+  const archive = zhihu ? prepareZhihuForViewing(input) : input as ExportData;
+  let verification: string | null = zhihu ? '知乎导出文件：仅在本机阅览，回复关系调整与原文分开保存。' : null;
   if (archive.format === 'gonglun-2') {
     const replay = replayArchive(archive);
     verification = `记录连续性及资金守恒校验通过：${replay.changeCount} 次变更，${replay.messages.length} 条消息，${replay.accounts.size} 个账户。运营余额 ${replay.operating}，发行总量 ${replay.issued}。`;
   }
-  const data = archive;
+  let data = archive;
   if (!data.scope || typeof data.scope.title !== 'string') {
     throw new Error(archive.format === 'gonglun-2'
       ? '缺少阅览范围信息（scope）；仅含执行记录的文件请改用消息视图中的“导出”生成阅览文件'
@@ -40,12 +45,24 @@ export function validateExportForViewing(input: unknown): { data: ExportData; ve
   if (!Array.isArray(data.relations)) throw new Error('缺少关系列表（relations）');
   if(data.messages.some(message=>!Array.isArray(message.parts)||!Number.isSafeInteger(message.revision)))
     throw new Error('消息文件需要先使用独立迁移程序转换为最新版');
+  if (!zhihu && data.format === 'gonglun-view-3' && data.formatVersion === 5) {
+    // Compact native files persist the canonical parts once. Restore the
+    // display alias only in memory, leaving explicit differing content intact.
+    const restore = <T extends object>(record: T): T => 'parts' in record && Array.isArray(record.parts)
+      && !('content' in record) ? { ...record, content: textOf(record as unknown as Message) } : record;
+    const messages = data.messages.map(restore);
+    if (messages.some((row, i) => row !== data.messages[i])) data = { ...data, messages };
+  }
+  if (isNativeZhihuView(data) && (data.view ? data.view.username !== '本地整理者' : data.viewerUsername !== '本地整理者')) {
+    data = { ...data, ...(data.view ? { view: { ...data.view, username: '本地整理者' } } : { viewerUsername: '本地整理者' }) };
+  }
   const view = data.view;
   if (view !== undefined && (!view || typeof view !== 'object'
     || !(view.username === null || typeof view.username === 'string')
     || !['list', 'graph'].includes(view.mode)
     || typeof view.messageFilter?.hideSettlement !== 'boolean' || typeof view.messageFilter?.hideJoin !== 'boolean'
     || !isHomeFilterMode(view.homeFilter)
+    || view.discussion !== undefined && !isDiscussionView(view.discussion)
     || !Array.isArray(view.cleanFilters) || view.cleanFilters.some(rule => !rule || !['sender', 'tag', 'stake', 'rounds', 'participants', 'relationType','messageType','time'].includes(rule.kind)
       ||rule.kind==='messageType'&&(!Array.isArray(rule.messageTypes)||!rule.messageTypes.length
         ||rule.messageTypes.some(type=>!cleanMessageTypes.has(type)))

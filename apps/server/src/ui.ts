@@ -11,10 +11,20 @@ import { sendSnapshot } from './snapshot-response.js';
 import { windowSnapshot } from './window-snapshot.js';
 import {bodyVersionSchema} from './reference-schema.js';
 import {validateBodyVersion} from './validation.js';
+import {activitySchema, updateUsagePoints} from './usage-points.js';
+import {pointTransactions} from './point-transactions.js';
 import { accountView, allUsers, attentionUsers, relationViewType, messageView, paginate, parentOf, roundView, scopeMessages, snapshot, stakesFor, tagCounts, tagCountsFor, scopeView, userView, viewsFor, type RecordData } from './ui-projections.js';
 /** Transport views for the established interaction model. The domain contains messages only. */
 export function createUiRouter(store: Store, publish: () => Promise<void>) {
     const router = Router();
+    router.post('/points/activity', async (req, res, next) => {
+        try {
+            const session = await requireCsrf(store, req);
+            const progress = await updateUsagePoints(store, session.user.id, activitySchema.parse(req.body));
+            res.json(progress);
+            if (progress.awarded) await publish().catch(error => console.error('发布贡献点变更失败', error));
+        } catch (error) { next(error); }
+    });
     router.post('/body-versions/resolve',(req,res,next)=>{
         void store.read(async()=>{const version=bodyVersionSchema.parse(req.body);res.json({message:await validateBodyVersion(store,version)});}).catch(next);
     });
@@ -147,10 +157,8 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
     } });
     get('/points/transactions', async (req, res, next) => {
         try {
-            const session = (await requireSession(store, req)), rows = (await store.db.prepare("SELECT * FROM ledger WHERE \"userId\"=$1 ORDER BY position").all(session.user.id));
-            let available = 0;
-            const result = (await Promise.all(rows.map(async ({position:_position,...row}) => { available += Number(row.amount); return { ...row, type: Number(row.lockedDelta) > 0 ? 'LOCK' : Number(row.lockedDelta) < 0 ? 'UNLOCK' : Number(row.amount) < 0 ? 'SPEND' : 'TRANSFER', balanceAfter: available, data: { reason: row.reason, messageId: row.messageId, messageRevision: row.messageRevision, scopeMessageId: row.messageId ? (await parentOf(store, String(row.messageId))) : null, lockedDelta: row.lockedDelta, ruleVersion: row.ruleVersion } }; }))).reverse();
-            res.json(paginate(result, req.query, 100));
+            const session = await requireSession(store, req);
+            res.json(await pointTransactions(store, session.user.id, req.query));
         }
         catch (e) {
             next(e);
@@ -204,13 +212,15 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
         }
     });
     get('/revenue/pool', async (_req, res) => {
-        const distributed = (await store.db.prepare("SELECT COALESCE(SUM((p.value::jsonb #>> '{value,total}')::bigint),0) AS n FROM revisions m,jsonb_array_elements(m.body::jsonb -> 'parts') p WHERE m.revision=1 AND (p.value::jsonb #>> '{type}')='data' AND (p.value::jsonb #>> '{value,source}')='operations'").get())!;
+        const start = await store.setting<{sequence:number}>('usage-points-start');
+        const distributed = (await store.db.prepare("SELECT COALESCE(SUM((p.value::jsonb #>> '{value,total}')::bigint),0) AS n FROM revisions m,jsonb_array_elements(m.body::jsonb -> 'parts') p WHERE m.revision=1 AND (m.body::jsonb->>'sequence')::bigint>$1 AND (p.value::jsonb #>> '{type}')='data' AND (p.value::jsonb #>> '{value,source}')='operations'").get(start.sequence))!;
         const balance = (await store.setting<number>('operating')), totalDistributed = Number(distributed.n);
         res.json({ id: 'local', balance, totalDistributed, totalReceived: balance + totalDistributed, updatedAt: new Date().toISOString() });
     });
     get('/revenue/distributions', async (req, res, next) => {
         try {
-            const messages = (await store.db.prepare("SELECT body FROM revisions WHERE revision=1 AND EXISTS(SELECT 1 FROM jsonb_array_elements(body::jsonb -> 'parts') p WHERE (p.value::jsonb #>> '{value,source}')='operations') ORDER BY position DESC").all()).map(r => JSON.parse(String(r.body)) as Message);
+            const start = await store.setting<{sequence:number}>('usage-points-start');
+            const messages = (await store.db.prepare("SELECT body FROM revisions WHERE revision=1 AND (body::jsonb->>'sequence')::bigint>$1 AND EXISTS(SELECT 1 FROM jsonb_array_elements(body::jsonb -> 'parts') p WHERE (p.value::jsonb #>> '{value,source}')='operations') ORDER BY position DESC").all(start.sequence)).map(r => JSON.parse(String(r.body)) as Message);
             const rows = ((await Promise.all(messages.map(async (m) => { const data = dataOf(m); return (await Promise.all((data.allocations as unknown as RecordData[] ?? []).map(async (a, index) => ({ id: `${m.id}:${index}`, messageId: m.id, userId: a.userId, user: (await userView(store, a.userId)), amount: a.amount, reason: a.reason, messageIds: a.messageIds, createdAt: m.createdAt })))); }))).flat());
             res.json(paginate(rows, req.query));
         }

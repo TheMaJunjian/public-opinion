@@ -138,11 +138,12 @@ describe('排行榜', () => {
 
   it('名称列去掉名字并沿用此前保存的列宽，新名称设置优先', () => {
     localStorage.setItem(LEADERBOARD_PREFERENCES_KEY, JSON.stringify({ columnWidths: {
-      user: { '与会者名': 196 }, message: { '议事人名': 180, '议事人': 220 },
+      user: { '与会者名': 196, '充值收入': 140, '充值及受押总点': 200 }, message: { '议事人名': 180, '议事人': 220 },
     } }));
     setup();
     expect(screen.getByRole('columnheader', { name: '与会者' })).toBeInTheDocument();
     expect(screen.getByRole('separator', { name: '调整与会者列宽' })).toHaveAttribute('aria-valuenow', '196');
+    expect(screen.getByRole('separator', { name: '调整充值贡献列宽' })).toHaveAttribute('aria-valuenow', '140');
     fireEvent.click(screen.getByRole('button', { name: '消息榜' }));
     expect(screen.getByRole('columnheader', { name: '议事人' })).toBeInTheDocument();
     expect(screen.getByRole('separator', { name: '调整议事人列宽' })).toHaveAttribute('aria-valuenow', '220');
@@ -151,6 +152,8 @@ describe('排行榜', () => {
     expect(saved.columnWidths.user['与会者']).toBe(196);
     expect(saved.columnWidths.message['议事人']).toBe(236);
     expect(saved.columnWidths.user['与会者名']).toBeUndefined();
+    expect(saved.columnWidths.user['充值收入']).toBeUndefined();
+    expect(saved.columnWidths.user['充值及受押总点']).toBeUndefined();
     expect(saved.columnWidths.message['议事人名']).toBeUndefined();
   });
 
@@ -525,14 +528,15 @@ describe('排行榜', () => {
     expect(cells(rows()[0]).at(-1)).toBe('user-alice');
   });
 
-  it('人榜与消息榜共用实际表态金额、引用和结算指标，充值分账归入接收者', () => {
+  it('人榜与消息榜共用表态、引用和结算指标，账号贡献独立展示，发点记录不计消息数', () => {
     const { rerender, props } = setup();
     const createdBy = users[1];
     rerender(<LeaderboardModal {...props}
+      users={[{ ...users[0], rechargeContribution: 80, usageContribution: 12 }, users[1]]}
       messages={[...messages.map(item => item.id === 'round-a' || item.id === 'result-a'
         ? { ...item, settlementTargetId: 'reply-a', roundPayload: { roundId: 'round-a' } } : item),
         message('stance-b', 'bob', 'relation'), message('reference-b', 'bob', 'relation'),
-        { ...message('grant', 'system', 'round_result'), parts: [{ id: 'allocation', type: 'data', value: {
+        { ...message('grant', 'system', 'round_result'), authorId: 'system', parts: [{ id: 'allocation', type: 'data', value: {
           source: 'grant', inputs: { proposalId: 'proposal-a' }, allocations: [{ userId: users[0].id, amount: 80 }],
         } }] }]}
       relations={[
@@ -542,7 +546,11 @@ describe('排行榜', () => {
       edges={[0, 1].map(index => ({ id: `reference-b:${index}`, relationMessageId: 'reference-b', relationType: 'reference', relationLabel: '引用',
         from: { messageId: 'text-b', selection: { kind: 'whole' } }, to: { messageId: 'reply-a', selection: { kind: 'whole' } } }))}
     />);
-    expect(cells(rows()[0])).toEqual(['1', 'user-alice', 'alice', '80', '6', '1', '5', '20', '7', '10.00', '1', '1', '112', '-']);
+    expect(cells(rows()[0])).toEqual(['1', 'user-alice', 'alice', '80', '6', '1', '5', '20', '7', '10.00', '1', '1', '12', '-']);
+    expect(screen.getByRole('columnheader', { name: '充值贡献' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '累计使用贡献' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: '按充值及受押总点' })).toBeNull();
+    expect(rows()).toHaveLength(2);
     fireEvent.click(screen.getByRole('button', { name: '消息榜' }));
     expect(cells(rows()[0]).slice(1, 3)).toEqual(['reply-a', 'reply-a']);
     expect(cells(rows()[0]).slice(4, 10)).toEqual(['20', '10', '7', '-40.00', '1', '1']);
@@ -550,9 +558,9 @@ describe('排行榜', () => {
 
   it('人榜的所有排序选项与方向均生效，支持搜索和净支持率最小样本', () => {
     setup();
-    for (const key of ['messageCount', 'textMessageCount', 'relationMessageCount', 'receivedTruthStake', 'totalIncome', 'rechargeIncome', 'receivedStanceStake', 'netSupportRate', 'referenceHeat', 'settlementActivity']) {
+    for (const key of ['messageCount', 'textMessageCount', 'relationMessageCount', 'receivedTruthStake', 'usageContribution', 'rechargeContribution', 'receivedStanceStake', 'netSupportRate', 'referenceHeat', 'settlementActivity']) {
       fireEvent.change(screen.getByRole('combobox', { name: '排序条件' }), { target: { value: key } });
-      const column = { messageCount: 4, textMessageCount: 5, relationMessageCount: 6, receivedTruthStake: 7, totalIncome: 12, rechargeIncome: 3, receivedStanceStake: 8, netSupportRate: 9, referenceHeat: 10, settlementActivity: 11 }[key]!;
+      const column = { messageCount: 4, textMessageCount: 5, relationMessageCount: 6, receivedTruthStake: 7, usageContribution: 12, rechargeContribution: 3, receivedStanceStake: 8, netSupportRate: 9, referenceHeat: 10, settlementActivity: 11 }[key]!;
       const values = () => rows().map(row => Number(cells(row)[column]));
       expect(values()).toEqual([...values()].sort((a, b) => b - a));
       fireEvent.click(screen.getByRole('button', { name: '降序' }));

@@ -1,0 +1,270 @@
+/* Paper dialogs share a quiet surface; correction colors describe versions. */
+:root[data-appearance='opus-paper'] {
+  --dialog-surface: var(--surface-card);
+  --dialog-border: var(--border-default);
+  --dialog-accent-border: 1px solid var(--dialog-border);
+  --dialog-radius: 8px;
+  --dialog-shadow: 0 16px 48px rgb(65 48 24 / 16%);
+  --dialog-heading-font: var(--font-reading);
+  --dialog-heading-size: 17px;
+  --dialog-heading-weight: 600;
+  --dialog-body-color: var(--text-secondary);
+  --dialog-backdrop: rgb(47 40 30 / 32%);
+  --dialog-hint-accent: var(--recommendation-accent);
+  --dialog-hint-text: #684815;
+  --dialog-hint-surface: #f5edda;
+  --dialog-motion-duration: 160ms;
+  --comparison-before-surface: #f1eee7;
+  --comparison-before-border: #d6cfc2;
+  --comparison-before-ink: #484236;
+  --comparison-before-change: #e5dfd2;
+  --comparison-after-surface: #f4f2ec;
+  --comparison-after-border: #b6ae9e;
+  --comparison-after-ink: #403d37;
+  --comparison-after-change: #e5e0d4;
+}
+
+:root[data-appearance='opus-paper'] [data-popup-overlay='true'] {
+  background: var(--dialog-backdrop) !important;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+:root[data-appearance='opus-paper'] [data-popup-overlay='true'] > .popup-backdrop-guides {
+  display: none;
+}
+
+:root[data-appearance='opus-paper'] [data-dialog-panel='true'] {
+  animation: opus-dialog-enter var(--dialog-motion-duration) ease-out both;
+}
+
+:root[data-appearance='opus-paper'] :is([data-prompt-modal='true'], [data-dialog-tone='hint']) {
+  --dialog-accent-border: 3px solid var(--dialog-hint-accent);
+}
+
+:root[data-appearance='opus-paper'] [data-dialog-layout='scroll'] {
+  display: flex !important;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden !important;
+  color-scheme: light !important;
+}
+
+:root[data-appearance='opus-paper'] [data-dialog-layout='scroll'] > :is([data-dialog-header], [data-dialog-footer]) {
+  flex: 0 0 auto;
+  background: var(--dialog-surface);
+}
+
+:root[data-appearance='opus-paper'] [data-dialog-layout='scroll'] > [data-dialog-body] {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+:root[data-appearance='opus-paper'] [data-dialog-panel] [data-dialog-header] {
+  font: var(--dialog-heading-weight) var(--dialog-heading-size)/1.5 var(--dialog-heading-font);
+  color: var(--text-primary);
+}
+
+:root[data-appearance='opus-paper'] :is([data-dialog-close='true'], [data-dialog-panel] button[aria-label^='关闭']) {
+  display: inline-flex !important;
+  flex: 0 0 32px !important;
+  align-items: center;
+  justify-content: center;
+  width: 32px !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 0 !important;
+  border: 1px solid var(--dialog-border) !important;
+  border-radius: 6px !important;
+  background: var(--dialog-surface) !important;
+  color: var(--text-secondary) !important;
+  font: 400 16px/1 sans-serif;
+}
+
+:root[data-appearance='opus-paper'] :is([data-dialog-close='true'], [data-dialog-panel] button[aria-label^='关闭']):hover {
+  background: var(--surface-hover) !important;
+  color: var(--text-primary) !important;
+}
+
+:root[data-appearance='opus-paper'] .correction-comparison-dialog {
+  padding: 0 !important;
+}
+
+:root[data-appearance='opus-paper'] .correction-comparison-dialog > :is([data-dialog-header], [data-dialog-footer]) {
+  margin: 0 !important;
+}
+
+:root[data-appearance='opus-paper'] .correction-comparison-dialog > [data-dialog-header] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+:root[data-appearance='opus-paper'] .correction-comparison-dialog > [data-dialog-body] {
+  display: block !important;
+  padding: 16px;
+}
+
+:root[data-appearance='opus-paper'] [data-version-side='before'] {
+  --comparison-version-ink: var(--comparison-before-ink);
+  --comparison-version-change: var(--comparison-before-change);
+  --comparison-version-border: var(--comparison-before-border);
+  background: var(--comparison-before-surface) !important;
+  border-color: var(--comparison-before-border) !important;
+}
+
+:root[data-appearance='opus-paper'] [data-version-side='after'] {
+  --comparison-version-ink: var(--comparison-after-ink);
+  --comparison-version-change: var(--comparison-after-change);
+  --comparison-version-border: var(--comparison-after-border);
+  background: var(--comparison-after-surface) !important;
+  border-color: var(--comparison-after-border) !important;
+}
+
+:root[data-appearance='opus-paper'] [data-version-side] pre {
+  font: 14px/1.75 var(--font-reading) !important;
+  overflow-wrap: anywhere;
+}
+
+:root[data-appearance='opus-paper'] [data-version-side] :is([data-diff-change], [data-comparison-change='current']) {
+  background: var(--comparison-version-change) !important;
+  color: var(--comparison-version-ink) !important;
+  outline: 1px solid var(--comparison-version-border) !important;
+}
+
+:root[data-appearance='opus-paper'] [data-version-side='before'] :is([data-diff-change], [data-comparison-change='current']) {
+  text-decoration: line-through;
+}
+
+:root[data-appearance='opus-paper'] [data-version-side='after'] :is([data-diff-change], [data-comparison-change='current']) {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+:root[data-appearance='opus-paper'] [data-version-side] [data-comparison-change='other'] {
+  background: var(--dialog-hint-surface) !important;
+  color: var(--dialog-hint-text) !important;
+  outline: 1px solid var(--dialog-hint-accent) !important;
+}
+
+:root[data-appearance='opus-paper'] [data-comparison-status] {
+  color: var(--dialog-hint-text) !important;
+  line-height: 1.65;
+}
+
+/* Full text stays in two independently scrollable version columns. */
+:root[data-appearance='opus-paper'] [data-dialog-panel]:has([data-comparison-grid] > [data-version-side]:nth-child(2) pre) {
+  width: min(960px, calc(100vw - 32px)) !important;
+}
+
+:root[data-appearance='opus-paper'] :is(.correction-comparison-dialog, [data-comparison-content]):has([data-comparison-grid] > [data-version-side]:nth-child(2) pre) > .comparison-scroll-controls {
+  display: flex !important;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  color: var(--text-secondary);
+  font: 13px/1.5 system-ui, sans-serif;
+  cursor: pointer;
+  user-select: none;
+}
+
+:root[data-appearance='opus-paper'] .correction-comparison-dialog > .comparison-scroll-controls {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--dialog-border);
+  background: var(--dialog-surface);
+}
+
+:root[data-appearance='opus-paper'] .comparison-scroll-controls input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--text-primary);
+}
+
+:root[data-appearance='opus-paper'] [data-comparison-grid] > [data-version-side]:has(pre) {
+  max-height: min(56vh, 560px);
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+:root[data-appearance='opus-paper'] [data-guide-bubble='true'] {
+  border-radius: var(--dialog-radius) !important;
+  border-left-color: var(--dialog-hint-accent);
+  animation: opus-dialog-enter var(--dialog-motion-duration) ease-out both;
+}
+
+:root[data-appearance='opus-paper'] .guide-title {
+  font: var(--dialog-heading-weight) 17px/1.5 var(--font-reading);
+}
+
+:root[data-appearance='opus-paper'] [data-guide-mask='true'] {
+  box-shadow: 0 0 0 9999px var(--dialog-backdrop) !important;
+}
+
+:root[data-appearance='opus-paper'] [data-message-jump-backdrop='true'] {
+  fill: var(--dialog-backdrop);
+}
+
+/* Target connections stay visible; ordinary dialog rays are hidden above. */
+:root[data-appearance='opus-paper'] [data-message-jump-overlay='true'] .popup-guides {
+  stroke: var(--dialog-hint-accent);
+  animation: none;
+  opacity: .65;
+}
+
+@keyframes opus-dialog-enter {
+  from { opacity: 0; translate: 0 6px; }
+  to { opacity: 1; translate: 0 0; }
+}
+
+/* The anchored version picker uses the same paper hierarchy as the larger dialogs. */
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-reading-version-dialog] {
+  padding: 14px !important; font: 13px/1.65 system-ui, sans-serif !important;
+  border: 1px solid var(--dialog-border) !important; border-radius: 8px !important;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] .reading-version-header {
+  padding-bottom: 10px; margin-bottom: 12px !important; border-bottom: 1px solid var(--dialog-border);
+  font: 600 16px/1.5 var(--font-reading);
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-reading-version-dialog] button {
+  min-height: 28px; padding: 4px 9px !important; border: 1px solid var(--button-secondary-border) !important;
+  border-radius: 4px !important; background: var(--surface-card) !important; color: var(--text-secondary) !important;
+  font: 400 12px/1.6 system-ui, sans-serif;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-reading-version-dialog] button:enabled:hover { background: var(--surface-hover) !important; border-color: var(--paper-gold) !important; }
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-reading-version-dialog] [role='radio'] { padding: 9px 10px !important; gap: 10px !important; }
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-reading-version-dialog] [role='radio']::before {
+  content: ''; width: 14px; height: 14px; flex: 0 0 14px; border: 1px solid var(--button-secondary-border); border-radius: 50%;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-reading-version-dialog] [aria-checked='true'] {
+  background: var(--selection-bg) !important; color: var(--text-primary) !important; border-color: var(--text-primary) !important; font-weight: 600;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-reading-version-dialog] [aria-checked='true']::before {
+  background: var(--text-primary); border-color: var(--text-primary); box-shadow: inset 0 0 0 3px var(--selection-bg);
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] .reading-version-note { color: var(--text-muted) !important; font-size: 11px !important; font-weight: 400; }
+:root[data-theme='opus'][data-appearance='opus-paper'] .reading-version-current { color: var(--text-primary) !important; font-size: 11px !important; }
+:root[data-theme='opus'][data-appearance='opus-paper'] .reading-version-current::before { content: '✓ '; }
+
+@media (max-width: 560px) {
+  :root[data-appearance='opus-paper'] [data-comparison-grid='true'] {
+    flex-direction: column;
+  }
+  :root[data-appearance='opus-paper'] [data-comparison-grid] > [data-version-side]:has(pre) {
+    flex: 0 1 auto;
+    max-height: min(30vh, 360px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-appearance='opus-paper'] :is([data-dialog-panel='true'], [data-guide-bubble='true']) {
+    animation: none;
+  }
+}

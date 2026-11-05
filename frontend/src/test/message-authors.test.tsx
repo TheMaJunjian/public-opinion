@@ -1,6 +1,7 @@
 import {fireEvent,render,screen,within} from '@testing-library/react';
 import {describe,expect,it,vi} from 'vitest';
 import MessageAuthors from '../components/MessageAuthors';
+import MessageCard from '../components/MessageCard';
 import {MessageDisplayHintsProvider} from '../components/MessageDisplayHints';
 import {computeCorrectionVersions,convertMessagesToDemoModel,type DemoMessage} from '../utils/modelBridge';
 import {deriveContainerEffect} from '../pages/workbench/model/containerEffect';
@@ -18,6 +19,22 @@ function fixture(correctionAuthor='乙'){
 }
 
 describe('author label and contribution dialog',()=>{
+  it('keeps the card sender stake when the current body author changes to a correction author',()=>{
+    const {input,message}=fixture();
+    const view=render(<MessageDisplayHintsProvider input={input} onView={vi.fn()}>
+      <MessageCard msg={message} ctx={{}} stakeCounts={{truth:{pro:99,con:0},value:{pro:88,con:0}}}/>
+      <MessageAuthors message={message} showSelfStake/>
+    </MessageDisplayHintsProvider>);
+    const sender=view.container.querySelector('.message-card-self-stake [data-message-self-stake]')!;
+    expect(sender).toHaveTextContent('自押 2/3');
+    expect(sender).toHaveAccessibleName(/发送者 甲.*真假 2 点／价值 3 点/);
+    const author=screen.getByRole('button',{name:/查看消息 message-id 的当前正文作者：甲，共 2 人/});
+    fireEvent.wheel(author,{deltaY:100});
+    expect(author).toHaveAccessibleName(/当前正文作者：乙/);
+    expect(author.parentElement?.querySelector('[data-message-self-stake]')).toHaveTextContent('自押 5/7');
+    expect(sender).toHaveTextContent('自押 2/3');
+    expect(sender).not.toHaveTextContent('自押 99/88');
+  });
   it('shows one person for a sender who also corrected the original, with separate source investment details',()=>{
     const {input,message}=fixture('甲'),wheel=vi.fn();
     render(<div onWheel={wheel}><MessageDisplayHintsProvider input={input} onView={vi.fn()}><MessageAuthors message={message} showSelfStake/></MessageDisplayHintsProvider></div>);

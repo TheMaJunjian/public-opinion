@@ -8,6 +8,7 @@ import { markedPage, notifications, personalMessages } from './personal.js';
 import { createUiRouter } from './ui.js';
 import { journalManifest } from './export-response.js';
 import { RollbackUnconfirmedError } from './postgres.js';
+import { refreshUsagePoints } from './usage-points.js';
 const query = z.object({ parent: z.string().max(100).optional(), cursor: z.string().max(1000).optional(), limit: z.coerce.number().int().min(1).max(100).optional(), q: z.string().max(200).optional(), relation: z.string().max(80).optional(), author: z.string().max(100).optional() }).strict();
 const personalQuery = query.extend({ filter: z.enum(['normal', 'follow', 'read', 'unread', 'block', 'archive']).optional(), after: z.coerce.number().int().nonnegative().optional() });
 export async function createApp(options: {
@@ -210,7 +211,8 @@ export async function createApp(options: {
             const before = req.query.cursor === undefined ? Number.MAX_SAFE_INTEGER : Number(req.query.cursor);
             if (!Number.isSafeInteger(before) || before < 1)
                 throw new DomainError('账本游标无效');
-            const rows = (await store.db.prepare("SELECT position AS cursor,* FROM ledger WHERE \"userId\"=$1 AND position<$2 ORDER BY position DESC LIMIT $3").all(session.user.id, before, limit + 1));
+            const start = await store.setting<{ledgerPosition:number}>('usage-points-start');
+            const rows = (await store.db.prepare("SELECT position AS cursor,* FROM ledger WHERE \"userId\"=$1 AND position<$2 AND position>$4 ORDER BY position DESC LIMIT $3").all(session.user.id, before, limit + 1, start.ledgerPosition));
             res.json({ entries: rows.slice(0, limit).map(({ cursor: _cursor, position:_position, ...row }) => row), account: (await store.account(session.user.id)), nextCursor: rows.length > limit ? String(rows[limit - 1]!.cursor) : null });
         }
         catch (error) {
@@ -316,7 +318,7 @@ export async function createApp(options: {
     let ticking:Promise<void>|undefined;
     const timer = setInterval(() => {
         if(closed||ticking||readOnlyRehearsal)return;
-        ticking=(async()=>{try{await processDue(store);await publish();}catch(error){console.error('延时结算或同步失败',error);}})().finally(()=>{ticking=undefined;});
+        ticking=(async()=>{try{await refreshUsagePoints(store);await processDue(store);await publish();}catch(error){console.error('贡献点刷新、延时结算或同步失败',error);}})().finally(()=>{ticking=undefined;});
     }, options.settlementTickMs ?? 1000);
     timer.unref();
     const heartbeat = setInterval(() => { for (const [response] of clients)

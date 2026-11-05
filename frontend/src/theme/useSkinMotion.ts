@@ -12,10 +12,19 @@ export function useSkinMotion() {
       element.removeAttribute('data-skin-motion');
     };
     const stopAll = () => { for (const element of active.keys()) stop(element); };
+    const updateDensity = () => {
+      const dense = document.querySelectorAll('.themed-message').length > 200;
+      document.documentElement.toggleAttribute('data-skin-dense', dense);
+      return dense;
+    };
+    let dense = updateDensity();
     const observer = new MutationObserver(records => {
-      if (motion.matches || document.documentElement.dataset.appearance === 'gpt') { stopAll(); return; }
-      if (document.querySelectorAll('.themed-message').length > 200) return;
+      // Virtualized mounts arrive in batches; scan once per structural batch, never per carrier.
+      const wasDense = dense;
+      if (records.some(record => record.type === 'childList')) dense = updateDensity();
+      if (dense || wasDense || motion.matches || document.documentElement.dataset.appearance === 'gpt') { stopAll(); return; }
       for (const record of records) {
+        if (record.type !== 'attributes') continue;
         const element = record.target as Element;
         if (!element.matches('.themed-message, .graph-edge-label, [data-frame-visual], [data-skin-decoration], [data-skin-tag]')) continue;
         const current = element.getAttribute('data-stake-level');
@@ -29,8 +38,8 @@ export function useSkinMotion() {
         active.set(element, setTimeout(() => stop(element), up ? 900 : 200));
       }
     });
-    observer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['data-stake-level'], attributeOldValue: true });
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-stake-level'], attributeOldValue: true });
     motion.addEventListener('change', stopAll);
-    return () => { observer.disconnect(); motion.removeEventListener('change', stopAll); stopAll(); };
+    return () => { observer.disconnect(); motion.removeEventListener('change', stopAll); stopAll(); document.documentElement.removeAttribute('data-skin-dense'); };
   }, []);
 }

@@ -18,6 +18,7 @@ export const FRAME_PAD = 16;
 export const CANVAS_BOTTOM_PAD = 120;
 export const CANVAS_RIGHT_PAD = 120;
 export const MERGE_CARD_H = 36;
+export const COMPACT_FRAME_HEADER_HEIGHT = 36;
 
 export type LayoutBox = { x: number; y: number; width: number; height: number };
 export type Rect = { x: number; y: number; width: number; height: number };

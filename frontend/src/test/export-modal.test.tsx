@@ -5,6 +5,7 @@ import { startArchiveExport } from '../utils/exportWorker';
 import { downloadExport, saveUpdatedExport } from '../utils/saveExport';
 import type { PreparedExport } from '../utils/exportTask';
 import { conversionFailure } from '@gonglun/core';
+import type { NativeZhihuView } from '../utils/nativeZhihuView';
 
 vi.mock('../utils/exportWorker', () => ({ startArchiveExport: vi.fn() }));
 vi.mock('../utils/saveExport', () => ({ downloadExport: vi.fn(), saveUpdatedExport: vi.fn() }));
@@ -80,6 +81,7 @@ it('terminates work on close and ignores a result arriving after unmount', async
   vi.mocked(startArchiveExport).mockReturnValue({ result: new Promise(resolve => { finish = resolve; }), cancel });
   const { unmount } = render(<ExportModal {...props} />);
   fireEvent.click(screen.getByRole('button', { name: '导出文件' }));
+  await waitFor(() => expect(startArchiveExport).toHaveBeenCalled());
   fireEvent.click(screen.getByRole('button', { name: '关闭' }));
   expect(cancel).toHaveBeenCalled();
   unmount();
@@ -96,4 +98,29 @@ it('keeps a verified update ready when the user cancels the save dialog', async 
   await waitFor(() => expect(screen.getByRole('button', { name: '保存更新文件' })).toBeEnabled());
   expect(screen.queryByRole('alert')).toBeNull();
   expect(props.onClose).not.toHaveBeenCalled();
+});
+
+const zhihuSource: NativeZhihuView = { format: 'gonglun-view-3', formatVersion: 5, exportedAt: '',
+  scope: { title: '知乎收藏', messageId: null }, messages: [], relations: [],
+  source: { provider: 'zhihu', version: 1, scope: 'collections', ownerId: 'fixture', ownerUrl: null } };
+
+it('updates a local Zhihu file with the current document and view instead of using the server update', async () => {
+  render(<ExportModal {...props} source={zhihuSource} />);
+  expect(screen.getByRole('dialog', { name: '保存阅览文件' })).toBeVisible();
+  expect(startArchiveExport).not.toHaveBeenCalled();
+  choose(); fireEvent.click(screen.getByRole('button', { name: '更新文件' }));
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('已补充 2 条消息，现有 3 条消息'));
+  expect(startArchiveExport).toHaveBeenCalledWith({ kind: 'update', file: expect.any(File), source: zhihuSource, view: props.view }, expect.any(Function));
+  expect(screen.getByRole('status')).not.toHaveTextContent('资金守恒');
+  expect(saveUpdatedExport).not.toHaveBeenCalled();
+  expect(downloadExport).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: '保存更新文件' }));
+  await waitFor(() => expect(saveUpdatedExport).toHaveBeenCalledWith(prepared.blob, '旧文件.json', expect.any(File)));
+});
+
+it('still offers a new standalone Zhihu download when no old file is selected', async () => {
+  render(<ExportModal {...props} filename="知乎阅览.json" source={zhihuSource} />);
+  fireEvent.click(screen.getByRole('button', { name: '导出文件' }));
+  await waitFor(() => expect(downloadExport).toHaveBeenCalledWith(prepared.blob, '知乎阅览.json'));
+  expect(startArchiveExport).toHaveBeenCalledWith({ kind: 'full', scopeMessageId: 'root', source: zhihuSource, view: props.view }, expect.any(Function));
 });

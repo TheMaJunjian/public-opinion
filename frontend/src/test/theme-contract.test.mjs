@@ -10,7 +10,7 @@ const opus = readCss('opus.css');
 const sources = import.meta.glob(['../components/**/*.{ts,tsx,css}', '../pages/**/*.{ts,tsx}', '../utils/*.{ts,tsx}', '../types/*.ts', '../theme/*.tsx', '../App.tsx', '../index.css'], {
   query: '?raw', import: 'default', eager: true,
 });
-for (const file of ['gpt.css', 'opus.css', 'shared.css', 'opus-layout.css', 'message-skins.css', 'opus-paper.css', 'gpt-arena.css', 'stake-tiers.css', 'specimen-skins.css', 'specimen-layout.css']) sources[file] = readCss(file);
+for (const file of ['gpt.css', 'opus.css', 'shared.css', 'opus-layout.css', 'message-skins.css', 'opus-paper.css', 'gpt-arena.css', 'stake-tiers.css', 'specimen-skins.css', 'specimen-layout.css', 'opus-dialogs.css']) sources[file] = readCss(file);
 const declarations = (source) => new Set([...source.matchAll(/(--[\w-]+)\s*:/g)].map(match => match[1]));
 
 describe('theme coverage', () => {

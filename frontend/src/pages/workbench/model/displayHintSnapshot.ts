@@ -34,6 +34,7 @@ export type DisplayHint = {
   different: boolean;
   matchesPersonal: boolean;
   matchesRecommended: boolean;
+  hasPersonalChoice: boolean;
   personalActive: boolean;
   recommendedActive: boolean;
   readChanged?: boolean;
@@ -113,7 +114,7 @@ export function displayHintDestination(input:DisplayHintsInput,id:string,record=
   const map=new Map(input.messages.map(message=>[message.id,message])),message=map.get(id);
   if(message?.relationType==='correct')return {kind:'corrections',id};
   if(isContainerType(message?.relationType))return {kind:'container',id};
-  if(message?.kind==='join'&&message.joinInfo?.containerId)return {kind:'container',id:message.joinInfo.containerId};
+  if(message?.kind==='join'&&message.joinInfo?.containerId)return record?{kind:'related',id}:{kind:'container',id:message.joinInfo.containerId};
   if(record)return {kind:'related',id};
   const edge=input.edges.find(item=>item.relationMessageId===id&&['agree','disagree'].includes(item.relationType));
   const target=edge?resolveDisplayedStance(edge,map,buildStanceTargetMap(input.edges,map))?.targetId:undefined;

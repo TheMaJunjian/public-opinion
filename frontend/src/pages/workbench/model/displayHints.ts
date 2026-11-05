@@ -51,11 +51,15 @@ export function deriveDisplayHints(input: DisplayHintsInput) {
     const recommended = {...snapshot(message,recommendedEffect,recommendedParents,recommendedCorrections.get(message.id)?.current),width:recommendedWidths[message.id]??320};
     const displayed=displays.get(message.id)!;
     const different = !sameDisplay(personal,recommended);
-    const hasPersonal = stances.has(message.id) || (corrections.get(message.id)?.versions.some(version => correctionChoices.has(version.correctionId)) ?? false)
+    const hasPersonal = stances.has(message.id) || (personalEffect.choiceSourcesByMessage?.has(message.id)??false) || correctionChoices.has(message.id) || (corrections.get(message.id)?.versions.some(version => correctionChoices.has(version.correctionId)) ?? false)
       || personal.parentIds.some(id => {
         const joinId = personalEffect.joinByTarget.get(message.id);
         return joinId && personalEffect.context.joinEffectSourcesByMessage?.get(joinId)?.has('personal') && !!id;
-      }) || isContainerType(message.relationType) && message.author === username;
+      }) || isContainerType(message.relationType) && message.author === username
+      || message.kind==='join' && (message.joinInfo?.targetIds.some(id=>{
+        const joinId=personalEffect.joinByTarget.get(id);
+        return !!joinId&&personalEffect.context.joinEffectSourcesByMessage?.get(joinId)?.has('personal');
+      })??false);
     const hasRecommendation = !!personal.correctionIds.length || !!personal.parentIds.length || stances.has(message.id)
       || isContainerType(message.relationType) || personal.suppressed;
     const hint:DisplayHint={unreadCorrectionIds:reading.pendingCorrections.get(message.id)??[],selectionChanged:reading.selectionChanges.has(message.id),otherVersionInfluenceCount:reading.otherVersionInfluences.get(message.id)?.length??0,unread:pending.has(message.id),originalUnread:reading.pendingOriginals.has(message.id),explicitlyUnread:readStatus.get(message.id) === 'UNREAD',
@@ -63,7 +67,7 @@ export function deriveDisplayHints(input: DisplayHintsInput) {
       unreadMemberCount:reading.pendingMembers.get(message.id)?.size??0,
       relatedUnreadIds:[...(related.get(message.id) ?? [])].sort((a,b) => (msgMap.get(b)?.createdAt ?? '').localeCompare(msgMap.get(a)?.createdAt ?? '') || b.localeCompare(a)),
       source:different ? 'personal' : hasRecommendation && !hasPersonal ? 'recommended' : undefined,
-      different,personal,recommended,displayed,matchesPersonal:sameDisplay(displayed,personal),matchesRecommended:sameDisplay(displayed,recommended),
+      different,personal,recommended,displayed,matchesPersonal:sameDisplay(displayed,personal),matchesRecommended:sameDisplay(displayed,recommended),hasPersonalChoice:hasPersonal||different,
       personalActive:personal.membershipActive??!personal.suppressed,recommendedActive:recommended.membershipActive??!recommended.suppressed,
       readChanged:readDisplays.get(message.id)?.signature!==undefined?readDisplays.get(message.id)!.signature!==displaySignature(displayed):undefined};
     const hasCorrections=!!corrections.get(message.id)?.versions.length;
@@ -72,6 +76,7 @@ export function deriveDisplayHints(input: DisplayHintsInput) {
       const previous=readDisplays.get(message.id);
       const bodyChanged=previous?.parts?.corrections!==undefined?previous.parts.corrections!==displaySignature(correctionDisplay(displayed)):undefined;
       correctionHints.set(message.id,{...hint,unread:false,explicitlyUnread:false,unreadMemberCount:0,
+        hasPersonalChoice:!!corrections.get(message.id)?.versions.some(version=>correctionChoices.has(version.correctionId))||personal.content!==recommended.content,
         readChanged:bodyChanged,
         matchesPersonal:displayed.content===personal.content,matchesRecommended:displayed.content===recommended.content,
         source:personal.content!==recommended.content?'personal':personal.correctionIds.length&&!personalCorrectionChoices.has(message.id)?'recommended':undefined});
@@ -106,10 +111,12 @@ export function deriveDisplayHints(input: DisplayHintsInput) {
   };
   for(const [id,hint] of hints){
     const targets=stanceEffects.get(id)?.filter(target=>hints.has(target.targetId));
+    if(targets?.some(target=>hints.get(target.targetId)?.hasPersonalChoice))hint.hasPersonalChoice=true;
     hint.personalActive=active(id,'personal')&&(!targets?.length||targets.every(target=>active(target.targetId,'personal')===(target.type==='agree')));
     hint.recommendedActive=active(id,'recommended')&&(!targets?.length||targets.every(target=>active(target.targetId,'recommended')===(target.type==='agree')));
+    if(hint.personalActive!==hint.recommendedActive)hint.hasPersonalChoice=true;
   }
-  return { hints, correctionHints, recommendedEffect, recommendedCorrections, readDisplays, personalCorrectionChoices,reading };
+  return { hints, correctionHints, recommendedEffect, recommendedCorrections, readDisplays, personalCorrectionChoices,reading,personalStances:stances,stanceEffects };
 }
 
 /** The existing correction viewer shows this record's complete replacement body. */

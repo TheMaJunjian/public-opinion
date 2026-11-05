@@ -3,9 +3,11 @@ import { computeCorrectedEdgeMap, isCardMessage, isContentKind, isSettlementReco
 import { getSummaryCoveredIds, hasActiveDisplayEffect, needsSeparateStanceCard } from './messageDisplay';
 import { projectStanceLayoutEdges } from './stanceLayout';
 import {projectAnnotationLayoutEdges} from './annotationLayout';
+import { projectDiscussionLayoutEdges } from './discussionLayoutEdges';
 import { buildFrameBlocks } from './graphOrganizations';
 import {isRejectedContainer,isRejectedRelation} from './relatedMessages';
 import { getPresentationSpec } from '../types';
+import { hasManualDiscussionOrder } from './discussionTypes';
 import { computeMinColumnsForAnnoRefRule1, applyReplyLayoutAdjustmentsWithConstraints, applyAgreeDisagreeColumnOverride, applyGroupingColumnOverride } from './graphColumnRules';
 
 export interface GraphProjectionInput {
@@ -13,17 +15,38 @@ export interface GraphProjectionInput {
   edges: DemoEdge[];
   traceExpandedFrameIds: Set<string>;
   isTraceWindow: boolean;
+  /** Explicit contextual expansion without changing trace or stance semantics. */
+  expandedFrameIds?: ReadonlySet<string>;
   showJoinRecords?: boolean;
   standaloneMessageIds?:ReadonlySet<string>;
   rejectedContainerIds?:ReadonlySet<string>;
   rejectedRelationIds?:ReadonlySet<string>;
   hiddenMessageIds?:ReadonlySet<string>;
   cardFrameIds?:ReadonlySet<string>;
+  /** Relationship records with their own discussion need a selectable card as an anchor. */
+  discussionTargetIds?:ReadonlySet<string>;
+}
+
+/** Explicit member ordering has no automatic inner regions, so its direct
+ * targets must not become hidden behind a fold that has no local reopening entry.
+ * Descendants of nested automatic frames keep their own discussion controls. */
+export function manualDiscussionTargets({ messages, edges, traceMode = false }: { messages: DemoMessage[]; edges: DemoEdge[]; traceMode?: boolean }): Set<string> {
+  const explicitFrames = new Set(messages.filter(message => hasManualDiscussionOrder(message, traceMode)).map(message => message.id));
+  const targets = new Set<string>();
+  if (!explicitFrames.size) return targets;
+  const visibleCardIds = new Set(messages.filter(message => !isSettlementRecord(message) && message.kind !== 'join').map(message => message.id));
+  const frames = buildFrameBlocks({ edges, visibleCardIds, msgMap: new Map(messages.map(message => [message.id, message])) });
+  for (const frame of frames) if (explicitFrames.has(frame.relMsgId)
+    && (frame.targetLayout === 'single-row' || frame.targetLayout === 'single-column')) {
+    for (const id of frame.directCardIds) targets.add(id);
+  }
+  return targets;
 }
 
 /** Derive visible cards, organization ownership and relative columns without DOM or UI state. */
-export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTraceWindow,showJoinRecords=false,standaloneMessageIds,rejectedContainerIds,rejectedRelationIds,hiddenMessageIds,cardFrameIds }: GraphProjectionInput) {
+export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTraceWindow,expandedFrameIds,showJoinRecords=false,standaloneMessageIds,rejectedContainerIds,rejectedRelationIds,hiddenMessageIds,cardFrameIds,discussionTargetIds }: GraphProjectionInput) {
   if(!isTraceWindow)traceExpandedFrameIds=new Set();
+  traceExpandedFrameIds = new Set([...traceExpandedFrameIds, ...expandedFrameIds ?? []].filter(id => !rejectedContainerIds?.has(id)));
   const msgMap = new Map(messages.map(message => [message.id, message]));
   const edgesByRelMsg = new Map<string, DemoEdge[]>();
   const classifyRelMsgIds = new Set<string>();
@@ -34,6 +57,11 @@ export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTr
     if (message.relationType === 'classify') classifyRelMsgIds.add(message.id);
     if (message.relationType === 'summary') summaryRelMsgIds.add(message.id);
   }
+  const discussionRelationCardIds = new Set(messages.filter(message => message.kind === 'relation'
+    && discussionTargetIds?.has(message.id) && !['classify','summary','merge','arrange'].includes(message.relationType??'')
+    && getPresentationSpec(message.relationType??'').kind !== 'inline-badge'
+    && !message.parts?.some(part=>part.type==='display'&&part.layout==='relation'))
+    .map(message=>message.id));
   for (const edge of edges) {
     const own = edgesByRelMsg.get(edge.relationMessageId) ?? [];
     own.push(edge); edgesByRelMsg.set(edge.relationMessageId, own);
@@ -46,6 +74,7 @@ export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTr
     }
   }
   const relationCardMsgIds = new Set([...classifyRelMsgIds, ...summaryRelMsgIds]);
+  for (const id of discussionRelationCardIds) relationCardMsgIds.add(id);
   for (const message of messages) {
     if (message.kind === 'relation' && (isCardMessage(message) || needsSeparateStanceCard(message, msgMap)
       || standaloneMessageIds?.has(message.id)&&['agree','disagree'].includes(message.relationType??'')
@@ -77,17 +106,22 @@ export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTr
   const hiddenTargetIds = new Set([...getSummaryCoveredIds(msgMap, edges)]
     .filter(id => !summaryRelMsgIds.has(id) && !tracedSummaryMembers.has(id)));
   const normals = messages.filter(message => !isSettlementRecord(message) && (message.kind !== 'join' || showJoinRecords) && !hiddenMessageIds?.has(message.id) && !traceExpandedFrameIds.has(message.id) && !hiddenTargetIds.has(message.id)
-    && (!presentationTarget(message) || showJoinRecords && message.kind === 'join') && (isContentKind(message.kind)
+    && (!presentationTarget(message) || discussionRelationCardIds.has(message.id) || showJoinRecords && message.kind === 'join') && (isContentKind(message.kind)
       || message.kind === 'relation' && relationCardMsgIds.has(message.id)));
   const normalIds = normals.map(message => message.id);
   const relIds = new Set(messages.filter(message => message.kind === 'relation' && !relationCardMsgIds.has(message.id)).map(message => message.id));
-  const layoutEdges = projectAnnotationLayoutEdges(messages,projectStanceLayoutEdges(messages, edges.filter(edge =>
+  const activeLayoutEdges = edges.filter(edge =>
     ![edge.relationMessageId,edge.from.messageId,edge.to.messageId].some(id=>isSettlementRecord(msgMap.get(id))||!showJoinRecords&&msgMap.get(id)?.kind==='join')
-    && !hiddenMessageIds?.has(edge.relationMessageId) && (isTraceWindow || hasActiveDisplayEffect(edge, msgMap)))));
-  const base = computeMinColumnsForAnnoRefRule1(normalIds, layoutEdges, relIds);
-  const reply = applyReplyLayoutAdjustmentsWithConstraints({ normals, edges: layoutEdges, baseCol: base.col, baseMaxCol: base.maxCol, relIds });
-  const stance = applyAgreeDisagreeColumnOverride({ normals, edges: layoutEdges, ...reply });
-  const columns = applyGroupingColumnOverride({ normals, edges: layoutEdges, ...stance });
+    && !hiddenMessageIds?.has(edge.relationMessageId) && (isTraceWindow || hasActiveDisplayEffect(edge, msgMap)));
+  const layoutEdges = projectAnnotationLayoutEdges(messages,discussionTargetIds
+    ? projectDiscussionLayoutEdges(messages,activeLayoutEdges,discussionRelationCardIds)
+    : projectStanceLayoutEdges(messages,activeLayoutEdges), !!discussionTargetIds);
+  const columns = discussionTargetIds ? {col:Object.fromEntries(normalIds.map(id=>[id,0])),maxCol:0} : (()=>{
+    const base = computeMinColumnsForAnnoRefRule1(normalIds, layoutEdges, relIds);
+    const reply = applyReplyLayoutAdjustmentsWithConstraints({ normals, edges: layoutEdges, baseCol: base.col, baseMaxCol: base.maxCol, relIds });
+    const stance = applyAgreeDisagreeColumnOverride({ normals, edges: layoutEdges, ...reply });
+    return applyGroupingColumnOverride({ normals, edges: layoutEdges, ...stance });
+  })();
   const keepEmptyFrameIds = new Set(traceExpandedFrameIds);
   for (const message of messages) {
     if (['merge', 'arrange'].includes(message.relationType ?? '') && !isRejectedContainer(message, rejectedContainerIds)
@@ -96,10 +130,10 @@ export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTr
         && hasActiveDisplayEffect(edge, msgMap))) keepEmptyFrameIds.add(message.id);
   }
   const frameBlocks = buildFrameBlocks({ edges:edges.filter(edge=>!hiddenMessageIds?.has(edge.relationMessageId)), visibleCardIds: new Set(normalIds), msgMap,
-    opaqueFrameIds:new Set([...classifyRelMsgIds,...summaryRelMsgIds].filter(id=>!isTraceWindow||!traceExpandedFrameIds.has(id))),
+    opaqueFrameIds:new Set([...classifyRelMsgIds,...summaryRelMsgIds].filter(id=>!traceExpandedFrameIds.has(id))),
     keepEmptyFrameIds, cardFrameIds, traceMode: isTraceWindow }).filter(block =>
     !['classify', 'summary'].includes(msgMap.get(block.relMsgId)?.relationType ?? '')
-    || isTraceWindow && traceExpandedFrameIds.has(block.relMsgId));
+    || traceExpandedFrameIds.has(block.relMsgId));
   const blocksById = new Map(frameBlocks.map(block => [block.relMsgId, block]));
   const childIds = new Set(frameBlocks.flatMap(block => block.childRelMsgIds));
   const frameDepthMap = new Map<string, number>();

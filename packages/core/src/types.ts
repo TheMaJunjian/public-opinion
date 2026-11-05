@@ -61,7 +61,7 @@ export interface Rules {
   };
 }
 export const DEFAULT_RULES: Rules = {
-  version: 1, protocolFee: 1, initialGrant: 1000, operatingReserve: 100,
+  version: 1, protocolFee: 1, initialGrant: 0, operatingReserve: 100,
   lowQualityPenalty: 5, settlementDelayMs: 0,
   contributionWeights: { content: 3, relation: 2, agreement: 1, evidence: 5, duplicate: 0, earlyBonus: 1, earlyWindow: 20, unrecognizedAuthorCap: 8 },
 };
@@ -116,6 +116,10 @@ export interface Change {
   removedMessageIds?: string[];
   states: MessageState[];
   ledger: LedgerEntry[];
+  /** Archived economic epoch ends here; subsequent points start from zero. */
+  pointsReset?: { archiveId: string; userIds: string[] };
+  createdAccountIds?: string[];
+  usageRewardTotals?: { messageId: string; total: number; updatedAt: string }[];
   treasury: { operating: number; issued: number };
 }
 export interface Page {

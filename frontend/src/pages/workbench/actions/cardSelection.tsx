@@ -136,6 +136,15 @@ interface HandleMessageClickDependencies {
 export function handleMessageClick(dependencies: HandleMessageClickDependencies, e: React.MouseEvent, messageId: string): void {
   const { lastDragOrSelectTimeRef, comparisonMode, setComparisonTargetId, setComparisonReviewed, setComparisonReviewBaseMessages, setComparisonReviewBaseEdges, setComparisonSide, setLastClickedMessageId, setDraftUnits, sourceUnits, setSendError, lastClickActionsRef } = dependencies;
   if (e.button !== 0) return;
+  // A drag may finish on metadata whose mouse-up does not reach the card.
+  // Keep that native selection copyable without treating its trailing click as staging.
+  if (e.detail !== 0 && e.currentTarget instanceof HTMLElement) {
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && selection.rangeCount > 0 && selection.getRangeAt(0).intersectsNode(e.currentTarget)) {
+      e.stopPropagation();
+      return;
+    }
+  }
   if (Date.now() - lastDragOrSelectTimeRef.current < 350) return;
   e.stopPropagation();
   if (comparisonMode) {
@@ -309,14 +318,14 @@ export function handleTextMouseUp(dependencies: HandleTextMouseUpDependencies, e
   const m = msgMap.get(messageId);
   if (!m) return;
   // The second mouse-up belongs to the double-click gesture, not a drag selection.
-  if (e.detail > 1) return;
+  if (e.button !== 0 || e.detail > 1) return;
   const organizationText = m.relationType === 'classify' || m.relationType === 'summary';
   if (activeTextSelectId !== messageId && !organizationText) return;
   const container = e.currentTarget as HTMLElement;
   const fragmentUnit = capturePartSelection(container, m);
   if (!fragmentUnit) return;
   e.stopPropagation();
-  clearBrowserSelection();
+  // Staging records the fragment without consuming the native range used by Copy.
   setActiveTextSelectId(messageId);
   setDraftUnits(prev => {
     const exists = prev.some(u => unitEquals(u, fragmentUnit));
@@ -369,7 +378,7 @@ export function commitDraftTo(dependencies: CommitDraftToDependencies, role: "so
   }
   if (role === "source") setSourceUnits(prev => mergeUnits(prev, draftUnits));
   else setTargetUnits(prev => mergeUnits(prev, draftUnits));
-  setDraftUnits([]); setActiveTextSelectId(null);
+  setDraftUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
 }
 
 interface ToggleWholeUnitDependencies {

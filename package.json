@@ -31,6 +31,7 @@
     "db:migrate-view": "tsx apps/migrate/src/view-file-cli.ts",
     "db:migrate": "tsx --env-file-if-exists=.env apps/migrate/src/migrate-cli.ts",
     "db:verify": "tsx --env-file-if-exists=.env apps/migrate/src/verify-current-cli.ts",
+    "db:points-archive": "tsx --env-file-if-exists=.env apps/migrate/src/points-archive-cli.ts",
     "db:topic-retirement": "tsx --env-file-if-exists=.env apps/migrate/src/retire-legacy-topics-cli.ts"
   },
   "devDependencies": {

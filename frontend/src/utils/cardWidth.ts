@@ -11,7 +11,8 @@ export function cardAuthor(author: string, messageId: string): string {
 }
 
 /** Width corrections choose a display independently of all body corrections. */
-export function effectiveCardWidths(messages: DemoMessage[], edges: DemoEdge[], username: string | null = null): Record<string, number> {
+export function effectiveCardWidths(messages: DemoMessage[], edges: DemoEdge[], username: string | null = null,
+  assumption?: { messageId: string; side: 'agree' | 'disagree' }): Record<string, number> {
   const byId = new Map(messages.map(message => [message.id, message]));
   const personal = computeUserActiveStanceRelIds(edges, messages, username);
   const statistics = computeTransitiveVoteStats(edges, messages);
@@ -21,10 +22,12 @@ export function effectiveCardWidths(messages: DemoMessage[], edges: DemoEdge[], 
     const correction = byId.get(edge.relationMessageId), payload = correction?.relationPayload;
     if (!correction || payload?.correctionKind !== 'WIDTH' || !isCardWidth(payload.correctionWidth)) continue;
     const stance = personal.get(correction.id);
+    const assumed = assumption?.messageId === correction.id ? assumption.side : undefined;
+    const choice = assumed ?? stance?.type;
     const pro = correction.state?.supportCount ?? statistics[correction.id]?.agreeCount ?? 0;
     const con = correction.state?.oppositionCount ?? statistics[correction.id]?.disagreeCount ?? 0;
-    if (stance?.type === 'disagree' || !stance && (con > pro || correction.state?.suppressed)) continue;
-    const score = [stance?.type === 'agree' ? 1 : 0,
+    if (choice === 'disagree' || !choice && (con > pro || correction.state?.suppressed)) continue;
+    const score = [assumed === 'agree' ? 2 : stance?.type === 'agree' ? 1 : 0,
       stance?.type === 'agree' ? Date.parse(byId.get(stance.relMsgId)?.createdAt ?? '') || 0 : 0,
       pro - con, pro, Date.parse(correction.createdAt) || 0];
     const previous = selected.get(edge.to.messageId);

@@ -1,4 +1,5 @@
 import type { Account, Change, Membership, Message, MessageState } from './types.js';
+import { updateUsageRewardMessage } from './usage-rewards.js';
 
 export interface Archive {
   format: 'gonglun-2'; regionId: string; ledgerId: string; programVersion: string;
@@ -62,6 +63,14 @@ export function replayArchive(input: unknown): Replay {
         const history=revisions.get(message.id);if(history?.length)history[history.length-1]=message;
       }
     }
+    for (const update of change.usageRewardTotals ?? []) {
+      const current = messages.get(update.messageId);
+      if (!current || !Number.isFinite(Date.parse(update.updatedAt))) throw new Error('每日使用奖励缺少原始记录');
+      const message = updateUsageRewardMessage(current, update.total, change.sequence, update.updatedAt);
+      messages.set(message.id, message);
+      const history = revisions.get(message.id)!;
+      history[history.length - 1] = message;
+    }
     for (const state of change.states) {
       if (!state || !messages.has(state.messageId) || !Number.isSafeInteger(state.revision) || typeof state.suppressed !== 'boolean') throw new Error('显示状态不正确');
       safe(state.supportCount); safe(state.oppositionCount); safe(state.recommendationTotal);
@@ -76,6 +85,17 @@ export function replayArchive(input: unknown): Replay {
         throw new Error('已删除的消息不能恢复归属');
       if (retiredOrganizations.has(membership.memberId) || retiredOrganizations.has(membership.parentId)) throw new Error('已退役的组织 不能恢复归属');
       memberships.set(membership.memberId, membership);
+    }
+    for (const userId of change.createdAccountIds ?? []) {
+      if (typeof userId !== 'string' || !userId || accounts.has(userId)) throw new Error('账户创建记录无效');
+      accounts.set(userId, { available: 0, locked: 0, earned: 0, spent: 0 });
+    }
+    if (change.pointsReset) {
+      if (!change.pointsReset.archiveId || !Array.isArray(change.pointsReset.userIds)
+        || change.pointsReset.userIds.some(id => typeof id !== 'string')
+        || change.ledger.length) throw new Error('贡献点归档重置记录无效');
+      accounts.clear();
+      for (const userId of change.pointsReset.userIds) accounts.set(userId, { available: 0, locked: 0, earned: 0, spent: 0 });
     }
     for (const entry of change.ledger) {
       if (ledgerIds.has(entry.id)) throw new Error('同一笔资金变动被重复记录');

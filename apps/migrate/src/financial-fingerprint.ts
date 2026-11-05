@@ -21,6 +21,8 @@ export async function financialFingerprint(db:Postgres, additions:LedgerEntry[]=
       if(!rows.length)break;
       for(const row of rows){
         const body=row.body;after=String(body[key!]);
+        // A cached display balance is not part of the immutable financial entry.
+        if(table==='ledger')delete body.balanceAfter;
         if(table==='ledger'&&excluded.has(String(body.id)))continue;
         const delta=table==='accounts'?deltas.get(String(body.userId)):undefined;
         if(delta)for(const field of ['available','locked','earned','spent'] as const)body[field]-=delta[field];

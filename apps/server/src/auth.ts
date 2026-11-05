@@ -87,9 +87,12 @@ export async function register(store:Store,input:unknown,res:Response) {
     await store.db.prepare('INSERT INTO accounts VALUES ($1,0,0,0,0)').run(userId);
     await bindKey(store,userId,data.deviceId,data.publicKey);
     const tx=new Mutation(store),rules=await store.rules(),grant=rules.initialGrant;
-    const message=await distribution(tx,undefined,{source:'grant',total:grant,ruleVersion:rules.version,inputs:{reason:'initial-grant'},allocations:[{userId,amount:grant,reason:'初始发放',messageIds:[]}]});
-    await store.ledger(userId,message.id,grant,0,'初始发放');
-    await store.set('minted',integer(await store.setting<number>('minted')+grant));
+    tx.createdAccountIds = [userId];
+    if (grant > 0) {
+      const message=await distribution(tx,undefined,{source:'grant',total:grant,ruleVersion:rules.version,inputs:{reason:'initial-grant'},allocations:[{userId,amount:grant,reason:'初始发放',messageIds:[]}]});
+      await store.ledger(userId,message.id,grant,0,'初始发放');
+      await store.set('minted',integer(await store.setting<number>('minted')+grant));
+    }
     const change=await tx.commit();
     return {authentication:await createSession(store,userId,data.deviceId),change};
   });

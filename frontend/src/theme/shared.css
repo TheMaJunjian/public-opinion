@@ -168,6 +168,7 @@ html, body, #root {
   background-repeat: no-repeat;
 }
 .view-target-corners { display: none; fill: none; stroke: var(--ink-22c55e); stroke-width: 2px; pointer-events: none; }
+[data-related-relation-id][data-view-target="true"]::after { inset: 0; }
 [data-view-target="true"] + .view-target-corners,
 [data-view-target="true"] > .view-target-corners { display: inline; }
 
@@ -202,28 +203,27 @@ html, body, #root {
 [data-reading-position~="next"] > .reading-position-marks[data-position="next"] { display: inline; stroke: var(--ink-60a5fa); }
 [data-reading-position~="continue"] > .reading-position-marks[data-position="continue"] { display: inline; stroke: var(--ink-fbbf24); }
 
-.workbench-left-panel::-webkit-scrollbar {
+.workbench-left-panel::-webkit-scrollbar,
+[data-comparison-viewport]::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
-.workbench-left-panel::-webkit-scrollbar-track {
+.workbench-left-panel::-webkit-scrollbar-track,
+[data-comparison-viewport]::-webkit-scrollbar-track {
   background: var(--surface-151b24);
 }
 
-.workbench-left-panel::-webkit-scrollbar-thumb {
+.workbench-left-panel::-webkit-scrollbar-thumb,
+[data-comparison-viewport]::-webkit-scrollbar-thumb {
   background: var(--surface-52657c);
   border: 2px solid var(--line-151b24);
   border-radius: 8px;
 }
 
 [data-comparison-viewport] {
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-
-[data-comparison-viewport]::-webkit-scrollbar {
-  display: none;
+  scrollbar-width: auto;
+  scrollbar-color: var(--surface-52657c) var(--surface-151b24);
 }
 
 /* Keep guide segments static and pulse the group once. Independent moving
@@ -305,4 +305,134 @@ html, body, #root {
   html::-webkit-scrollbar, body::-webkit-scrollbar {
     display: none;
   }
+}
+/* Quiet contribution progress, shared by the navigation and the ledger panel. */
+.usage-points-progress {
+  display: block;
+  width: 100%;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--selection-accent) 14%, var(--surface-card));
+}
+.usage-points-progress--compact { width: 100%; height: 3px; flex-shrink: 0; }
+.usage-points-progress__fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  transform-origin: left center;
+  background: linear-gradient(90deg, var(--selection-accent), color-mix(in srgb, var(--selection-accent) 70%, white));
+  transition: transform 220ms linear;
+}
+@media (prefers-reduced-motion: reduce) { .usage-points-progress__fill { transition: none; } }
+
+/* Comparison controls share semantics and inherit each appearance's palette. */
+.comparison-difference-toolbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 10px 12px; border: 1px solid var(--border-default);
+  border-radius: var(--button-radius); background: var(--surface-panel);
+  color: var(--text-primary); font-size: 13px; line-height: 1.5;
+}
+.comparison-difference-count { font-weight: 600; font-variant-numeric: tabular-nums; }
+.comparison-difference-hint { color: var(--text-muted); font-size: 12px; margin-right: auto; }
+.comparison-difference-toolbar :is(button, select) {
+  min-height: 32px; padding: 5px 10px; border: 1px solid var(--button-secondary-border);
+  border-radius: var(--button-radius); background: var(--button-secondary-bg);
+  color: var(--button-secondary-text); font: inherit; cursor: pointer;
+}
+.comparison-difference-toolbar select { flex: 1 1 260px; min-width: 0; max-width: 100%; }
+.comparison-difference-toolbar button:enabled:hover { background: var(--surface-hover); border-color: var(--fragment-accent); }
+.comparison-difference-toolbar button[aria-pressed='true']:enabled {
+  background: var(--button-primary-bg); color: var(--button-primary-text);
+  border-color: var(--button-primary-bg); font-weight: 600;
+}
+.comparison-difference-toolbar button:disabled {
+  background: var(--button-disabled-bg); color: var(--button-disabled-text);
+  border-color: var(--border-default); border-style: solid; cursor: default;
+}
+.comparison-difference-toolbar :is(button, select):focus-visible,
+.about-viewer-close:focus-visible { outline: 2px solid var(--fragment-accent); outline-offset: 3px; }
+.about-viewer-toolbar {
+  display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; gap: 16px;
+  padding: 8px 24px; background: var(--surface-page); color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-default); font-size: 13px;
+}
+.about-viewer-close {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 4px 8px;
+  border: 1px solid transparent; border-radius: var(--button-radius);
+  background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer;
+}
+.about-viewer-close:hover { color: var(--text-primary); background: var(--surface-hover); border-color: var(--border-default); }
+
+.workbench-help-link {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: 20px; height: 20px; margin-left: 8px; border: 1px solid var(--border-default);
+  border-radius: 50%; color: var(--text-secondary); background: var(--surface-card);
+  font: 12px/1 system-ui, sans-serif; text-decoration: none; vertical-align: middle;
+}
+.workbench-help-link:hover { border-color: var(--fragment-accent); color: var(--text-primary); }
+.workbench-help-link[href*='stake-tiers'] {
+  width: auto; border: 0; border-radius: 0; margin: 0; font-size: 12px;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+
+.home-page { position: relative; isolation: isolate; }
+.home-primary-action {
+  display: inline-flex; align-items: center; justify-content: center; min-height: 42px; padding: 9px 24px;
+  border: 1px solid var(--button-primary-bg); border-radius: var(--button-radius);
+  background: var(--button-primary-bg); color: var(--button-primary-text);
+  font-size: 14px; font-weight: 600; text-decoration: none;
+  transition: background-color 120ms, border-color 120ms;
+}
+.home-primary-action:is(:hover, :active) {
+  background: color-mix(in srgb, var(--button-primary-bg) 88%, var(--text-primary));
+  border-color: color-mix(in srgb, var(--button-primary-bg) 88%, var(--text-primary));
+  color: var(--button-primary-text);
+}
+.home-background-motto { display: none; pointer-events: none; user-select: none; }
+@media (min-width: 1024px) {
+  .home-background-motto {
+    display: flex; position: fixed; inset: 100px 32px 32px; align-items: center;
+    justify-content: space-between; z-index: -1;
+  }
+  .home-background-motto svg {
+    width: clamp(48px, calc((100vw - 820px) / 2), 100px); height: min(480px, 65vh);
+    fill: var(--paper-gold-ink, var(--selection-accent)); opacity: .11;
+  }
+  .home-background-motto text {
+    font-family: "STXingkai", "华文行楷", "STKaiti", "KaiTi", "楷体", serif;
+    font-size: 100px; font-weight: 400; text-anchor: middle;
+  }
+}
+.auth-input {
+  width: 100%; padding: 9px 12px; border: 1px solid var(--border-default); border-radius: var(--button-radius);
+  background: var(--surface-card); color: var(--text-primary); font: inherit; font-size: 14px;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+.auth-input::placeholder { color: var(--text-muted); }
+.auth-input:is(:focus, :focus-visible) {
+  border-color: var(--paper-gold, var(--fragment-accent)); outline: none !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--paper-gold, var(--fragment-accent)) 15%, transparent);
+}
+
+/* Link decoration adds no source text, so document ranges remain unchanged. */
+[data-reading-link] {
+  display: block;
+  margin-block: 0.35em;
+}
+[data-reading-link]::before {
+  content: '[';
+  color: var(--ink-9ca3af);
+  font-size: 0.85em;
+  user-select: none;
+}
+[data-reading-link]::after {
+  content: ']';
+  color: var(--ink-9ca3af);
+  user-select: none;
+}
+[data-reading-link-url] {
+  color: var(--ink-9ca3af);
+  overflow-wrap: anywhere;
 }

@@ -3,9 +3,10 @@ import {isCardMessage} from './modelBridge';
 import {getPresentationSpec} from '../types';
 
 /** Text accompanying an annotation occupies the same source lane as a citation. */
-export function projectAnnotationLayoutEdges(messages:DemoMessage[],edges:DemoEdge[]):DemoEdge[]{
+export function projectAnnotationLayoutEdges(messages:DemoMessage[],edges:DemoEdge[],preserveValueRelations=false):DemoEdge[]{
   const byId=new Map(messages.map(message=>[message.id,message]));
   return edges.map(edge=>{
+    if(preserveValueRelations&&['recommend','archive'].includes(edge.relationType))return edge;
     if(edge.relationType!=='annotation'&&!['inline-badge','decoration-label'].includes(getPresentationSpec(edge.relationType).kind))return edge;
     const source=edge.from.messageId.startsWith('anon:')?byId.get(edge.relationMessageId):byId.get(edge.from.messageId);
     if(!source||!isCardMessage(source))return edge;

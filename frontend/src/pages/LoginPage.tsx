@@ -1,11 +1,19 @@
-import { useState } from 'react';
+import { useCallback, useContext, useEffect, useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import PromptModal from '../components/PromptModal';
 import { dialogStyles } from '../components/dialogStyles';
+import { AutoAuthEntryContext } from '../context/AutoAuthEntryContext';
 
-export default function LoginPage() {
+export default function LoginPage({ onClose, onRegister, onSuccess, closeText = '返回首页' }: {
+  onClose?: () => void;
+  onRegister?: () => void;
+  onSuccess?: () => void;
+  closeText?: string;
+} = {}) {
   const { login } = useAuth();
+  const autoAuthEntry = useContext(AutoAuthEntryContext);
+  const suspended = autoAuthEntry?.suspended ?? false;
   const navigate = useNavigate();
   const location = useLocation();
   const redirectReason = (location.state as any)?.reason as string | undefined;
@@ -13,6 +21,13 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const close = useCallback(() => onClose ? onClose() : navigate('/', { replace: true }), [navigate, onClose]);
+  useEffect(() => {
+    if (suspended) return;
+    const dismiss = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
+    window.addEventListener('keydown', dismiss);
+    return () => window.removeEventListener('keydown', dismiss);
+  }, [close, suspended]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -21,7 +36,8 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await login(username.trim(), password);
-      navigate('/');
+      if (onSuccess) onSuccess();
+      else navigate('/');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '登录失败，请重试');
     } finally {
@@ -30,8 +46,8 @@ export default function LoginPage() {
   }
 
   return (
-    <PromptModal open title={redirectReason ? '请先登录' : '登录公论'} hideActions onConfirm={() => {}}
-      dialogProps={{ style: { width: 'min(400px, 100%)', colorScheme: 'dark' } }} message={<div style={{ whiteSpace: 'normal' }}>
+    <PromptModal open title={redirectReason ? '请先登录' : '登录公论'} hideActions onConfirm={() => {}} onCancel={close} onClose={close}
+      dialogProps={{ style: { width: 'min(400px, 100%)' } }} message={<div style={{ whiteSpace: 'normal' }}>
         <p className="text-center text-[color:var(--ink-d1d5db)] text-sm mb-6">登录您的与会者账户，参与公论</p>
         {redirectReason && (
           <div role="status" className="bg-[color:var(--surface-451a03)] border border-[color:var(--line-92400e)] text-[color:var(--ink-fde68a-2)] rounded-lg px-3 py-2 text-sm mb-4">
@@ -51,10 +67,11 @@ export default function LoginPage() {
               type="text"
               name="username"
               autoComplete="username"
+              autoFocus
               value={username}
               onChange={e => setUsername(e.target.value)}
               placeholder="请输入与会者名"
-              className="w-full bg-[color:var(--surface-111827)] text-[color:var(--ink-f3f4f6-2)] border border-[color:var(--line-4b5563)] rounded-lg px-3 py-2 text-sm placeholder:text-[color:var(--ink-6b7280)] focus:outline-none focus:ring-2 focus:ring-[color:var(--fragment-accent)]"
+              className="auth-input"
             />
           </div>
           <div>
@@ -67,7 +84,7 @@ export default function LoginPage() {
               value={password}
               onChange={e => setPassword(e.target.value)}
               placeholder="请输入密码"
-              className="w-full bg-[color:var(--surface-111827)] text-[color:var(--ink-f3f4f6-2)] border border-[color:var(--line-4b5563)] rounded-lg px-3 py-2 text-sm placeholder:text-[color:var(--ink-6b7280)] focus:outline-none focus:ring-2 focus:ring-[color:var(--fragment-accent)]"
+              className="auth-input"
             />
           </div>
           <button
@@ -81,10 +98,11 @@ export default function LoginPage() {
         </form>
         <p className="mt-4 text-center text-sm text-[color:var(--ink-9ca3af)]">
           还没有账户？{' '}
-          <Link to="/register" className="text-[color:var(--ink-60a5fa-2)] hover:underline font-medium">
-            立即注册
-          </Link>
+          {onRegister
+            ? <button type="button" onClick={onRegister} className="text-[color:var(--ink-60a5fa-2)] hover:underline font-medium">立即注册</button>
+            : <Link to="/register" className="text-[color:var(--ink-60a5fa-2)] hover:underline font-medium">立即注册</Link>}
         </p>
+        <button type="button" onClick={close} style={{ ...dialogStyles.button, width: '100%', marginTop: 16 }}>{closeText}</button>
       </div>} />
   );
 }

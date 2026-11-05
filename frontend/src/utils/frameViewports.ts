@@ -1,9 +1,10 @@
 import type {Box,FrameBlock,FrameViewSize} from './frameLayout';
 import type {DemoEdge} from './modelBridge';
 import {getPresentationSpec} from '../types';
+import { nearestScrollDelta } from './scrollVisibility';
 
 export type FrameScroll={left:number;top:number};
-export type GraphFrameViewState=Record<string,{sizes:Record<string,FrameViewSize>;scrolls:Record<string,FrameScroll>;full?:Record<string,boolean>}>;
+export type GraphFrameViewState=Record<string,{sizes:Record<string,FrameViewSize>;scrolls:Record<string,FrameScroll>;full?:Record<string,boolean>;collapsed?:string[];hiddenHeaders?:string[]}>;
 export const FRAME_SCROLLBAR=14;
 export const intersectFrameRects=(a:Box,b:Box):Box=>{
   const x=Math.max(a.x,b.x),y=Math.max(a.y,b.y);
@@ -47,8 +48,8 @@ export function projectFrameViewports(layout:Record<string,Box>,frames:Record<st
         if(!offsets[parent])continue;
         const viewport=frames[parent],current=next[parent],width=viewport.width-FRAME_SCROLLBAR,height=viewport.height-FRAME_SCROLLBAR;
         const x=box.x-viewport.x,y=box.y-viewport.y;
-        const left=box.width>width?x+(box.width-width)/2:x<current.left?x:x+box.width>current.left+width?x+box.width-width:current.left;
-        const top=box.height>height?y+(box.height-height)/2:y<current.top?y:y+box.height>current.top+height?y+box.height-height:current.top;
+        const left=current.left+nearestScrollDelta(x,x+box.width,current.left,current.left+width);
+        const top=current.top+nearestScrollDelta(y,y+box.height,current.top,current.top+height);
         const content=contents[parent];
         const scroll={left:Math.max(0,Math.min(left,content.width-width)),top:Math.max(0,Math.min(top,content.height-height))};
         next[parent]=scroll;

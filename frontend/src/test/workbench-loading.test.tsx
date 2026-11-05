@@ -380,6 +380,24 @@ describe('workbench loading through registered drawing tasks', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
+  it('resumes the drawing fence when returning to a tab whose background animation frames did not run', () => {
+    let hidden = true;
+    vi.spyOn(document, 'hidden', 'get').mockImplementation(() => hidden);
+    const requestFrame = window.requestAnimationFrame.bind(window);
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => hidden ? 0 : requestFrame(callback));
+    let tasks!: Tasks;
+    const onTasks = (value: Tasks) => { tasks = value; };
+    render(<WorkbenchLoadingBoundary><Content onTasks={onTasks} /></WorkbenchLoadingBoundary>);
+    finish(tasks);
+    advance(60_000);
+    expect(screen.queryByRole('alert')).toBeNull();
+    act(() => { hidden = false; document.dispatchEvent(new Event('visibilitychange')); });
+    advance(34);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByTestId('workbench').parentElement!.inert).toBe(false);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('excludes time in a hidden tab from the drawing deadline', () => {
     let hidden = false;
     vi.spyOn(document, 'hidden', 'get').mockImplementation(() => hidden);

@@ -34,11 +34,11 @@ const edge = (relationMessageId: string, relationType: DemoEdge['relationType'],
   from: { messageId: from, selection: { kind: 'whole' } }, to: { messageId: to, selection: { kind: 'whole' } },
 });
 
-it('keeps an inline organization and every visible member together across the old 50-message boundary', () => {
+it('keeps an inline organization together when legacy placement paging is explicitly requested', () => {
   const frame: DemoMessage = { ...messages[0], id: 'frame', kind: 'relation', relationType: 'arrange' };
   const records = [...messages, frame];
   const edges = [edge('frame', 'arrange', 'anon:frame', 'm-0'), edge('frame', 'arrange', 'anon:frame', 'm-149')];
-  const { result } = renderHook(() => useMessageWindow(records, edges, true, 'root', []));
+  const { result } = renderHook(() => useMessageWindow(records, edges, true, 'root', [], true, 'placement'));
   const visible = new Set(result.current.messages.map(message => message.id));
   expect(visible.has('m-0')).toBe(true);
   expect(visible.has('m-149')).toBe(true);
@@ -55,10 +55,10 @@ it('pins the entire relation structure rather than showing an isolated target or
   expect(result.current.edges).toEqual(edges);
 });
 
-it('counts a large connected structure as one unit and never truncates its body to a raw row limit', () => {
+it('counts a large connected structure as one unit only in explicit legacy placement mode', () => {
   const frame: DemoMessage = { ...messages[0], id: 'large-frame', kind: 'relation', relationType: 'merge' };
   const edges = messages.map(message => edge(frame.id, 'merge', `anon:${frame.id}`, message.id));
-  const { result } = renderHook(() => useMessageWindow([...messages, frame], edges, true, 'root', []));
+  const { result } = renderHook(() => useMessageWindow([...messages, frame], edges, true, 'root', [], true, 'placement'));
   expect(result.current.messages).toHaveLength(151);
   expect(result.current.hasMore).toBe(false);
 });
@@ -68,6 +68,26 @@ it('can navigate to a relation drawn only as an edge and brings its full compone
   const { result } = renderHook(() => useMessageWindow(messages, edges, true, 'root', ['edge-only']));
   expect(result.current.messages.map(message => message.id)).toEqual(expect.arrayContaining(['m-148', 'm-149']));
   expect(result.current.edges).toEqual(edges);
+});
+
+it.each([
+  { source: 'm-0', target: 'm-90' },
+  { source: 'm-90', target: 'm-0' },
+])('withholds a chronological edge until both known endpoints load ($source to $target)', ({ source, target }) => {
+  const relation: DemoMessage = { ...messages[0], id: 'cross-page-reply', kind: 'relation', relationType: 'reply' };
+  const records = [...messages, relation], edges = [edge(relation.id, 'reply', source, target)];
+  const original = structuredClone(edges);
+  const { result, rerender } = renderHook(({ pinned }) => useMessageWindow(records, edges, true, 'chronological-edge', pinned),
+    { initialProps: { pinned: [] as string[] } });
+  expect(result.current.messages.some(message => message.id === 'm-90')).toBe(false);
+  expect(result.current.edges).toEqual([]);
+  expect(result.current.messages.some(message => message.id === relation.id)).toBe(source === 'm-0');
+  rerender({ pinned: [relation.id] });
+  expect(result.current.messages).toHaveLength(92);
+  expect(result.current.messages.some(message => message.id === 'm-90')).toBe(true);
+  expect(result.current.messages.some(message => message.id === 'm-91')).toBe(false);
+  expect(result.current.edges).toEqual(edges);
+  expect(edges).toEqual(original);
 });
 
 it('keeps a closed classification opaque and preserves its member references without mounting another scope', () => {

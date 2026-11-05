@@ -1,6 +1,9 @@
 import { once } from 'node:events';
 import { type AddressInfo } from 'node:net';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createServer, type ViteDevServer } from 'vite';
 import { expect, it } from 'vitest';
 import type { Session } from '@gonglun/core';
@@ -12,12 +15,15 @@ it('registers, logs in and sends through the actual development proxy while reje
   const app = (await createTestApp());
   const backend = app.listen(0, '127.0.0.1');
   let web: ViteDevServer | undefined;
+  // Each Vite instance owns its cache, including when tests run beside npm run dev.
+  let cacheDir: string | undefined;
   try {
     await once(backend, 'listening');
+    cacheDir = await mkdtemp(join(tmpdir(), 'gonglun-dev-proxy-'));
     const target = `http://127.0.0.1:${(backend.address() as AddressInfo).port}`;
     const configured = webConfig.server!.proxy!['/api']!;
     web = await createServer({
-      ...webConfig, configFile: false, logLevel: 'silent',
+      ...webConfig, configFile: false, logLevel: 'silent', cacheDir,
       server: { ...webConfig.server, host: '127.0.0.1', port: 0, strictPort: false,
         proxy: { '/api': typeof configured === 'string' ? target : { ...configured, target } },
       },
@@ -48,5 +54,6 @@ it('registers, logs in and sends through the actual development proxy while reje
     backend.closeAllConnections();
     await new Promise<void>((resolve, reject) => backend.close(error => error ? reject(error) : resolve()));
     (await app.close());await cleanupTestDatabases();
+    if (cacheDir) await rm(cacheDir, { recursive: true, force: true });
   }
 });

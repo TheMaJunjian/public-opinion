@@ -3,8 +3,14 @@ import { getEffectiveJoinByTarget } from './membership';
 import type { DemoEdge, DemoMessage } from '../../../utils/modelBridge';
 import { expandTextIdsWithCorrections } from './correction';
 import { displayDependencyIds } from '../../../utils/displayDependency';
+import { createSourceNavigationDeclarations } from './sourceNavigation';
 type ContainerRelation = Pick<Relation,'id'|'relationType'|'sourceMessageId'|'targetRefs'> & Partial<Pick<Relation,'payload'|'state'|'createdAt'>>;
 const containerTypes=new Set(['CLASSIFY','SUMMARY','MERGE','ARRANGE']);
+
+export interface ContainerMemberCounts {
+  readonly direct: number;
+  readonly total: number;
+}
 
 /** Build once per traversal. Avoid scanning every relation for every member. */
 function ownershipIndex(relations:ContainerRelation[],rejected:Set<string>,rejectedJoins:Set<string>,displayWinners?:ReadonlyMap<string,string>) {
@@ -13,6 +19,7 @@ function ownershipIndex(relations:ContainerRelation[],rejected:Set<string>,rejec
   const normalize=(ref:TargetRef):TargetRef=>ref.kind!=='relation'&&containerTypes.has(byId.get(ref.messageId)?.relationType?.toUpperCase()??'')?{kind:'relation',relationId:ref.messageId}:ref;
   const key=(ref:TargetRef)=>{const normalized=normalize(ref);return normalized.kind==='relation'?`r:${normalized.relationId}`:`m:${normalized.messageId}`;};
   const effective=displayWinners??getEffectiveJoinByTarget(relations,rejected,rejectedJoins);
+  const retainsSourceDeclaration=createSourceNavigationDeclarations(relations,effective);
   const releasedDeclarations=new Map<string,Map<string,string>>();
   const effectiveFor=(id:string)=>{
     if(byId.get(id)?.payload?.independentMemberships||(bySource.get(id)??[]).some(join=>join.payload?.membershipHistory)||!rejected.has(id))return effective;
@@ -43,7 +50,7 @@ function ownershipIndex(relations:ContainerRelation[],rejected:Set<string>,rejec
       if (relation.payload?.independentMemberships) continue;
       const joins=byTarget.get(key(ref));
       const targetId=ref.kind==='relation'?ref.relationId:ref.messageId;
-      if(!joins?.length||joins.some(join=>join.sourceMessageId===id&&memberJoins.get(targetId)===join.id))add(ref);
+      if(!joins?.length||joins.some(join=>join.sourceMessageId===id&&memberJoins.get(targetId)===join.id)||retainsSourceDeclaration(id,targetId))add(ref);
     }
     for(const join of bySource.get(id)??[]) for(const ref of join.targetRefs??[])if(memberJoins.get(ref.kind==='relation'?ref.relationId:ref.messageId)===join.id)add(ref);
     return {textIds,relationIds};
@@ -61,7 +68,11 @@ export function collectOwnedByRelation(relationId:string,relationById:Map<string
 
 /** One consistent membership index for a real or simulated organization state. */
 export function createContainerOwnership(relations:ContainerRelation[],rejectedContainerIds=new Set<string>(),rejectedJoinRelationIds=new Set<string>(),displayWinners?:ReadonlyMap<string,string>) {
-  const index=ownershipIndex(relations,rejectedContainerIds,rejectedJoinRelationIds,displayWinners);
+  // This instance belongs to one immutable relation/effect snapshot. Do not build
+  // its index (or any totals) until a visible consumer actually asks for them.
+  let index:ReturnType<typeof ownershipIndex>|undefined;
+  const getIndex=()=>index??=ownershipIndex(relations,rejectedContainerIds,rejectedJoinRelationIds,displayWinners);
+  const direct=(id:string)=>getIndex().direct(id);
   const cached=new Map<string,{textIds:Set<string>;relationIds:Set<string>}>();
   const owned=(relationId:string,visited=new Set<string>())=>{
   const cacheable=visited.size===0;
@@ -70,11 +81,11 @@ export function createContainerOwnership(relations:ContainerRelation[],rejectedC
   const visit=(id:string)=>{
     if(visited.has(id))return;
     visited.add(id);
-    const direct=index.direct(id);
+    const direct=getIndex().direct(id);
     for(const text of direct.textIds)result.textIds.add(text);
     for(const childId of direct.relationIds) {
       result.relationIds.add(childId);
-      const child=index.byId.get(childId);
+      const child=getIndex().byId.get(childId);
       // Rejection dissolves this child into its parent canvas, not out of all
       // ancestor scopes. Ancestors must still own the released descendants.
       if(!child||!containerTypes.has(child.relationType.toUpperCase()))continue;
@@ -84,6 +95,41 @@ export function createContainerOwnership(relations:ContainerRelation[],rejectedC
   visit(relationId);
   if(cacheable)cached.set(relationId,result);
   return result;
+  };
+  // Retain only adjacency and requested scalar totals, not a descendant Set for
+  // every container. Shared paths and fragment references still count each ID once.
+  const countMembers=new Map<string,readonly string[]>();
+  const countCache=new Map<string,ContainerMemberCounts>();
+  const membersForCount=(id:string)=>{
+    let members=countMembers.get(id);
+    if(!members){
+      const current=direct(id);
+      members=[...new Set([...current.textIds,...current.relationIds])]
+        .filter(member=>member!==id&&!member.startsWith('anon:'));
+      countMembers.set(id,members);
+    }
+    return members;
+  };
+  const memberCounts=(id:string):ContainerMemberCounts=>{
+    const previous=countCache.get(id);
+    if(previous)return previous;
+    const currentIndex=getIndex();
+    const isContainer=(member:string)=>containerTypes.has(currentIndex.byId.get(member)?.relationType.toUpperCase()??'');
+    if(!isContainer(id)){
+      const empty={direct:0,total:0};countCache.set(id,empty);return empty;
+    }
+    const immediate=membersForCount(id),seen=new Set<string>([id]),pending=[...immediate];
+    while(pending.length){
+      const member=pending.pop()!;
+      if(seen.has(member))continue;
+      seen.add(member);
+      // Iterate instead of recursing so deeply nested imported classifications
+      // cannot overflow the stack. Related messages are not membership children.
+      if(isContainer(member))for(const child of membersForCount(member))pending.push(child);
+    }
+    const result={direct:immediate.length,total:seen.size-1};
+    countCache.set(id,result);
+    return result;
   };
   const active=(type:string,scopeOwners?:ReadonlySet<string>)=>{
     const result={textIds:new Set<string>(),relationIds:new Set<string>()};
@@ -99,20 +145,26 @@ export function createContainerOwnership(relations:ContainerRelation[],rejectedC
     const result={textIds:new Set<string>(),relationIds:new Set<string>()},visited=new Set<string>();
     const visit=(parent:string)=>{
       if(visited.has(parent))return;visited.add(parent);
-      const direct=index.direct(parent);
+      const direct=getIndex().direct(parent);
       direct.textIds.forEach(member=>result.textIds.add(member));
       for(const member of direct.relationIds){
         result.relationIds.add(member);
-        const type=index.byId.get(member)?.relationType.toUpperCase();
+        const type=getIndex().byId.get(member)?.relationType.toUpperCase();
         if(type==='MERGE'||type==='ARRANGE'||rejectedContainerIds.has(member))visit(member);
       }
     };
     visit(id);return result;
   };
-  return {direct:index.direct,owned,active,released};
+  return {direct,owned,memberCounts,active,released};
 }
 
 export type ContainerOwnership=ReturnType<typeof createContainerOwnership>;
+
+/** Full preview coverage shares one index across every container instead of rebuilding it per category. */
+export function collectAllContainerOwnership(relations: Relation[], rejectedJoinRelationIds = new Set<string>()) {
+  const ownership = createContainerOwnership(relations, new Set(), rejectedJoinRelationIds);
+  return { classify: ownership.active('CLASSIFY'), merge: ownership.active('MERGE'), summary: ownership.active('SUMMARY') };
+}
 
 export interface FindContainingClassificationInput {
   relationById: Map<string,Relation>;

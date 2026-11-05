@@ -28,6 +28,9 @@ export function readLeaderboardPreferences(): LeaderboardPreferences {
     if (userWidths['与会者'] === undefined && userWidths['与会者名'] !== undefined) userWidths['与会者'] = userWidths['与会者名'];
     if (messageWidths['议事人'] === undefined && messageWidths['议事人名'] !== undefined) messageWidths['议事人'] = messageWidths['议事人名'];
     delete userWidths['与会者名'];
+    if (userWidths['充值贡献'] === undefined && userWidths['充值收入'] !== undefined) userWidths['充值贡献'] = userWidths['充值收入'];
+    delete userWidths['充值收入'];
+    delete userWidths['充值及受押总点'];
     delete messageWidths['议事人名'];
     return {
       pageSize: [20, 50, 100].includes(saved.pageSize) ? saved.pageSize : 20,

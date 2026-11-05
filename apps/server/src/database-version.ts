@@ -26,4 +26,9 @@ export const DATABASE_MIGRATIONS = [
   'cleanup-redundant-container-reading-marks',
   'explicit-body-versions-and-influence-contexts',
   'shared-message-reading-and-text-corrections',
+  'archive-and-reset-contribution-points',
+  'daily-usage-points-refresh',
+  'daily-usage-reward-ledger',
+  'usage-contribution-wording',
+  'fund-reset-message-contributions',
 ] as const;

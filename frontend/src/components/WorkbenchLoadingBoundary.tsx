@@ -8,7 +8,8 @@ import { createWorkbenchDrawingTasks, WorkbenchDrawingContext, WORKBENCH_DRAWING
 
 type Phase = 'loading' | 'drawing' | 'sending' | 'ready';
 const LoadingContext = createContext<(phase: Phase, resetFailure?: boolean) => void>(() => undefined);
-const SendingContext = createContext<(sending: boolean) => void>(() => undefined);
+type SendDestination = 'server' | 'local';
+const SendingContext = createContext<(sending: boolean, destination?: SendDestination) => void>(() => undefined);
 const ViewOnlyDrawingContext = createContext<(active: boolean) => void>(() => undefined);
 const DrawingPreparationContext = createContext<((work: () => void) => () => void) | null>(null);
 export const WORKBENCH_REQUEST_WAIT_MS = 60_000;
@@ -22,7 +23,7 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
   const [viewOnly, setViewOnly] = useState(false);
   const [cycle, setCycle] = useState(0);
   const [waitNotice, setWaitNotice] = useState<string | null>(null);
-  const [progress, setProgress] = useState<{ phase: Phase; sending: boolean; reason: 'loading' | 'sending'; drawingRevision?: number }>({ phase: 'loading', sending: false, reason: 'loading' });
+  const [progress, setProgress] = useState<{ phase: Phase; sending: boolean; reason: 'loading' | 'sending'; destination?: SendDestination; drawingRevision?: number }>({ phase: 'loading', sending: false, reason: 'loading' });
   const { phase, reason, drawingRevision } = progress;
   const reportLoading = useCallback((next: Phase, resetFailure = false) => {
     tasks.committed();
@@ -30,12 +31,12 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
     if (next !== 'ready' && !tasks.failure) tasks.setBlocking(true);
     setProgress(previous => previous.sending ? previous : { ...previous, phase: next, reason: 'loading', drawingRevision: undefined });
   }, [tasks]);
-  const reportSending = useCallback((sending: boolean) => {
+  const reportSending = useCallback((sending: boolean, destination: SendDestination = 'server') => {
     if (sending) {
       tasks.clearFailure(); setFailure(null); setCycle(value => value + 1);
       tasks.setBlocking(true);
     }
-    setProgress(previous => previous.sending === sending ? previous : { phase: tasks.failure ? 'ready' : sending ? 'sending' : 'drawing', sending, reason: 'sending' });
+    setProgress(previous => previous.sending === sending ? previous : { phase: tasks.failure ? 'ready' : sending ? 'sending' : 'drawing', sending, reason: 'sending', destination });
   }, [tasks]);
   const content = useRef<HTMLDivElement>(null);
   const finishDrawing = useRef<((completed?: boolean) => void) | null>(null);
@@ -82,13 +83,15 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
     if (phase !== 'loading' && phase !== 'sending') return;
     const timer = setTimeout(() => {
       setWaitNotice(phase === 'sending'
-        ? '等待已超过 60 秒，发送结果尚未确认。已恢复界面；请先核对记录，不要重复提交。'
+        ? progress.destination === 'local'
+          ? '保存等待已超过 60 秒，结果尚未确认。已恢复界面；请先核对本机保存记录，不要重复提交。'
+          : '等待已超过 60 秒，发送结果尚未确认。已恢复界面；请先核对记录，不要重复提交。'
         : '加载等待已超过 60 秒，已恢复界面；数据尚未准备完成，可稍后重试。');
       // This releases presentation only. The write and its duplicate guard keep their owner.
       setProgress(previous => previous.phase === phase ? { ...previous, phase: 'ready' } : previous);
     }, WORKBENCH_REQUEST_WAIT_MS);
     return () => clearTimeout(timer);
-  }, [phase, cycle]);
+  }, [phase, cycle, progress.destination]);
 
   useLayoutEffect(() => {
     const failed = () => {
@@ -126,14 +129,14 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
     finishDrawing.current = null;
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (phase !== 'drawing') return;
     let frame = 0, paintFrame = 0;
     let disposed = false;
     const schedule = () => {
       cancelAnimationFrame(frame);
       cancelAnimationFrame(paintFrame);
-      if (disposed || tasks.failure || tasks.pending) return;
+      if (disposed || document.hidden || tasks.failure || tasks.pending) return;
       const revision = tasks.revision;
       // Cross a browser paint only after every registered task has committed.
       // This is a commit fence, not an elapsed-time or DOM-quiet heuristic.
@@ -146,6 +149,7 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
       });
     };
     const unsubscribe = tasks.subscribe(schedule);
+    document.addEventListener('visibilitychange', schedule);
     let fontTask: ReturnType<typeof tasks.begin> | undefined;
     const waitForFonts = () => {
       if (fontTask || tasks.failure || document.fonts?.status !== 'loading') return;
@@ -163,6 +167,7 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
     return () => {
       disposed = true;
       unsubscribe();
+      document.removeEventListener('visibilitychange', schedule);
       document.fonts?.removeEventListener?.('loading', waitForFonts);
       fontTask?.cancel();
       cancelAnimationFrame(frame);
@@ -170,7 +175,7 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
     };
   }, [phase, tasks, cycle]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (phase !== 'drawing' || tasks.failure) return;
     if (drawingWait.current?.tasks !== tasks || drawingWait.current.cycle !== cycle) {
       drawingWait.current = { tasks, cycle, remaining: WORKBENCH_DRAWING_TIMEOUT_MS };
@@ -218,8 +223,8 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
     </div>
     {busy && <OperationProgressDialog title={reason === 'sending' ? '正在发送' : phase === 'drawing' ? '正在绘制' : '正在加载'}>
       <div data-workbench-progress-active="true">
-        {phase === 'sending' ? '正在等待服务器确认发送，请勿重复提交。' : phase === 'drawing' ? reason === 'sending'
-          ? '正在完成消息绘制和新消息定位，请稍候。' : '正在更新消息与关系，等待绘制和定位完成。' : '正在加载消息数据，请稍候。'}
+        {phase === 'sending' ? progress.destination === 'local' ? '正在保存本地文档，请勿重复提交。' : '正在等待服务器确认发送，请勿重复提交。' : phase === 'drawing' ? reason === 'sending'
+          ? progress.destination === 'local' ? '正在更新本地消息和关系，等待绘制完成。' : '正在完成消息绘制和新消息定位，请稍候。' : '正在更新消息与关系，等待绘制和定位完成。' : '正在加载消息数据，请稍候。'}
         <p>完成后将自动关闭，并恢复工作区操作。</p>
       </div>
     </OperationProgressDialog>}
@@ -253,14 +258,14 @@ export function useWorkbenchDrawingPreparation() {
 }
 
 /** After sending, wait for drawing, measurement and positioning to commit together. */
-export function useWorkbenchSendingProgress(sending: boolean) {
+export function useWorkbenchSendingProgress(sending: boolean, destination: SendDestination = 'server') {
   const report = useContext(SendingContext);
-  useLayoutEffect(() => { report(sending); }, [report, sending]);
+  useLayoutEffect(() => { report(sending, destination); }, [report, sending, destination]);
   const prepare = useCallback(() => {
     // Commit the lightweight boundary first, before copying or rendering the
     // workbench. Cross a paint so even synchronous command preparation is covered.
-    flushSync(() => report(true));
+    flushSync(() => report(true, destination));
     return new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-  }, [report]);
-  return { prepare, finish: () => report(false) };
+  }, [report, destination]);
+  return { prepare, finish: () => report(false, destination) };
 }

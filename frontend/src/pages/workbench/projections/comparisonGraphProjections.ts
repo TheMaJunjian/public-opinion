@@ -1,5 +1,6 @@
 import type { Relation } from '../../../types';
-import { isContentKind, type DemoEdge, type DemoMessage } from '../../../utils/modelBridge';
+import { annotationAtReference, oppositeAnnotation } from '@gonglun/core';
+import { computeCorrectionVersions, isContentKind, withCorrectionContent, type DemoEdge, type DemoMessage } from '../../../utils/modelBridge';
 import { applyTraceFrameVisibility, buildTraceProjection, type TraceContainerMembership } from '../../../utils/traceProjection';
 import { expandTextIdsWithCorrections } from '../model/correction';
 import { expandTextIdsWithSettlementResults } from '../model/navigation';
@@ -8,7 +9,9 @@ import { projectContainerCanvas } from './containerCanvas';
 import type { TraceEntry } from '../types';
 import { deriveCrossCanvasRelations } from '../../../utils/crossCanvasRelations';
 import { projectGraphScene } from '../../../utils/graphProjection';
-import {isRejectedRelation} from '../../../utils/relatedMessages';
+import {isRejectedRelation,hiddenInactiveRelationIds} from '../../../utils/relatedMessages';
+import { effectiveCardWidths } from '../../../utils/cardWidth';
+import { comparisonMembershipFrames } from './comparisonMembershipFrames';
 
 export interface DeriveComparisonGraphProjectionsInput {
   comparisonReviewed: boolean;
@@ -34,9 +37,36 @@ export interface DeriveComparisonGraphProjectionsInput {
   traceDirection?: import('../../../utils/traceRange').TraceDirection;
   traceExpandedFrameIds: Set<string>;
   filterMessages?: (messages: DemoMessage[]) => DemoMessage[];
+  displayedCorrections?: ReturnType<typeof computeCorrectionVersions>;
+  /** Paired review reveals the affected membership paths; previews retain their ordinary scope. */
+  showMembershipFrames?: boolean;
+  annotationResolved?: boolean;
 }
 
 export function projectComparisonSide(input: DeriveComparisonGraphProjectionsInput, side: 'agree' | 'disagree') {
+  const annotated = input.messages.find(message=>message.id===input.comparisonTargetId);
+  const action = annotated && annotationAtReference(annotated,{messageId:annotated.id});
+  const opposite = action && oppositeAnnotation(action);
+  if (!input.annotationResolved && annotated && action && opposite) {
+    const chosen = side === 'agree' ? action : opposite;
+    const type = (chosen.relation === 'follow' ? 'attention' : chosen.relation) as DemoEdge['relationType'];
+    const competitors = new Set(input.messages.filter(message=>{
+      if(message.id===annotated.id)return false;
+      const other=annotationAtReference(message,{messageId:message.id});
+      return other && [action.relation,opposite.relation].includes(other.relation)
+        && JSON.stringify(other.targets)===JSON.stringify(action.targets);
+    }).map(message=>message.id));
+    const messages = input.messages.filter(message=>!competitors.has(message.id)).map(message=>message.id!==annotated.id?message:{...message,
+      relationType:type,relationPayload:chosen.payload,
+      parts:message.parts?.map(part=>part.type==='relation'&&part.relation===action.relation?{...part,relation:chosen.relation,reason:chosen.payload.subType==='YES'||chosen.payload.subType==='NO'?chosen.payload.subType:undefined}:part)});
+    return projectComparisonSideResolved({...input,annotationResolved:true,messages,
+      relations:input.relations.filter(relation=>!competitors.has(relation.id)).map(relation=>relation.id===annotated.id?{...relation,relationType:type.toUpperCase(),payload:chosen.payload}:relation),
+      edges:input.edges.filter(edge=>!competitors.has(edge.relationMessageId)).map(edge=>edge.relationMessageId===annotated.id?{...edge,relationType:type,relationLabel:type}:edge)},'agree');
+  }
+  return projectComparisonSideResolved(input, side);
+}
+
+function projectComparisonSideResolved(input: DeriveComparisonGraphProjectionsInput, side: 'agree' | 'disagree') {
   const { comparisonReviewed, comparisonTargetId, messages, relations, edges, username, scopeId,
     traceEntries, traceDistance, traceExpandedFrameIds, traceRelationMsgIds, collectExclusiveRelationMsgIds,
     replacedRelationMsgIds, comparisonReviewBaseMessages, comparisonReviewBaseEdges, normalGraphProjection, isInsideClassify } = input;
@@ -96,7 +126,7 @@ export function projectComparisonSide(input: DeriveComparisonGraphProjectionsInp
     const projectedMessages = (side === 'agree' || releasedTarget || traceStartIdSet.has(comparisonTargetId)||isRejectedRelation(effect.msgMap.get(comparisonTargetId),suppressed) ? [...withTarget.values()] : baseMessages).filter(message => {
       if(organizationScopeIds&&!organizationScopeIds.has(message.id))return false;
       if (forcedVisibleIds.has(message.id)) return true;
-      if (suppressed.has(message.id)) return isRejectedRelation(message,suppressed);
+      if (suppressed.has(message.id) && !isContentKind(message.kind)) return isRejectedRelation(message,suppressed);
       if (!organizationEffect && isInsideClassify && scopedIds.has(message.id)) return true;
       if (isContentKind(message.kind) && (hiddenTextIds.has(message.id) || ownedRelationIds.has(message.id))) return false;
       return message.kind !== 'relation' || !hiddenRelationIds.has(message.id);
@@ -126,6 +156,16 @@ export function projectComparisonSide(input: DeriveComparisonGraphProjectionsInp
   };
 
     const effect = deriveContainerEffect({messages,relations,edges,username,stakeCounts:input.sourceEffect?.stakeCounts,assumption:{messageId:comparisonTargetId,side}});
+    const assumedCorrections = computeCorrectionVersions(effect.messages, edges, effect.suppressed, username,
+      targetType?.toUpperCase() === 'CORRECT' && side === 'agree' ? { previewCorrectionId: comparisonTargetId } : {});
+    const corrections = new Map(input.displayedCorrections ?? assumedCorrections);
+    const widths = effect.msgMap.get(comparisonTargetId)?.relationPayload?.correctionKind === 'WIDTH'
+      ? effectiveCardWidths(effect.messages, edges, username, { messageId: comparisonTargetId, side }) : undefined;
+    // Only this correction's original body changes its selected version. Other
+    // messages retain the reading versions shown in the entering view.
+    if (targetType?.toUpperCase() === 'CORRECT') for (const [id, entry] of assumedCorrections) {
+      if (entry.versions.some(version => version.correctionId === comparisonTargetId)) corrections.set(id, entry);
+    }
     let canvas = project(effect);
     if (traceStartIds.length) {
       const traceMessages = organizationEffect ? effect.messages : [
@@ -151,21 +191,28 @@ export function projectComparisonSide(input: DeriveComparisonGraphProjectionsInp
       canvas = {...canvas,messages:visible,edges:trace.edges.filter(edge => visibleIds.has(edge.relationMessageId)
         && (edge.from.messageId.startsWith('anon:')||visibleIds.has(edge.from.messageId)) && visibleIds.has(edge.to.messageId))};
     }
-    const finalMessages=input.filterMessages?.(canvas.messages)??canvas.messages;
+    const finalMessages=(input.filterMessages?.(canvas.messages)??canvas.messages)
+      .filter(message => message.relationType !== 'annotation' || !effect.suppressed.has(message.id)).map(message => {
+      const entry = corrections.get(message.id);
+      if (!entry) return message;
+      const original = effect.msgMap.get(message.id) ?? message, current = entry.current;
+      return current ? withCorrectionContent(original, current.content, current.changes, current.snapshot) : original;
+    });
     const scene=projectGraphScene({messages:finalMessages,edges:canvas.edges,
       traceExpandedFrameIds,isTraceWindow:traceStartIds.length>0,
       rejectedContainerIds:effect.rejectedContainerIds,rejectedRelationIds:effect.suppressed,
-      hiddenMessageIds:new Set([...effect.suppressed].filter(id=>!isRejectedRelation(effect.msgMap.get(id),effect.suppressed)))});
+      hiddenMessageIds:hiddenInactiveRelationIds(effect.messages,effect.suppressed)});
     const allowedRelations=new Set((input.filterMessages?.(effect.messages)??effect.messages).map(message=>message.id));
     const relatedEdges=effect.edges.filter(edge=>allowedRelations.has(edge.relationMessageId));
     const crossCanvasRelations=deriveCrossCanvasRelations({
       edges:relatedEdges,
       visibleMessageIds:new Set([...scene.normalIds,...scene.frameBlocks.map(frame=>frame.relMsgId)]),renderedEdges:scene.layoutEdges,
     });
-    return {...canvas,messages:finalMessages,suppressed:effect.suppressed,context:{...effect.context,relatedEdges,crossCanvasRelations},effect};
+    return {...canvas,messages:finalMessages,corrections,widths,suppressed:effect.suppressed,context:{...effect.context,relatedEdges,crossCanvasRelations},effect};
 }
 
 export function deriveComparisonGraphProjections(input: DeriveComparisonGraphProjectionsInput) {
   if(!input.comparisonReviewed||!input.comparisonTargetId)return null;
-  return {agree:projectComparisonSide(input,'agree')!,disagree:projectComparisonSide(input,'disagree')!};
+  const pair = {agree:projectComparisonSide(input,'agree')!,disagree:projectComparisonSide(input,'disagree')!};
+  return input.showMembershipFrames ? comparisonMembershipFrames(pair, input.comparisonTargetId, input.filterMessages) : pair;
 }

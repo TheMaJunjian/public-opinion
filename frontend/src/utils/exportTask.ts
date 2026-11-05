@@ -2,9 +2,11 @@ import type { ExportData, ExportUpdateData } from '../api/client';
 import { mergeExportUpdate, prepareExportUpdate, validateExportForViewing } from './exportArchive';
 import { fetchJsonWithDeadline } from './requestLifecycle';
 import type { ConversionFailureReport } from '@gonglun/core';
+import { isNativeZhihuView, type NativeZhihuView } from './nativeZhihuView';
+import { prepareZhihuViewExport } from './zhihuViewExport';
 
 export type ExportTask = { kind: 'full'; scopeMessageId: string; source?: ExportData | null; view: NonNullable<ExportData['view']> }
-  | { kind: 'update'; file: Blob };
+  | { kind: 'update'; file: Blob; source?: NativeZhihuView; view?: ExportData['view'] };
 export interface PreparedExport { blob: Blob; added: number; messageCount: number }
 export type ExportWorkerRequest = { task: ExportTask; apiUrl: string };
 export type ExportWorkerResponse = { status: 'progress'; message: string }
@@ -12,6 +14,9 @@ export type ExportWorkerResponse = { status: 'progress'; message: string }
 
 /** Runs in the export worker: only small progress messages and the finished Blob leave it. */
 export async function prepareArchiveExport({ task, apiUrl }: ExportWorkerRequest, progress: (message: string) => void): Promise<PreparedExport> {
+  if (isNativeZhihuView(task.source)) {
+    return prepareZhihuViewExport(task.source, task.view, task.kind === 'update' ? task.file : undefined, progress);
+  }
   async function fetchExport(parent: string, base?: Awaited<ReturnType<typeof prepareExportUpdate>>['checkpoint']) {
     const query = new URLSearchParams({ parent });
     if (base) Object.entries({ after: base.sequence, baseCount: base.entryCount, baseHash: base.hash,
@@ -40,5 +45,5 @@ export async function prepareArchiveExport({ task, apiUrl }: ExportWorkerRequest
     data = { ...validateExportForViewing(source).data, view: task.view };
   }
   progress('正在生成文件…');
-  return { blob: new Blob([JSON.stringify(data)], { type: 'application/json' }), added, messageCount: data.messages.length };
+  return { blob: new Blob([`${JSON.stringify(data, null, 2)}\n`], { type: 'application/json' }), added, messageCount: data.messages.length };
 }

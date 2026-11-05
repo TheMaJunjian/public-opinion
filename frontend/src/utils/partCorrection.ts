@@ -51,5 +51,10 @@ export function preparePartCorrection(message: DemoMessage, selection: UnitSelec
     && !reference.memberId && (!reference.path?.length || reference.path.length === 1 && ['text', 'source', 'excerpt'].includes(String(reference.path[0])))) {
     return { before: textOf(coreMessage), after: textOf({ ...coreMessage, parts }), value, target: { ...selection, reference } };
   }
+  if (typeof current === 'string' && reference.path?.length) {
+    const field = { ...reference, range: undefined };
+    return { before: display(resolveReference(field, () => coreMessage)),
+      after: display(resolveReference(field, () => ({ ...coreMessage, parts }))), value, target: { ...selection, reference } };
+  }
   return { before: display(reference.partId ? current : message.parts), after: display(value), value, target: { ...selection, reference } };
 }

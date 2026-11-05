@@ -3,8 +3,9 @@
 @import './shared.css';
 @import './opus-layout.css';
 @import './message-skins.css';
-@import './opus-paper.css';
 @import './stake-tiers.css';
 @import './specimen-skins.css';
 @import './specimen-layout.css';
+@import './opus-paper.css';
 @import './gpt-arena.css';
+@import './opus-dialogs.css';

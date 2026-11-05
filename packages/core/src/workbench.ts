@@ -5,6 +5,9 @@ export interface UserView {
   id: string;
   username: string;
   createdAt: string;
+  /** Account-wide contributions in the current economic epoch, independent of the viewed scope. */
+  usageContribution?: number;
+  rechargeContribution?: number;
 }
 
 export interface ScopeView {
@@ -77,6 +80,11 @@ export type RelationTargetLayout = 'single-column' | 'multi-column' | 'single-ro
 
 export interface RelationPayload {
   independentMemberships?: boolean;
+  /** Imported documents may keep a container title separate from its readable body. */
+  separateTitle?: boolean;
+  /** Local document field corrections must not mix a title into the body. */
+  localCorrectionField?: 'body' | 'title';
+  localCorrectionApplicable?: boolean;
   membershipHistory?: import('./membership.js').MembershipAction;
   label?: string;
   annotationStance?: { target: Reference; side: 'pro' | 'con' };

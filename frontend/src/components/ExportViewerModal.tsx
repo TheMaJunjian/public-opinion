@@ -2,10 +2,15 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ExportData } from '../api/client';
 import { validateExportForViewing,prepareExportForViewing } from '../utils/exportArchive';
-import { loadLastExport, saveLastExport } from '../utils/exportViewerCache';
+import { getExportCacheReference, inheritExportCacheReference, loadCachedExport, loadCachedNativeExport, loadLastExport, saveLastExport } from '../utils/exportViewerCache';
+import { isZhihuViewingData } from '../utils/zhihuArchive';
+import { canLinkZhihuDirectory, chooseZhihuDirectory, readZhihuDirectory, rememberZhihuDirectory, type LinkedDirectory } from '../utils/zhihuDirectory';
+import { mergeZhihuSourceUpdate } from '../utils/zhihuIncremental';
+import { isNativeZhihuView, mergeNativeZhihuUpdate } from '../utils/nativeZhihuView';
 import PopupOverlay from './PopupOverlay';
 import { DIALOG_BACKDROP, dialogStyles } from './dialogStyles';
 import PromptModal from './PromptModal';
+import OfflineViewerStatus from './OfflineViewerStatus';
 import { conversionFailure } from '@gonglun/core';
 
 export { validateExportForViewing } from '../utils/exportArchive';
@@ -24,6 +29,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
   const [prepared, setPrepared] = useState<ReturnType<typeof validateExportForViewing> | null>(null);
   const [lastExport, setLastExport] = useState<ReturnType<typeof validateExportForViewing> | null>(null);
   const [opening, setOpening] = useState(false);
+  const [linkedDirectory, setLinkedDirectory] = useState<LinkedDirectory | null>(null);
   const readingGeneration = useRef(0);
   const openingFrame = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -37,6 +43,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
     let cancelled = false;
     if (open) {
       setSelectedFile(null);
+      setLinkedDirectory(null);
       setProcessing(false);
       setError(null);
       setCacheError(null);
@@ -46,7 +53,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
       // Display the chooser before loading and verifying a large cached archive.
       frame = requestAnimationFrame(() => {
         frame = requestAnimationFrame(() => {
-          void loadLastExport().then(async cached => {
+          void loadLastExport({ sourceOnly: true }).then(async cached => {
             if (cancelled || cached===null) return;
             const prepared=await prepareExportForViewing(cached);
             if(!cancelled)setLastExport(prepared);
@@ -59,7 +66,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
     return () => { cancelled = true; cancelAnimationFrame(frame); cancelAnimationFrame(openingFrame.current); readingGeneration.current += 1; };
   }, [open]);
 
-  const openData = (data: ExportData) => {
+  const openData = (data: ExportData, fromCache = false) => {
     if (opening) return;
     const generation = ++readingGeneration.current;
     setOpening(true);
@@ -68,10 +75,20 @@ export default function ExportViewerModal({ open, onClose }: Props) {
     openingFrame.current = requestAnimationFrame(() => {
       openingFrame.current = requestAnimationFrame(() => {
         if (generation !== readingGeneration.current) return;
-        void saveLastExport(data).then(() => {
+        void (async () => {
+          if (!fromCache) {
+            await saveLastExport(data);
+            if (linkedDirectory) await rememberZhihuDirectory(data, linkedDirectory);
+            return data;
+          }
+          const latest = isZhihuViewingData(data) ? await loadCachedExport(data.zhihu.archiveId, { fresh: true, sourceOnly: true }) : await loadLastExport({ sourceOnly: true, fresh: true });
+          if (!latest) throw new Error('上次阅览缓存已不存在，请重新选择 JSON 文件。');
+          return inheritExportCacheReference((await prepareExportForViewing(latest)).data, latest);
+        })().then(openedData => {
           if (generation !== readingGeneration.current) return;
           window.dispatchEvent(new Event('prepare-export-viewer'));
-          navigate('/viewer', { state: { exportData: data }, replace: true });
+          const viewerCacheRef = getExportCacheReference(openedData);
+          navigate('/viewer', { state: { exportData: openedData, ...(viewerCacheRef ? { viewerCacheRef } : {}) }, replace: true });
           onClose();
         }).catch(error => {
           if (generation !== readingGeneration.current) return;
@@ -91,6 +108,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
     const generation = ++readingGeneration.current;
     setError(null);
     setPrepared(null);
+    setLinkedDirectory(null);
     setSelectedFile(file);
     setProcessing(true);
     const reader = new FileReader();
@@ -110,6 +128,29 @@ export default function ExportViewerModal({ open, onClose }: Props) {
       setProcessing(false);
     } };
     reader.readAsText(file);
+  };
+
+  const selectDirectory = async () => {
+    const generation = ++readingGeneration.current;
+    try {
+      const directory = await chooseZhihuDirectory();
+      if (generation !== readingGeneration.current) return;
+      setProcessing(true); setError(null); setPrepared(null); setLinkedDirectory(null);
+      setSelectedFile(new File([], `${directory.name}/gonglun.json`));
+      // Give the chooser a paint before validating a large exported document.
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      const opened = await readZhihuDirectory(directory);
+      const cached = isZhihuViewingData(opened.data) ? await loadCachedExport(opened.data.zhihu.archiveId, { fresh: true, sourceOnly: true })
+        : isNativeZhihuView(opened.data) ? await loadCachedNativeExport(opened.data) : null;
+      const previous = cached ? (await prepareExportForViewing(cached)).data : null;
+      const data = previous && isZhihuViewingData(previous) && isZhihuViewingData(opened.data) ? mergeZhihuSourceUpdate(previous, opened.data)
+        : previous && isNativeZhihuView(previous) && isNativeZhihuView(opened.data) ? mergeNativeZhihuUpdate(previous, opened.data) : opened.data;
+      const prepared = await prepareExportForViewing(data);
+      if (generation !== readingGeneration.current) return;
+      setPrepared(prepared); setLinkedDirectory(opened.connection);
+    } catch (error) {
+      if (generation === readingGeneration.current && (error as DOMException).name !== 'AbortError') setError(`关联目录失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally { if (generation === readingGeneration.current) setProcessing(false); }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -144,24 +185,24 @@ export default function ExportViewerModal({ open, onClose }: Props) {
       }}
       onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
     >
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="阅览导出文本" style={{
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="阅览导出文本" data-dialog-layout="scroll" style={{
         ...dialogStyles.panel, width: '100%', maxWidth: 500, maxHeight: '100%',
         display: 'flex', flexDirection: 'column', overflow: 'auto',
       }}>
-        <div style={{
+        <div data-dialog-header="true" style={{
           ...dialogStyles.header, display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         }}>
           <div>阅览导出文本</div>
-          <button aria-label="关闭阅览" onClick={onClose} style={dialogStyles.button}>✕</button>
+          <button data-dialog-close="true" aria-label="关闭阅览" onClick={onClose} style={dialogStyles.button}>✕</button>
         </div>
 
-        <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center' }}>
+        <div data-dialog-body="true" style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
           <div style={{ color: 'var(--ink-94a3b8)', fontSize: 13, textAlign: 'center' }}>
-            选择导出的 JSON 文件，将使用系统中已有的线性和非线性视图进行阅览。
+            打开公论导出的 JSON 文件，在本机阅览。
           </div>
 
           {lastExport && (
-            <button onClick={() => openData(lastExport.data)} style={{
+            <button onClick={() => openData(lastExport.data, true)} style={{
               width: '100%', padding: '12px 16px', borderRadius: 8,
               border: '1px solid var(--line-4a9eff)', background: 'var(--surface-1a2a3c)',
               color: 'var(--ink-4a9eff)', fontSize: 13, cursor: 'pointer',
@@ -180,7 +221,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
             onDragLeave={handleDragLeave}
             onClick={() => { if (!processing) fileInputRef.current?.click(); }}
             style={{
-              width: '100%', height: 140,
+              width: '100%', height: 112,
               border: `2px dashed ${dragging ? 'var(--line-0b84ff)' : selectedFile ? 'var(--line-4ade80)' : 'var(--line-444)'}`,
               borderRadius: 10,
               background: dragging ? 'var(--surface-rgba-11-132-255-0-08)' : selectedFile ? 'var(--surface-rgba-74-222-128-0-06)' : 'var(--surface-1a1a1a)',
@@ -226,9 +267,21 @@ export default function ExportViewerModal({ open, onClose }: Props) {
               border: 'none', background: 'var(--surface-0b84ff)',
               color: 'var(--ink-fff)', fontSize: 14, cursor: 'pointer',
             }}>
-              阅览此文件
+              {linkedDirectory ? '关联并阅览' : '阅览此文件'}
             </button>
           )}
+
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', width: '100%', fontSize: 11, color: 'var(--ink-94a3b8)' }}>
+            <span>文件仅在本机读取，不会上传</span><OfflineViewerStatus />
+          </div>
+          <details style={{ width: '100%', fontSize: 12, color: 'var(--ink-94a3b8)' }}>
+            <summary style={{ cursor: 'pointer' }}>本地辅助</summary>
+            <p style={{ margin: '8px 0', lineHeight: 1.6 }}>也可选择知乎导出的 JSON，在本机阅览和整理。</p>
+            {canLinkZhihuDirectory() && <>
+              <button disabled={processing || opening} onClick={() => { void selectDirectory(); }} style={dialogStyles.button}>关联知乎导出目录</button>
+              <p style={{ margin: '8px 0 0', lineHeight: 1.6 }}>关联导出目录后可持续更新，并保留本地整理。</p>
+            </>}
+          </details>
 
           {error && (
             <div role="alert" style={{ color: 'var(--ink-f87171)', fontSize: 12, padding: '8px 12px', background: 'var(--surface-rgba-239-68-68-0-1)', borderRadius: 6, width: '100%', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>

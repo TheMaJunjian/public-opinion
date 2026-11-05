@@ -56,7 +56,7 @@ it('finishes selecting and deselecting an arrangement while its worker layout an
     useWorkbenchLoadingProgress(false, null);
     tasks = useContext(WorkbenchDrawingContext);
     const [draftUnits, setDraftUnits] = useState<GraphViewProps['draftUnits']>([]);
-    return <GraphView messages={messages} edges={edges} draftUnits={draftUnits} activeTextSelectId={null} lastClickedMessageId="arrange"
+    return <GraphView messages={messages} edges={edges} getMemberCounts={() => ({ direct: 1, total: 1 })} draftUnits={draftUnits} activeTextSelectId={null} lastClickedMessageId="arrange"
       onMessageClick={() => setDraftUnits(previous => previous.length ? [] : [{ messageId: 'arrange', selection: { kind: 'whole' } }])}
       onMessageDoubleClick={vi.fn()} onTextMouseUp={vi.fn()} onEdgeLabelSingleClick={vi.fn()}
       onEdgeLabelDoubleClick={vi.fn()} onFragmentAnchorClick={vi.fn()} isFragmentSelected={() => false} />;

@@ -7,10 +7,12 @@ import type { LayoutBox, Rect } from './layout';
 import type { Box } from './frameLayout';
 import type { Point, LabelSeed } from './graphEdgeGeometry';
 import { getEdgeDecorationLeft, getDecorationColumnWidth, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, EDGE_HINT_W, EDGE_LABEL_HINT_GAP, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_MAX_LABEL_CHARS, MAX_RELATION_NESTING_DEPTH } from './graphPresentationGeometry';
-import { quadAt, rayRectIntersectionFirst, samplePerimeterCandidates, computeLabelPlacementsAlongCurve } from './graphEdgeGeometry';
+import { quadAt, curvedEdgeControl, rayRectIntersectionFirst, samplePerimeterCandidates, computeLabelPlacementsAlongCurve, attachLabelToCurve } from './graphEdgeGeometry';
 import type { PositionedEdge } from './graphOverlays';
 
 export interface GraphRoutingInput {
+  /** View-only hiding; the full relationship catalog still supplies semantics. */
+  hiddenMessageIds?: ReadonlySet<string>;
   visibleDecorationIds?: ReadonlySet<string>;
   visibleAnnotationIds?: ReadonlySet<string>;
   annotationToggleRects?: Record<string, Rect>;
@@ -42,6 +44,10 @@ export interface GraphRoutingInput {
 /** Route edges between rendered card, fragment, frame and relation anchors. */
 export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
   const { newTagDecorationsByMsg, edgesByRelMsg, endpointBoxForNormal, layout, relationCardMsgIds, frameByRelMsgId, groupFrameByRelMsgId, msgMap, labelBboxes, relDecByRelMsgId, decorationRects, edges, comparisonSuppressedRelIds, colOf, correctedEdgeIdsByRelMsg, normalSet, contentRefs, toCanvasRect, getMessageRects, sampleQuad, penScore, globalForbiddenRects } = input;
+    const hiddenEdge = (edge: DemoEdge) => !!input.hiddenMessageIds
+      && [edge.relationMessageId, edge.from.messageId, edge.to.messageId].some(id => input.hiddenMessageIds!.has(id));
+    const routingEdgeIds = new Set(edges.filter(edge => !hiddenEdge(edge)).map(edge => edge.id));
+    const hiddenRelationAnchors = new Set<string>();
     const tagBadgeByRelMsgId = new Map<string,{mid:string;rect:Rect}>();
     for (const [mid,groups] of Object.entries(newTagDecorationsByMsg)) {
       for (const group of groups) {
@@ -53,11 +59,19 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
     // This is needed when an edge targets a relation message (rel:...) that is itself
     // a relation whose endpoints may also be relation messages (deeply nested annotations).
     function getRelVisualBox(relId: string, depth = 0): LayoutBox | null {
+      if (input.hiddenMessageIds?.has(relId)) { hiddenRelationAnchors.add(relId); return null; }
       if (depth > MAX_RELATION_NESTING_DEPTH) return null;
-      const relEdges = edgesByRelMsg.get(relId) ?? [];
+      const nestedBox = (id: string) => {
+        const box = getRelVisualBox(id, depth + 1);
+        if (hiddenRelationAnchors.has(id)) hiddenRelationAnchors.add(relId);
+        return box;
+      };
+      const sourceEdges = edgesByRelMsg.get(relId) ?? [];
+      const relEdges = sourceEdges.filter(edge => routingEdgeIds.has(edge.id));
       if (relEdges.length === 0) {
         // CLASSIFY relations may have no target edges yet, but their classification cards are still visible.
         const relCard = endpointBoxForNormal(relId)?.box ?? layout[relId];
+        if (!relCard && sourceEdges.length) hiddenRelationAnchors.add(relId);
         return relCard ?? null;
       }
       // Readable relation messages (for example DELEGATION) are rendered as
@@ -68,6 +82,9 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
         if (relCard) return relCard;
       }
       const te0 = relEdges[0];
+      // A missing folded endpoint is not permission to use the other endpoint
+      // (or a stale label rectangle) as this relationship's visual identity.
+      if (hiddenEdge(te0)) { hiddenRelationAnchors.add(relId); return null; }
       const relType = te0.relationType;
       if (relType === "arrange") {
         const fr = frameByRelMsgId.get(relId);
@@ -107,7 +124,7 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
           // insertion order as `edges` (prop), so the first matching entry corresponds to the
           // same positioned edge that the decoration-badge renderer picks (it also takes the
           // first unrendered positioned edge per relation message).
-          const targetRelEdges = edgesByRelMsg.get(targetMid) ?? [];
+          const targetRelEdges = (edgesByRelMsg.get(targetMid) ?? []).filter(edge => routingEdgeIds.has(edge.id));
           for (const r1e of targetRelEdges) {
             const bb = labelBboxes[r1e.id] ?? labelBboxes[`${r1e.id}__toRel__${r1e.to.messageId}`];
             if (bb) {
@@ -122,7 +139,7 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
             }
           }
           // No label bbox available yet (first render) — fall back to recursive approximation
-          return getRelVisualBox(targetMid, depth + 1);
+          return nestedBox(targetMid);
         }
         // Point to the decoration badge rect so the arrow targets the badge, not the whole card
         const decKey = `${targetMid}::${relType}`;
@@ -148,7 +165,7 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
       let fromBox: LayoutBox | null = null;
       if (!te0.from.messageId.startsWith("anon:")) {
         if (msgMap.get(te0.from.messageId)?.kind === "relation") {
-          fromBox = getRelVisualBox(te0.from.messageId, depth + 1);
+          fromBox = nestedBox(te0.from.messageId);
         } else {
           const fm = msgMap.get(te0.from.messageId);
           if (fm && isContentKind(fm.kind)) fromBox = endpointBoxForNormal(te0.from.messageId)?.box ?? null;
@@ -156,11 +173,12 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
       }
       let toBox: LayoutBox | null = null;
       if (msgMap.get(te0.to.messageId)?.kind === "relation") {
-        toBox = getRelVisualBox(te0.to.messageId, depth + 1);
+        toBox = nestedBox(te0.to.messageId);
       } else {
         const tm = msgMap.get(te0.to.messageId);
         if (tm && isContentKind(tm.kind)) toBox = endpointBoxForNormal(te0.to.messageId)?.box ?? null;
       }
+      if (hiddenRelationAnchors.has(relId)) return null;
       if (fromBox && toBox) {
         const midX = (fromBox.x + fromBox.width / 2 + toBox.x + toBox.width / 2) / 2;
         const midY = (fromBox.y + fromBox.height / 2 + toBox.y + toBox.height / 2) / 2;
@@ -203,6 +221,7 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
     };
 
     for (const e of edges) {
+      if (hiddenEdge(e)) continue;
       if (comparisonSuppressedRelIds.has(e.relationMessageId)) continue;
       const fromMsg=msgMap.get(e.from.messageId);
       if (!fromMsg) continue;
@@ -251,7 +270,7 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
 
       if (toMsg?.kind==="relation") {
         const relId=e.to.messageId;
-        const targetRelEdges = edgesByRelMsg.get(relId) ?? [];
+        const targetRelEdges = (edgesByRelMsg.get(relId) ?? []).filter(edge => routingEdgeIds.has(edge.id));
         // All edges in the same relation message share the same relationType by construction
         // (a relation has exactly one type), so using the first edge is always correct.
         const targetRelType = targetRelEdges[0]?.relationType ?? "";
@@ -371,6 +390,16 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
       const vTo={x:toCenter.x-fromCenter.x,y:toCenter.y-fromCenter.y};
       const vFrom={x:fromCenter.x-toCenter.x,y:fromCenter.y-toCenter.y};
 
+      // Finalize facing-side ports before routing. Keeping the whole quadratic
+      // inside the facing-side gap prevents long reply branches from bending
+      // back into an endpoint column, regardless of unrelated edge count.
+      const targetOnLeft=toRect.x+toRect.width<fromBox.x;
+      const targetOnRight=fromBox.x+fromBox.width<toRect.x;
+      if (targetOnLeft||targetOnRight) {
+        pe.start={x:targetOnLeft?fromBox.x:fromBox.x+fromBox.width,y:fromCenter.y};
+        pe.end={x:targetOnLeft?toRect.x+toRect.width:toRect.x,y:toCenter.y};
+        pe.ctrl=curvedEdgeControl(pe.start,pe.end,true);
+      } else {
       let startP=rayRectIntersectionFirst(fromCenter.x,fromCenter.y,vTo.x,vTo.y,fromBox)??null;
       let endP=rayRectIntersectionFirst(toCenter.x,toCenter.y,vFrom.x,vFrom.y,toRect)??null;
 
@@ -413,11 +442,10 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
       const dist = Math.hypot(dx, dy) || 1;
       const perpX = -dy / dist;  // perpendicular (rotate 90° CCW)
       const perpY = dx / dist;
-      const fanBase = (idx - (rawEdges.length - 1) / 2) * 6;
       const arcOffset = Math.min(60, dist * 0.3);
       const ctrlBase = {
-        x: midX + perpX * arcOffset + perpX * fanBase,
-        y: midY + perpY * arcOffset + perpY * fanBase,
+        x: midX + perpX * arcOffset,
+        y: midY + perpY * arcOffset,
       };
       // Candidates: vary along perpendicular + along the line direction
       const ctrlCands = [
@@ -460,21 +488,10 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
       }
 
       const chosenS=snapBound(fromBox,chosenCurve.s), chosenE=snapBound(toRect,chosenCurve.e);
-      const clampY=(y:number,box:Rect)=>Math.min(Math.max(y,box.y),box.y+box.height);
-      const dirX=toCenter.x-fromCenter.x, dirY=toCenter.y-fromCenter.y;
-      const preferHorizontalSide=pe.fromCol!==pe.toCol||Math.abs(dirX)>=Math.abs(dirY)*0.7;
-      let finalS=chosenS, finalE=chosenE;
-      if (preferHorizontalSide) {
-        const targetOnLeft=dirX<0||pe.fromCol>pe.toCol;
-        if (targetOnLeft) {
-          finalS={x:fromBox.x,y:clampY(chosenS.y,fromBox)};
-          finalE={x:toRect.x+toRect.width,y:clampY(chosenE.y,toRect)};
-        } else {
-          finalS={x:fromBox.x+fromBox.width,y:clampY(chosenS.y,fromBox)};
-          finalE={x:toRect.x,y:clampY(chosenE.y,toRect)};
-        }
+      // Keep the ports that were scored with this control point. Moving them
+      // after scoring can turn a safe curve back into the source card.
+      pe.start=chosenS; pe.ctrl=chosenCurve.c; pe.end=chosenE;
       }
-      pe.start=finalS; pe.ctrl=chosenCurve.c; pe.end=finalE;
       let rightWidth=0,rightHeight=EDGE_HINT_W;
       const relId=edge.relationMessageId;
       if(!decoratedLabels.has(relId)){
@@ -497,13 +514,16 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
             ? rightHeight+2*(DEC_GAP+tagHeight) : Math.max(rightHeight,tagHeight);
         }
       }
-      labelSeeds.push({drawId:pe.drawId,text:pe.edgeLabelText,p0:pe.start,p1:pe.ctrl,p2:pe.end,rightWidth,rightHeight});
+      const measuredLabel=labelBboxes[pe.drawId];
+      labelSeeds.push({drawId:pe.drawId,text:pe.edgeLabelText,p0:pe.start,p1:pe.ctrl,p2:pe.end,rightWidth,rightHeight,
+        measuredWidth:measuredLabel?.width,measuredHeight:measuredLabel?.height,labelPlacement:'edge'});
     }
 
     const placements=computeLabelPlacementsAlongCurve({seeds:labelSeeds,forbiddenRects:globalForbiddenRects});
-    const positionedEdges = rawEdges.map(pe => {
+    const positionedEdges = rawEdges.map((pe,index) => {
       const position=placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5);
-      return {...pe,labelX:position.x,labelY:position.y};
+      const attached=attachLabelToCurve(labelSeeds[index],position,globalForbiddenRects);
+      return {...pe,ctrl:attached.ctrl,labelAnchor:attached.anchor,labelX:position.x,labelY:position.y};
     });
 
   return positionedEdges;

@@ -118,7 +118,9 @@ it('automatically imports a Prisma database once under concurrent startups and r
   expect((await migrateLegacy(source)).sourceDigest).toBe(before.sourceDigest);
   const app=await createTestApp({databaseSchema:targetSchema}),agent=request.agent(app);
   expect(await app.store.setting('automatic-import-source')).toBe(source.sourceSchema);
-  expect(await app.store.account('old-user')).toMatchObject({available:498,locked:2});
+  expect(await app.store.account('old-user')).toMatchObject({available:-4,locked:2});
+  expect((await app.store.db.prepare('SELECT body FROM points_archive_rows WHERE "tableName"=$1 AND body->>\'userId\'=$2').get('accounts','old-user'))!.body)
+    .toMatchObject({available:498,locked:2});
   const login=await agent.post('/api/login').send({name:'旧用户',password:'short'});
   expect(login.status,login.text).toBe(200);
   const cursor=await app.store.latestSequence();
@@ -161,7 +163,7 @@ it.each([false,true])('keeps the legacy source intact after failed publication a
   }
 },30_000);
 
-it('automatically retains exactly funded active principal without starting a settlement countdown',async()=>{
+it('automatically archives funded active principal before voiding old points and settlement countdowns',async()=>{
   const source=await fixture({PointAccount:[{userId:'old-user',available:500,locked:10}],
     Stake:[{id:'active-stake',userId:'old-user',messageId:'old-message',roundId:'pending',side:'PRO',amount:10,settlementType:'TRUTH',createdAt:time}],
     BetPool:[{messageId:'old-message',settlementType:'TRUTH',lockedPro:10,lockedCon:0}],
@@ -170,11 +172,13 @@ it('automatically retains exactly funded active principal without starting a set
   const before=await migrateLegacy({...source,preserveActiveState:true,readOnlyRehearsal:true});
   await prepareStartupDatabase(source.sourceUrl,source.sourceSchema,{targetSchema});
   const app=await createTestApp({databaseSchema:targetSchema});
-  expect(await app.store.account('old-user')).toMatchObject({available:498,locked:12});
+  expect(await app.store.account('old-user')).toMatchObject({available:-4,locked:2});
   expect(await app.store.setting('access-mode')).toBe('read-write');
   const round=await app.store.db.prepare('SELECT body FROM rounds WHERE id=$1').get('pending');
-  expect(JSON.parse(String(round!.body))).toMatchObject({status:'open',endsAt:null});
-  expect((await stakesFor(app.store,['old-message']))['old-message'].pool).toEqual({lockedPro:11,lockedCon:0});
+  expect(round).toBeUndefined();
+  const archivedRound=await app.store.db.prepare('SELECT body FROM points_archive_rows WHERE "tableName"=$1 AND body->>\'id\'=$2').get('rounds','pending');
+  expect(JSON.parse(String(archivedRound!.body.body))).toMatchObject({status:'open',endsAt:null});
+  expect((await stakesFor(app.store,['old-message']))['old-message'].pool).toEqual({lockedPro:1,lockedCon:0});
   expect((await migrateLegacy({...source,preserveActiveState:true,readOnlyRehearsal:true})).sourceDigest).toBe(before.sourceDigest);
 });
 

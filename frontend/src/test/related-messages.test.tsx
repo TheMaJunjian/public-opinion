@@ -13,33 +13,33 @@ it('lets blank space select the owning card while keeping related controls indep
  expect(click).toHaveBeenCalledTimes(1);expect(doubleClick).toHaveBeenCalledTimes(1);expect(down).toHaveBeenCalledTimes(1);expect(up).toHaveBeenCalledTimes(1);
  const toggle=view.getByRole('button',{name:/被反对的容器/});
  fireEvent.mouseDown(toggle);fireEvent.mouseUp(toggle);fireEvent.click(toggle);fireEvent.doubleClick(toggle);
- const related=view.getByRole('button',{name:'选择被反对的分类消息部件'});
+ const related=view.getByRole('button',{name:'选择被反对的分类消息'});
  fireEvent.mouseDown(related);fireEvent.mouseUp(related);fireEvent.click(related);fireEvent.doubleClick(related);
  fireEvent.click(view.getByRole('button',{name:'查看'}));
  expect(click).toHaveBeenCalledTimes(1);expect(doubleClick).toHaveBeenCalledTimes(1);expect(down).toHaveBeenCalledTimes(1);expect(up).toHaveBeenCalledTimes(1);
  fireEvent.click(view.container.querySelector('[data-related-message-id="category"]')!);
  expect(click).toHaveBeenCalledTimes(2);
 });
-it('shows and selects the rejected container part on its former member',()=>{
+it('shows and selects the whole rejected container on its former member',()=>{
  const rows=indexRelatedMessages([source]).get('claim'),selection=vi.fn(),navigate=vi.fn();window.addEventListener(PART_SELECTION_EVENT,selection);
  const view=render(<RelatedMessages rows={rows} onNavigate={navigate}/>);
  const toggle=view.getByRole('button',{name:/被反对的容器：1/});
  expect(toggle.getAttribute('aria-expanded')).toBe('false');
- expect(view.queryByRole('button',{name:'选择被反对的分类消息部件'})).toBeNull();
+ expect(view.queryByRole('button',{name:'选择被反对的分类消息'})).toBeNull();
  fireEvent.click(toggle);
  expect(toggle.getAttribute('aria-expanded')).toBe('true');
- expect(view.getByRole('button',{name:'选择被反对的分类消息部件'}).textContent).toBe('【分类】 category');
+ expect(view.getByRole('button',{name:'选择被反对的分类消息'}).textContent).toBe('【分类】 category');
  expect(view.queryByText('旧分类')).toBeNull();
  expect(view.queryByText('claim')).toBeNull();
- fireEvent.click(view.getByRole('button',{name:'选择被反对的分类消息部件'}));
- expect(selection.mock.calls[0][0].detail.reference).toEqual({messageId:'category',revision:1,partId:'organization'});
- view.rerender(<RelatedMessages rows={rows} onNavigate={navigate} selectedUnits={[{messageId:'category',selection:{kind:'whole'},reference:{messageId:'category',revision:1,partId:'organization'}}]}/>);
- expect(view.getByRole('button',{name:'选择被反对的分类消息部件'}).getAttribute('aria-pressed')).toBe('true');
+ fireEvent.click(view.getByRole('button',{name:'选择被反对的分类消息'}));
+ expect(selection.mock.calls[0][0].detail.reference).toEqual({messageId:'category',revision:1});
+ view.rerender(<RelatedMessages rows={rows} onNavigate={navigate} selectedUnits={[{messageId:'category',selection:{kind:'whole'},reference:{messageId:'category',revision:1}}]}/>);
+ expect(view.getByRole('button',{name:'选择被反对的分类消息'}).getAttribute('aria-pressed')).toBe('true');
  fireEvent.click(view.getByRole('button',{name:'查看'}));expect(navigate).toHaveBeenCalledWith('category');
  fireEvent.click(toggle);
  expect(view.queryByRole('button',{name:'查看'})).toBeNull();
  fireEvent.click(toggle);
- expect(view.getByRole('button',{name:'选择被反对的分类消息部件'}).getAttribute('aria-pressed')).toBe('true');
+ expect(view.getByRole('button',{name:'选择被反对的分类消息'}).getAttribute('aria-pressed')).toBe('true');
  window.removeEventListener(PART_SELECTION_EVENT,selection);
 });
 it('does not repeat agreement or round records that already have graph presentations',()=>{

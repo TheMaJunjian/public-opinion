@@ -17,7 +17,7 @@ import { getOrganizationTitle } from '../../../utils/messageDisplay';
 import { isWholeMessageSelection } from '../../../utils/messageElementSelection';
 import { messageScopePath } from '../../../utils/messageRoutes';
 import { type CorrectionVersion, type DemoEdge, type DemoMessage, isCardMessage, isContentKind, type RelationType, type UnitSelection } from '../../../utils/modelBridge';
-import { collectOwnedByRelation } from '../model/ownership';
+import { createContainerOwnership } from '../model/ownership';
 import { getJoinStatusPresentation, type JoinStatus } from '../model/membership';
 import type { JoinEffectSource } from '../model/joinDisplay';
 import type { ContainerEffect } from '../model/containerEffect';
@@ -86,6 +86,7 @@ interface Props {
   crossCanvasRelations?:Map<string,CrossCanvasRelationGroups>;
   onRelatedRelationView?:(messageId:string)=>void;
   standaloneMessageIds?:ReadonlySet<string>;
+  highlightedMessageIds?:ReadonlySet<string>;
   showJoinRecords?:boolean;
   onCorrectionNavigate: (messageId: string, switchToList: boolean) => void;
   onCorrectionHistory?: (event:React.MouseEvent,messageId:string)=>void;
@@ -103,6 +104,10 @@ export default function WorkbenchMessageList(props: Props) {
   const { embeddedMessageIds, suppressedRelIds, rejectedContainerIds, overriddenStanceRelIds, readStatusByMessageId, homeMatchIds, homeReasonByMessageId, homeDisplayRoleByMessageId, stakeCounts, correctionFilterTargetId } = props.display;
   const { comparisonReviewed, comparisonTargetId, comparisonRecommendedDisplay, activeStanceByRelMsgId, activeStanceMap } = props.comparison;
   const { draftUnits, activeTextSelectId, lastClickedMessageId } = props.selection;
+  // The catalog is unfiltered; one ownership snapshot and its lazy counts serve
+  // every mounted row. Never rebuild the index separately for each card.
+  const ownership = useMemo(() => props.catalog.containerOwnership ?? createContainerOwnership([...relationById.values()], rejectedContainerIds),
+    [props.catalog.containerOwnership, relationById, rejectedContainerIds]);
   const relatedByTarget=useMemo(()=>indexRelatedMessages(messages,rejectedContainerIds),[messages,rejectedContainerIds]);
   const standaloneMessageIds = props.standaloneMessageIds;
   const showJoinRecords=props.showJoinRecords??props.display.joinFilterTargetId!==null;
@@ -132,9 +137,8 @@ export default function WorkbenchMessageList(props: Props) {
           const govKind = msg.backendKind;
           const isGovernanceMsg = !isOrganizationMessage && msg.kind !== "relation" && (govKind === "GOVERNANCE" || govKind === "CODE" || govKind === "OPERATIONS");
           const governanceColor = govKind === "GOVERNANCE" ? "var(--ink-f59e0b)" : govKind === "CODE" ? "var(--ink-3b82f6-2)" : "var(--ink-10b981)";
-          const memberCount = isOrganizationMessage
-            ? (props.catalog.containerOwnership?.owned(msg.id)??collectOwnedByRelation(msg.id, relationById)).textIds.size
-            : 0;
+          const memberCounts = isOrganizationMessage || relType === 'arrange' ? ownership.memberCounts(msg.id) : undefined;
+          const memberCount = memberCounts?.total;
           const organizationTitle = isOrganizationMessage ? getOrganizationTitle(msg, memberCount) : "";
           const summaryCoverages = summaryCoverageByMessageId.get(msg.id) ?? [];
           const settleTargetId = msg.settlementTargetId;
@@ -155,6 +159,7 @@ export default function WorkbenchMessageList(props: Props) {
             governanceColor,
             organizationTitle,
             memberCount,
+            directMemberCount: memberCounts?.direct,
             relType,
             settlementTargetId: settleTargetId,
             lastClickedMsgId: lastClickedMessageId,
@@ -224,7 +229,8 @@ export default function WorkbenchMessageList(props: Props) {
           return (
             <MessageCard
               relatedMessages={<><RelatedMessages rows={relatedByTarget.get(msg.id)} selectedUnits={draftUnits} onNavigate={props.onRelatedNavigate??handleNavigateToMessage}/>
-                <CrossCanvasRelatedMessages groups={props.crossCanvasRelations?.get(msg.id)} messages={msgMap} selectedUnits={draftUnits} onView={props.onRelatedRelationView??handleNavigateToMessage}/></>}
+                <CrossCanvasRelatedMessages groups={props.crossCanvasRelations?.get(msg.id)} messages={msgMap} selectedUnits={draftUnits}
+                  highlightedMessageIds={props.highlightedMessageIds} onView={props.onRelatedRelationView??handleNavigateToMessage}/></>}
               selectedUnits={draftUnits}
               key={msg.id} msg={msg} ctx={ctx}
               stakeCounts={sc}
@@ -342,7 +348,7 @@ export default function WorkbenchMessageList(props: Props) {
                           </span>
                         ) : null;
                       })()}
-                      {suppressedRelIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "var(--surface-rgba-239-68-68-0-2)", color: "var(--ink-fca5a5)", border: "1px solid var(--line-rgba-239-68-68-0-35)" }}>你已反对 · 点赞同恢复</span>}
+                      {suppressedRelIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "var(--surface-rgba-239-68-68-0-2)", color: "var(--ink-fca5a5)", border: "1px solid var(--line-rgba-239-68-68-0-35)" }}>{activeTargetStanceInfo?.type === 'disagree' ? '你已反对 · 点赞同恢复' : '当前未生效'}</span>}
                       {rejectedContainerIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "var(--surface-rgba-251-191-36-0-15)", color: "var(--ink-fbbf24)", border: "1px solid var(--line-rgba-251-191-36-0-3)" }} title="社区反对多于赞同，该分类已暂时解散">社区已反对 · 双击预览</span>}
                       {overriddenStanceRelIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "var(--surface-rgba-255-255-255-0-04)", color: "var(--ink-6b7280-2)", border: "1px solid var(--line-rgba-255-255-255-0-1)" }}>已失效</span>}
                     </div>

@@ -1,4 +1,5 @@
 export * from './types.js';
+export * from './usage-rewards.js';
 export * from './model.js';
 export * from './replay.js';
 export * from './membership.js';

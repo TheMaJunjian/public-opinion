@@ -4,7 +4,8 @@ import { WorkbenchPortalContext } from '../context/WorkbenchPortalContext';
 import { DEFAULT_VIEW_CACHE_LIMIT, useViewCacheSettings } from '../context/ViewCacheSettingsContext';
 
 export const RECENT_WORKBENCH_VIEW_LIMIT = DEFAULT_VIEW_CACHE_LIMIT;
-type Entry = { key: string; host: HTMLDivElement; overlays: HTMLDivElement; content: ReactNode };
+type ScrollPosition = { element: HTMLElement; top: number; left: number };
+type Entry = { key: string; host: HTMLDivElement; overlays: HTMLDivElement; content: ReactNode; scroll: { positions: ScrollPosition[] } };
 
 /** Suspension retains component state and disconnects layout effects while parked. */
 function RetainedView({ active, children }: { active: boolean; children: ReactNode }) {
@@ -14,16 +15,22 @@ function RetainedView({ active, children }: { active: boolean; children: ReactNo
 }
 
 /** Only the active portal is attached, so navigation never measures a cached scene. */
-export default function RecentWorkbenchViews({ viewKey, children, limit, ownerKey }: {
-  viewKey: string; children: ReactNode; limit?: number; ownerKey?:unknown;
+export default function RecentWorkbenchViews({ viewKey, children, limit, ownerKey, deferParking = false, preserveScroll = false }: {
+  viewKey: string; children: ReactNode; limit?: number; ownerKey?:unknown; deferParking?: boolean; preserveScroll?: boolean;
 }) {
+  const [previousKey, setPreviousKey] = useState(viewKey);
+  // Router transitions must commit before parking the old view. Suspending it
+  // during the transition would make React wait forever for the parked promise.
+  useLayoutEffect(() => {
+    if (deferParking && previousKey !== viewKey) setPreviousKey(viewKey);
+  }, [deferParking, previousKey, viewKey]);
   const settings = useViewCacheSettings();
   const capacity = limit ?? settings.limit;
   const committed = useRef(new Map<string, Entry>());
   const owner = useRef(ownerKey);
   const attached = useRef<Entry>();
   const entries = new Map(owner.current===ownerKey?committed.current:[]);
-  const active = entries.get(viewKey) ?? { key: viewKey, host: document.createElement('div'), overlays: document.createElement('div'), content: children };
+  const active = entries.get(viewKey) ?? { key: viewKey, host: document.createElement('div'), overlays: document.createElement('div'), content: children, scroll: { positions: [] } };
   const current = { ...active, content: children };
   current.host.style.display = 'contents';
   current.overlays.style.display = 'contents';
@@ -33,15 +40,28 @@ export default function RecentWorkbenchViews({ viewKey, children, limit, ownerKe
   useLayoutEffect(() => { committed.current = entries; owner.current=ownerKey; });
   // This ref precedes portal layout effects, including on the first mount.
   const attach = useCallback((node: HTMLDivElement | null) => {
+    if (preserveScroll && attached.current) {
+      attached.current.scroll.positions = [...attached.current.host.querySelectorAll<HTMLElement>('*')]
+        .filter(element => element.scrollTop !== 0 || element.scrollLeft !== 0)
+        .map(element => ({ element, top: element.scrollTop, left: element.scrollLeft }));
+    }
     attached.current?.overlays.remove();
     attached.current = node ? current : undefined;
     if (node) { node.replaceChildren(current.host); document.body.appendChild(current.overlays); }
-  }, [current.host]);
+  }, [current.host, preserveScroll]);
+  useLayoutEffect(() => {
+    if (!preserveScroll) return;
+    // Detaching a native scroll box clears its used offsets. Restore after the
+    // retained scene's layout effects have run and its scroll range is available.
+    for (const { element, top, left } of current.scroll.positions) {
+      element.scrollTop = top; element.scrollLeft = left;
+    }
+  }, [current.host, preserveScroll]);
   return <>
     <div ref={attach} data-workbench-view-cache data-cached-view-count={entries.size} style={{ display: 'contents' }} />
     {[...entries.values()].map(entry => createPortal(
       <WorkbenchPortalContext.Provider value={entry.overlays}>
-        <Suspense fallback={null}><RetainedView active={entry.key === viewKey}>{entry.content}</RetainedView></Suspense>
+        <Suspense fallback={null}><RetainedView active={entry.key === viewKey || deferParking && entry.key === previousKey}>{entry.content}</RetainedView></Suspense>
       </WorkbenchPortalContext.Provider>,
       entry.host, entry.key,
     ))}

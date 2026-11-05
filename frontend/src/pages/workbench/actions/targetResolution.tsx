@@ -157,15 +157,11 @@ interface ResolveEffectiveTargetUnitsDependencies {
 export function resolveEffectiveTargetUnits(context: ResolveEffectiveTargetUnitsDependencies, draft: UnitSelection[], targets: UnitSelection[], currentRelationType: string | null): UnitSelection[] {
   const { msgMap, promoteCompleteContainerSelections } = context;
   const selected = draft.length > 0 ? draft : targets;
+  // Correction validation must see every selection, including a whole message
+  // selected alongside one of its fields or fragments.
+  if (currentRelationType === 'correct') return selected;
   const rawTargets = currentRelationType&&!['classify','summary','merge','arrange'].includes(currentRelationType)
     ?relationTargetUnits(selected,msgMap):selected;
-  if (currentRelationType === 'correct') {
-    const textTargets = rawTargets.filter(unit => unit.selection.kind === 'text');
-    if (textTargets.length === 1 && rawTargets.every(unit => unit === textTargets[0] || isWholeMessageSelection(unit, textTargets[0].messageId))) {
-      return textTargets;
-    }
-    return rawTargets;
-  }
   if (rawTargets.some(unit => unit.reference || msgMap.get(unit.messageId)?.parts)) return rawTargets;
   return ['classify', 'summary', 'merge', 'arrange'].includes(currentRelationType ?? '')
     ? promoteCompleteContainerSelections(rawTargets) : rawTargets;

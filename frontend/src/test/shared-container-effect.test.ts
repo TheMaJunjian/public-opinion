@@ -22,7 +22,7 @@ function scene(projection:{messages:ReturnType<typeof convertMessagesToDemoModel
   return {ids:[...result.normalIds].sort(),frames:result.frameBlocks.map(frame=>({id:frame.relMsgId,members:[...frame.directCardIds].sort()})),members:projection.edges.filter(edge=>edge.relationMessageId==='C').map(edge=>edge.to.messageId).sort()};
 }
 
-it.each(['ANNOTATION','REFERENCE','REPLY','NOTIFY'])('retains an inactive %s as a card and restores its connection in approval preview and comparison',type=>{
+it.each(['ANNOTATION','REFERENCE','REPLY','NOTIFY'])('restores an inactive %s connection in approval preview and comparison',type=>{
   const relations=[rel('connection',type,['target'],'source'),rel('objection','DISAGREE',['connection'],null,'2026-01-02')];
   const model=convertMessagesToDemoModel(['source','target'].map(text),relations);
   const effect=deriveContainerEffect({...model,relations,username:'tester'}),ordinary=projectContainerCanvas(effect,{kind:'root'});
@@ -34,7 +34,9 @@ it.each(['ANNOTATION','REFERENCE','REPLY','NOTIFY'])('retains an inactive %s as 
   expect(pair.disagree.edges.some(edge=>edge.relationMessageId==='connection')).toBe(false);
   for(const [side,card] of [[pair.agree,false],[pair.disagree,true]] as const){
     const scene=projectGraphScene({...side,...side.context,isTraceWindow:false,traceExpandedFrameIds:new Set()});
-    expect(scene.normalIds.includes('connection')).toBe(card);
+    // Ordinary inspection retains the record; comparison hides an inactive
+    // annotation instead of inventing a message card for the missing edge.
+    expect(scene.normalIds.includes('connection')).toBe(card&&type!=='ANNOTATION');
     expect(scene.normalIds).not.toContain('objection');
     expect(side.messages.some(message=>message.id==='objection')).toBe(true);
   }
@@ -199,7 +201,10 @@ it('uses exactly the original comparison agree side including surrounding messag
     const preview=projectContainerPreview(model.messages,relations,model.edges,'C','tester',null,scopedInput)!;
     expect(preview.messages).toEqual(pair.agree.messages);
     expect(preview.edges).toEqual(pair.agree.edges);
-    expect(preview.context).toEqual(pair.agree.context);
+    const { getMemberCounts: previewCounts, ...previewContext } = preview.context;
+    const { getMemberCounts: comparisonCounts, ...comparisonContext } = pair.agree.context;
+    expect(previewContext).toEqual(comparisonContext);
+    for (const relation of relations) expect(previewCounts(relation.id)).toEqual(comparisonCounts(relation.id));
     expect(preview.suppressed).toEqual(pair.agree.suppressed);
     expect(preview).not.toHaveProperty('disagree');
     if(!trace){expect(scene(preview).ids).toEqual(['C','neighbor']);expect(scene(pair.disagree).ids).toEqual(['leaf','neighbor']);}

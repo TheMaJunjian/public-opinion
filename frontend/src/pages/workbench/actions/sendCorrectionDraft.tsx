@@ -5,6 +5,9 @@ import { correctionSelectionIsStale, isContentKind, withCorrectionContent } from
 import { mapCorrectionSelection, preparePartCorrection } from "../../../utils/partCorrection";
 import { isWholeMessageSelection } from '../../../utils/messageElementSelection';
 import { generateCorrectionContent } from '../model/correction';
+import { messageTextField } from '../../../utils/messageTextField';
+import { getRelationTitle } from '../../../types';
+import { resolveReference, type Message as CoreMessage } from '@gonglun/core';
 import type { DraftSendDependencies } from "./sendDraftTypes";
 
 export async function prepareAddressedCorrection(dependencies: Pick<DraftSendDependencies, "msgMap" | "correctionVersions" | "newMessageContent" | "setComparisonPopup" | "setSendError" | "secondaryRelationType">, { effectiveTargets }: { effectiveTargets: UnitSelection[]; }): Promise<void> {
@@ -13,12 +16,19 @@ export async function prepareAddressedCorrection(dependencies: Pick<DraftSendDep
     let target = effectiveTargets[0];
     const message = msgMap.get(target.messageId)!;
     if (isWholeMessageSelection(target, message.id)) {
-      const body = message.parts?.find(part => ['text', 'code', 'web'].includes(part.type));
-      if (body) target = { ...target, reference: { messageId: message.id, revision: message.revision ?? 1, partId: body.id, path: [body.type === 'code' ? 'source' : body.type === 'web' ? 'excerpt' : 'text'] } };
+      const title = ['classify', 'summary', 'merge', 'arrange'].includes(message.relationType ?? '') && !message.relationPayload?.separateTitle
+        ? getRelationTitle(message.relationPayload) : undefined;
+      const field = messageTextField(message, title || undefined);
+      if (field) target = { ...target, reference: { messageId: message.id, revision: message.revision ?? 1, partId: field.part.id,
+        path: field.path ?? [field.part.type === 'code' ? 'source' : field.part.type === 'web' ? 'excerpt' : 'text'] } };
     }
     let replacement = newMessageContent;
     const current = dependencies.correctionVersions.get(message.id)?.current;
     if (target.reference?.range) {
+      const selectedPart = message.parts?.find(part => part.id === target.reference?.partId);
+      if (selectedPart?.type === 'data' && target.selection.kind === 'text'
+        && resolveReference(target.reference, () => message as unknown as CoreMessage) !== target.selection.text)
+        throw new Error('显示的正文已变化，请重新选字');
       const displayed = current ? withCorrectionContent(message, current.content, current.changes, current.snapshot) : message;
       let offset = 0;
       for (const part of message.parts ?? []) {

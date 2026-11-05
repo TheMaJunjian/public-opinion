@@ -49,6 +49,7 @@ export function deriveSendValidationLabel(input: DeriveSendValidationLabelInput)
   if (!joinOnlyAction && !totalConsumption?.groups && relationType && typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) return `关系消息最低押注 ${effectiveMinStake} 点`;
   if (totalConsumption && totalConsumption.total > availablePoints) return `贡献点余额不足：需要 ${totalConsumption.total} 点，可用 ${availablePoints} 点`;
   if (hasCorrectionRelationTarget) return "关系消息不能作为更正目标，请选择普通文本消息";
+  if (hasInvalidCorrectTarget && (draftUnits.length > 0 ? draftUnits : targetUnits).length > 1) return '更正每次只能选择一个目标，请移除多余的整条消息、字段或片段';
   if (hasInvalidCorrectTarget) return secondaryRelationType === 'width-adjustment' ? '宽度调整需要选择一条当前完整消息，且不能有来源' : "更正只能选择原始内容中的一个文本字段";
   if (hasInvalidContainerSource) return "来源集合必须是当前关系类型对应的容器消息";
   if (joinOnlyAction && !hasTargetsAvailable) return '请选择要加入已有容器的目标消息，此处不可输入';

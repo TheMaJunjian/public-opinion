@@ -51,8 +51,15 @@ export function useVirtualMessageMounts(ref: RefObject<HTMLElement>, ids: string
       setRevealed(previous => previous.length === ids.length && previous.every((id, index) => id === ids[index]) ? previous : ids);
     };
     const host = surface.closest('[data-workbench-left-panel]') ?? surface;
+    const comparisonViewport = surface.closest('[data-comparison-viewport]');
     host.addEventListener(REVEAL_VIRTUAL_MESSAGE, reveal);
-    return () => host.removeEventListener(REVEAL_VIRTUAL_MESSAGE, reveal);
+    // Review navigation reveals each pane independently, while ordinary
+    // workbench navigation can still reveal both through their shared host.
+    if (comparisonViewport && comparisonViewport !== host) comparisonViewport.addEventListener(REVEAL_VIRTUAL_MESSAGE, reveal);
+    return () => {
+      host.removeEventListener(REVEAL_VIRTUAL_MESSAGE, reveal);
+      if (comparisonViewport && comparisonViewport !== host) comparisonViewport.removeEventListener(REVEAL_VIRTUAL_MESSAGE, reveal);
+    };
   }, [ref, ids, revealGroups, resolveRevealIds]);
   useLayoutEffect(() => {
     const surface = ref.current;

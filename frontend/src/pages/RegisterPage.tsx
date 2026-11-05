@@ -1,11 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useContext, useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getSetup, storePrivateKeyForUser } from '../api/client';
 import { generateSigningKeyPair } from '../utils/signature';
+import PromptModal from '../components/PromptModal';
+import { dialogStyles } from '../components/dialogStyles';
+import { AutoAuthEntryContext } from '../context/AutoAuthEntryContext';
 
-export default function RegisterPage() {
+export default function RegisterPage({ onClose, onLogin, onSuccess, closeText = '返回首页' }: {
+  onClose?: () => void;
+  onLogin?: () => void;
+  onSuccess?: () => void;
+  closeText?: string;
+} = {}) {
   const { register } = useAuth();
+  const autoAuthEntry = useContext(AutoAuthEntryContext);
+  const suspended = autoAuthEntry?.suspended ?? false;
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -13,6 +23,14 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [founderKeyRequired, setFounderKeyRequired] = useState(false);
   const [founderKey, setFounderKey] = useState('');
+  const close = useCallback(() => onClose ? onClose() : navigate('/', { replace: true }), [navigate, onClose]);
+
+  useEffect(() => {
+    if (suspended) return;
+    const dismiss = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
+    window.addEventListener('keydown', dismiss);
+    return () => window.removeEventListener('keydown', dismiss);
+  }, [close, suspended]);
 
   useEffect(() => {
     let active = true;
@@ -42,7 +60,8 @@ export default function RegisterPage() {
 
       await register(normalizedUsername, password, publicKey, founderKeyRequired ? founderKey.trim() : undefined);
       localStorage.setItem('registration-guide-pending', 'true');
-      navigate('/');
+      if (onSuccess) onSuccess();
+      else navigate('/');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '注册失败，请重试');
     } finally {
@@ -51,60 +70,64 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[color:var(--surface-f9fafb)] flex items-center justify-center px-4">
-      <div className="bg-[color:var(--surface-fff)] rounded-xl shadow-md p-8 w-full max-w-sm">
-        <h1 className="text-2xl font-bold text-center text-[color:var(--ink-4338ca)] mb-2">公论</h1>
-        <p className="text-center text-[color:var(--ink-6b7280)] text-sm mb-6">创建您的与会者账户，参与公论</p>
+    <PromptModal open title="注册公论" hideActions onConfirm={() => {}} onCancel={close} onClose={close}
+      dialogProps={{ style: { width: 'min(400px, 100%)' } }} message={<div style={{ whiteSpace: 'normal' }}>
+        <p className="text-center text-[color:var(--ink-d1d5db)] text-sm mb-6">创建您的与会者账户，参与公论</p>
         {error && (
-          <div className="bg-[color:var(--surface-fef2f2)] border border-[color:var(--line-fecaca)] text-[color:var(--ink-dc2626)] rounded px-3 py-2 text-sm mb-4">
+          <div role="alert" className="bg-[color:var(--surface-450a0a)] border border-[color:var(--line-991b1b)] text-[color:var(--ink-fecaca-2)] rounded px-3 py-2 text-sm mb-4">
             {error}
           </div>
         )}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-[color:var(--ink-374151)] mb-1">与会者名</label>
+            <label htmlFor="register-username" className="block text-sm font-medium text-[color:var(--ink-e5e7eb-2)] mb-1">与会者名</label>
             <input
+              id="register-username"
               type="text"
               name="username"
               autoComplete="username"
+              autoFocus
               value={username}
               onChange={e => setUsername(e.target.value)}
               placeholder="2-30位字母、数字、下划线或汉字"
-              className="w-full border border-[color:var(--line-d1d5db)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--fragment-accent)]"
+              className="auth-input"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-[color:var(--ink-374151)] mb-1">密码</label>
+            <label htmlFor="register-password" className="block text-sm font-medium text-[color:var(--ink-e5e7eb-2)] mb-1">密码</label>
             <input
+              id="register-password"
               type="password"
+              autoComplete="new-password"
               value={password}
               onChange={e => setPassword(e.target.value)}
               placeholder="请输入密码"
-              className="w-full border border-[color:var(--line-d1d5db)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--fragment-accent)]"
+              className="auth-input"
             />
           </div>
           {founderKeyRequired && <div>
-            <label htmlFor="founder-key" className="block text-sm font-medium text-[color:var(--ink-374151)] mb-1">初始发起人密钥</label>
+            <label htmlFor="founder-key" className="block text-sm font-medium text-[color:var(--ink-e5e7eb-2)] mb-1">初始发起人密钥</label>
             <input id="founder-key" type="password" autoComplete="off" value={founderKey}
               onChange={e => setFounderKey(e.target.value)}
               placeholder="站点首次初始化时需要"
-              className="w-full border border-[color:var(--line-d1d5db)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--fragment-accent)]" />
+              className="auth-input" />
           </div>}
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-[color:var(--surface-4f46e5)] hover:bg-[color:var(--surface-4338ca)] disabled:bg-[color:var(--surface-a5b4fc)] text-[color:var(--ink-fff-2)] py-2 rounded-lg text-sm font-semibold transition-colors"
+            style={{ ...dialogStyles.primaryButton, padding: '9px 14px' }}
+            className="w-full disabled:opacity-50 disabled:cursor-wait"
           >
             {loading ? '注册中…' : '注册账户'}
           </button>
         </form>
-        <p className="mt-4 text-center text-sm text-[color:var(--ink-6b7280)]">
+        <p className="mt-4 text-center text-sm text-[color:var(--ink-9ca3af)]">
           已有账户？{' '}
-          <Link to="/login" className="text-[color:var(--ink-4f46e5-2)] hover:underline font-medium">
-            立即登录
-          </Link>
+          {onLogin
+            ? <button type="button" onClick={onLogin} className="text-[color:var(--ink-60a5fa-2)] hover:underline font-medium">立即登录</button>
+            : <Link to="/login" className="text-[color:var(--ink-60a5fa-2)] hover:underline font-medium">立即登录</Link>}
         </p>
-      </div>
-    </div>
+        <button type="button" onClick={close} style={{ ...dialogStyles.button, width: '100%', marginTop: 16 }}>{closeText}</button>
+      </div>} />
   );
 }

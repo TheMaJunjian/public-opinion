@@ -5,6 +5,10 @@ import { deriveCrossCanvasRelations } from '../utils/crossCanvasRelations';
 import type { DemoEdge } from '../utils/modelBridge';
 import { loadRelatedTraceContext } from '../utils/relatedTraceContext';
 import type { Message, Relation } from '../types';
+import { MessageDisplayHintsProvider } from '../components/MessageDisplayHints';
+import { deriveContainerEffect } from '../pages/workbench/model/containerEffect';
+import type { DemoMessage } from '../utils/modelBridge';
+import { PART_SELECTION_EVENT } from '../utils/messageElementSelection';
 
 const edge = (type: DemoEdge['relationType'], id = 'relation', from = 'source', to = 'target'): DemoEdge => ({
   id: `${id}:${to}`, relationMessageId: id, relationType: type, relationLabel: '自定义标签',
@@ -51,8 +55,8 @@ it('opens a separate popup without expanding the card, groups directions and ope
   expect(within(view.container).queryByRole('group')).toBeNull();
   const outgoing = within(view.getByRole('group', { name: '发出的关联' }));
   const incoming = within(view.getByRole('group', { name: '指向本消息的关联' }));
-  expect(outgoing.getByRole('button', { name: '选择相关引用消息部件' })).toHaveTextContent('【引用】 out');
-  expect(incoming.getByRole('button', { name: '选择相关回复消息部件' })).toHaveTextContent('【回复】 in');
+  expect(outgoing.getByRole('button', { name: '选择相关引用消息' })).toHaveTextContent('【引用】 out');
+  expect(incoming.getByRole('button', { name: '选择相关回复消息' })).toHaveTextContent('【回复】 in');
   fireEvent.click(outgoing.getByRole('button', { name: '查看' }));
   expect(open).toHaveBeenCalledWith('out');
   expect(view.queryByRole('dialog')).toBeNull();
@@ -78,10 +82,70 @@ it('lets blank areas select the owning card while keeping related-message contro
   for (const handler of [click, doubleClick, mouseDown, mouseUp]) expect(handler).toHaveBeenCalledTimes(1);
 
   interact(view.getByRole('button', { name: '▸ 其他相关消息：1' }));
-  interact(view.getByRole('button', { name: '选择相关引用消息部件' }));
+  interact(view.getByRole('button', { name: '选择相关引用消息' }));
   interact(view.getByRole('dialog').querySelector('[data-related-relation-id="out"]')!);
   interact(view.getByRole('button', { name: '查看' }));
   for (const handler of [click, doubleClick, mouseDown, mouseUp]) expect(handler).toHaveBeenCalledTimes(1);
+});
+
+it('selects the complete related message instead of its type or relation part', () => {
+  const message: DemoMessage = { id: 'reply', revision: 4, kind: 'relation', relationType: 'reply', author: 'fixture', content: '', createdAt: '',
+    parts: [{ id: 'relation', type: 'relation', relation: 'reply', roles: {} }] };
+  const props = { messages: new Map([[message.id, message]]), groups: { outgoing: { '回复': [message.id] }, incoming: {} } };
+  const selection = vi.fn(); window.addEventListener(PART_SELECTION_EVENT, selection);
+  const view = render(<CrossCanvasRelatedMessages {...props} />);
+  fireEvent.click(view.getByRole('button', { name: /其他相关消息：1/ }));
+  const entry = view.getByRole('button', { name: '选择相关回复消息' });
+  fireEvent.click(within(entry).getByText('【回复】'));
+  expect(selection.mock.calls[0][0].detail.reference).toEqual({ messageId: 'reply', revision: 4 });
+  fireEvent.keyDown(entry, { key: 'Enter' });
+  expect(selection.mock.calls[1][0].detail.reference).toEqual({ messageId: 'reply', revision: 4 });
+  view.rerender(<CrossCanvasRelatedMessages {...props} selectedUnits={[{ messageId: 'reply', selection: { kind: 'whole' } }]} />);
+  expect(entry).toHaveAttribute('aria-pressed', 'true');
+  view.rerender(<CrossCanvasRelatedMessages {...props} selectedUnits={[{ messageId: 'reply', selection: { kind: 'whole' }, reference: { messageId: 'reply', revision: 4, partId: 'relation' } }]} />);
+  expect(entry).toHaveAttribute('aria-pressed', 'false');
+  window.removeEventListener(PART_SELECTION_EVENT, selection);
+});
+
+it('marks only the current trace messages in the popup and updates or clears the green marks without selecting them', () => {
+  const props={messages:new Map(),groups:{outgoing:{'引用':['out']},incoming:{'回复':['in']}}};
+  const view=render(<CrossCanvasRelatedMessages {...props} highlightedMessageIds={new Set(['out'])}/>);
+  fireEvent.click(view.getByRole('button',{name:/其他相关消息：2/}));
+  const row=(id:string)=>view.getByRole('dialog').querySelector(`[data-related-relation-id="${id}"]`)!;
+  expect(row('out')).toHaveAttribute('data-view-target','true');
+  expect(row('in')).not.toHaveAttribute('data-view-target');
+  expect(within(row('out') as HTMLElement).getByRole('button',{name:'选择相关引用消息'})).toHaveAttribute('aria-pressed','false');
+  view.rerender(<CrossCanvasRelatedMessages {...props} highlightedMessageIds={new Set(['in'])}/>);
+  expect(row('out')).not.toHaveAttribute('data-view-target');
+  expect(row('in')).toHaveAttribute('data-view-target','true');
+  view.rerender(<CrossCanvasRelatedMessages {...props} highlightedMessageIds={new Set()}/>);
+  expect(view.getByRole('dialog').querySelector('[data-view-target]')).toBeNull();
+});
+
+it('opens message status and impact after the ID and keeps the related list open while interacting with its hint', () => {
+  const messages:DemoMessage[]=[{id:'related',kind:'normal',author:'fixture',createdAt:'',content:'关联正文',revision:1,
+    parts:[{id:'body',type:'text',text:'关联正文'}]}];
+  const personalEffect=deriveContainerEffect({messages,relations:[],edges:[],username:null,stakeCounts:{}});
+  const input={messages,relations:[],edges:[],username:null,readStatus:new Map(),personalEffect,corrections:new Map(),recommendedCorrections:new Map()};
+  const view=render(<MessageDisplayHintsProvider input={input} onView={vi.fn()}>
+    <CrossCanvasRelatedMessages messages={new Map(messages.map(message=>[message.id,message]))} groups={{outgoing:{'回复':['related']},incoming:{}}}/>
+  </MessageDisplayHintsProvider>);
+  fireEvent.click(view.getByRole('button',{name:/其他相关消息：1/}));
+  const popup=view.getByRole('dialog'),reference=within(popup).getByRole('button',{name:'选择相关回复消息'});
+  const marker=within(popup).getByRole('button',{name:/^消息状态与影响 related：/});
+  expect(reference.compareDocumentPosition(marker)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  fireEvent.click(marker);
+  let tooltip=view.getByRole('tooltip');
+  expect(within(tooltip).getByRole('region',{name:'消息信息'})).toHaveTextContent('fixture');
+  fireEvent.pointerDown(tooltip);
+  expect(popup).toBeInTheDocument();expect(tooltip).toBeInTheDocument();
+  fireEvent.click(within(tooltip).getByRole('button',{name:'关闭消息提示'}));
+  expect(view.queryByRole('tooltip')).toBeNull();expect(popup).toBeInTheDocument();
+  fireEvent.click(marker);tooltip=view.getByRole('tooltip');
+  fireEvent.keyDown(tooltip,{key:'Escape'});
+  expect(view.queryByRole('tooltip')).toBeNull();expect(popup).toBeInTheDocument();
+  fireEvent.keyDown(popup,{key:'Escape'});
+  expect(view.queryByRole('dialog')).toBeNull();
 });
 
 it('closes from its button, Escape or an outside click and keeps long lists inside the popup', () => {

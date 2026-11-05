@@ -28,6 +28,11 @@ import {readingStateSchema} from '../../server/src/reading-state.js';
 import {cleanupContainerReadingMarks} from './cleanup-container-reading-marks.js';
 import {migrateVersionContexts} from './version-contexts.js';
 import {migrateSimplifiedCorrections} from './simplified-corrections.js';
+import {resetContributionPoints} from './reset-contribution-points.js';
+import {migrateDailyUsagePoints} from './daily-usage-points.js';
+import {migrateUsageRewardStorage} from './usage-reward-storage.js';
+import {migrateUsageContributionLabels} from './usage-contribution-labels.js';
+import {fundResetMessageContributions} from './reset-message-contributions.js';
 
 export interface Migration { version: number; name: string; changesFinances?: boolean; up(): Promise<void> }
 
@@ -90,7 +95,12 @@ export function migrationsFor(store: Store): Migration[] {
   {version:23,name:'remove-public-reading-messages-and-refund',changesFinances:true,up:()=>removeReadingMessages(store).then(()=>{})},
   {version:24,name:'cleanup-redundant-container-reading-marks',up:()=>cleanupContainerReadingMarks(store).then(()=>{})},
   {version:25,name:'explicit-body-versions-and-influence-contexts',up:()=>migrateVersionContexts(store)},
-  {version:26,name:'shared-message-reading-and-text-corrections',changesFinances:true,up:()=>migrateSimplifiedCorrections(store)}];
+  {version:26,name:'shared-message-reading-and-text-corrections',changesFinances:true,up:()=>migrateSimplifiedCorrections(store)},
+  {version:27,name:'archive-and-reset-contribution-points',changesFinances:true,up:()=>resetContributionPoints(store)},
+  {version:28,name:'daily-usage-points-refresh',up:()=>migrateDailyUsagePoints(store)},
+  {version:29,name:'daily-usage-reward-ledger',up:()=>migrateUsageRewardStorage(store)},
+  {version:30,name:'usage-contribution-wording',up:()=>migrateUsageContributionLabels(store)},
+  {version:31,name:'fund-reset-message-contributions',changesFinances:true,up:()=>fundResetMessageContributions(store).then(()=>{})}];
 }
 
 /** Runs under the cross-process write lock. Failed upgrades roll back together. */
@@ -103,7 +113,10 @@ export async function runMigrations(db: Postgres, migrations: Migration[]): Prom
     if (migrations.some((migration, index) => migration.version !== index + 1)
       || applied.some((migration, index) => migration.version !== index + 1
         || migrations[index]?.name !== migration.name)) throw new Error('数据库迁移版本与当前程序不兼容');
-    if(migrations.length>applied.length)await db.exec(`DO $$ BEGIN IF to_regclass('display_stances') IS NOT NULL THEN ALTER TABLE display_stances ADD COLUMN IF NOT EXISTS context JSONB; END IF; END $$`);
+    if(migrations.length>applied.length)await db.exec(`DO $$ BEGIN
+      IF to_regclass('display_stances') IS NOT NULL THEN ALTER TABLE display_stances ADD COLUMN IF NOT EXISTS context JSONB; END IF;
+      IF to_regclass('ledger') IS NOT NULL THEN ALTER TABLE ledger ADD COLUMN IF NOT EXISTS "balanceAfter" BIGINT; END IF;
+    END $$`);
     for (const migration of migrations.slice(applied.length)) {
       const before=migration.changesFinances?null:await financialFingerprint(db);
       await migration.up();

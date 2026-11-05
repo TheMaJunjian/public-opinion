@@ -70,16 +70,23 @@ describe('排行榜统计口径', () => {
     expect(metrics.outgoingReferences.get('text')?.size).toBe(2);
   });
 
-  it('只计实际充值分账，待授权申请、运营注入及其他分配不计充值收入', () => {
+  it('充值贡献和使用贡献读取账号累计值，不依赖当前范围是否包含充值申请或发点消息', () => {
     const proposals = [relation('approved', 'PROPOSAL', [], { payload: { operationType: 'RECHARGE', amount: 100, revenuePoolShare: 20, recipientUserId: alice.id } }),
       relation('pending', 'PROPOSAL', [], { payload: { operationType: 'RECHARGE', amount: 500, recipientUserId: alice.id } }),
       relation('injection', 'PROPOSAL', [], { payload: { operationType: 'REVENUE_INJECTION', amount: 100 } })];
     const distribution = (id: string, proposalId: string, source = 'grant'): DemoMessage => message(id, 'round_result', {
+      authorId: 'system',
       parts: [{ id: 'allocation', type: 'data', value: { source, inputs: { proposalId }, allocations: [{ userId: alice.id, amount: 80 }] } }],
     });
-    const metrics = buildLeaderboardMetrics([distribution('paid', 'approved'), distribution('operating', 'injection'), distribution('wager', 'approved', 'wager')], [], proposals, [alice, bob]);
-    expect([...metrics.rechargeIncome]).toEqual([['alice', 80]]);
-    expect(buildLeaderboardMetrics([], [], proposals, [alice, bob]).rechargeIncome.size).toBe(0);
+    const people = [{ ...alice, rechargeContribution: 80, usageContribution: 12 }, bob];
+    const metrics = buildLeaderboardMetrics([distribution('paid', 'approved'), distribution('operating', 'injection'), distribution('wager', 'approved', 'wager')], [], proposals, people);
+    expect(metrics.rechargeContributions.get('alice')).toBe(80);
+    expect(metrics.usageContributions.get('alice')).toBe(12);
+    expect(metrics.rankedMessages.map(item => item.id)).toEqual(['wager']);
+    expect(buildLeaderboardMetrics([], [], [], people).rechargeContributions.get('alice')).toBe(80);
+    expect(buildLeaderboardMetrics([distribution('old-grant', 'approved')], [], proposals, [alice]).rechargeContributions.get('alice')).toBe(0);
+    const userText = { ...distribution('user-data', 'approved'), authorId: alice.id, kind: 'normal' as const };
+    expect(buildLeaderboardMetrics([userText], [], [], [alice]).rankedMessages.map(item => item.id)).toEqual(['user-data']);
   });
 
   it('转换后保留关系结算目标，发起和完成同一轮只计一次，充值分配不算结算', () => {

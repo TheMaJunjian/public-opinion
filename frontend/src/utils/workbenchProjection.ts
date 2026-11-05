@@ -3,6 +3,8 @@ import type { WorkbenchSnapshot } from '../data/workbench';
 import type { Message, Relation } from '../types';
 import { convertMessagesToDemoModel } from './modelBridge';
 import {messageAuthorInvestment} from './messageAuthorship';
+import { isNativeZhihuView } from './nativeZhihuView';
+import { nativeZhihuEditingView } from './nativeZhihuEditor';
 
 /** Online snapshots and archive viewing must derive exactly the same display data. */
 export function projectWorkbenchSnapshot(snapshot: WorkbenchSnapshot) {
@@ -25,12 +27,20 @@ export function projectWorkbenchSnapshot(snapshot: WorkbenchSnapshot) {
 }
 
 export function archiveToWorkbenchSnapshot(data: ExportData): WorkbenchSnapshot {
+  const native = isNativeZhihuView(data) ? nativeZhihuEditingView(data) : null;
+  const payload = (id: string, original: unknown) => {
+    const info = native?.zhihu.byMessageId[id];
+    if (!info) return original;
+    if (info.kind === 'local-correction') return { ...(original as object), localCorrectionApplicable: info.correctionApplicable !== false };
+    return info.localCorrections?.title ? { ...(original as object), title: info.localCorrections.title.content } : original;
+  };
   const messages = data.messages.map(message => ({ ...message,
+    ...(native && message.kind === 'RELATION' ? { relationPayload: payload(message.id, message.relationPayload) } : {}),
     createdBy: { id: message.authorId, username: message.author, createdAt: '' },
   })) as Message[];
   const relations: Relation[] = data.relations.map(relation => ({ ...relation,
     relationType: relation.relationType ?? 'REFERENCE', targetRefs: (relation.targetRefs ?? []) as Relation['targetRefs'],
-    payload: (relation.payload ?? undefined) as Relation['payload'],
+    payload: (payload(relation.id, relation.payload) ?? undefined) as Relation['payload'],
     createdBy: { id: relation.authorId, username: relation.author, createdAt: '' },
   }));
   const attentionUsers: WorkbenchSnapshot['attentionUsers'] = {};

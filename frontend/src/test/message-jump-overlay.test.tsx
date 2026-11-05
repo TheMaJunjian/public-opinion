@@ -10,6 +10,38 @@ function firstGuide() {
   return { x, y, endX, endY };
 }
 
+it.each([0.7, 1, 1.5])('clips simultaneous comparison prompts to separate panes at scale %s', scale => {
+  const panes = ['agree', 'disagree'].map((side, index) => {
+    const pane = document.createElement('div'); pane.dataset.comparisonViewport = side; pane.style.overflow = 'auto';
+    const target = document.createElement('div'); target.dataset.msgid = 'difference'; pane.append(target); document.body.append(pane);
+    return { pane, target, x: index * 350 * scale };
+  });
+  const geometry = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function(this: Element) {
+    if (this.hasAttribute('data-message-jump-overlay')) return new DOMRect(0, 0, window.innerWidth, window.innerHeight);
+    for (const { pane, target, x } of panes) {
+      if (this === pane) return new DOMRect(x, 100, 300 * scale, 200 * scale);
+      if (this === target) return new DOMRect(x + 20 * scale, 120, 200 * scale, 800 * scale);
+    }
+    return new DOMRect();
+  });
+  const view = render(<>{panes.map(({ pane, target }) => <MessageJumpOverlay key={pane.dataset.comparisonViewport}
+    messageId="difference" targetElement={target} targetRect={target.getBoundingClientRect()} viewportElement={pane} hint="已定位当前差异" />)}</>);
+  try {
+    const overlays = [...document.querySelectorAll('[data-message-jump-overlay]')];
+    expect(overlays).toHaveLength(2);
+    for (const [index, overlay] of overlays.entries()) {
+      const clip = overlay.querySelector('clipPath')!, rect = clip.querySelector('rect')!;
+      expect(overlay.querySelector('[data-message-jump-layer]')).toHaveAttribute('clip-path', `url(#${clip.id})`);
+      expect(Number(rect.getAttribute('x'))).toBeCloseTo(panes[index].x);
+      expect(Number(rect.getAttribute('width'))).toBeCloseTo(300 * scale);
+      expect(Number(rect.getAttribute('height'))).toBeCloseTo(200 * scale);
+      expect(overlay).toHaveAttribute('data-message-jump-scope', index ? 'disagree' : 'agree');
+      expect(overlay.querySelector('[data-message-jump-hint]')).toHaveTextContent('已定位当前差异');
+      expect((overlay as SVGElement).style.pointerEvents).toBe('none');
+    }
+  } finally { view.unmount(); geometry.mockRestore(); panes.forEach(({ pane }) => pane.remove()); }
+});
+
 it('keeps a dependent edge curve and the unrelated area inside its bounds under the mask when locating its source',()=>{
   const canvas=document.createElement('div');canvas.dataset.jumpCanvas='true';
   canvas.innerHTML='<div data-msgid="source">目标消息</div><svg><g data-jump-visual-msgids="reference" data-frame-edge-id="edge"><path d="M 10 10 L 900 500"/></g></svg><div data-directed-edge-start="reference" data-jump-msgids="reference"></div><div data-msgid="reference" data-directed-edge-label="reference">引用</div><div data-msgid="unrelated">无关消息</div>';

@@ -4,7 +4,7 @@ import {captureReadingVersionPosition} from '../utils/readingVersionPosition';
 afterEach(()=>{document.body.replaceChildren();document.documentElement.scrollTop=0;document.documentElement.scrollLeft=0;Reflect.deleteProperty(document,'scrollingElement');vi.restoreAllMocks();});
 
 describe('reading version position',()=>{
-  it.each([false,true])('preserves the header across nested pane and page layout changes, remounted=%s',remounted=>{
+  it.each([false,true])('keeps scroll offsets when the version changes layout, remounted=%s',remounted=>{
     const page=document.documentElement;
     Object.defineProperty(document,'scrollingElement',{configurable:true,value:page});page.scrollTop=80;
     const pane=document.createElement('div'),horizontal=document.createElement('div');
@@ -24,13 +24,24 @@ describe('reading version position',()=>{
     if(remounted)marker.replaceWith(makeMarker());
     restore();
     const after=horizontal.querySelector('button')!.getBoundingClientRect();
-    expect(after.top).toBe(before.top);expect(after.left).toBe(before.left);
-    expect(pane.scrollTop).toBe(950);expect(horizontal.scrollLeft).toBe(320);expect(page.scrollTop).toBe(230);
+    expect(after.top).toBe(before.top+600);expect(after.left).toBe(before.left+230);
+    expect(pane.scrollTop).toBe(500);expect(horizontal.scrollLeft).toBe(90);expect(page.scrollTop).toBe(80);
   });
   it('captures a pane before a larger version makes it overflow',()=>{
     const pane=document.createElement('div'),marker=document.createElement('button');pane.style.overflow='auto';pane.append(marker);document.body.append(pane);
     let contentTop=40;vi.spyOn(marker,'getBoundingClientRect').mockImplementation(()=>new DOMRect(20,contentTop-pane.scrollTop,18,16));
     const restore=captureReadingVersionPosition(marker);contentTop=500;restore();
-    expect(pane.scrollTop).toBe(460);expect(marker.getBoundingClientRect().top).toBe(40);
+    expect(pane.scrollTop).toBe(0);expect(marker.getBoundingClientRect().top).toBe(500);
+  });
+  it('restores nested and page offsets after browser scroll anchoring',()=>{
+    const page=document.documentElement;
+    Object.defineProperty(document,'scrollingElement',{configurable:true,value:page});
+    const pane=document.createElement('div'),marker=document.createElement('button');
+    pane.style.overflow='auto';pane.append(marker);document.body.append(pane);
+    pane.scrollTop=240;pane.scrollLeft=45;page.scrollTop=60;page.scrollLeft=12;
+    const restore=captureReadingVersionPosition(marker);
+    pane.scrollTop=780;pane.scrollLeft=90;page.scrollTop=140;page.scrollLeft=24;
+    restore();
+    expect([pane.scrollTop,pane.scrollLeft,page.scrollTop,page.scrollLeft]).toEqual([240,45,60,12]);
   });
 });

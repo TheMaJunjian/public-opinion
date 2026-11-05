@@ -49,14 +49,16 @@ async function previousDatabase(version:number){
   await store.close();return schema;
 }
 
-it.each([0,1,2,3])('startup automatically upgrades a real version %s schema, then exports and reopens with audited minimum truth stakes and unchanged signatures',async version=>{
+it.each([0,1,2,3])('startup upgrades version %s, clears old points and funds minimum message costs, then exports and reopens with unchanged signatures',async version=>{
   const schema=await previousDatabase(version);
   const oldChanges=await Store.inspect(testDatabaseUrl(),{schema},async previous=>(await previous.db.prepare('SELECT body FROM changes ORDER BY sequence').all()).map(row=>JSON.parse(String(row.body))));
   const oldFile={format:'gonglun-2',formatVersion:2,scope:{messageId:null,title:'原导出'},changes:oldChanges,
     messages:oldChanges.flatMap(change=>change.messages),relations:[]};
   const store=await Store.open(testDatabaseUrl(),{schema});
   try{
-    expect(await store.account('actor')).toEqual({available:497,locked:3,earned:500,spent:0});
+    expect(await store.account('actor')).toEqual({available:-6,locked:3,earned:0,spent:3});
+    expect((await store.db.prepare('SELECT body FROM points_archive_rows WHERE "tableName"=$1 AND body->>\'userId\'=$2').get('accounts','actor'))!.body)
+      .toEqual({userId:'actor',available:497,locked:3,earned:500,spent:0});
     expect(await store.setting('region')).toBe('old-region');
     expect((await store.message('old-follow')).parts[0]).toMatchObject({relation:'follow',reason:'NO'});
     expect((await store.db.prepare('SELECT payload,signature FROM signatures').get())).toEqual({payload:'unchanged signed input',signature:'original-signature'});
@@ -96,8 +98,10 @@ it('concurrent automatic startups execute the same upgrade only once',async()=>{
   const schema=await previousDatabase(3);
   const [left,right]=await Promise.all([Store.open(testDatabaseUrl(),{schema}),Store.open(testDatabaseUrl(),{schema})]);
   try{
-    expect(await left.latestSequence()).toBe(9);
-    expect(await right.latestSequence()).toBe(9);
+    expect(await left.latestSequence()).toBe(13);
+    expect(await right.latestSequence()).toBe(13);
+    expect((await left.db.prepare('SELECT COUNT(*) AS n FROM reset_message_contributions').get())!.n).toBe(3);
+    expect((await left.db.prepare('SELECT COUNT(*) AS n FROM points_archives').get())!.n).toBe(1);
     expect((await left.db.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get())?.n).toBe(DATABASE_MIGRATIONS.length);
   }finally{await left.close();await right.close();}
 },30_000);

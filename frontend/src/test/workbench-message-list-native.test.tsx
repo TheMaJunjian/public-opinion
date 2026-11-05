@@ -41,6 +41,19 @@ const renderList = (messages: DemoMessage[], props = listProps(messages)) => ren
 afterEach(() => { cleanup(); vi.restoreAllMocks(); window.getSelection()?.removeAllRanges(); });
 
 describe('native list content and navigation regressions', () => {
+  it.each([undefined, 'agree', 'disagree'] as const)('labels an inactive correction using the actual personal stance (%s)', stance => {
+    const correction = message('correction', { kind: 'relation', relationType: 'correct', content: '更正消息' });
+    const props = listProps([correction]);
+    props.display.suppressedRelIds.add(correction.id);
+    if (stance) props.comparison.activeStanceMap.set(correction.id, { relMsgId: 'personal-vote', type: stance });
+    const view = renderList([correction], props), row = within(view.container.querySelector<HTMLElement>('[data-msgid="correction"]')!);
+    if (stance === 'disagree') expect(row.getByText('你已反对 · 点赞同恢复')).toBeInTheDocument();
+    else {
+      expect(row.getByText('当前未生效')).toBeInTheDocument();
+      expect(row.queryByText('你已反对 · 点赞同恢复')).toBeNull();
+    }
+  });
+
   it('shows JOIN cards only in an explicitly opened record category',()=>{
     const messages=[message('member'),message('join',{kind:'join'})],props=listProps(messages);
     props.showJoinRecords=false;

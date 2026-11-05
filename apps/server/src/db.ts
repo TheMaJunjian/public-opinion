@@ -1,5 +1,5 @@
 import { commandIdentity } from './command-identities.js';
-import { type Account, type Change, type LedgerEntry, type Membership, type Message, type Rules, type User } from '@gonglun/core';
+import { updateUsageRewardMessage, type Account, type Change, type LedgerEntry, type Membership, type Message, type Rules, type User } from '@gonglun/core';
 import { statesFor } from './projections.js';
 import { Postgres } from './postgres.js';
 import { DATABASE_MIGRATIONS } from './database-version.js';
@@ -105,16 +105,25 @@ export class Store {
     if (!allowDebt && value < 0) throw new DomainError('运营资金不足');
     await this.set('operating', value);
   }
-  async ledger(userId: string, messageId: string, amount: number, lockedDelta: number, reason: string, allowDebt = false): Promise<LedgerEntry> {
+  async ledger(userId: string, messageId: string, amount: number, lockedDelta: number, reason: string, allowDebt = false, options?: {aggregateId:string;createdAt:string;total:number}): Promise<LedgerEntry> {
     const entries = this.db.ledger;
+    const aggregate = options ? await this.db.prepare('SELECT * FROM ledger WHERE id=$1').get(options.aggregateId) : undefined;
+    if (options && (amount !== 1 || lockedDelta !== 0 || aggregate && (aggregate.userId !== userId || aggregate.messageId !== messageId || !['使用奖励汇总','使用贡献汇总'].includes(String(aggregate.reason)) || aggregate.lockedDelta !== 0))) throw new DomainError('使用贡献累计记录不一致');
+    if (options && Number(aggregate?.amount ?? 0) + 1 !== options.total) throw new DomainError('使用贡献累计金额不一致');
     const account = await this.account(userId);
     const available = integer(account.available + amount), locked = integer(account.locked + lockedDelta);
     if (locked < 0 || (!allowDebt && available < 0)) throw new DomainError('可用贡献点不足或锁定资金不足');
     const earned = integer(account.earned + Math.max(0, amount + lockedDelta));
     const spent = integer(account.spent + Math.max(0, -amount - lockedDelta));
     await this.db.prepare('UPDATE accounts SET available=$1,locked=$2,earned=$3,spent=$4 WHERE "userId"=$5').run(available, locked, earned, spent, userId);
-    const entry: LedgerEntry = { id: id(), userId, messageId, messageRevision: (await this.message(messageId)).revision, amount, lockedDelta, reason, createdAt: now(), ruleVersion: (await this.rules()).version };
-    await this.db.prepare('INSERT INTO ledger(id,"userId","messageId",amount,"lockedDelta",reason,"createdAt","ruleVersion","messageRevision") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)').run(entry.id,userId,messageId,amount,lockedDelta,reason,entry.createdAt,entry.ruleVersion,entry.messageRevision);
+    const entry: LedgerEntry = { id: options && !aggregate ? options.aggregateId : id(), userId, messageId, messageRevision: (await this.message(messageId)).revision, amount, lockedDelta, reason, createdAt: options?.createdAt ?? now(), ruleVersion: (await this.rules()).version };
+    if (aggregate) {
+      await this.db.prepare('UPDATE ledger SET amount=$2,"createdAt"=$3,"balanceAfter"=$4,position=DEFAULT,reason=\'使用贡献汇总\' WHERE id=$1')
+        .run(aggregate.id, integer(Number(aggregate.amount) + amount), entry.createdAt, available);
+    } else {
+      await this.db.prepare('INSERT INTO ledger(id,"userId","messageId",amount,"lockedDelta",reason,"createdAt","ruleVersion","messageRevision","balanceAfter") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)')
+        .run(entry.id,userId,messageId,amount,lockedDelta,options ? '使用贡献汇总' : reason,entry.createdAt,entry.ruleVersion,entry.messageRevision,available);
+    }
     entries.push(entry);
     return entry;
   }
@@ -122,6 +131,9 @@ export class Store {
 }
 
 export class Mutation {
+  pointsReset?: Change['pointsReset'];
+  createdAccountIds?: string[];
+  usageRewardTotals?: Change['usageRewardTotals'];
   messages = new Map<string, Message>();
   memberships = new Map<string, Membership>();
   removed = new Set<string>();
@@ -155,6 +167,11 @@ export class Mutation {
     const previousSequence = await this.store.latestSequence();
     const row = await this.store.db.prepare('INSERT INTO changes(body) VALUES ($1) RETURNING sequence').get('{}');
     const sequence = row!.sequence;
+    for (const update of this.usageRewardTotals ?? []) {
+      const message = updateUsageRewardMessage(await this.store.message(update.messageId), update.total, sequence, update.updatedAt);
+      await this.store.db.prepare('UPDATE messages SET sequence=$2,body=$3 WHERE id=$1').run(message.id, sequence, JSON.stringify(message));
+      await this.store.db.prepare('UPDATE revisions SET body=$3 WHERE "messageId"=$1 AND revision=$2').run(message.id, message.revision, JSON.stringify(message));
+    }
     // put() already persisted content and reference indexes. Publishing only
     // changes the cursor; update current/revision bodies together in bounded batches.
     const messages = [...this.messages.values()];
@@ -172,6 +189,9 @@ export class Mutation {
     }
     const ledger = this.store.db.ledger.slice(this.ledgerStart);
     const change: Change = { sequence,previousSequence,messages:[...this.messages.values()],memberships:[...this.memberships.values()],removedMemberships:[...this.removed],states:await statesFor(this.store,[...this.affected]),ledger,treasury:{operating:await this.store.setting<number>('operating'),issued:await this.store.setting<number>('minted')} };
+    if (this.pointsReset) change.pointsReset = this.pointsReset;
+    if (this.createdAccountIds) change.createdAccountIds = this.createdAccountIds;
+    if (this.usageRewardTotals) change.usageRewardTotals = this.usageRewardTotals;
     await this.store.db.prepare('UPDATE changes SET body=$1 WHERE sequence=$2').run(JSON.stringify(change),sequence);
     return change;
   }

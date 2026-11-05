@@ -5,7 +5,7 @@ import { REVEAL_VIRTUAL_MESSAGE } from '../hooks/useVirtualMessageMounts';
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
-it('centers a wide merge on its message header after the frame border strips have mounted', () => {
+it('minimally reveals a wide merge message header after the frame border strips have mounted', () => {
   vi.useFakeTimers();
   const panel = document.createElement('div'), strip = document.createElement('div'), header = document.createElement('div');
   for (const element of [strip, header]) { element.dataset.msgid = 'merge'; element.dataset.relOverlay = 'true'; }
@@ -23,8 +23,8 @@ it('centers a wide merge on its message header after the frame border strips hav
       pendingScrollDependencyIdsRef: { current: [] }, leftPanelRef: { current: panel }, scrollRafRef: { current: null },
       findMessageElements, relationsRef: { current: [] }, edgesRef: { current: [] }, showMessagePulse: pulse, cancelScrollRafs: () => {} }, 'merge');
     vi.advanceTimersByTime(50);
-    expect(panel.scrollLeft).toBe(160);
-    expect(panel.scrollTop).toBe(887);
+    expect(panel.scrollLeft).toBe(120);
+    expect(panel.scrollTop).toBe(766);
     expect(pulse).toHaveBeenCalledWith('merge', header, 1, expect.any(Function));
   } finally { panel.remove(); }
 });
@@ -48,6 +48,28 @@ it('restores positioning only after pending layout work commits and the browser 
   expect(vi.getTimerCount()).toBe(0);
 });
 
+it('resumes pending positioning after returning from a tab without background animation frames', () => {
+  vi.useFakeTimers();
+  let hidden = true;
+  vi.spyOn(document, 'hidden', 'get').mockImplementation(() => hidden);
+  const requestFrame = window.requestAnimationFrame.bind(window);
+  vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => hidden ? 0 : requestFrame(callback));
+  const tasks = createWorkbenchDrawingTasks(), measurement = tasks.begin('measurement'), positioning = tasks.begin('positioning');
+  const restore = vi.fn(() => positioning.release());
+  positioning.afterLayout(restore);
+  measurement.release();
+  vi.advanceTimersByTime(60_000);
+  expect(restore).not.toHaveBeenCalled();
+  expect(tasks.failure).toBeNull();
+  hidden = false;
+  document.dispatchEvent(new Event('visibilitychange'));
+  vi.advanceTimersByTime(34);
+  expect(restore).toHaveBeenCalledOnce();
+  expect(tasks.pending).toBe(0);
+  expect(tasks.failure).toBeNull();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 it.each(['cancel', 'release'] as const)('cleans up a waiting restoration on %s and ignores late measurements', finish => {
   vi.useFakeTimers();
   const tasks = createWorkbenchDrawingTasks();
@@ -55,6 +77,7 @@ it.each(['cancel', 'release'] as const)('cleans up a waiting restoration on %s a
   positioning.afterLayout(restore);
   positioning[finish]();
   measurement.release();
+  document.dispatchEvent(new Event('visibilitychange'));
   vi.advanceTimersByTime(WORKBENCH_DRAWING_TIMEOUT_MS + 100);
   expect(restore).not.toHaveBeenCalled();
   expect(tasks.failure).toBeNull();

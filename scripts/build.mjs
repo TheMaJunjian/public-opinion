@@ -21,6 +21,7 @@ await build({entryPoints:{
   'migrate-legacy-cli':'apps/migrate/src/migrate-legacy-cli.ts',
   'verify-legacy-rehearsal-cli':'apps/migrate/src/verify-legacy-rehearsal-cli.ts',
   'verify-current-cli':'apps/migrate/src/verify-current-cli.ts',
+  'points-archive-cli':'apps/migrate/src/points-archive-cli.ts',
   'view-file-cli':'apps/migrate/src/view-file-cli.ts',
   'retire-legacy-topics-cli':'apps/migrate/src/retire-legacy-topics-cli.ts',
   'topic-retirement-audit':'apps/migrate/src/topic-retirement-audit.ts',

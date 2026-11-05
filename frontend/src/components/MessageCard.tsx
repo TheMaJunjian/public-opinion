@@ -6,13 +6,14 @@ import { getRelationMessageLabel } from '../utils/attachedRelationLabels';
 import MessageTextPart from './MessageTextPart';
 import SettlementMessageContent from './SettlementMessageContent';
 import MessageElement from './MessageElement';
+import MessageCardSelfStake from './MessageCardSelfStake';
+import MessageMemberCount from './MessageMemberCount';
 import { MessageDisplayMarker } from './MessageDisplayHints';
-import { isMessageElementSelected, messageMembersReference, messageTypeReference } from '../utils/messageElementSelection';
-import { getMessageProminence } from '../utils/messageDisplay';
+import { getMessageProminence, getMessageTypeLabel } from '../utils/messageDisplay';
 import { activateMessageFromKeyboard } from '../utils/messageKeyboard';
 import { stakeAppearanceAttributes, type StakeAmounts } from '../utils/stakeAppearance';
 import StakeTierBadge, { SkinOrnament } from '../theme/StakeTierBadge';
-import ThemeIcon, { ThemeLabel } from '../theme/ThemeIcon';
+import { ThemeLabel } from '../theme/ThemeIcon';
 
 export interface MessageCardContext {
   isRelationRecord?: boolean;
@@ -26,6 +27,7 @@ export interface MessageCardContext {
   governanceColor?: string;
   organizationTitle?: string;
   memberCount?: number;
+  directMemberCount?: number;
   relType?: string | null;
   settlementTargetId?: string | undefined;
   lastClickedMsgId?: string | null;
@@ -70,7 +72,6 @@ export interface MessageCardProps {
 export default function MessageCard({
   msg,
   ctx,
-  selectedUnits,
   onClick,
   onDoubleClick,
   onMouseDown,
@@ -92,7 +93,7 @@ export default function MessageCard({
     isWholeSelected, isActiveText, isOrganizationMessage, isRelationRecord,
     isClassification, isSummary, isMerge,
     isGovernanceMsg, governanceColor,
-    organizationTitle, memberCount,
+    organizationTitle, memberCount, directMemberCount,
     relType,
     settlementTargetId,
     lastClickedMsgId,
@@ -108,33 +109,16 @@ export default function MessageCard({
   const delegationColor = 'var(--ink-f97316)';
   const govColor = governanceColor ?? (bk === 'GOVERNANCE' ? 'var(--ink-f59e0b)' : bk === 'CODE' ? 'var(--ink-3b82f6-2)' : 'var(--ink-10b981)');
   const organizationBackground = isSummary ? 'var(--surface-14352a)' : isMerge ? 'var(--surface-1e293b)' : 'var(--surface-1f1f1f)';
-  const specificMessageLabel = getRelationMessageLabel(msg);
+  const relationType = relType ?? msg.relationType ?? 'relation';
+  const baseRelationLabel = relationType.toLowerCase() === 'proposal' ? '提案' : getPresentationSpec(relationType).label;
   const messageTypeLabel = isRelationRecord && msg.kind === 'relation'
-    ? getPresentationSpec(relType ?? msg.relationType ?? 'relation').label
-    : specificMessageLabel ?? (msg.kind === 'relation'
-    ? getPresentationSpec(relType ?? msg.relationType ?? 'relation').label
-    : msg.kind === 'normal'
-      ? '文本'
-      : msg.kind === 'join'
-        ? '加入'
-        : msg.kind === 'round'
-          ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? '价值仲裁' : '真假仲裁')
-          : msg.kind === 'round_result'
-            ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? '价值仲裁结算' : '真假仲裁结算')
-            : bk === 'GOVERNANCE' ? '治理提案'
-              : bk === 'CODE' ? '代码'
-                : bk === 'OPERATIONS' ? '运营'
-                  : '消息');
+    ? baseRelationLabel
+    : relType != null && msg.kind === 'relation'
+      ? getRelationMessageLabel(msg) ?? baseRelationLabel
+      : getMessageTypeLabel(msg);
   const typeBadgeLabel = isClassification ? '分类' : isSummary ? '总结' : isMerge ? '归并' : messageTypeLabel;
   const inlineRelationContent = isRelationRecord && !isOrganizationMessage && children != null;
-  const defaultHeaderLabel = isRelationRecord || isClassification || isSummary || isMerge || isDelegationMsg || msg.kind === 'relation'
-    ? msg.id
-    : bk === 'ROUND' ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? '发起价值仲裁' : '发起真假仲裁')
-      : bk === 'ROUND_RESULT' ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? '价值仲裁已结算' : '真假仲裁已结算')
-        : bk === 'GOVERNANCE' ? (specificMessageLabel ? msg.id : '治理提案')
-          : bk === 'CODE' ? '代码'
-            : bk === 'OPERATIONS' ? msg.id
-              : msg.id;
+  const defaultHeaderLabel = msg.id;
 
   const cardBorder = isWholeSelected ? '2px solid var(--line-fbbf24)'
     : isRelationRecord ? isActiveText ? '2px dashed var(--line-0b84ff)' : '1px dashed var(--line-32363d)'
@@ -196,24 +180,29 @@ export default function MessageCard({
         flexDirection: 'column',
         color: isOrganizationMessage && !isRelationRecord ? 'var(--ink-94a3b8)' : undefined,
       }}>
-        <div style={{ display: 'flex', justifyContent: isRelationRecord ? 'flex-start' : 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '4px 8px' }}>
-        <span style={{ minWidth: 0, maxWidth:'100%', overflowWrap: 'anywhere' }}>
+        <div className="message-card-header-row" style={{ display: 'flex', justifyContent: isRelationRecord ? 'flex-start' : 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '4px 8px' }}>
+        <span className="message-card-header-main" style={{ minWidth: 0, maxWidth:'100%', overflowWrap: 'anywhere' }}>
+          <span className="message-card-type-group">
           {headerLeading}
           <StakeTierBadge counts={stakeCounts} />
-          <MessageElement reference={messageTypeReference(msg)} selected={isMessageElementSelected(selectedUnits, messageTypeReference(msg))} label={typeBadgeLabel} style={{ marginRight: 6, padding: '2px 6px', borderRadius: 4, background: isWholeSelected ? 'var(--surface-fbbf24)' : 'var(--surface-rgba-148-163-184-0-16)', color: isWholeSelected ? 'var(--ink-111827)' : 'var(--ink-cbd5e1)', border: isWholeSelected ? '1px solid var(--line-fbbf24)' : '1px solid var(--line-rgba-148-163-184-0-35)', fontWeight: 700, opacity: 1 }}>
+          <MessageElement data-skin-type-label="true" label={typeBadgeLabel} style={{ marginRight: 6, padding: '2px 6px', borderRadius: 4, background: isWholeSelected ? 'var(--surface-fbbf24)' : 'var(--surface-rgba-148-163-184-0-16)', color: isWholeSelected ? 'var(--ink-111827)' : 'var(--ink-cbd5e1)', border: isWholeSelected ? '1px solid var(--line-fbbf24)' : '1px solid var(--line-rgba-148-163-184-0-35)', fontWeight: 700, opacity: 1 }}>
             <ThemeLabel text={typeBadgeLabel} />
           </MessageElement>
           {' '}
           <HomeFilterBadge label={homeMatch?'命中':homeContextRole==='source'?'来源':homeContextRole==='target'?'目标':homeContextRole==='source-target'?'来源/目标':homeReason?'上下文':null} reason={homeReason}/>
-          {headerLabel ?? defaultHeaderLabel}
+          <MessageCardSelfStake message={msg} />
+          </span>
+          <span className="message-card-identity">
+          <span className="message-card-id" title={msg.id}><bdi dir="ltr">{headerLabel ?? defaultHeaderLabel}</bdi></span>
           {readStatus === 'READ' && <span className="message-read-stamp">已阅</span>}
           {headerLeading === undefined && <MessageDisplayMarker messageId={msg.id} />}
+          </span>
           {headerBetweenIdAuthor && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 6, verticalAlign: 'middle', maxWidth: '100%', flexWrap: 'wrap' }}>{headerBetweenIdAuthor}</span>}
         </span>
         {inlineRelationContent && <div style={{ display: 'contents' }} onMouseUp={e => onContentMouseUp?.(e, msg.id)}>{children}</div>}
         {isRelationRecord && badges}
-        <span style={{ textAlign: 'right', marginLeft: 'auto', maxWidth: '100%', ...(isRelationRecord ? { order: 2 } : {}) }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' }}>
+        <span className="message-card-meta" style={{ textAlign: 'right', marginLeft: 'auto', maxWidth: '100%', ...(isRelationRecord ? { order: 2 } : {}) }}>
+          <div className="message-card-actions" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' }}>
             {headerAfterAuthor}
             {headerExtra}
           </div>
@@ -222,26 +211,22 @@ export default function MessageCard({
       </div>
 
       {!isRelationRecord && badges}
-      {isOrganizationMessage && (
-        <div style={{
+      {(isOrganizationMessage || ['classify', 'summary', 'merge', 'arrange'].includes(msg.relationType ?? '')) && (
+        <div className="message-card-content-row" style={{
           display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
           gap: 8, marginBottom: 6,
         }}>
-          <div style={{
+          <div className="message-card-title" style={{
             fontWeight: isRelationRecord ? 500 : 600, color: isRelationRecord ? 'var(--ink-cbd5e1)' : 'var(--ink-f1f5f9)',
             flex: 1, minWidth: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
             userSelect: isActiveText ? 'text' : 'auto',
             cursor: isActiveText ? 'text' : 'inherit',
           }}>
-          <MessageTextPart message={msg} activeText={isActiveText} onMouseUp={onContentMouseUp}>
-            {isActiveText && msg.parts ? undefined : isSummary && organizationTitle ? (
-              <>
-                <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{organizationTitle}</div>
-              </>
-            ) : organizationTitle || (isClassification ? `分类（${memberCount ?? 0}）`
+          <MessageTextPart message={msg} activeText={isActiveText} onMouseUp={onContentMouseUp}
+            displayedText={organizationTitle || (isClassification ? `分类（${memberCount ?? 0}）`
               : isMerge ? `归并（${memberCount ?? 0}）`
               : `总结（${memberCount ?? 0}）`)}
-          </MessageTextPart></div>
+          /></div>
           {isClassification&&<span style={{
             fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 999,
             background: 'var(--surface-rgba-2-150-80-0-2)', color: 'var(--ink-86efac)',
@@ -280,8 +265,8 @@ export default function MessageCard({
 
       {/* Organization membership */}
       {isOrganizationMessage && (
-        <div style={{ fontSize: 12, color: 'var(--ink-94a3b8)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <MessageElement reference={messageMembersReference(msg)} selected={isMessageElementSelected(selectedUnits, messageMembersReference(msg))} label="所含消息"><ThemeIcon name="message" fallback="💬" /> {memberCount ?? 0} 条观点</MessageElement>
+        <div className="message-card-members" style={{ fontSize: 12, color: 'var(--ink-94a3b8)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <MessageMemberCount total={memberCount} direct={directMemberCount} />
         </div>
       )}
 

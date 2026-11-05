@@ -9,6 +9,21 @@ import {ViewCacheSettingsProvider,VIEW_CACHE_LIMIT_KEY,useViewCacheSettings} fro
 afterEach(()=>localStorage.removeItem(VIEW_CACHE_LIMIT_KEY));
 
 describe('recent workbench views', () => {
+  it('restores native scroll offsets after a retained route is detached and reattached', () => {
+    const element = (key: string) => <RecentWorkbenchViews viewKey={key} deferParking preserveScroll>
+      <div data-testid="scroll-box" style={{ overflow: 'auto', width: 100, height: 100 }}><div style={{ width: 1000, height: 1000 }}>{key}</div></div>
+    </RecentWorkbenchViews>;
+    const view = render(element('workbench'));
+    const original = screen.getByTestId('scroll-box');
+    original.scrollTop = 380; original.scrollLeft = 125;
+    view.rerender(element('home'));
+    // Browsers clear the used offsets while the box has no connected layout.
+    original.scrollTop = 0; original.scrollLeft = 0;
+    view.rerender(element('workbench'));
+    expect(screen.getByTestId('scroll-box')).toBe(original);
+    expect([original.scrollTop, original.scrollLeft]).toEqual([380, 125]);
+  });
+
   it('shares a saved capacity across view areas and evicts immediately without rebuilding the active view',()=>{
     localStorage.setItem(VIEW_CACHE_LIMIT_KEY,'invalid');
     let settings!:ReturnType<typeof useViewCacheSettings>;

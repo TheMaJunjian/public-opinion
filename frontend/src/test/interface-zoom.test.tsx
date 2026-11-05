@@ -4,7 +4,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 import App from '../App';
 import { useWorkbenchViewport } from '../pages/workbench/useWorkbenchViewport';
 
-vi.mock('../context/AuthContext', () => ({ AuthProvider: ({ children }: { children: ReactNode }) => children, useOptionalAuth: () => null }));
+vi.mock('../context/AuthContext', () => ({ AuthProvider: ({ children }: { children: ReactNode }) => children,
+  useAuth: () => ({ user: { id: 'user', username: '已登录' }, loading: false }), useOptionalAuth: () => null }));
 vi.mock('../components/Navbar', () => ({ default: () => <nav /> }));
 vi.mock('../components/GestureShortcutManager', () => ({
   default: ({ onConfirm }: { onConfirm: (direction: string, target: null, symbol: string) => void }) => <>

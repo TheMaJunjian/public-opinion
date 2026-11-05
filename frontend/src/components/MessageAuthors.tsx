@@ -79,16 +79,16 @@ export default function MessageAuthors({message,prefix='',showSelfStake=false,st
       label={`当前正文作者 ${current.name}（对应消息 ${[...new Set(current.contributions.map(source=>source.message.id))].join('、')}）`}/>}
     {open&&<PopupOverlay contentRef={contentRef} zIndex={10060} background={DIALOG_BACKDROP} onClick={close}
       style={{display:'flex',alignItems:'center',justifyContent:'center',padding:16,boxSizing:'border-box'}}>
-      <div ref={contentRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`消息 ${message.id} 的当前正文作者`} data-message-authors-popup={message.id}
+      <div ref={contentRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`消息 ${message.id} 的当前正文作者`} data-message-authors-popup={message.id} data-dialog-layout="scroll"
         onClick={stop} onMouseDown={stop} onMouseUp={stop} onDoubleClick={stop} onKeyDown={stop}
         style={{...dialogStyles.panel,width:'min(560px, 100%)',maxHeight:'100%',display:'flex',flexDirection:'column',minHeight:0}}>
-        <div style={dialogStyles.header}>当前正文作者 · {authors.length} 人</div>
-        <div style={{...dialogStyles.body,overflowY:'auto',minHeight:0}}>
+        <div data-dialog-header="true" style={dialogStyles.header}>当前正文作者 · {authors.length} 人</div>
+        <div data-dialog-body="true" style={{...dialogStyles.body,overflowY:'auto',minHeight:0}}>
           <div style={{fontSize:12,color:'var(--ink-94a3b8)',marginBottom:12}}>自押 N/M：该消息发送者的累计真假投入／价值投入。各条消息分别列示。</div>
           {authors.map(author=>profile(author.name,author.contributions.map(source=><Contribution key={source.message.id} source={source}/>),author.key))}
           {!original.contributes&&profile(`原消息发送者：${original.message.author}（当前正文未保留原文）`,<Contribution source={original}/>,'original-sender')}
         </div>
-        <div style={dialogStyles.footer}><button type="button" data-shortcut-cancel="true" onClick={close} style={dialogStyles.button}>关闭作者详情</button></div>
+        <div data-dialog-footer="true" style={dialogStyles.footer}><button type="button" data-shortcut-cancel="true" onClick={close} style={dialogStyles.button}>关闭作者详情</button></div>
       </div>
     </PopupOverlay>}
   </span>;

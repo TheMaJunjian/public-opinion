@@ -14,6 +14,9 @@ import { archiveToWorkbenchSnapshot, projectWorkbenchSnapshot } from '../../util
 import { beginWorkbenchDrawing, beginWorkbenchSync, finishWorkbenchSync } from '../../utils/workbenchActivity';
 import type { RelatedTraceContext } from '../../utils/relatedTraceContext';
 import { useWorkbenchDrawingTask } from '../../context/WorkbenchDrawingContext';
+import { inheritExportCacheReference, loadCachedExport, loadLastExport, loadReferencedExport, saveLastExportPersistent } from '../../utils/exportViewerCache';
+import { isZhihuViewingData } from '../../utils/zhihuArchive';
+import { prepareExportForViewing } from '../../utils/exportArchive';
 
 export const VIEWER_USERNAME_KEY = 'export-viewer-username';
 
@@ -75,13 +78,65 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
 
   // ── Preloaded data (from export viewer) ──
   const location = useLocation();
-  const preloadedData = (location.state as { exportData?: ExportData })?.exportData ?? null;
+  const locationRef = useRef(location);
+  locationRef.current = location;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const isViewerRoute = location.pathname === '/viewer';
+  const routeExport = (location.state as { exportData?: ExportData })?.exportData ?? null;
+  const routeCacheReference = (location.state as { viewerCacheRef?: unknown })?.viewerCacheRef;
+  const preloadedLoaded = useRef<ExportData | null>(null);
+  const [restoredViewer, setRestoredViewer] = useState<{ key: string; data: ExportData } | null>(null);
+  const needsCacheRestore = isViewerRoute && (!routeExport || isZhihuViewingData(routeExport) || routeCacheReference !== undefined)
+    && (!routeExport || preloadedLoaded.current !== routeExport);
+  const preloadedData = restoredViewer && restoredViewer.key === location.key ? restoredViewer.data : needsCacheRestore ? null : routeExport;
+  useEffect(() => {
+    if (!needsCacheRestore) return;
+    let cancelled = false;
+    setLoading(true); setLoadError(null); setIsPreloaded(true);
+    void (async () => {
+      const cached = routeCacheReference !== undefined ? await loadReferencedExport(routeCacheReference, { sourceOnly: true })
+        : routeExport && isZhihuViewingData(routeExport) ? await loadCachedExport(routeExport.zhihu.archiveId, { sourceOnly: true })
+        : await loadLastExport({ sourceOnly: true });
+      const source = cached ?? routeExport;
+      if (!source) throw new Error('没有可恢复的阅览文件，请从“阅览”入口选择 JSON 文件');
+      const prepared = await prepareExportForViewing(source);
+      if (!cancelled) setRestoredViewer({ key: location.key, data: inheritExportCacheReference(prepared.data, source) });
+    })().catch(error => {
+      if (!cancelled) { setLoadError(`恢复阅览失败：${error instanceof Error ? error.message : String(error)}`); setLoading(false); }
+    });
+    return () => { cancelled = true; };
+  }, [needsCacheRestore, location.key, routeExport, routeCacheReference]);
   const refreshLeaderboard = useCallback(() => {
     if (preloadedData) return Promise.resolve(false);
     return catalogRef.current?.refresh() ?? syncRef.current?.refresh() ?? Promise.reject(new Error('讨论尚未载入'));
   }, [preloadedData]);
-  const preloadedLoaded = useRef<ExportData | null>(null);
   const [loadedExport, setLoadedExport] = useState<ExportData | null>(null);
+
+  /** Publish only after the source or incremental local edit is durable. */
+  const persistPreloadedExport = useCallback(async (next: ExportData, options?: { sourceUpdate?: boolean }) => {
+    if (!preloadedData) throw new Error('当前未打开阅览文件');
+    const origin = locationRef.current;
+    const snapshot = archiveToWorkbenchSnapshot(next);
+    const projected = projectWorkbenchSnapshot(snapshot);
+    if (options) await saveLastExportPersistent(next, loadedExport ?? preloadedData, options);
+    else await saveLastExportPersistent(next, loadedExport ?? preloadedData);
+    if (!mounted.current || locationRef.current.key !== origin.key || locationRef.current.pathname !== origin.pathname
+      || locationRef.current.state?.exportData !== origin.state?.exportData) {
+      throw new Error('文件已保存；阅览页面已切换，请重新打开上次阅览');
+    }
+    preloadedLoaded.current = next;
+    setRelatedTraceContext(null);
+    setLoadError(null);
+    if (graphViewRef.current) beginWorkbenchDrawing();
+    records.replace(snapshot, projected);
+    setIsPreloaded(true);
+    setLoadedExport(next);
+    setLoading(false);
+    // The durable cache owns reload recovery. Replacing browser history here
+    // clones the whole archive and can restart loading, unmounting the canvas.
+    setRestoredViewer({ key: origin.key, data: next });
+  }, [preloadedData, loadedExport, records.replace]);
 
   useLayoutEffect(() => {
     if (!preloadedData || preloadedLoaded.current === preloadedData) return;
@@ -132,7 +187,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
   }, [isPreloaded, messages, relations, registeredUsers]);
 
   useEffect(() => {
-    if (!scopeMessageId || preloadedData || authLoading || !user) return;
+    if (!scopeMessageId || isViewerRoute || preloadedData || authLoading || !user) return;
     setLoading(true);
     setLoadError(null);
     catalogReadyRef.current = false;
@@ -246,13 +301,13 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
       setLoading(false);
     });
     return () => { cancelled = true; stop?.(); catalogRef.current?.stop(); catalogRef.current = null; };
-  }, [scopeMessageId, authLoading, user?.id, preloadedData]);
+  }, [scopeMessageId, authLoading, user?.id, preloadedData, isViewerRoute]);
 
   useEffect(() => {
-    if (!authLoading && !preloadedData && !user) {
+    if (!isViewerRoute && !authLoading && !preloadedData && !user) {
       navigate('/login', { replace: true });
     }
-  }, [authLoading, navigate, preloadedData, user?.username]);
+  }, [authLoading, navigate, preloadedData, user?.username, isViewerRoute]);
 
   useEffect(() => {
     if (loading || authLoading || loadError || isPreloaded) return;
@@ -280,7 +335,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     showUnauthenticatedNotice, setShowUnauthenticatedNotice, showRegistrationGuide, setShowRegistrationGuide, stakeCounts,
     setStakeCounts, messageBettorCounts, setMessageBettorCounts, authorStakes, setAuthorStakes,
     refreshLeaderboard, registeredUsers, isPreloaded, viewerUser, setViewerUser,
-    displayUser, correctionVersions, preloadedData, loadedExport, viewerUsers, loading,
+    displayUser, correctionVersions, preloadedData, loadedExport, viewerUsers, loading, persistPreloadedExport, isViewerRoute,
     tagCounts,
     onDemand, ensureMessages,
     catalog, catalogReady, catalogVersion, catalogComputationsCurrent,

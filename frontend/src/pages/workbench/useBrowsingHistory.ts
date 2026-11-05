@@ -1,7 +1,9 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useBrowserBrowsingHistory } from './useBrowserBrowsingHistory';
 
 /** Keep view snapshots only; message data continues to come from the live store. */
-export function useBrowsingHistory<T>(key: unknown, capture: () => T, restore: (snapshot: T) => void) {
+export function useBrowsingHistory<T>(key: unknown, capture: () => T, restore: (snapshot: T) => void, options?: { browser?: boolean; routeState?: unknown }) {
+  const browserHistory = useBrowserBrowsingHistory(key, capture, restore, options?.browser ?? false, options?.routeState);
   const callbacks = useRef({ capture, restore });
   callbacks.current = { capture, restore };
   const history = useRef({ key, back: [] as T[], forward: [] as T[], recorded: false });
@@ -31,6 +33,6 @@ export function useBrowsingHistory<T>(key: unknown, capture: () => T, restore: (
   }, []);
   const back = useCallback(() => move('back'), [move]);
   const forward = useCallback(() => move('forward'), [move]);
-  return { record, back, forward, canGoBack: history.current.back.length > 0, canGoForward: history.current.forward.length > 0,
+  return options?.browser ? browserHistory : { record, back, forward, canGoBack: history.current.back.length > 0, canGoForward: history.current.forward.length > 0,
     backSnapshot:history.current.back.at(-1),forwardSnapshot:history.current.forward.at(-1) };
 }

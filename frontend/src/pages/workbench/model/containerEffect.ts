@@ -96,11 +96,12 @@ export function deriveContainerEffect(input: {
       targetIds:[...direct.textIds,...direct.relationIds]};
   });
   const context = {
+    getMemberCounts: ownership.memberCounts,
     relatedMessages: messages, relatedEdges: edges, rejectedContainerIds,rejectedRelationIds:suppressed,
     joinStatusByMessage: getJoinStatusByMessage(relations,effectiveJoinIds,rejectedContainerIds,rejectedJoinRelationIds),
     joinEffectSourcesByMessage: display?.sourcesByJoin,
   };
-  return {messages,relations,edges,traceEdges,msgMap,relationById,suppressed,rejectedContainerIds,rejectedJoinRelationIds,effectiveJoinIds,joinByTarget,ownership,memberships,projectEdges,context,stakeCounts:input.stakeCounts};
+  return {messages,relations,edges,traceEdges,msgMap,relationById,suppressed,rejectedContainerIds,rejectedJoinRelationIds,effectiveJoinIds,joinByTarget,ownership,memberships,projectEdges,context,stakeCounts:input.stakeCounts,choiceSourcesByMessage:display?.choiceSourcesByMessage};
 }
 
 export type ContainerEffect=ReturnType<typeof deriveContainerEffect>;

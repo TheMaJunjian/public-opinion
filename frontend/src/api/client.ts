@@ -65,6 +65,7 @@ export function getPrivateKeyForUser(username: string): string | null {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  if (path === '/points/activity') return requestCore<T>(path, options);
   const readOnly=['/snapshot/query','/body-versions/resolve'].includes(path.split('?')[0]);
   const queued = options.method && options.method !== 'GET' && path !== '/reading-state'&&!readOnly ? queueCommand(path, options) : null;
   if (queued) return queued as T;
@@ -125,14 +126,16 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
   headers['X-Device-Id'] = getDeviceId();
   const isAuthBootstrap = ['/login', '/register', '/logout', '/auth/signing-key'].includes(path);
   const privateReading=path==='/reading-state';
+  const privateActivity=path==='/points/activity';
   const readOnlySnapshot = ['/snapshot/query','/body-versions/resolve'].includes(path.split('?')[0]);
   let identityKey: string | undefined;
   const checkOwner = () => { if (requestOwner() !== owner) throw new DOMException('账户已切换，请重新操作', 'AbortError'); };
-  if (path === '/auth/signing-key' || path === '/logout' || privateReading&&options.method==='POST') {
+  if (path === '/auth/signing-key' || path === '/logout' || (privateReading||privateActivity)&&options.method==='POST') {
+    if (privateActivity) checkOwner();
     if (!csrf) await getSession();
     headers['X-CSRF-Token'] = csrf;
   }
-  if (options.method && options.method !== 'GET' && !isAuthBootstrap && !readOnlySnapshot && !privateReading) {
+  if (options.method && options.method !== 'GET' && !isAuthBootstrap && !readOnlySnapshot && !privateReading && !privateActivity) {
     if (!csrf) await getSession();
     headers['X-CSRF-Token'] = csrf;
     const body = JSON.parse(typeof options.body === 'string' ? options.body : '{}');
@@ -159,7 +162,7 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
     if (attempt === 0) { options.signal?.throwIfAborted(); if (identityKey||privateReading||rehearsal) checkOwner(); }
     try {
       options.signal?.throwIfAborted();
-      if (identityKey||privateReading||rehearsal) checkOwner();
+      if (identityKey||privateReading||privateActivity||rehearsal) checkOwner();
       received = await fetchJsonWithDeadline(url, { ...options, headers, credentials: 'same-origin' });
       break;
     } catch (error) {
@@ -168,7 +171,7 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
     }
   }
   const { response: res, data } = received;
-  if (rehearsal) checkOwner();
+  if (rehearsal||privateActivity) checkOwner();
   if (!res.ok) {
     const err = (data ?? {}) as { error?: string; message?: string; code?: string; details?: unknown };
     const details = Array.isArray(err.details)
@@ -395,6 +398,10 @@ export function getPointsBalance() {
   return request<import('../types').PointsBalance>('/points/balance');
 }
 
+export function updateUsagePoints(data: { action: 'start' | 'tick'; roundId?: string }, signal?: AbortSignal) {
+  return request<import('../types').UsagePointProgress>('/points/activity', { method: 'POST', body: JSON.stringify(data), signal });
+}
+
 export function getPointsTransactions(params?: { page?: number; limit?: number }) {
   const qs = new URLSearchParams();
   if (params?.page) qs.set('page', String(params.page));
@@ -555,8 +562,9 @@ export interface ExportData {
     homeFilter: import('../components/HomeFilterPanel').HomeFilterMode | null;
     cleanFilters: import('../types').CleanFilterRule[];
     classificationId: string | null;
+    discussion?: { mode: 'graph' | 'discussion'; collapsed: string[] };
   };
-  messages: Array<Partial<Pick<import('../types').Message, 'revision' | 'parts' | 'state' | 'spending' | 'executedStance'>> & {
+  messages: Array<Partial<Pick<import('../types').Message, 'sequence' | 'revision' | 'parts' | 'state' | 'spending' | 'executedStance'>> & {
     id: string;
     kind: string;
     contentType: string | null;

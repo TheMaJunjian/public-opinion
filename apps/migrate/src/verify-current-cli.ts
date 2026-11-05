@@ -14,6 +14,7 @@ import {retainedTargetInvestmentPlan} from './retained-target-investments.js';
 import {legacyAnnotationInvestmentPlan} from './legacy-annotation-investments.js';
 import {readingMessageRemovalPlan} from './remove-reading-messages.js';
 import {containerReadingCleanupPlan} from './cleanup-container-reading-marks.js';
+import {resetMessageContributionPlan} from './reset-message-contributions.js';
 
 const stable=(value:unknown)=>JSON.stringify(value,(_key,value)=>value&&typeof value==='object'&&!Array.isArray(value)
   ?Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b))):value);
@@ -50,6 +51,8 @@ const report=await Store.inspect(process.env.DATABASE_URL,{schema:process.env.DA
   if(valueVoteMessages.pending||valueVoteMessages.unresolved)throw new Error(`仍有 ${valueVoteMessages.pending+valueVoteMessages.unresolved} 条历史价值投票消息需要转换`);
   const annotationStanceMessages=await annotationStanceMessageRepairPlan(store.db);
   const minimumContributions=(await minimumContributionCandidates(store.db)).length;
+  const resetMessageContributions=await resetMessageContributionPlan(store);
+  if(resetMessageContributions.pending)throw new Error(`仍有 ${resetMessageContributions.pending} 条清零后的旧消息需要补扣`);
   if(minimumContributions)throw new Error(`仍有 ${minimumContributions} 条用户消息未投入真假或价值`);
   if(annotationStanceMessages.pending||annotationStanceMessages.unresolved)throw new Error(`仍有 ${annotationStanceMessages.pending+annotationStanceMessages.unresolved} 条历史标注表态需要转换`);
   const delegationBodies=await delegationBodyRepairPlan(store.db);
@@ -65,7 +68,7 @@ const report=await Store.inspect(process.env.DATABASE_URL,{schema:process.env.DA
   const containerReadingMarks=await containerReadingCleanupPlan(store);
   if(containerReadingMarks.pending)throw new Error('仍有可确认的冗余容器阅读记录需要清理');
   return {verified:true,messages:messages.length,accounts:accounts.length,memberships:memberships.length,changes:changes.length,sequence:replay.sequence,
-    settlementTargets,valueVoteMessages,annotationStanceMessages,delegationBodies,targetInvestments,retainedTargetInvestments,legacyAnnotationInvestments,readingMessages,containerReadingMarks,
+    settlementTargets,valueVoteMessages,annotationStanceMessages,delegationBodies,targetInvestments,retainedTargetInvestments,legacyAnnotationInvestments,readingMessages,containerReadingMarks,resetMessageContributions,
     financialFingerprint:await financialFingerprint(store.db),replayMessagesMatch:true,replayAccountsMatch:true,replayMembershipsMatch:true,referenceIndexesMatch:true};
 });
 if(process.argv[2])await writeFile(process.argv[2],JSON.stringify(report,null,2)+'\n',{flag:'wx'});

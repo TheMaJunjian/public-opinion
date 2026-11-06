@@ -5,7 +5,7 @@ import { RelationChoices } from '../pages/workbench/ui/RelationToolbar';
 import { ALL_RELATION_TYPES } from '../pages/workbench/model/relationComposition';
 import { relationTypeName } from '../utils/graphTextSelection';
 import type { RelationType } from '../utils/modelBridge';
-import { setTheme } from '../theme/theme';
+import { setTheme, THEMES } from '../theme/theme';
 
 afterEach(() => { cleanup(); localStorage.clear(); delete document.documentElement.dataset.appearance; delete document.documentElement.dataset.theme; });
 
@@ -34,11 +34,11 @@ it('keeps exactly one entry for all 16 relation types in each theme and preserve
   }
 });
 
-it('uses the existing merge draft restoration and correction defaults after moving controls to the desk', () => {
-  setTheme('opus-paper'); render(<Composer />);
+it.each(THEMES)('restores the merge draft and correction defaults when switching from $id', theme => {
+  setTheme(theme.id); render(<Composer />);
   fireEvent.click(screen.getByRole('button', {name: '归并'}));
   expect(screen.getByLabelText('测试正文')).toHaveValue('');
-  act(() => setTheme('gpt'));
+  act(() => setTheme(theme.id === 'gpt' ? 'opus-paper' : 'gpt'));
   fireEvent.click(screen.getByRole('button', {name: '更正'}));
   expect(screen.getByLabelText('测试正文')).toHaveValue('保留未发送的正文');
   expect(screen.getByRole('status')).toHaveTextContent('text-correction');

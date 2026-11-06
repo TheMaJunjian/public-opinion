@@ -65,7 +65,7 @@ export function getPrivateKeyForUser(username: string): string | null {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  if (path === '/points/activity') return requestCore<T>(path, options);
+  if (path === '/points/activity' || path.startsWith('/notifications')) return requestCore<T>(path, options);
   const readOnly=['/snapshot/query','/body-versions/resolve'].includes(path.split('?')[0]);
   const queued = options.method && options.method !== 'GET' && path !== '/reading-state'&&!readOnly ? queueCommand(path, options) : null;
   if (queued) return queued as T;
@@ -95,7 +95,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
         throw new Error('消息数据已过期，正在重新加载，请稍后重新确认已阅', { cause: error });
       }
       const cancelled = options.signal?.aborted || (typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError');
-      operation.finish(error instanceof UncertainRequestError ? 'uncertain' : cancelled ? 'cancelled' : 'failed', error instanceof Error ? error.message : String(error));
+      // Leaving a scope cancels its reads intentionally. Release their progress
+      // instead of leaving the browser's AbortError as a persistent toast.
+      if (explicitRead && cancelled) operation.discard();
+      else operation.finish(error instanceof UncertainRequestError ? 'uncertain' : cancelled ? 'cancelled' : 'failed', error instanceof Error ? error.message : String(error));
       throw error;
     }
   };
@@ -127,15 +130,16 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
   const isAuthBootstrap = ['/login', '/register', '/logout', '/auth/signing-key'].includes(path);
   const privateReading=path==='/reading-state';
   const privateActivity=path==='/points/activity';
+  const privateNotifications=path.startsWith('/notifications');
   const readOnlySnapshot = ['/snapshot/query','/body-versions/resolve'].includes(path.split('?')[0]);
   let identityKey: string | undefined;
   const checkOwner = () => { if (requestOwner() !== owner) throw new DOMException('账户已切换，请重新操作', 'AbortError'); };
-  if (path === '/auth/signing-key' || path === '/logout' || (privateReading||privateActivity)&&options.method==='POST') {
-    if (privateActivity) checkOwner();
+  if (path === '/auth/signing-key' || path === '/logout' || (privateReading||privateActivity||privateNotifications)&&options.method==='POST') {
+    if (privateActivity||privateNotifications) checkOwner();
     if (!csrf) await getSession();
     headers['X-CSRF-Token'] = csrf;
   }
-  if (options.method && options.method !== 'GET' && !isAuthBootstrap && !readOnlySnapshot && !privateReading && !privateActivity) {
+  if (options.method && options.method !== 'GET' && !isAuthBootstrap && !readOnlySnapshot && !privateReading && !privateActivity && !privateNotifications) {
     if (!csrf) await getSession();
     headers['X-CSRF-Token'] = csrf;
     const body = JSON.parse(typeof options.body === 'string' ? options.body : '{}');
@@ -162,7 +166,7 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
     if (attempt === 0) { options.signal?.throwIfAborted(); if (identityKey||privateReading||rehearsal) checkOwner(); }
     try {
       options.signal?.throwIfAborted();
-      if (identityKey||privateReading||privateActivity||rehearsal) checkOwner();
+      if (identityKey||privateReading||privateActivity||privateNotifications||rehearsal) checkOwner();
       received = await fetchJsonWithDeadline(url, { ...options, headers, credentials: 'same-origin' });
       break;
     } catch (error) {
@@ -171,7 +175,7 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
     }
   }
   const { response: res, data } = received;
-  if (rehearsal||privateActivity) checkOwner();
+  if (rehearsal||privateActivity||privateNotifications) checkOwner();
   if (!res.ok) {
     const err = (data ?? {}) as { error?: string; message?: string; code?: string; details?: unknown };
     const details = Array.isArray(err.details)
@@ -203,6 +207,16 @@ export async function getSession(): Promise<UiSession | null> {
 export function getSetup() {
   return request<{ initialized: boolean; founderKeyRequired: boolean }>('/setup');
 }
+
+export function getNotifications(query: import('@gonglun/core').NotificationQuery = {}, signal?: AbortSignal) {
+  const params = new URLSearchParams(Object.entries(query).filter(([,value]) => value !== undefined).map(([key,value]) => [key,String(value)]));
+  return request<import('@gonglun/core').NotificationPage>(`/notifications?${params}`, {signal});
+}
+export const getNotificationSummary = (signal?: AbortSignal) => request<import('@gonglun/core').NotificationSummary>('/notifications/summary', {signal});
+export const markNotificationsSeen = (input: import('@gonglun/core').NotificationSeenInput) => request<{ok:true}>('/notifications/seen', {method:'POST',body:JSON.stringify(input)});
+export const deleteNotifications = (input: import('@gonglun/core').NotificationDeleteInput) => request<{ok:true}>('/notifications/delete', {method:'POST',body:JSON.stringify(input)});
+export const muteNotifications = (targetId:string,muted:boolean) => request<{ok:true}>('/notifications/mute', {method:'POST',body:JSON.stringify({targetId,muted})});
+export const getNotificationRecipients = (ids:string[],signal?:AbortSignal) => request<{users:Array<{id:string;username:string}>}>(`/notifications/recipients?ids=${encodeURIComponent(ids.join(','))}`, {signal});
 export async function register(data: { username: string; password: string; publicKey?: string | null; founderKey?: string }) {
   const session = await request<UiSession>('/register', {
     method: 'POST',

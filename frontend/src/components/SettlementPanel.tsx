@@ -236,7 +236,7 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
           <button
             onClick={handleCreateRound}
             disabled={creatingRound}
-            className="px-3 py-1.5 bg-[color:var(--surface-4f46e5)] hover:bg-[color:var(--surface-4338ca)] disabled:bg-[color:var(--surface-a5b4fc)] text-[color:var(--ink-fff-2)] text-xs font-medium rounded transition-colors"
+            className="record-action px-3 py-1.5 bg-[color:var(--surface-4f46e5)] hover:bg-[color:var(--surface-4338ca)] disabled:bg-[color:var(--surface-a5b4fc)] text-[color:var(--ink-fff-2)] text-xs font-medium rounded transition-colors"
           >
             {creatingRound ? '创建中...' : '发起结算'}
           </button>
@@ -690,7 +690,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
         <button
           onClick={handleVote}
           disabled={voting || settling}
-          className="px-3 py-1.5 bg-[color:var(--surface-4f46e5)] hover:bg-[color:var(--surface-4338ca)] disabled:bg-[color:var(--surface-a5b4fc)] text-[color:var(--ink-fff-2)] text-xs font-medium rounded transition-colors"
+          className="record-action px-3 py-1.5 bg-[color:var(--surface-4f46e5)] hover:bg-[color:var(--surface-4338ca)] disabled:bg-[color:var(--surface-a5b4fc)] text-[color:var(--ink-fff-2)] text-xs font-medium rounded transition-colors"
         >
           {voting ? '投票中...' : '投票'}
         </button>

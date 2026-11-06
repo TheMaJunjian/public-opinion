@@ -47,6 +47,7 @@ interface MessageDisplay {
   rejectedContainerIds: Set<string>;
   overriddenStanceRelIds: Set<string>;
   readStatusByMessageId: Map<string, 'READ' | 'UNREAD'>;
+  preserveReadingLayout?: boolean;
   homeMatchIds?: Set<string>;
   homeReasonByMessageId?: Map<string,string>;
   homeDisplayRoleByMessageId: Map<string, 'source' | 'target' | 'source-target'>;
@@ -164,6 +165,8 @@ export default function WorkbenchMessageList(props: Props) {
             settlementTargetId: settleTargetId,
             lastClickedMsgId: lastClickedMessageId,
             readStatus: readStatusByMessageId.get(msg.id),
+            showReadStamp: false,
+            preserveReadingLayout: props.display.preserveReadingLayout,
             homeMatch: homeMatchIds?.has(msg.id),
             homeReason: homeReasonByMessageId?.get(msg.id),
             homeContextRole: homeDisplayRoleByMessageId.get(msg.id),

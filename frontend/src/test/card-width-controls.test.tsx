@@ -5,6 +5,7 @@ import GraphView, { type GraphViewProps } from '../components/GraphView';
 import { CardWidthContext } from '../components/graph/CardWidthContext';
 import CardWidthEditor from '../components/graph/CardWidthEditor';
 import type { DemoMessage } from '../utils/modelBridge';
+import { CARD_W, ORGANIZATION_CARD_W } from '../utils/layout';
 
 const message: DemoMessage = { id: 'message-id', author: '非常非常长的用户名不应该把消息编号挤出卡片', kind: 'normal', content: '正文保持不变', createdAt: '2026-10-23T00:00:00Z' };
 const props: GraphViewProps = { messages: [message], edges: [], draftUnits: [], activeTextSelectId: null, lastClickedMessageId: null,
@@ -83,12 +84,18 @@ describe('card width controls', () => {
   });
   it('keeps the merge message card at its own width when a member widens the frame', () => {
     const frame = { ...message, id: 'frame', kind: 'relation' as const, relationType: 'merge' as const };
-    const view = render(<CardWidthContext.Provider value={{ widths: { [message.id]: 900 }, editing: null }}>
+    const scene = (memberWidth: number) => <CardWidthContext.Provider value={{ widths: { [message.id]: memberWidth }, editing: null }}>
       <GraphView {...props} messages={[message, frame]} edges={[{ id: 'member', relationMessageId: 'frame', relationType: 'merge', relationLabel: '归并',
         from: { messageId: 'anon:frame', selection: { kind: 'whole' } }, to: { messageId: message.id, selection: { kind: 'whole' } } }]} />
-    </CardWidthContext.Provider>);
-    const card = view.getByRole('group', { name: '组织消息 frame' });
-    expect(card.style.width).toBe('320px');
+    </CardWidthContext.Provider>;
+    const view = render(scene(CARD_W));
+    const card = () => view.getByRole('group', { name: '组织消息 frame' });
+    const frameWidth = () => Number(view.container.querySelector('rect[data-jump-visual-msgids="frame"]')!.getAttribute('width'));
+    const originalFrameWidth = frameWidth();
+    expect(card().style.width).toBe(`${ORGANIZATION_CARD_W}px`);
+    view.rerender(scene(900));
+    expect(card().style.width).toBe(`${ORGANIZATION_CARD_W}px`);
     expect(view.container.querySelector<HTMLElement>('[data-msgid="message-id"]')!.style.width).toBe('900px');
+    expect(frameWidth()).toBeGreaterThan(originalFrameWidth);
   });
 });

@@ -7,6 +7,8 @@ import MessageElement from './MessageElement';
 import { MessageDisplayMarker } from './MessageDisplayHints';
 import {dialogStyles} from './dialogStyles';
 import {useWorkbenchPortalTarget} from '../context/WorkbenchPortalContext';
+import { LOCATE_RELATED_MESSAGE, type RelatedMessageLocation } from '../utils/relatedMessageNavigation';
+import { nearestScrollDelta } from '../utils/scrollVisibility';
 
 const stopControlPropagation = (event: SyntheticEvent) => {
   if (event.target instanceof Element && event.target.closest('button,[data-message-reference]')) event.stopPropagation();
@@ -34,6 +36,10 @@ export default function CrossCanvasRelatedMessages({ groups, messages, selectedU
   expandedChangeRef.current = onExpandedChange;
   const [limit, setLimit] = useState(5);
   const triggerRef = useRef<HTMLButtonElement>(null), popupRef = useRef<HTMLDivElement>(null);
+  const rowsRef = useRef<HTMLDivElement>(null);
+  const [location, setLocation] = useState<RelatedMessageLocation | null>(null);
+  const completedLocation = useRef<RelatedMessageLocation | null>(null);
+  const pendingLocation = useRef<RelatedMessageLocation | null>(null);
   const popupId = useId();
   const [position, setPosition] = useState({ left: 8, top: 8 });
   const directions = (['outgoing', 'incoming'] as const).map(direction => {
@@ -46,7 +52,26 @@ export default function CrossCanvasRelatedMessages({ groups, messages, selectedU
     return { direction, rows };
   });
   const count = new Set(directions.flatMap(group => group.rows.map(row => row.id))).size;
+  const recordKey = JSON.stringify(directions.map(group => group.rows.map(row => row.id)));
   const popupOpen = expanded && count > 0;
+  useLayoutEffect(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const locate = (event: Event) => {
+      const detail = (event as CustomEvent<RelatedMessageLocation>).detail;
+      const indexes = (JSON.parse(recordKey) as string[][]).map(ids => ids.indexOf(detail.messageId));
+      const index = Math.max(...indexes);
+      if (index < 0) return;
+      detail.handled = true;
+      pendingLocation.current?.onLocated(null);
+      pendingLocation.current = detail;
+      setLimit(previous => Math.max(previous, Math.ceil((index + 1) / 5) * 5));
+      setLocation(detail); setExpanded(true);
+    };
+    trigger.addEventListener(LOCATE_RELATED_MESSAGE, locate);
+    return () => trigger.removeEventListener(LOCATE_RELATED_MESSAGE, locate);
+  }, [recordKey]);
+  useLayoutEffect(() => () => { pendingLocation.current?.onLocated(null); pendingLocation.current = null; }, []);
   useLayoutEffect(() => {
     expandedChangeRef.current?.(popupOpen);
     return () => { if (popupOpen) expandedChangeRef.current?.(false); };
@@ -96,12 +121,29 @@ export default function CrossCanvasRelatedMessages({ groups, messages, selectedU
       window.visualViewport?.removeEventListener('resize', schedule); window.visualViewport?.removeEventListener('scroll', schedule);
     };
   }, [expanded, count]);
+  useLayoutEffect(() => {
+    if (!location || completedLocation.current === location) return;
+    if (!popupOpen) { completedLocation.current = location; pendingLocation.current = null; location.onLocated(null); return; }
+    const frame = requestAnimationFrame(() => {
+      const rows = rowsRef.current;
+      const row = Array.from(rows?.querySelectorAll<HTMLElement>('[data-related-relation-id]') ?? [])
+        .find(element => element.dataset.relatedRelationId === location.messageId);
+      if (!rows || !row) { completedLocation.current = location; pendingLocation.current = null; location.onLocated(null); return; }
+      const bounds = rows.getBoundingClientRect(), target = row.getBoundingClientRect();
+      const delta = nearestScrollDelta(target.top, target.bottom, bounds.top, bounds.bottom);
+      if (delta) rows.scrollTop += delta;
+      completedLocation.current = location;
+      pendingLocation.current = null;
+      location.onLocated(row);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [popupOpen, location, limit, position]);
   if (!count) return null;
   return <div data-cross-canvas-related-messages style={{ marginTop: hideTriggerText ? 0 : 5, fontSize: 11, color: 'var(--ink-a5b4fc)' }}
     onMouseDown={stopControlPropagation} onMouseUp={stopControlPropagation}
     onClick={stopControlPropagation} onDoubleClick={stopControlPropagation}>
     <button ref={triggerRef} type="button" className={triggerClassName} aria-label={hideTriggerText ? triggerLabel : undefined}
-      data-jump-msgids={directions.flatMap(group => group.rows.map(row => row.id)).join(' ')} data-rel-overlay="true" aria-expanded={expanded} aria-haspopup="dialog" aria-controls={expanded ? popupId : undefined} onClick={() => setExpanded(value => !value)}
+      data-related-messages-trigger="true" data-jump-msgids={directions.flatMap(group => group.rows.map(row => row.id)).join(' ')} data-rel-overlay="true" aria-expanded={expanded} aria-haspopup="dialog" aria-controls={expanded ? popupId : undefined} onClick={() => setExpanded(value => !value)}
       style={{ color: 'inherit', background: 'none', border: 0, cursor: 'pointer', padding: 0, fontSize: 'inherit', ...triggerStyle }}>
       {!hideTriggerText && <>{expanded ? '▾' : '▸'} {triggerLabel ?? `其他相关消息：${count}`}</>}
     </button>
@@ -118,7 +160,7 @@ export default function CrossCanvasRelatedMessages({ groups, messages, selectedU
           style={{ color: 'var(--ink-bae6fd)', background: 'var(--surface-243448)', border: '1px solid var(--line-475569)', borderRadius: 3, cursor: 'pointer', fontSize: 10 }}>关闭</button>
       </div>
       <div style={{ color: 'var(--ink-94a3b8)', fontSize: 10 }}>点击消息选择整条，点击“查看”跳转。</div>
-      <div style={{ overflowY: 'auto', minHeight: 0, overscrollBehavior: 'contain', display: 'grid', gap: 6 }}>
+      <div ref={rowsRef} style={{ overflowY: 'auto', minHeight: 0, overscrollBehavior: 'contain', display: 'grid', gap: 6 }}>
       {directions.filter(group => group.rows.length > 0).map(({ direction, rows }) => <div key={direction}
       role="group" aria-label={direction === 'outgoing' ? '发出的关联' : '指向本消息的关联'}
       style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
@@ -126,7 +168,7 @@ export default function CrossCanvasRelatedMessages({ groups, messages, selectedU
       {rows.slice(0, limit).map(({ id, type }) => {
         const message = messages.get(id);
         const reference = { messageId: id, revision: message?.revision };
-        return <div key={id} data-related-relation-id={id} data-view-target={highlightedMessageIds?.has(id) || undefined}
+        return <div key={id} data-related-relation-id={id} data-view-target={highlightedMessageIds?.has(id) || location?.messageId === id || undefined}
           style={{ border: '1px solid var(--line-373c70)', borderRadius: 4, padding: '2px 5px', overflowWrap: 'anywhere' }}>
           <MessageElement reference={reference} selected={selectedUnits?.some(unit => isWholeMessageSelection(unit, id))} label={`相关${type}消息`}>
             <span style={{ color: 'var(--ink-94a3b8)' }}>【{type}】 </span><span style={{ fontFamily: 'monospace' }}>{id}</span>

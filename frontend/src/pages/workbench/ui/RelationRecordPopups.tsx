@@ -3,6 +3,7 @@ import type { DemoEdge, DemoMessage } from '../../../utils/modelBridge';
 import { useRef, type ReactNode } from 'react';
 import PopupOverlay from '../../../components/PopupOverlay';
 import { DIALOG_BACKDROP, dialogStyles } from '../../../components/dialogStyles';
+import { ThemeLabel } from '../../../theme/ThemeIcon';
 
 function RecordDialog({ title, children, onClose }: { title: string; children: ReactNode; onClose(): void }) {
   const contentRef = useRef<HTMLDivElement>(null);
@@ -10,7 +11,7 @@ function RecordDialog({ title, children, onClose }: { title: string; children: R
     style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, boxSizing: 'border-box' }}>
     <div ref={contentRef} role="dialog" aria-modal="true" aria-label={title} onClick={event => event.stopPropagation()}
       style={{ ...dialogStyles.panel, width: 'min(460px, 100%)', maxHeight: '100%', overflow: 'auto' }}>
-      <div style={dialogStyles.header}>{title}</div>
+      <div style={dialogStyles.header}><ThemeLabel text={title} /></div>
       <div style={dialogStyles.body}>{children}</div>
       <div style={dialogStyles.footer}><button data-shortcut-cancel="true" onClick={onClose} style={dialogStyles.button}>关闭</button></div>
     </div>

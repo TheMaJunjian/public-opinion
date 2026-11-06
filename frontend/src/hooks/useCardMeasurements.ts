@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { MIN_CARD_H } from '../utils/layout';
 import { useWorkbenchDrawingTask } from '../context/WorkbenchDrawingContext';
@@ -16,6 +16,22 @@ export function useCardMeasurements(
 ) {
   const startMeasurement = useWorkbenchDrawingTask('measurement');
   const [heights, setHeights] = useState<Record<string, number>>({});
+  const latestHeights = useRef(heights);
+  const publishHeights = useCallback((updates: Record<string, number>) => {
+    const previous = latestHeights.current;
+    let next = previous;
+    for (const [id, height] of Object.entries(updates)) {
+      if (previous[id] !== undefined && Math.abs(previous[id] - height) <= 1) continue;
+      if (next === previous) next = { ...previous };
+      next[id] = height;
+    }
+    if (next === previous) return;
+    latestHeights.current = next;
+    // React can replay a layout update over an earlier pending resize. Reuse
+    // this measured snapshot: an updater that allocates on each replay makes
+    // the overlay layout effect enqueue another synchronous render forever.
+    setHeights(next);
+  }, []);
   const observer = useRef<ResizeObserver | null>(null);
   const observed = useRef(new Set<Element>());
   const pending = useRef<Record<string, number>>({});
@@ -49,14 +65,7 @@ export function useCardMeasurements(
             scheduled.current = null;
             const updates = pending.current;
             pending.current = {};
-            setHeights(previous => {
-              let changed = false;
-              const next = { ...previous };
-              for (const [id, height] of Object.entries(updates)) {
-                if (previous[id] === undefined || Math.abs(previous[id] - height) > 1) { next[id] = height; changed = true; }
-              }
-              return changed ? next : previous;
-            });
+            publishHeights(updates);
             task.complete();
             measurement.current = null;
           });
@@ -75,7 +84,7 @@ export function useCardMeasurements(
       measurement.current = null;
       pending.current = {};
     };
-  }, [startMeasurement]);
+  }, [startMeasurement, publishHeights]);
   useLayoutEffect(() => {
     const instance = observer.current;
     if (!instance) return;
@@ -93,18 +102,12 @@ export function useCardMeasurements(
     if (added.length) {
       const task = startMeasurement();
       task.run(() => {
-        setHeights(previous => {
-          let next = previous;
-          for (const element of added) {
-            const id = element.dataset.measureId ?? element.dataset.msgid;
-            if (!id) continue;
-            const height = measuredHeight(element, element.offsetHeight);
-            if (previous[id] !== undefined && Math.abs(previous[id] - height) <= 1) continue;
-            if (next === previous) next = { ...previous };
-            next[id] = height;
-          }
-          return next;
-        });
+        const updates: Record<string, number> = {};
+        for (const element of added) {
+          const id = element.dataset.measureId ?? element.dataset.msgid;
+          if (id) updates[id] = measuredHeight(element, element.offsetHeight);
+        }
+        publishHeights(updates);
         task.complete();
       });
     }

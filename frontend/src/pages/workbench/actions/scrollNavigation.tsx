@@ -3,8 +3,9 @@ import type { Relation } from "../../../types";
 import { getPresentationSpec } from "../../../types";
 import type { WorkbenchDrawingTask } from '../../../context/WorkbenchDrawingContext';
 import { REVEAL_VIRTUAL_MESSAGE, type VirtualMessageRevealDetail } from '../../../hooks/useVirtualMessageMounts';
-import { getMessageJumpDisplay } from '../../../utils/messageJumpDisplay';
+import { getMessageJumpAnchor, getMessageJumpDisplay } from '../../../utils/messageJumpDisplay';
 import { nearestScrollDelta } from '../../../utils/scrollVisibility';
+import { LOCATE_RELATED_MESSAGE, type RelatedMessageLocation } from '../../../utils/relatedMessageNavigation';
 import type {
   DemoEdge
 } from "../../../utils/modelBridge";
@@ -52,6 +53,15 @@ interface ShowMessagePulseDependencies {
 export const MESSAGE_PULSE_DURATION_MS = 400;
 
 export function showMessagePulse(dependencies: ShowMessagePulseDependencies, targetId: string, element: HTMLElement, requestId = dependencies.scrollRequestIdRef.current, onShown?: (shown: boolean) => void): void {
+  if (element.hasAttribute('data-related-messages-trigger')) {
+    const detail: RelatedMessageLocation = { messageId: targetId, onLocated: row => {
+      if (!row || requestId !== dependencies.scrollRequestIdRef.current) { onShown?.(false); return; }
+      showMessagePulse({ ...dependencies, releaseVirtualMessage: false }, targetId, row, requestId, onShown);
+    } };
+    element.dispatchEvent(new CustomEvent(LOCATE_RELATED_MESSAGE, { detail }));
+    if (!detail.handled) onShown?.(false);
+    return;
+  }
   const { scrollRequestIdRef, messagePulseTimerRef, messagePulseRafRef, leftPanelRef, findMessageElements, setMessagePulse } = dependencies;
   if (messagePulseTimerRef.current) clearTimeout(messagePulseTimerRef.current);
   if (messagePulseRafRef.current) cancelAnimationFrame(messagePulseRafRef.current);
@@ -64,12 +74,13 @@ export function showMessagePulse(dependencies: ShowMessagePulseDependencies, tar
         const currentCandidates = leftPanelRef.current
           ? findMessageElements(leftPanelRef.current, targetId)
           : [];
-        pulseElement = currentCandidates.find(candidate=>candidate.hasAttribute('data-directed-edge-start')) ?? currentCandidates.find(candidate =>
+        pulseElement = currentCandidates.find(candidate=>candidate.hasAttribute('data-directed-edge-label')) ?? currentCandidates.find(candidate=>candidate.hasAttribute('data-directed-edge-start')) ?? currentCandidates.find(candidate =>
           candidate.hasAttribute('data-rel-overlay') && candidate.getAttribute('data-msgid') === targetId,
         ) ?? currentCandidates[0];
       }
       if (!pulseElement?.isConnected) { onShown?.(false); return; }
-      const targetElements = pulseElement.hasAttribute('data-rel-overlay')
+      pulseElement=getMessageJumpAnchor(pulseElement,targetId);
+      const targetElements = pulseElement.closest('[data-related-messages-popup]') ? [pulseElement] : pulseElement.hasAttribute('data-rel-overlay')
         ? findMessageElements(leftPanelRef.current!, targetId)
           .filter(candidate => candidate.hasAttribute('data-rel-overlay'))
         : findMessageElements(leftPanelRef.current!, targetId);
@@ -104,7 +115,7 @@ export function showMessagePulse(dependencies: ShowMessagePulseDependencies, tar
 }
 
 export function findMessageElements(container: HTMLElement, messageId: string): HTMLElement[] {
-  const directElements = Array.from(container.querySelectorAll('[data-msgid], [data-directed-edge-start]'))
+  const directElements = Array.from(container.querySelectorAll('[data-msgid], [data-directed-edge-start], [data-related-messages-trigger]'))
     .filter(node => {
       const element = node as HTMLElement;
       if (element.getAttribute('data-msgid') === messageId) return true;
@@ -141,6 +152,41 @@ function viewportContainsTarget(element: HTMLElement, container: HTMLElement): b
     && Math.abs(nearestScrollDelta(start, end, min, max)) <= 1;
   return rect.width > 0 && rect.height > 0
     && axisVisible(rect.left, rect.right, left, right) && axisVisible(rect.top, rect.bottom, top, bottom);
+}
+
+function messageNavigationElements(container: HTMLElement, messageId: string, relations: Relation[], edges: DemoEdge[], findElements = findMessageElements): HTMLElement[] {
+  const relation = relations.find(relation => relation.id === messageId);
+  const edge = edges.find(edge => edge.relationMessageId === messageId);
+  const type = relation?.relationType ?? edge?.relationType ?? '';
+  const decoration = ['AGREE', 'DISAGREE', 'CORRECT'].includes(type.toUpperCase()) || getPresentationSpec(type).kind === 'inline-badge';
+  const mounted = findElements(container, messageId);
+  const measurable = mounted.filter(element => { const rect = element.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; });
+  const candidates = measurable.length ? measurable : mounted;
+  const overlays = candidates.filter(element => element.hasAttribute('data-rel-overlay'));
+  const directOverlays = overlays.filter(element => element.getAttribute('data-msgid') === messageId);
+  if (decoration) return directOverlays.length ? directOverlays : overlays.length ? overlays : candidates;
+  // The label/header is the message's reading anchor. A visible curve start or
+  // frame border must not hide the fact that its actual label/card is clipped.
+  for (const attribute of ['data-directed-edge-label', 'data-directed-edge-start', 'data-frame-header']) {
+    const anchors = candidates.filter(element => element.hasAttribute(attribute));
+    if (anchors.length) return anchors;
+  }
+  const cards = candidates.filter(element => !element.hasAttribute('data-rel-overlay'));
+  return cards.length ? cards : candidates;
+}
+
+/** Reuse a mounted reading anchor only when its pane and all enclosing clips expose it. */
+export function findVisibleMessageElement(container: HTMLElement | null, messageId: string, relations: Relation[] = [], edges: DemoEdge[] = []): HTMLElement | null {
+  if (!container) return null;
+  const relation = relations.find(relation => relation.id === messageId);
+  const candidates = messageNavigationElements(container, messageId, relations, edges);
+  const summaries = findMessageElements(container, messageId).filter(element => element.hasAttribute('data-related-messages-trigger'));
+  return [...candidates, ...summaries].find(element => {
+    if (element.hasAttribute('data-directed-edge-start')) return false;
+    if (relation && getPresentationSpec(relation.relationType).isContainer && element.hasAttribute('data-rel-overlay') && !element.hasAttribute('data-frame-header')) return false;
+    const visibility = getComputedStyle(element).visibility;
+    return visibility !== 'hidden' && visibility !== 'collapse' && viewportContainsTarget(element, container);
+  }) ?? null;
 }
 
 function scrollScale(element: HTMLElement, rect: DOMRect) {
@@ -228,6 +274,13 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
     if (pendingScrollMsgIdRef.current !== targetId) { complete(false); return; }
     const container = leftPanelRef.current;
     if (!container) { scrollRafRef.current = nextFrame(tryScroll); return; }
+    const visibleElement = options?.align !== 'center' && dependencyIds.length === 0
+      ? findVisibleMessageElement(container, targetId, relationsRef.current, edgesRef.current) : null;
+    if (visibleElement) {
+      pendingScrollMsgIdRef.current = null;
+      showMessagePulse(targetId, visibleElement, requestId, complete);
+      return;
+    }
     const reveal: VirtualMessageRevealDetail = { ids: [targetId, ...dependencyIds] };
     container.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: reveal }));
     if (reveal.positioningPending) { afterLayout(tryScroll); return; }
@@ -250,25 +303,7 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
       }),
     );
     if (!dependencyReady) { scrollRafRef.current = nextFrame(tryScroll); return; }
-    const targetRelation = relationsRef.current.find(relation => relation.id === targetId);
-    const targetEdge = edgesRef.current.find(edge => edge.relationMessageId === targetId);
-    const isDecorationTarget = targetRelation
-      ? ['AGREE', 'DISAGREE', 'CORRECT'].includes(targetRelation.relationType.toUpperCase())
-      || getPresentationSpec(targetRelation.relationType).kind === 'inline-badge'
-      : ['AGREE', 'DISAGREE', 'CORRECT'].includes(targetEdge?.relationType?.toUpperCase() ?? '');
-    const findTargetElement = (scope = container) => {
-      const mounted = findMessageElements(scope, targetId);
-      const measurable=mounted.filter(candidate=>{const rect=candidate.getBoundingClientRect();return rect.width>0&&rect.height>0;});
-      const candidates=measurable.length?measurable:mounted;
-      const overlayCandidates = candidates.filter(candidate => candidate.hasAttribute('data-rel-overlay'));
-      const directOverlayCandidates = overlayCandidates.filter(candidate => candidate.getAttribute('data-msgid') === targetId);
-      const preferredCandidates = isDecorationTarget
-        ? (directOverlayCandidates.length > 0 ? directOverlayCandidates : overlayCandidates.length > 0 ? overlayCandidates : candidates)
-        : candidates;
-      return isDecorationTarget
-          ? preferredCandidates[0] ?? null
-          : preferredCandidates.find(candidate=>candidate.hasAttribute('data-directed-edge-start')) ?? preferredCandidates.find(candidate => !candidate.hasAttribute('data-rel-overlay')) ?? preferredCandidates[0] ?? null;
-    };
+    const findTargetElement = (scope = container) => messageNavigationElements(scope, targetId, relationsRef.current, edgesRef.current, findMessageElements)[0] ?? null;
     const el = findTargetElement();
     if (!el) { scrollRafRef.current = nextFrame(tryScroll); return; }
     const elRect = el.getBoundingClientRect();

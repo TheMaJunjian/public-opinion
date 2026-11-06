@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { createContext, useContext, useLayoutEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import RecentWorkbenchViews from '../components/RecentWorkbenchViews';
@@ -9,6 +9,36 @@ import {ViewCacheSettingsProvider,VIEW_CACHE_LIMIT_KEY,useViewCacheSettings} fro
 afterEach(()=>localStorage.removeItem(VIEW_CACHE_LIMIT_KEY));
 
 describe('recent workbench views', () => {
+  it('releases a large document on leaving before another document starts loading', () => {
+    const release = vi.fn();
+    function Document() { useEffect(() => release, []); return <div>大档案</div>; }
+    const view = render(<RecentWorkbenchViews viewKey="viewer" retainOnLeave={false} deferParking><Document /></RecentWorkbenchViews>);
+    view.rerender(<RecentWorkbenchViews viewKey="chooser" deferParking><div>选择文件</div></RecentWorkbenchViews>);
+    expect(release).toHaveBeenCalledOnce();
+    expect(view.container.querySelector('[data-cached-view-count]')).toHaveAttribute('data-cached-view-count', '1');
+  });
+  it('replaces a previous viewer instance without evicting an unrelated online workbench', () => {
+    const released = vi.fn();
+    function Scene({ id }: { id: string }) {
+      const [value] = useState(() => ({ id }));
+      useEffect(() => () => released(value), [value]);
+      return <div data-scene={id}>{id}</div>;
+    }
+    const element = (id: string) => <RecentWorkbenchViews viewKey={id}
+      exclusiveGroup={id.startsWith('viewer:') ? 'viewer' : undefined} deferParking>
+      <Scene id={id} />
+    </RecentWorkbenchViews>;
+    const view = render(element('online'));
+    const online = view.container.querySelector('[data-scene="online"]');
+    view.rerender(element('viewer:first'));
+    view.rerender(element('home'));
+    expect(released).not.toHaveBeenCalled();
+    for (let index = 0; index < 8; index++) view.rerender(element(`viewer:${index}`));
+    expect(released).toHaveBeenCalledWith({ id: 'viewer:first' });
+    expect(view.container.querySelector('[data-cached-view-count]')).toHaveAttribute('data-cached-view-count', '3');
+    view.rerender(element('online'));
+    expect(view.container.querySelector('[data-scene="online"]')).toBe(online);
+  });
   it('restores native scroll offsets after a retained route is detached and reattached', () => {
     const element = (key: string) => <RecentWorkbenchViews viewKey={key} deferParking preserveScroll>
       <div data-testid="scroll-box" style={{ overflow: 'auto', width: 100, height: 100 }}><div style={{ width: 1000, height: 1000 }}>{key}</div></div>
@@ -100,4 +130,20 @@ describe('recent workbench views', () => {
     expect(screen.getByRole('dialog')).toBe(popup);expect(popup).toHaveTextContent('已同步的新正文');
     view.unmount();expect(popup.isConnected).toBe(false);
   });
+});
+it('keeps each cached scene intact while the next scope is still loading', () => {
+  const scene = (id: string, pending = false) => <RecentWorkbenchViews viewKey={id} pending={pending}><div data-testid="scope">{id}</div></RecentWorkbenchViews>;
+  const view = render(scene('A'));
+  const first = screen.getByTestId('scope');
+  view.rerender(scene('B', true));
+  expect(screen.getByTestId('scope')).toBe(first); expect(first).toHaveTextContent('A');
+  view.rerender(scene('B'));
+  const second = screen.getByTestId('scope');
+  for (let n = 0; n < 8; n++) {
+    view.rerender(scene('A', true)); expect(screen.getByTestId('scope')).toBe(second);
+    view.rerender(scene('A')); expect(screen.getByTestId('scope')).toBe(first);
+    view.rerender(scene('B', true)); expect(screen.getByTestId('scope')).toBe(first);
+    view.rerender(scene('B')); expect(screen.getByTestId('scope')).toBe(second);
+  }
+  expect(view.container.querySelector('[data-cached-view-count]')).toHaveAttribute('data-cached-view-count', '2');
 });

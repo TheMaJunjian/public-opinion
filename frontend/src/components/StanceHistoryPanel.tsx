@@ -1,16 +1,18 @@
 import { messageScopePath } from '../utils/messageRoutes';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import type { StanceRelation, StanceStake, StanceTag } from '../types';
+import ThemeIcon from '../theme/ThemeIcon';
 
 interface Props {
   userId: string;
   scopeMessageId?: string;
 }
 
-const TYPE_ICON: Record<string, string> = {
-  AGREE: '👍', DISAGREE: '👎', SELF_AGREE: '✍️',
+const TYPE_ICON: Record<string, ReactNode> = {
+  AGREE: <ThemeIcon name="agree" fallback="👍" />, DISAGREE: <ThemeIcon name="disagree" fallback="👎" />,
+  SELF_AGREE: <ThemeIcon name="agree" fallback="✍️" />,
 };
 const TYPE_LABEL: Record<string, string> = {
   AGREE: '赞同', DISAGREE: '反对', SELF_AGREE: '赞同自己',
@@ -186,7 +188,7 @@ export default function StanceHistoryPanel({ userId, scopeMessageId }: Props) {
 function StanceCard({
   icon, title, subtitle, time, highlight, onDoubleClick,
 }: {
-  icon: string;
+  icon: ReactNode;
   title: string;
   subtitle?: string;
   time: string;

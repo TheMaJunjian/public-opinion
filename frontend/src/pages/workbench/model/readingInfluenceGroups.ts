@@ -25,7 +25,7 @@ export function groupReadingInfluences(items:ReadingInfluence[],messages:Readonl
   for(const item of items){
     const message=messages.get(item.messageId),grouped=groupedReadingInfluence(item);
     const label=item.type==='reference'&&grouped?'被引用':readingInfluenceLabel(message,item.type);
-    const key=grouped?JSON.stringify([item.type,label]):JSON.stringify([item.messageId,item.key]);
+    const key=JSON.stringify([item.type,label]);
     const group=groups.get(key)??{key,label,grouped,items:[]};group.items.push(item);groups.set(key,group);
   }
   return [...groups.values()].sort((a,b)=>{

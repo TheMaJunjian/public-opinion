@@ -1,10 +1,10 @@
-import { StrictMode, useLayoutEffect, useState } from 'react';
+import { StrictMode, useContext, useLayoutEffect, useState } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WorkbenchLoadingBoundary, { useWorkbenchDrawingPreparation, useWorkbenchLoadingProgress, useWorkbenchSendingProgress, WORKBENCH_REQUEST_WAIT_MS } from '../components/WorkbenchLoadingBoundary';
 import WorkbenchActivityIndicator from '../components/WorkbenchActivityIndicator';
-import { useWorkbenchDrawingTask, WORKBENCH_DRAWING_TIMEOUT_MS } from '../context/WorkbenchDrawingContext';
-import { resetWorkbenchActivity } from '../utils/workbenchActivity';
+import { WorkbenchDrawingContext, useWorkbenchDrawingTask, WORKBENCH_DRAWING_TIMEOUT_MS } from '../context/WorkbenchDrawingContext';
+import { beginWorkbenchSync, finishWorkbenchSync, resetWorkbenchActivity } from '../utils/workbenchActivity';
 
 type Task = ReturnType<ReturnType<typeof useWorkbenchDrawingTask>>;
 type Tasks = { measurement: Task; overlays: Task; positioning: Task };
@@ -99,7 +99,7 @@ describe('workbench loading through registered drawing tasks', () => {
     expect(screen.getByTestId('workbench').parentElement!.inert).toBe(false);
   });
 
-  it('waits for every task even through long idle gaps, then unlocks clicking, keys and scrolling with both prompts', () => {
+  it('waits for every task in one dialog, then unlocks clicking, keys and scrolling', () => {
     let tasks!: Tasks;
     const onTasks = (value: Tasks) => { tasks = value; };
     const click = vi.fn(), key = vi.fn();
@@ -108,7 +108,7 @@ describe('workbench loading through registered drawing tasks', () => {
     const overflow = document.body.style.overflow;
     advance(5000);
     expect(screen.getByRole('dialog', { name: '正在绘制' })).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('正在绘制');
+    expect(screen.queryByRole('status')).toBeNull();
     act(() => tasks.measurement.complete());
     advance(5000);
     act(() => tasks.overlays.complete());
@@ -123,7 +123,7 @@ describe('workbench loading through registered drawing tasks', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     advance(34);
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(screen.getByRole('status')).not.toHaveTextContent('正在绘制');
+    expect(screen.queryByRole('status')).toBeNull();
     expect(root.inert).toBe(false);
     expect(document.body.style.overflow).toBe(overflow);
     document.addEventListener('keydown', key);
@@ -154,6 +154,61 @@ describe('workbench loading through registered drawing tasks', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     act(() => tasks.positioning.complete());
     advance(34);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('uses the same dialog for loading, drawing and positioning, then leaves background synchronization nonblocking', () => {
+    let tasks!: NonNullable<React.ContextType<typeof WorkbenchDrawingContext>>;
+    function Workspace() {
+      useWorkbenchLoadingProgress(false, null);
+      tasks = useContext(WorkbenchDrawingContext)!;
+      return <input aria-label="测试工作区" />;
+    }
+    const view = render(<><WorkbenchLoadingBoundary><Workspace /></WorkbenchLoadingBoundary><WorkbenchActivityIndicator /></>);
+    advance(34);
+    let request!: ReturnType<typeof tasks.begin>, drawing!: ReturnType<typeof tasks.begin>, positioning!: ReturnType<typeof tasks.begin>;
+    act(() => { request = tasks.begin('loading', true); });
+    const dialog = screen.getByRole('dialog', { name: '正在加载消息' });
+    advance(5000);
+    expect(screen.getByRole('dialog')).toBe(dialog);
+    act(() => { drawing = tasks.begin('projection'); positioning = tasks.begin('positioning', true); request.release(); });
+    expect(screen.getByRole('dialog', { name: '正在绘制' })).toBe(dialog);
+    act(() => drawing.release());
+    expect(screen.getByRole('dialog', { name: '正在定位' })).toBe(dialog);
+    advance(1000);
+    expect(view.container.querySelector('[aria-busy]')).toHaveAttribute('aria-busy', 'true');
+    act(() => positioning.release());
+    expect(screen.getByRole('dialog', { name: '正在定位' })).toBe(dialog);
+    advance(34);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    act(() => { beginWorkbenchSync(); drawing = tasks.begin('projection'); });
+    advance(1000);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(view.container.querySelector('[aria-busy]')).toHaveAttribute('aria-busy', 'false');
+    expect(screen.getByRole('status')).toHaveTextContent('正在同步消息');
+    act(() => { drawing.release(); finishWorkbenchSync(); });
+    advance(34);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('does not reopen an expired request wait for an old foreground task, but allows a fresh operation', () => {
+    let tasks!: NonNullable<React.ContextType<typeof WorkbenchDrawingContext>>;
+    function Workspace() {
+      useWorkbenchLoadingProgress(true, null);
+      tasks = useContext(WorkbenchDrawingContext)!;
+      return null;
+    }
+    render(<WorkbenchLoadingBoundary><Workspace /></WorkbenchLoadingBoundary>);
+    let old!: ReturnType<typeof tasks.begin>, next!: ReturnType<typeof tasks.begin>;
+    act(() => { old = tasks.begin('loading', true); });
+    advance(WORKBENCH_REQUEST_WAIT_MS);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('alert')).toHaveTextContent('加载等待已超过 60 秒');
+    act(() => tasks.committed()); advance(34);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    act(() => { old.cancel(); next = tasks.begin('positioning', true); });
+    expect(screen.getByRole('dialog', { name: '正在定位' })).toBeInTheDocument();
+    act(() => next.release()); advance(34);
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
@@ -283,6 +338,44 @@ describe('workbench loading through registered drawing tasks', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('消息整理失败');
     expect(screen.getByTestId('workbench').parentElement!.inert).toBe(false);
     expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('keeps asynchronous preparation visible until its request completes and the scene paints', async () => {
+    let prepare!: ReturnType<typeof useWorkbenchDrawingPreparation>, complete!: () => void;
+    const work = vi.fn(() => new Promise<void>(resolve => { complete = resolve; }));
+    render(<WorkbenchLoadingBoundary><Content /><Preparation onReady={value => { prepare = value; }} /></WorkbenchLoadingBoundary>);
+    advance(34);
+    act(() => { prepare(work); });
+    expect(screen.getByRole('dialog', { name: '正在绘制' })).toBeInTheDocument();
+    expect(work).not.toHaveBeenCalled();
+    advance(16);
+    expect(work).not.toHaveBeenCalled();
+    advance(34);
+    expect(work).toHaveBeenCalledOnce();
+    advance(5000);
+    expect(screen.getByRole('dialog', { name: '正在绘制' })).toBeInTheDocument();
+    await act(async () => { complete(); });
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    advance(34);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByTestId('workbench').parentElement!.inert).toBe(false);
+  });
+
+  it('cancels an unfinished asynchronous preparation on timeout and ignores its late completion', async () => {
+    let prepare!: ReturnType<typeof useWorkbenchDrawingPreparation>, complete!: () => void;
+    const cancelled = vi.fn();
+    render(<WorkbenchLoadingBoundary><Content /><Preparation onReady={value => { prepare = value; }} /></WorkbenchLoadingBoundary>);
+    advance(34);
+    act(() => { prepare(() => new Promise<void>(resolve => { complete = resolve; }), cancelled); });
+    advance(WORKBENCH_DRAWING_TIMEOUT_MS);
+    expect(cancelled).toHaveBeenCalledOnce();
+    expect(screen.getByRole('alert')).toHaveTextContent('超过 30 秒');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByTestId('workbench').parentElement!.inert).toBe(false);
+    await act(async () => { complete(); });
+    advance(34);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(cancelled).toHaveBeenCalledOnce();
   });
 
   it('waits for the actual font promise without using a timeout', async () => {

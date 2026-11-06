@@ -31,6 +31,18 @@ export function registerMessageJumpGroups(canvas: HTMLElement, groups: DisplayGr
   return () => { if (canvasGroups.get(canvas) === groups) canvasGroups.delete(canvas); };
 }
 
+/** A relation is located by its visible label, not the distant start of its curve. */
+export function getMessageJumpAnchor(target: HTMLElement, messageId: string): HTMLElement {
+  const canvas=target.closest<HTMLElement>('[data-jump-canvas]');
+  if(!canvas)return target;
+  const labels=Array.from(canvas.querySelectorAll<HTMLElement>('[data-directed-edge-label]'))
+    .filter(element=>element.getAttribute('data-directed-edge-label')===messageId)
+    .filter(element=>{const rect=element.getBoundingClientRect();return rect.width>0&&rect.height>0;});
+  if(labels.includes(target))return target;
+  const edgeId=target.getAttribute('data-frame-edge-id');
+  return (edgeId?labels.find(label=>label.getAttribute('data-frame-edge-id')===edgeId):undefined)??labels[0]??target;
+}
+
 export function getMessageJumpDisplay(target: HTMLElement, messageId: string, fallback = target.getBoundingClientRect()) {
   const canvas = target.closest<HTMLElement>('[data-jump-canvas]');
   if (!canvas) return { source: target, elements: undefined, rect: fallback };

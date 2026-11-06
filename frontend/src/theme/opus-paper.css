@@ -24,6 +24,13 @@
 :root[data-appearance='opus-paper'] [data-skin-frame-header] { border-top: 3px solid var(--skin-type-accent, var(--skin-border)) !important; }
 :root[data-appearance='opus-paper'] .graph-edge-label-plate { rx: 1px; }
 :root[data-appearance='opus-paper'] .trace-reading-panel { background: var(--surface-card); border-color: var(--skin-border) !important; }
+/* Fine ink strokes and seal/coin marks replace emoji throughout the paper UI. */
+:root[data-theme='opus'][data-appearance='opus-paper'] :is(.theme-icon-legacy, .theme-icon-arena) { display: none; }
+:root[data-theme='opus'][data-appearance='opus-paper'] .theme-icon-paper {
+  display: inline-block; width: 14px; height: 14px; flex: 0 0 14px;
+  vertical-align: -2px; pointer-events: none;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] .theme-icon-before-label { margin-right: 4px; }
 :root[data-appearance='opus-paper'] .workbench-operation-panel > [data-guide-selection-staging],
 :root[data-appearance='opus-paper'] .workbench-composer-section { box-shadow: inset 3px 0 var(--skin-decoration-line); }
 
@@ -84,6 +91,7 @@
 }
 :root[data-theme='opus'][data-appearance='opus-paper'] .themed-message[data-skin-carrier='record'][data-whole-selected='true'] { border-width: 0 0 1px !important; }
 :root[data-theme='opus'][data-appearance='opus-paper'] [data-view-target='true']:not(svg *)::after { inset: calc(-8px - var(--skin-mount, 0px)); }
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-related-relation-id][data-view-target='true']::after { inset: 0; }
 :root[data-theme='opus'][data-appearance='opus-paper'] [data-display-reading] { opacity: 1 !important; }
 :root[data-theme='opus'][data-appearance='opus-paper'] .message-read-stamp { color: var(--text-secondary); border-color: var(--skin-border); }
 
@@ -99,7 +107,7 @@
 :root[data-theme='opus'][data-appearance='opus-paper'] .desk-empty-hint { opacity: 1 !important; color: var(--text-secondary); }
 :root[data-theme='opus'][data-appearance='opus-paper'] .desk-relation-group { gap: 8px; margin-block: 6px; }
 :root[data-theme='opus'][data-appearance='opus-paper'] .desk-relation-group button { border-radius: 3px; }
-:root[data-theme='opus'][data-appearance='opus-paper'] .desk-submit-bar { min-height: 52px; box-sizing: border-box; padding: 10px 0 6px; background: var(--surface-panel); }
+:root[data-theme='opus'][data-appearance='opus-paper'] .desk-submit-bar { min-height: 52px; box-sizing: border-box; padding: 10px 0 6px; background: var(--surface-card); }
 :root[data-theme='opus'][data-appearance='opus-paper'] .desk-send-hint[data-duplicates-validation='true'] { display: none; }
 :root[data-theme='opus'][data-appearance='opus-paper'] :is(.trace-reading-panel, [data-workbench-progress-active]) { color: var(--text-primary); font-size: 13px; line-height: 1.6; }
 :root[data-theme='opus'][data-appearance='opus-paper'] .trace-reading-panel p { color: var(--text-secondary); }
@@ -173,8 +181,6 @@
 }
 :root[data-theme='opus'][data-appearance='opus-paper'] .themed-message:not([data-skin-carrier='record']) [data-message-settlement-actions] { font-size: 12px !important; gap: 8px !important; color: #696258; }
 :root[data-theme='opus'][data-appearance='opus-paper'] .themed-message:not([data-skin-carrier='record']) [data-message-settlement-actions] button { min-width: 24px; min-height: 24px; padding: 3px !important; color: #696258 !important; }
-:root[data-theme='opus'][data-appearance='opus-paper'] .themed-message:not([data-skin-carrier='record']) .theme-icon-legacy { display: none; }
-:root[data-theme='opus'][data-appearance='opus-paper'] .themed-message:not([data-skin-carrier='record']) .theme-icon-arena { display: inline-block; width: 14px; height: 14px; vertical-align: -2px; }
 :root[data-theme='opus'][data-appearance='opus-paper'] .themed-message:not([data-skin-carrier='record']) button[aria-label^='查看加入消息'],
 :root[data-theme='opus'][data-appearance='opus-paper'] .themed-message:not([data-skin-carrier='record']) button[aria-label^='查看被加入消息'] {
   padding: 3px 0 !important; font: 400 12px/1.5 system-ui, sans-serif !important;
@@ -229,8 +235,6 @@
 :root[data-theme='opus'][data-appearance='opus-paper'] [data-skin-frame-header]:is([data-skin-type='classify'], [data-skin-type='summary']) .organization-frame-members { margin-top: 0 !important; padding-top: 8px; border-top: 1px solid #e8e1d5; color: #696258 !important; font: 400 12px/1.6 system-ui, sans-serif !important; }
 :root[data-theme='opus'][data-appearance='opus-paper'] .organization-frame-heading [data-message-settlement-actions] { font-size: 12px !important; gap: 8px !important; color: #696258; }
 :root[data-theme='opus'][data-appearance='opus-paper'] .organization-frame-heading [data-message-settlement-actions] button { min-width: 24px; min-height: 24px; padding: 3px !important; color: #696258 !important; }
-:root[data-theme='opus'][data-appearance='opus-paper'] [data-skin-frame-header]:is([data-skin-type='classify'], [data-skin-type='summary']) .theme-icon-legacy { display: none; }
-:root[data-theme='opus'][data-appearance='opus-paper'] [data-skin-frame-header]:is([data-skin-type='classify'], [data-skin-type='summary']) .theme-icon-arena { display: inline-block; width: 14px; height: 14px; vertical-align: -2px; }
 :root[data-theme='opus'][data-appearance='opus-paper'] .organization-frame-records button:is([aria-label^='查看加入消息'], [aria-label^='查看被加入消息']) {
   padding: 3px 0 !important; font: 400 12px/1.5 system-ui, sans-serif !important; color: #696258 !important;
   background: none !important; border: 0 !important; border-radius: 0 !important;
@@ -245,7 +249,7 @@
   border: 0 !important; border-radius: 0 !important; background: none !important; box-shadow: none !important;
   color: #696258 !important; font: 400 12px/1.5 system-ui, sans-serif !important; letter-spacing: .08em;
 }
-:root[data-theme='opus'][data-appearance='opus-paper'] [data-skin-type-label] :is(.theme-icon-legacy, .theme-icon-arena) { display: none !important; }
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-skin-type-label] :is(.theme-icon-legacy, .theme-icon-arena, .theme-icon-paper) { display: none !important; }
 :root[data-theme='opus'][data-appearance='opus-paper'] .themed-message :is(.message-card-header, .message-card-header-row) {
   font: 400 12px/1.5 system-ui, sans-serif !important; color: #696258 !important; opacity: 1 !important;
 }
@@ -264,8 +268,6 @@
 :root[data-theme='opus'][data-appearance='opus-paper'] .organization-frame-identity-content { gap: 5px; align-items: center; }
 :root[data-theme='opus'][data-appearance='opus-paper'] :is(.themed-message, [data-skin-frame-header]) [data-message-settlement-actions] { font-size: 12px !important; gap: 8px !important; color: #696258; }
 :root[data-theme='opus'][data-appearance='opus-paper'] :is(.themed-message, [data-skin-frame-header]) [data-message-settlement-actions] button { min-width: 24px; min-height: 24px; padding: 3px !important; color: #696258 !important; }
-:root[data-theme='opus'][data-appearance='opus-paper'] :is(.themed-message, [data-skin-frame-header]) .theme-icon-legacy { display: none; }
-:root[data-theme='opus'][data-appearance='opus-paper'] :is(.themed-message, [data-skin-frame-header]) .theme-icon-arena { display: inline-block; width: 14px; height: 14px; vertical-align: -2px; }
 :root[data-theme='opus'][data-appearance='opus-paper'] [data-frame-visual][data-skin-type='arrange']:not([data-whole-selected='true']) > rect { stroke-dasharray: 6 3; }
 :root[data-theme='opus'][data-appearance='opus-paper'] [data-frame-visual][data-whole-selected='true'] > rect { stroke: var(--skin-selected); }
 :root[data-theme='opus'][data-appearance='opus-paper'] .themed-message[data-skin-type='arrange'][data-skin-carrier='record'] {
@@ -300,7 +302,7 @@
   min-height: 32px; padding: 4px 10px !important; border-color: transparent !important; background: transparent !important;
 }
 :root[data-theme='opus'][data-appearance='opus-paper'] .app-navbar .navbar-logout:hover { border-color: var(--border-default) !important; }
-:root[data-theme='opus'][data-appearance='opus-paper'] :is(.workbench-shell, [data-popup-overlay], .guide-bubble, [data-reading-version-dialog], [data-display-hint-mode]) button:disabled:not([data-reading-confirm-action='read']) {
+:root[data-theme='opus'][data-appearance='opus-paper'] :is(.workbench-shell, [data-popup-overlay], .guide-bubble, [data-reading-version-dialog], [data-display-hint-mode], [role='dialog'], [role='tooltip'], .record-panel, .settlement-panel, .round-history, .notification-panel, .operation-feedback) button:disabled:not([data-reading-confirm-action='read']) {
   background: var(--button-disabled-bg) !important; color: var(--button-disabled-text) !important;
   border: 1px solid color-mix(in srgb, var(--border-default) 55%, var(--surface-page)) !important;
   box-shadow: none !important; opacity: 1 !important; cursor: default; filter: none;
@@ -336,3 +338,106 @@
 :root[data-theme='opus'][data-appearance='opus-paper'] [data-influence-reading-group='read'] { border-color: #92ab95; background: #f0f3ec; }
 :root[data-theme='opus'][data-appearance='opus-paper'] .comparison-difference-toolbar { border-radius: 4px; background: var(--surface-card); }
 :root[data-theme='opus'][data-appearance='opus-paper'] .comparison-difference-toolbar :is(button, select) { border-radius: 4px; }
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-message-entry-hint] { color: var(--text-muted); opacity: 1 !important; }
+
+/* Standalone record panels and notifications follow the same paper controls. */
+:root[data-theme='opus'][data-appearance='opus-paper'] .record-panel :is(textarea, select, input:not([type='checkbox'], [type='radio'])) {
+  background: var(--surface-card); color: var(--text-primary); border-color: var(--border-default);
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] .record-panel :is(textarea, input)::placeholder {
+  color: var(--text-muted); opacity: 1;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] .record-action {
+  border: 1px solid var(--button-secondary-border); background-color: var(--button-secondary-bg); color: var(--button-secondary-text);
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] .record-action:enabled:hover {
+  background-color: var(--surface-hover); border-color: var(--paper-gold);
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-guide-settle='true']:enabled {
+  border: 1px solid var(--line-fde68a); color: var(--graph-label-amber);
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] .notification-panel h2 {
+  font: 600 20px/1.5 var(--font-reading);
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] .notification-panel button:enabled:hover {
+  background: var(--surface-hover); border-color: var(--paper-gold);
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] .notification-panel nav button[aria-pressed='true']:enabled:hover {
+  background: var(--button-primary-bg); color: var(--button-primary-text); border-color: transparent;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] .notification-panel .notification-error {
+  color: var(--ink-f87171); background: var(--surface-fef2f2); border-color: var(--line-fecaca);
+}
+
+/* Reading metadata uses quiet ink. Color remains reserved for links and states. */
+:root[data-theme='opus'][data-appearance='opus-paper'] :is([data-display-hint-mode], [data-reading-message-details]) {
+  color: var(--text-primary);
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] :is([data-display-hint-mode], [data-reading-message-details]) [role='alert'] { color: var(--ink-f87171); }
+:root[data-theme='opus'][data-appearance='opus-paper'] .trace-reading-panel > div > button:enabled:hover {
+  background: var(--surface-hover); border-color: var(--paper-gold); color: var(--text-primary);
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-reading-structure] button[aria-pressed='false']:enabled:hover {
+  background: var(--surface-hover) !important; border-color: var(--paper-gold) !important; color: var(--text-primary) !important;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-reading-confirm-action='pending']:enabled:hover {
+  background: #3d372d !important; border-color: #3d372d !important;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-comparison-reading]:enabled:hover {
+  background: var(--surface-hover) !important; border-color: var(--paper-gold) !important;
+}
+
+/* The send footer and the records below it continue the same opaque paper surface. */
+:root[data-theme='opus'][data-appearance='opus-paper'] :is([data-selected-message-connections], .workbench-record-section) {
+  background: var(--surface-card); border-color: var(--border-default) !important; color: var(--text-primary);
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] .workbench-operation-panel :is(input, select, textarea):disabled {
+  background: var(--button-disabled-bg) !important; color: var(--button-disabled-text) !important;
+  border-color: var(--border-default) !important; opacity: 1;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] .workbench-operation-panel textarea:read-only {
+  background: var(--surface-panel) !important; color: var(--text-muted) !important;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] .workbench-record-section .workbench-action[aria-expanded='true']:enabled {
+  background: var(--selection-bg) !important; border-color: var(--text-primary) !important; color: var(--text-primary) !important;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] .operation-log-meta {
+  color: var(--text-muted); opacity: 1 !important;
+}
+
+/* Ranking and filter popovers keep selected controls distinct during hover. */
+:root[data-theme='opus'][data-appearance='opus-paper'] .leaderboard-tab {
+  background: var(--surface-card) !important; border-color: var(--border-default) !important; color: var(--text-secondary) !important;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] .leaderboard-tab[aria-pressed='true'] {
+  background: var(--selection-bg) !important; border-color: var(--text-primary) !important; color: var(--text-primary) !important;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] .leaderboard-tab[aria-pressed='false']:enabled:hover {
+  background: var(--surface-hover) !important; border-color: var(--paper-gold) !important;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-clean-filter] [role='dialog'] :is(input, select) {
+  color: var(--text-primary); background: var(--surface-card); border: 1px solid var(--border-default); border-radius: 3px; accent-color: var(--text-primary);
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-clean-filter] legend { color: var(--text-secondary) !important; }
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-clean-filter] [role='dialog'] button:enabled:hover {
+  background: var(--surface-hover) !important; border-color: var(--paper-gold) !important;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-clean-filter] .clean-filter-confirm:enabled {
+  background: var(--button-primary-bg) !important; color: var(--button-primary-text) !important;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-clean-filter] [role='dialog'] .clean-filter-confirm:enabled:hover {
+  background: #3d372d !important;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-home-filter] input { accent-color: var(--text-primary); }
+
+/* Export, jump and both filters are peers, including their hover surfaces. */
+:root[data-theme='opus'][data-appearance='opus-paper'] .workbench-toolbar-action {
+  background: var(--button-secondary-bg) !important; color: var(--button-secondary-text) !important;
+  border-color: var(--button-secondary-border) !important;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] .workbench-toolbar-action:enabled:hover {
+  background: var(--surface-hover) !important; color: var(--text-primary) !important; border-color: var(--paper-gold) !important;
+}
+:root[data-theme='opus'][data-appearance='opus-paper'] .workbench-toolbar-action:is([data-filter-active='true'], [aria-expanded='true']):enabled {
+  border-color: var(--text-primary) !important; color: var(--text-primary) !important; font-weight: 600 !important;
+}

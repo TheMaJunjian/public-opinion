@@ -50,6 +50,7 @@ it('retains reading windows across leaving and returning without allowing a park
   const section=document.querySelector<HTMLDetailsElement>('[data-reading-message-section="m"]')!;
   fireEvent.click(section.querySelector('summary')!);expect(section.open).toBe(false);
   await act(async()=>fireEvent.click(screen.getByRole('button',{name:'已读并继续'})));
+  expect(screen.getByRole('button',{name:'下一条'})).toBeDisabled();
   fireEvent.click(screen.getByRole('button',{name:'隐藏阅读区'}));expect(section.isConnected).toBe(false);
   await act(async()=>finish());
   fireEvent.click(screen.getByRole('button',{name:'显示阅读区'}));
@@ -63,15 +64,24 @@ it('marks the same continue target that is opened after confirming and shows no 
   expect(onNavigationChange.mock.lastCall?.[0]).toMatchObject({current:'m',continue:'reason'});
   await act(async()=>fireEvent.click(screen.getByRole('button',{name:'已读并继续'})));
   expect(document.querySelector('[data-reading-current-id]')).toHaveAttribute('data-reading-current-id','reason');
-  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'已读并继续'})));
+  expect(screen.getByRole('button',{name:'下一条'})).toBeDisabled();
+  expect(screen.queryByRole('button',{name:'已读并继续'})).toBeNull();
+  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'已读'})));
+  expect(screen.getByRole('button',{name:'已读'})).toBeDisabled();
+  expect(document.querySelector('[data-reading-current-id]')).toHaveAttribute('data-reading-current-id','reason');
   expect(onNavigationChange.mock.lastCall?.[0].continue).toBeNull();
 });
-it('navigates actual reading history after explicitly choosing a message and preserves confirmed roots',async()=>{
+it('allows next from a confirmed message without saving again and preserves it in reading history',async()=>{
   const input=fixture(),marks=readingMarksFor(input,'m',deriveDisplayHints(input).hints.get('m')!.displayed);
-  render(<Harness input={{...input,readingMarks:[...input.readingMarks,...marks]}}/>);
+  const save=vi.fn(async()=>{});
+  render(<Harness input={{...input,readingMarks:[...input.readingMarks,...marks]}} save={save}/>);
   expect(screen.getByRole('button',{name:'已读并继续'})).toBeDisabled();
   expect(screen.getByRole('button',{name:'阅读前进'})).toBeDisabled();
-  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'设为阅读消息'})));
+  expect(document.querySelector('[data-reading-continue-target]')).toHaveTextContent('下一条 →');
+  expect(screen.getByRole('button',{name:'下一条'})).toBeEnabled();
+  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'下一条'})));
+  expect(save).not.toHaveBeenCalled();
+  expect(document.querySelector('[data-reading-current-id]')).toHaveAttribute('data-reading-current-id','reason');
   expect(screen.getByRole('button',{name:'阅读后退'})).toBeEnabled();
   await act(async()=>fireEvent.click(screen.getByRole('button',{name:'阅读后退'})));
   expect(document.querySelector('[data-reading-current-id]')).toHaveAttribute('data-reading-current-id','m');
@@ -126,7 +136,8 @@ it('confirms the whole reading group, shows each status separately and restores 
   expect(within(section).getByRole('region',{name:'消息与影响',hidden:true})).not.toBeVisible();
   expect(document.querySelector('[data-reading-message-section="reason"]')).toHaveAttribute('open');
   fireEvent.click(section.querySelector('summary')!);
-  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'本组已读并继续'})));
+  expect(screen.getByRole('button',{name:'下一条'})).toBeDisabled();
+  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'本组已读'})));
   expect(save).toHaveBeenCalledOnce();
   expect(save.mock.calls[0][0].filter(mark=>mark.scope==='message').map(mark=>mark.messageId)).toEqual(['m','reason']);
   fireEvent.click(section.querySelector('summary')!);expect(section).not.toHaveAttribute('open');

@@ -18,7 +18,7 @@ export default function DirectedEdgeVisual({ layer, relationType, start, ctrl, e
   opacity?: number; hidden?: boolean; dashed?: boolean; textRef?: Ref<SVGTextElement>;
   selection?: 'whole' | 'fragment';
 }) {
-  const paint=selection==='whole'?'var(--selection-accent)':selection==='fragment'?'var(--fragment-accent)':color;
+  const paint=selection==='whole'?'var(--edge-selection-accent, var(--selection-accent))':selection==='fragment'?'var(--edge-fragment-accent, var(--fragment-accent))':color;
   // Annotation keeps its own hue even when a decorative skin paints the edge.
   const colorOverride=selection||relationType==='annotation'?paint:undefined;
   const path = `M ${start.x} ${start.y} Q ${ctrl.x} ${ctrl.y} ${end.x} ${end.y}`;
@@ -33,7 +33,7 @@ export default function DirectedEdgeVisual({ layer, relationType, start, ctrl, e
   </>;
   return <>
     {!hidden && plate && <rect className="graph-edge-label-plate" aria-hidden="true"
-      {...plate} rx={3} style={{display:'block',fill:selection==='whole'?'var(--selection-bg)':selection==='fragment'?'var(--fragment-bg)':'var(--surface-141414)',fillOpacity:0.96,stroke:paint,strokeWidth:0.8}} />}
+      {...plate} rx={3} style={{display:'block',fill:selection==='whole'?'var(--edge-selection-bg, var(--selection-bg))':selection==='fragment'?'var(--edge-fragment-bg, var(--fragment-bg))':'var(--surface-141414)',fillOpacity:0.96,stroke:paint,strokeWidth:selection?2:0.8}} />}
     {!hidden && labelBox && <EdgeLabelSkin box={labelBox} color={colorOverride}/>}
     <text className="graph-edge-label-text" ref={textRef} x={labelX} y={labelY} fill={paint} opacity={hidden ? 0 : opacity}
       fontSize="var(--graph-label-size)" textAnchor="middle" dominantBaseline="central"

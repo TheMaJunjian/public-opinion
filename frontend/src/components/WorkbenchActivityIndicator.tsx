@@ -10,8 +10,6 @@ export default function WorkbenchActivityIndicator() {
   const labels = [
     activity.sync.active ? '正在同步消息…' : activity.sync.lastDuration !== null
       ? `消息同步用时 ${durationLabel(activity.sync.lastDuration)}` : null,
-    activity.draw.active ? '正在绘制消息图…' : activity.draw.lastDuration !== null
-      ? `消息图绘制用时 ${durationLabel(activity.draw.lastDuration)}` : null,
   ].filter((label): label is string => label !== null);
   if (labels.length === 0) return null;
 

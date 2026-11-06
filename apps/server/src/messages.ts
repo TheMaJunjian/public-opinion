@@ -4,6 +4,7 @@ import { applyOrganization, reconcileOrganizationEffects, reconcileOrganizationR
 import { dataOf, distributeOperations, grant, hasEffect, injectRevenue, lockDelegation, markEffect, oneTarget, openSettlement, placeValueWager, placeWager, relationTarget, settleDue, terminate } from './economy.js';
 import { parseSend, partsSchema, readReference, rulesSchema, validateReferences } from './validation.js';
 import { recordPersonal } from './personal-actions.js';
+import { notificationRecipients } from './notifications.js';
 import { normalizeAnnotationStance } from './annotation-stances.js';
 import {chargeMessage} from './message-spending.js';
 import {bindCommandContexts} from './reference-contexts.js';
@@ -145,6 +146,9 @@ export async function send(store: Store, user: User, raw: unknown, options: {
         if (wager > 0 && !input.selfStance && !valueVote && !actionParts.some(p => p.type === 'relation' && ['agree', 'disagree'].includes(p.relation)))
             throw new DomainError('押注须选择赞同、反对、推荐或冷藏');
         const tx = new Mutation(store,{authorId:user.id,joinContribution:input.joinContribution??{wager,recommendation}});
+        const notifyTargets = normalized.parts.flatMap(part=>part.type==='relation'&&part.relation==='notify'?(part.roles.target??[]).map(binding=>binding.reference.messageId):[]);
+        if(notifyTargets.length&&!(await notificationRecipients(store,[...new Set(notifyTargets)],user.id)).length)
+            throw new DomainError('通知目标没有其他作者或关注者，请重新选择目标');
         // Finish elapsed rounds before accepting an incoming wager at the new cutoff.
         await settleDue(tx);
         const protocol = (await store.rules()).protocolFee;

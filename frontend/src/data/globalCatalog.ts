@@ -14,7 +14,10 @@ export interface CatalogCache {
   load(): Promise<CatalogCheckpoint | null>;
   save(value: CatalogCheckpoint): Promise<void>;
   clear(): Promise<void>;
+  /** Atomically append just the received page and its replay position. */
+  append?(position: CatalogPosition, page: WorkbenchSnapshot): Promise<void>;
 }
+export type CatalogPosition = Omit<CatalogCheckpoint, 'snapshot'> & { regionId: string; sequence: number };
 export interface CatalogProgress { ready: boolean; count: number; syncing: boolean; error?: string }
 
 /** A separate cursor is essential: fetching a visible window cannot complete the global index. */
@@ -33,18 +36,28 @@ export function syncGlobalCatalog(options: {
   let initialized = false, stopped = false, running = false, queued = false, ready = false;
   let resetRequested = false;
   let publishedAfter = -1, failures = 0;
+  let journalPages = 0;
   let lastError: string | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const waiters = new Set<{ resolve(changed: boolean): void; reject(error: Error): void }>();
-  const report = () => { if (!stopped) options.onProgress({ ready, count: checkpoint?.snapshot.messages.length ?? 0, syncing: running || queued, ...(lastError ? { error: lastError } : {}) }); };
+  const report = () => { if (!stopped) options.onProgress({ ready, count: store.size, syncing: running || queued, ...(lastError ? { error: lastError } : {}) }); };
   const request = (query: Partial<SnapshotQuery>) => {
     abort.signal.throwIfAborted();
     return options.load({ parent: options.parent, ...query, signal: abort.signal });
   };
-  const save = async () => {
+  const save = async (page: WorkbenchSnapshot) => {
     if (!checkpoint) return;
+    const { snapshot, ...position } = checkpoint;
+    // Bounded page writes avoid copying and serializing the growing catalog on
+    // every request. Compact only after a complete replay, at most once per 64 pages.
+    if (options.cache.append && snapshot.regionId && !(checkpoint.complete && journalPages >= 64)) {
+      await options.cache.append({ ...position, regionId: snapshot.regionId, sequence: store.sequence }, page);
+      journalPages++;
+      return;
+    }
     checkpoint = { ...checkpoint, snapshot: store.snapshot() };
     await options.cache.save(checkpoint);
+    journalPages = 0;
   };
   const publish = () => {
     if (!checkpoint || stopped || resetRequested) return;
@@ -68,7 +81,7 @@ export function syncGlobalCatalog(options: {
         resetRequested = false;
         await options.cache.clear();
         if (stopped) return;
-        store = new WorkbenchStore(); checkpoint = null; ready = false; publishedAfter = -1; initialized = true;
+        store = new WorkbenchStore(); checkpoint = null; ready = false; publishedAfter = -1; initialized = true; journalPages = 0;
       }
       if (!initialized) {
         checkpoint = await options.cache.load();
@@ -85,21 +98,21 @@ export function syncGlobalCatalog(options: {
       }
       if (!checkpoint) {
         await options.idle(abort.signal);
-        const page = await request({ limit: 200, batch: 1 });
+        const page = await request({ limit: 200, batch: 4 });
         if (stopped || resetRequested) return;
         store.apply(page);
         checkpoint = { snapshot: store.snapshot(), boundary: page.sequence, after: page.sequence,
           nextCursor: page.nextCursor ?? null, phase: 'pages', complete: false, pages: 1 };
-        await save(); report();
+        await save(page); report();
       }
       while (checkpoint.phase === 'pages' && checkpoint.nextCursor) {
         await options.idle(abort.signal);
-        const page = await request({ cursor: checkpoint.nextCursor, regionId: checkpoint.snapshot.regionId, limit: 200, batch: 1 });
+        const page = await request({ cursor: checkpoint.nextCursor, regionId: checkpoint.snapshot.regionId, limit: 200, batch: 4 });
         if (stopped || resetRequested) return;
         store.apply(page);
         checkpoint.pages++;
         checkpoint.nextCursor = page.nextCursor ?? null;
-        await save(); report();
+        await save(page); report();
       }
       if (checkpoint.phase === 'pages') {
         checkpoint.phase = 'changes';
@@ -117,7 +130,7 @@ export function syncGlobalCatalog(options: {
         checkpoint.after = page.sequence;
         more = !!page.hasMore || store.sequence > checkpoint.after;
         checkpoint.complete = !more;
-        if (!unchanged) await save();
+        if (!unchanged) await save(page);
         report();
       } while (more && !stopped);
       if (stopped || resetRequested) return;
@@ -127,7 +140,7 @@ export function syncGlobalCatalog(options: {
       if (stopped) return;
       if ((error as { status?: number }).status === 409) {
         await options.cache.clear();
-        store = new WorkbenchStore(); checkpoint = null; ready = false; publishedAfter = -1;
+        store = new WorkbenchStore(); checkpoint = null; ready = false; publishedAfter = -1; journalPages = 0;
         schedule();
       } else {
         const failure = error instanceof Error ? error : new Error(String(error));

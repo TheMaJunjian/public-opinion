@@ -156,7 +156,7 @@
 :root[data-appearance='gpt-arena'] .app-navbar-account > button:last-child,
 :root[data-appearance='gpt-arena'] .app-navbar-account > a:last-child { background: #2463a9; }
 :root[data-appearance='gpt-arena'] .app-navbar button:not(:disabled) { color: #fff; }
-:root[data-appearance='gpt-arena'] .theme-icon-legacy { display: none; }
+:root[data-appearance='gpt-arena'] .theme-icon-arena-fallback { display: none; }
 :root[data-appearance='gpt-arena'] .theme-icon-arena {
   display: inline-block; width: 14px; height: 14px; flex: 0 0 14px;
   vertical-align: -.18em; pointer-events: none;

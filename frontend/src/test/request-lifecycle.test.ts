@@ -225,13 +225,14 @@ it('tracks explicit message loads immediately while keeping background snapshot 
   expect(getOperations()).toHaveLength(0);
 });
 
-it('tracks explicit context reads and distinguishes their cancellation from a failed write', async () => {
+it('removes progress for a cancelled context read without leaving a failure or cancellation toast', async () => {
   vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
   const controller = new AbortController();
   const read = api.getMessageContext(['target'], controller.signal).catch(error => error);
   expect(getOperations()).toMatchObject([{ label: '加载消息', state: 'pending' }]);
-  controller.abort(); await read;
-  expect(getOperations()).toMatchObject([{ label: '加载消息', state: 'cancelled' }]);
+  controller.abort();
+  expect(await read).toMatchObject({ name: 'AbortError' });
+  expect(getOperations()).toEqual([]);
 });
 
 it('starts a fresh context read when the previous navigation was just cancelled', async () => {
@@ -244,7 +245,36 @@ it('starts a fresh context read when the previous navigation was just cancelled'
   const next = new AbortController();
   const second = api.getMessageContext(['target'], next.signal).catch(error => error);
   expect(fetcher).toHaveBeenCalledTimes(2);
-  finish(new Response(JSON.stringify({ messages: [], relations: [] })));
   expect(await first).toMatchObject({ name: 'AbortError' });
+  expect(getOperations()).toMatchObject([{ label: '加载消息', state: 'pending' }]);
+  finish(new Response(JSON.stringify({ messages: [], relations: [] })));
   expect(await second).toEqual({ messages: [], relations: [] });
+  expect(getOperations()).toEqual([]);
+});
+
+it.each([true, false])('silently cancels structural body requests (already aborted=%s)', async alreadyAborted => {
+  const json = vi.fn(() => new Promise(() => {}));
+  const fetcher = vi.fn(async () => ({ ok: true, json })); vi.stubGlobal('fetch', fetcher);
+  const controller = new AbortController();
+  if (alreadyAborted) controller.abort();
+  const reads = ['a', 'b', 'c'].map(id => api.getWorkbenchSnapshot({
+    parent: 'root', mode: 'window', ids: [id], signal: controller.signal,
+  }).catch(error => error));
+  if (!alreadyAborted) {
+    await vi.waitFor(() => expect(json).toHaveBeenCalledTimes(3));
+    controller.abort();
+  }
+  for (const result of await Promise.all(reads)) expect(result).toMatchObject({ name: 'AbortError' });
+  expect(fetcher).toHaveBeenCalledTimes(alreadyAborted ? 0 : 3);
+  expect(getOperations()).toEqual([]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('keeps a genuine message-loading timeout visible', async () => {
+  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+  const read = api.getWorkbenchSnapshot({ parent: 'root', mode: 'window', ids: ['target'] }).catch(error => error);
+  await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+  expect(await read).toBeInstanceOf(RequestTimeoutError);
+  expect(getOperations()).toMatchObject([{ label: '加载消息', state: 'failed', message: '请求等待超时，请稍后重试' }]);
 });

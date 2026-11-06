@@ -2,6 +2,7 @@ import { useState, type CSSProperties } from 'react';
 import { EdgeLabelSkin, EdgeSkin, FrameSkin } from './GraphSkin';
 import { SkinOrnament, TypeOrnament } from './StakeTierBadge';
 import type { Theme } from './theme';
+import { STAKE_TIER_RANGES } from '../utils/stakeAppearance';
 
 export default function ThemeTierPreview({ theme }: { theme: Theme }) {
   const [carrier, setCarrier] = useState('content');
@@ -10,7 +11,6 @@ export default function ThemeTierPreview({ theme }: { theme: Theme }) {
   const [reading, setReading] = useState(false);
   if (theme === 'gpt') return <p>原版沿用原来的消息外观，不启用四档材质。选择另一种风格可查看四种载体的等级对照。</p>;
   const names = theme === 'gpt-arena' ? ['素面', '精工', '辉光', '星铸'] : ['素纸', '压边', '洒金', '鎏金装裱'];
-  const ranges = ['小于 10 点', '10–99 点', '100–999 点', '1000 点及以上'];
   const paper = theme === 'opus-paper';
   const types: Record<string, string> = carrier === 'edge' ? { reference: '引用', reply: '回复', annotation: '注释', notification: '通知', agree: '赞同', disagree: '反对' }
     : carrier === 'frame' ? { classify: '分类', summary: '总结', merge: '归并', arrange: '排列' }
@@ -30,7 +30,7 @@ export default function ThemeTierPreview({ theme }: { theme: Theme }) {
       {carrier === 'content' && <label><input type="checkbox" checked={reading} onChange={event => setReading(event.target.checked)} />叠加定位、片段与已阅</label>}
     </div>}
     <div className="theme-carrier-grid">{names.map((name, level) => <div className="theme-carrier-column" key={level}>
-      <div className="theme-carrier-heading"><b>L{level}</b> {name}<small>{ranges[level]}</small></div>
+      <div className="theme-carrier-heading"><b>L{level}</b> {name}<small>{STAKE_TIER_RANGES[level]}</small></div>
       {carrier === 'content' && <div className="stake-tier-example" data-stake-level={level} data-skin-type={paper ? previewType : undefined}
         data-whole-selected={paper && selected || undefined} data-view-target={paper && reading || undefined} style={previewStyle}>
         <SkinOrnament /><span data-skin-type-label={paper || undefined}>{paper ? types[previewType] : '消息正文'}</span>

@@ -9,7 +9,7 @@ export function createCatalogClient(userId: string, parent: string, callbacks: {
 }, regionId?: string) {
   const baseUrl = new URL((import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, ''), location.href).href;
   // Rebuild earlier catalogs once so unchanged accounts also receive contribution totals.
-  const options: CatalogOptions = { baseUrl, parent, deviceId: getDeviceId(), regionId, key: JSON.stringify([2, baseUrl, userId, parent]) };
+  const options: CatalogOptions = { baseUrl, parent, deviceId: getDeviceId(), regionId, structural: true, key: JSON.stringify(['structure-v1', baseUrl, userId, parent]) };
   let stopped = false, priority = false, nextId = 0;
   let failure: Error | undefined;
   let progress: CatalogProgress = { ready: false, count: 0, syncing: true };
@@ -97,6 +97,7 @@ export function createCatalogClient(userId: string, parent: string, callbacks: {
     },
     refresh() { prioritize(); return worker ? request<boolean>('refresh') : fallback!.then(engine => engine.refresh()); },
     filters(query: CatalogFilterQuery) { return worker ? request<CatalogFilterResult>('filters', query) : fallback!.then(engine => engine.filters(query)); },
+    leaderboard() { prioritize(); return worker ? request<NonNullable<CatalogData['rows']>>('leaderboard') : fallback!.then(engine => engine.leaderboard()); },
     stop() {
       stopped = true; worker?.terminate(); void fallback?.then(engine => engine.stop());
       document.removeEventListener('visibilitychange', schedule);

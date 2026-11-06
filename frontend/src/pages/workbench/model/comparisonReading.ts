@@ -1,5 +1,7 @@
 import {comparisonReadingKey,type BodyVersion,type ReadingMark} from '@gonglun/core';
 import {displaySignature,type DisplayHintsInput} from './displayHintSnapshot';
+import type {DemoEdge,DemoMessage} from '../../../utils/modelBridge';
+import type {ReadingInfluence} from './readingProgress';
 
 const fingerprint=(value:unknown)=>displaySignature({content:JSON.stringify(value),parentIds:[],memberIds:[],correctionIds:[],suppressed:false});
 
@@ -24,10 +26,39 @@ export function createComparisonBasis(input:DisplayHintsInput){
   };
 }
 
-/** Comparing two bodies never acknowledges either the message or its influences. */
+/** Record the exact comparison separately from message-body reading. */
 export function comparisonReadingMark(version:BodyVersion,before:string,after:string,basis=''):ReadingMark {
   const signature=fingerprint([before,after,basis]);
   return {format:3,messageId:version.messageId,scope:'comparison',key:comparisonReadingKey(version,signature),version,state:'READ',signature};
+}
+
+/** Only confirm correction outcomes represented by the displayed comparison. */
+export function comparisonCorrectionInfluences(version:BodyVersion,items:readonly ReadingInfluence[],messages:ReadonlyMap<string,DemoMessage>,edges:readonly DemoEdge[]){
+  const applied=new Map(version.corrections.map(correction=>[correction.messageId,correction.revision]));
+  const children=new Map<string,Set<string>>(),related=new Set<string>(),queue=[version.messageId];
+  for(const edge of edges)if(edge.relationType==='correct'&&!edge.proposalOnly){
+    const ids=children.get(edge.to.messageId)??new Set<string>();ids.add(edge.relationMessageId);children.set(edge.to.messageId,ids);
+  }
+  for(let index=0;index<queue.length;index++)for(const id of children.get(queue[index])??[])if(id!==version.messageId&&!related.has(id)){related.add(id);queue.push(id);}
+  return items.filter(item=>{
+    const message=messages.get(item.messageId);
+    if(item.type!=='correct'||!related.has(item.messageId)||!message||message.relationPayload?.correctionKind==='WIDTH')return false;
+    return item.resultKey==='effective'?applied.get(item.messageId)===(message.revision??1)
+      :item.resultKey==='ineffective'&&!applied.has(item.messageId);
+  });
+}
+
+/** Older comparison records already prove that these applied revisions were viewed. */
+export function comparedCorrectionVersions(marks:readonly ReadingMark[]){
+  const latest=new Map<string,ReadingMark>();
+  for(const mark of marks){
+    if(mark.format!==3||mark.unknownContext||mark.scope!=='comparison'||!mark.version||!mark.signature
+      ||mark.messageId!==mark.version.messageId||mark.key!==comparisonReadingKey(mark.version,mark.signature))continue;
+    const previous=latest.get(mark.key);
+    if(!previous||(mark.position??0)>(previous.position??0)||(mark.position??0)===(previous.position??0)&&(mark.updatedAt??'')>=(previous.updatedAt??''))latest.set(mark.key,mark);
+  }
+  return new Set([...latest.values()].filter(mark=>mark.state!=='UNREAD')
+    .flatMap(mark=>mark.version!.corrections.map(correction=>JSON.stringify([correction.messageId,correction.revision]))));
 }
 
 export function isComparisonRead(marks:readonly ReadingMark[],version:BodyVersion,before:string,after:string,basis=''){

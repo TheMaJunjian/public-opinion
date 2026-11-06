@@ -659,10 +659,10 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
 
       {!p.isViewerMode && <>
       {/* Stance History */}
-      <div style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, marginTop: 8 }}>
+      <div className="workbench-record-section" style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, marginTop: 8 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ fontWeight: 600 }}>📋 站队 · 立场 · 表态</div>
-          <button className="workbench-action" onClick={() => p.setShowStanceHistory(!p.showStanceHistory)}
+          <button className="workbench-action" aria-expanded={p.showStanceHistory} onClick={() => p.setShowStanceHistory(!p.showStanceHistory)}
             style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.showStanceHistory ? "var(--surface-0b84ff)" : "var(--surface-333)", color: "var(--ink-fff)", cursor: "pointer", fontSize: 12 }}>
             {p.showStanceHistory ? '收起' : '展开'}
           </button>
@@ -673,10 +673,10 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
       </div>
 
       {/* Audit Log */}
-      <div style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, marginTop: 8 }}>
+      <div className="workbench-record-section" style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, marginTop: 8 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ fontWeight: 600 }}>📋 审计日志</div>
-          <button className="workbench-action" onClick={() => p.setShowAuditLog(!p.showAuditLog)}
+          <button className="workbench-action" aria-expanded={p.showAuditLog} onClick={() => p.setShowAuditLog(!p.showAuditLog)}
             style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.showAuditLog ? "var(--surface-0b84ff)" : "var(--surface-333)", color: "var(--ink-fff)", cursor: "pointer", fontSize: 12 }}>
             {p.showAuditLog ? '收起' : '展开'}
           </button>
@@ -687,10 +687,10 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
       </div>
 
       {/* Revenue */}
-      <div style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, marginTop: 8 }}>
+      <div className="workbench-record-section" style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, marginTop: 8 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ fontWeight: 600 }}>💰 收入</div>
-          <button className="workbench-action" onClick={() => p.setShowRevenue(!p.showRevenue)}
+          <button className="workbench-action" aria-expanded={p.showRevenue} onClick={() => p.setShowRevenue(!p.showRevenue)}
             style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.showRevenue ? "var(--surface-0b84ff)" : "var(--surface-333)", color: "var(--ink-fff)", cursor: "pointer", fontSize: 12 }}>
             {p.showRevenue ? '收起' : '展开'}
           </button>

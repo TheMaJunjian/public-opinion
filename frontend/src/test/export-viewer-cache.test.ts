@@ -1,4 +1,4 @@
-import { IDBFactory } from 'fake-indexeddb';
+import { IDBFactory, IDBObjectStore } from 'fake-indexeddb';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ExportData } from '../api/client';
 
@@ -12,6 +12,58 @@ const archive = (title: string): ExportData => ({
 beforeEach(() => { vi.resetModules(); sessionStorage.clear(); vi.stubGlobal('indexedDB', new IDBFactory()); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); sessionStorage.clear(); });
 
+it('persists an owned immutable snapshot without a second full in-memory clone', async () => {
+  const cache = await import('../utils/exportViewerCache');
+  const data = archive('独占阅览快照');
+  const copy = vi.spyOn(globalThis, 'structuredClone');
+  await cache.saveLastExport(data, { immutable: true });
+  expect(copy.mock.calls.some(([value]) => value === data)).toBe(false);
+  const reference = cache.getExportCacheReference(data)!;
+  expect(reference).not.toBeNull();
+  expect(await cache.loadReferencedExport(reference)).toEqual(data);
+  const reads = vi.spyOn(IDBObjectStore.prototype, 'get');
+  await cache.loadLastExportPreview();
+  expect(reads.mock.calls.map(([key]) => key)).toEqual([`__archive_preview__:${reference.archiveId}`]);
+});
+
+it('bounds the Web Storage fallback after an IDB failure and retains the file in memory', async () => {
+  vi.stubGlobal('indexedDB', undefined);
+  const cache = await import('../utils/exportViewerCache');
+  const data = archive('无法持久化的大档案');
+  data.messages[0].content = '原'.repeat(3_000_000);
+  const write = vi.spyOn(Storage.prototype, 'setItem');
+  await cache.saveLastExport(data, { immutable: true });
+  expect(write.mock.calls.every(([, value]) => value.length < 1000)).toBe(true);
+  sessionStorage.clear();
+  expect(await cache.loadLastExport()).toEqual(data);
+});
+
+it('releases the durable in-memory copy and recovers the same document and navigation', async () => {
+  const cache = await import('../utils/exportViewerCache');
+  const data = archive('释放档案副本');
+  await cache.saveLastExport(data);
+  await cache.saveExportNavigation(data, { classificationId: null });
+  const reference = cache.getExportCacheReference(data)!;
+  cache.releaseDurableExportMemory();
+  const reads = vi.spyOn(IDBObjectStore.prototype, 'get');
+  expect(await cache.loadLastExportPreview()).toEqual({ title: data.scope.title, reference });
+  expect(reads.mock.calls.map(([key]) => key)).toEqual([`__archive_preview__:${reference.archiveId}`]);
+  const restored = await cache.loadLastExport() as ExportData;
+  expect(restored).toEqual(data);
+  expect(cache.getExportCacheReference(restored)).toEqual(reference);
+  expect(await cache.loadExportNavigation(restored)).toEqual({ classificationId: null });
+});
+
+it('keeps the recovery copy when durable storage is unavailable', async () => {
+  vi.stubGlobal('indexedDB', undefined);
+  const cache = await import('../utils/exportViewerCache');
+  const data = archive('未持久化的档案');
+  await cache.saveLastExport(data);
+  sessionStorage.clear();
+  cache.releaseDurableExportMemory();
+  expect(await cache.loadLastExport()).toEqual(data);
+});
+
 it('persists a file beyond the Web Storage quota and reloads every field after a page reload', async () => {
   const data = archive('大文件');
   data.messages[0].content = '大'.repeat(6_000_000);
@@ -21,6 +73,61 @@ it('persists a file beyond the Web Storage quota and reloads every field after a
   vi.resetModules();
   const reloaded = await import('../utils/exportViewerCache');
   expect(await reloaded.loadLastExport()).toEqual(data);
+});
+
+it('reads only small preview records for the chooser, including after a reload', async () => {
+  const cache = await import('../utils/exportViewerCache');
+  const data = archive('缓存预览');
+  await cache.saveLastExport(data);
+  const reference = cache.getExportCacheReference(data)!;
+  const reads = vi.spyOn(IDBObjectStore.prototype, 'get');
+  expect(await cache.loadLastExportPreview()).toEqual({ title: '缓存预览', reference });
+  expect(reads).not.toHaveBeenCalled();
+  vi.resetModules();
+  const reloaded = await import('../utils/exportViewerCache');
+  expect(await reloaded.loadLastExportPreview()).toEqual({ title: '缓存预览', reference });
+  expect(reads.mock.calls.map(([key]) => key)).toEqual([`__archive_preview__:${reference.archiveId}`]);
+  reads.mockClear(); sessionStorage.clear();
+  expect(await reloaded.loadLastExportPreview()).toEqual({ title: '缓存预览', reference });
+  expect(reads.mock.calls.map(([key]) => key)).toEqual(['__last_viewed_archive__', `__archive_preview__:${reference.archiveId}`]);
+});
+
+it('adds a preview to an older cache once without changing its source or edit revision', async () => {
+  const cache = await import('../utils/exportViewerCache');
+  const data = archive('旧缓存标题');
+  await cache.saveLastExport(data);
+  const reference = cache.getExportCacheReference(data)!;
+  await cache.withArchiveStore('readwrite', store => store.delete(`__archive_preview__:${reference.archiveId}`));
+  vi.resetModules();
+  const reloaded = await import('../utils/exportViewerCache');
+  const reads = vi.spyOn(IDBObjectStore.prototype, 'get');
+  expect(await reloaded.loadLastExportPreview()).toEqual({ title: data.scope.title, reference });
+  expect(reads.mock.calls.some(([key]) => key === reference.archiveId)).toBe(true);
+  reads.mockClear();
+  expect(await reloaded.loadLastExportPreview()).toEqual({ title: data.scope.title, reference });
+  expect(reads.mock.calls.map(([key]) => key)).toEqual([`__archive_preview__:${reference.archiveId}`]);
+  expect(await reloaded.loadReferencedExport(reference)).toEqual(data);
+});
+
+it('remembers leaving a classification, including the explicit root, independently of the saved file view', async () => {
+  const cache = await import('../utils/exportViewerCache');
+  const data = archive('阅览位置');
+  data.view!.classificationId = 'saved-category';
+  await cache.saveLastExport(data);
+  const reference = cache.getExportCacheReference(data)!;
+  const writes = vi.spyOn(IDBObjectStore.prototype, 'put');
+  const inside = cache.saveExportNavigation(data, { classificationId: 'inner', classificationPath: ['outer', 'inner'] });
+  const outside = cache.saveExportNavigation(data, { classificationId: null, classificationPath: [] });
+  expect(await cache.loadExportNavigation(data)).toEqual({ classificationId: null, classificationPath: [] });
+  await Promise.all([inside, outside]);
+  expect(writes.mock.calls.every(([, key]) => key === `__navigation_view__:${reference.viewCacheId}`)).toBe(true);
+  vi.resetModules();
+  const reopened = await import('../utils/exportViewerCache');
+  const restored = await reopened.loadReferencedExport(reference) as ExportData;
+  expect(restored).toEqual(data);
+  expect(await reopened.loadExportNavigation(restored)).toEqual({ classificationId: null, classificationPath: [] });
+  await reopened.saveExportNavigation(restored, { classificationId: 'inner', classificationPath: ['outer', 'inner'] });
+  expect(await reopened.loadExportNavigation(restored)).toEqual({ classificationId: 'inner', classificationPath: ['outer', 'inner'] });
 });
 
 it('restores authoritative Zhihu sources without copying their derived projections and keeps edits intact', async () => {

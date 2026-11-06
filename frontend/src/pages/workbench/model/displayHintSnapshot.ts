@@ -43,6 +43,8 @@ export type DisplayHint = {
   displayed: DisplaySnapshot;
 };
 export type DisplayHintsInput = {
+  /** A structural viewer knows membership without loading every member body. */
+  unloadedContainers?: ReadonlySet<string>;
   messages: DemoMessage[];
   relations: Relation[];
   edges: DemoEdge[];

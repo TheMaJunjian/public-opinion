@@ -37,6 +37,13 @@ function fixture(records:Message[],relations:Relation[],readStatus=new Map<strin
 }
 
 describe('computed display hints',()=>{
+  it('does not report unloaded category members as all read',()=>{
+    const input={...fixture([],[rel('category','CLASSIFY',['unloaded-member'])]),unloadedContainers:new Set(['category'])};
+    render(<MessageDisplayHintsProvider input={input} onView={vi.fn()}><MessageDisplayMarker messageId="category"/></MessageDisplayHintsProvider>);
+    const marker=screen.getByRole('button',{name:/显示提示 category：/});
+    expect(marker).toHaveAccessibleName(/进入后查看成员阅览状态/);
+    expect(marker).not.toHaveAccessibleName(/成员消息暂无待阅/);
+  });
   it.each([false,true])('labels the recommendation as no personal choice when public opposition is %s',opposed=>{
     const input=fixture([],[rel('m','CLASSIFY'),...(opposed?[rel('public-opposition','DISAGREE',['m'])]:[])]);
     expect(deriveDisplayHints(input).hints.get('m')).toMatchObject({hasPersonalChoice:false});
@@ -516,7 +523,7 @@ describe('computed display hints',()=>{
     const element=(value:DisplayHintsInput)=><MessageDisplayHintsProvider input={value} onView={onView} onMarkRead={onMarkRead}><MessageDisplayMarker messageId="container"/></MessageDisplayHintsProvider>;
     const view=render(element(input));fireEvent.click(screen.getByRole('button',{name:/显示提示 container：/}));
     const adopted=screen.getByRole('region',{name:'当前采用的被加入目标'}),unadopted=screen.getByRole('region',{name:'未采用的被加入目标'});
-    expect(adopted).toHaveTextContent('当前采用（2 条）');expect(unadopted).toHaveTextContent('未采用（3 条）');
+    expect(adopted).toHaveTextContent('当前采用（2 条目标 · 2 条加入记录）');expect(unadopted).toHaveTextContent('未采用（3 条目标 · 3 条加入记录）');
     expect(adopted.querySelector('[data-display-hint-members]')).not.toBeNull();
     expect(unadopted.querySelector('[data-display-hint-members]')).toBeNull();
     expect(within(adopted).getByRole('button',{name:'查看被加入目标 direct'})).toHaveTextContent('【文本】 ID：direct');
@@ -560,9 +567,9 @@ describe('computed display hints',()=>{
     await act(async()=>fireEvent.click(screen.getByRole('button',{name:'标记当前消息已阅'})));
     expect(onMarkRead.mock.calls[0][0].some(mark=>mark.messageId==='member'&&mark.scope!=='influence')).toBe(false);
   });
-  it.each([false,true])('groups classification members by body reading and new effects, including explicit JOIN: %s',async joined=>{
+  it.each(['CLASSIFY','SUMMARY','MERGE','ARRANGE'].flatMap(type=>[false,true].map(joined=>({type,joined}))))('groups $type members by body reading and new effects, including explicit JOIN: $joined',async({type,joined})=>{
     const records=[text('stable'),text('changed'),text('unread')],ids=records.map(message=>message.id);
-    const relations=[rel('container','CLASSIFY',joined?[]:ids),...(joined?[rel('join-all','JOIN',ids,'container')]:[])];
+    const relations=[rel('container',type,joined?[]:ids),...(joined?[rel('join-all','JOIN',ids,'container')]:[])];
     const before=fixture(records,relations),hints=deriveDisplayHints(before).hints;
     const baselineMarks=['stable','changed'].flatMap(id=>readingMarksFor({...before,memberships:before.personalEffect.memberships},id,hints.get(id)!.displayed));
     const input={...fixture(records,[...relations,rel('new-reply','REPLY',['changed']),rel('unread-reply','REPLY',['unread'])]),readingMarks:baselineMarks};
@@ -602,6 +609,46 @@ describe('computed display hints',()=>{
     view.rerender(element(later));
     expect(screen.getByRole('region',{name:'已阅有新影响的成员消息'}).querySelector('[data-member-reading-id="stable"]')).not.toBeNull();
     expect(screen.getByRole('region',{name:'已阅无新影响的成员消息'}).querySelector('[data-member-reading-id="changed"]')).not.toBeNull();
+  });
+  it.each(['CLASSIFY','SUMMARY','MERGE','ARRANGE'])('partitions adopted and unadopted %s targets independently and preserves multi-target JOIN history',async type=>{
+    const records=[text('stable'),text('changed'),text('unread')],ids=records.map(message=>message.id);
+    const relations=[rel('container',type),rel('elsewhere',type),rel('old-batch','JOIN',ids,'container'),
+      rel('old-stable','JOIN',['stable'],'container'),rel('current-batch','JOIN',ids,'container','2026-01-03'),
+      rel('moved-target','JOIN',['unread'],'elsewhere','2026-01-04')];
+    const before=fixture(records,relations),hints=deriveDisplayHints(before).hints;
+    const marks=['stable','changed'].flatMap(id=>readingMarksFor({...before,memberships:before.personalEffect.memberships,effectiveJoinIds:before.personalEffect.effectiveJoinIds},id,hints.get(id)!.displayed));
+    const input={...fixture(records,[...relations,rel('reply','REPLY',['changed'])]),readingMarks:marks};
+    const onView=vi.fn(),onMarkRead=vi.fn<(marks:ReadingMark[])=>Promise<void>>(async()=>{});
+    const element=(value:DisplayHintsInput)=><MessageDisplayHintsProvider input={value} onView={onView} onMarkRead={onMarkRead}><MessageDisplayMarker messageId="container"/></MessageDisplayHintsProvider>;
+    const view=render(element(input));fireEvent.click(screen.getByRole('button',{name:/^显示提示 container：/}));
+    const adopted=screen.getByRole('region',{name:'当前采用的被加入目标'}),unadopted=screen.getByRole('region',{name:'未采用的被加入目标'});
+    expect(within(adopted).getByRole('button',{name:'收起当前采用（3 条目标 · 1 条加入记录）'})).toBeVisible();
+    expect(within(unadopted).getByRole('button',{name:'收起未采用（4 条目标 · 2 条加入记录）'})).toBeVisible();
+    for(const [parent,stableCount] of [[adopted,1],[unadopted,2]] as const){
+      expect(within(parent).getByRole('button',{name:`展开已阅无新影响（${stableCount} 条）`})).toHaveAttribute('aria-expanded','false');
+      expect(within(parent).getByRole('button',{name:'收起已阅有新影响（1 条）'})).toBeVisible();
+      expect(within(parent).getByRole('button',{name:'收起未阅（1 条）'})).toBeVisible();
+      expect(parent.querySelectorAll('[data-member-reading-group]')).toHaveLength(3);
+      expect(parent.querySelectorAll('[data-member-reading-id]')).toHaveLength(stableCount+2);
+    }
+    expect(unadopted.querySelectorAll('[data-reading-join-record="old-batch"]')).toHaveLength(3);
+    expect(unadopted.querySelectorAll('[data-reading-join-record="old-stable"]')).toHaveLength(1);
+    expect(adopted.querySelector('[data-reading-join-target="unread"]')).toHaveTextContent('范围外 · 此目标未采用');
+    fireEvent.click(within(unadopted).getByRole('button',{name:'展开已阅无新影响（2 条）'}));
+    expect(unadopted.querySelector('[data-member-reading-id="stable"]')).toBeVisible();
+    expect(adopted.querySelector('[data-member-reading-id="stable"]')).not.toBeVisible();
+    fireEvent.click(within(unadopted).getByRole('button',{name:'查看被加入目标 changed'}));
+    expect(onView).toHaveBeenCalledWith('changed',expect.anything(),false);expect(onMarkRead).not.toHaveBeenCalled();
+    await act(async()=>fireEvent.click(screen.getByRole('button',{name:'标记当前消息已阅'})));
+    expect(onMarkRead.mock.calls[0][0].every(mark=>mark.messageId==='container')).toBe(true);
+    const targetHint=deriveDisplayHints(input).hints.get('changed')!;
+    const confirmed=readingMarksFor({...input,memberships:input.personalEffect.memberships,effectiveJoinIds:input.personalEffect.effectiveJoinIds},'changed',targetHint.displayed);
+    view.rerender(element({...input,readingMarks:[...marks,...confirmed]}));
+    expect(within(adopted).queryByRole('button',{name:/已阅有新影响/})).toBeNull();
+    expect(within(unadopted).queryByRole('button',{name:/已阅有新影响/})).toBeNull();
+    expect(within(adopted).getByRole('button',{name:'展开已阅无新影响（2 条）'})).toBeVisible();
+    expect(within(unadopted).getByRole('button',{name:'收起已阅无新影响（3 条）'})).toBeVisible();
+    expect(within(unadopted).getByRole('button',{name:'收起未阅（1 条）'})).toBeVisible();
   });
   it.each([0,1])('shows a corrected classification member section only when it has %s actual members',members=>{
     const correction={...rel('correction','CORRECT',['container']),payload:{correctionBeforeContent:'container',correctionAfterContent:'修正标题'}};

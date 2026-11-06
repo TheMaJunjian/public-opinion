@@ -1,8 +1,10 @@
 import {querySchema} from './query-schema.js';
 import {readingStateSchema} from './reading-state.js';
 import {usagePointsSchema} from './usage-points.js';
+import {notificationSchema} from './notification-schema.js';
 /** Fresh PostgreSQL schema with explicit insertion positions. */
 export const schemaSql = `
+${notificationSchema}
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS rule_versions(version INTEGER PRIMARY KEY,body TEXT NOT NULL,"authorizationId" TEXT,"createdAt" TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,name TEXT UNIQUE NOT NULL,password TEXT NOT NULL,founder INTEGER NOT NULL,"createdAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,position BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE);

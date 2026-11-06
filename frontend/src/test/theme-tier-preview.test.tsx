@@ -8,6 +8,9 @@ describe('paper type and tier preview', () => {
     fireEvent.change(screen.getByLabelText('预览消息类型'), { target: { value: 'summary' } });
     const cards = container.querySelectorAll('.stake-tier-example');
     expect([...cards].map(card => card.getAttribute('data-stake-level'))).toEqual(['0', '1', '2', '3']);
+    expect([...container.querySelectorAll('.theme-carrier-heading small')].map(label => label.textContent)).toEqual([
+      '小于 1,000 点', '1,000–99,999 点', '100,000–999,999 点', '1,000,000 点及以上',
+    ]);
     expect([...cards].every(card => card.getAttribute('data-skin-type') === 'summary')).toBe(true);
     fireEvent.click(screen.getByLabelText('选中'));
     fireEvent.click(screen.getByLabelText('叠加定位、片段与已阅'));

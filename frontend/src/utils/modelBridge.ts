@@ -306,7 +306,8 @@ function findTextInContent(content: string, text: string): { start: number; len:
 
 export function convertMessagesToDemoModel(
   messages: BackendMessage[],
-  relations: BackendRelation[]
+  relations: BackendRelation[],
+  edgeTargetIds?: ReadonlySet<string>,
 ): { messages: DemoMessage[]; edges: DemoEdge[] } {
   const sequenceById = new Map([...relations, ...messages].map(record => [record.id, record.sequence ?? 0]));
   const byCreation = (a: { id: string; createdAt: string }, b: { id: string; createdAt: string }) =>
@@ -463,6 +464,7 @@ export function convertMessagesToDemoModel(
 
     if (!isJoin) {
     rel.targetRefs.forEach((ref, index) => {
+      if (edgeTargetIds && !edgeTargetIds.has(ref.reference?.messageId ?? (ref.kind === 'relation' ? ref.relationId : ref.messageId))) return;
       const edgeId = `${rel.id}::${index}`;
       let toUnit: UnitSelection;
 
@@ -513,6 +515,7 @@ export function convertMessagesToDemoModel(
 
     const seenRelationTargetIds = new Set<string>();
     targetRefs.forEach((ref, index) => {
+      if (edgeTargetIds && !edgeTargetIds.has(ref.reference?.messageId ?? (ref.kind === 'relation' ? ref.relationId : ref.messageId))) return;
       const edgeId = `${relMsgId}::gov::${index}`;
       let toUnit: UnitSelection;
       if (ref.reference) {

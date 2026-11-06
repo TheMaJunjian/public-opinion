@@ -14,11 +14,13 @@ export class WorkbenchStore {
   private scope?: ScopeView;
   private regionId?: string;
   private windowed = false;
+  private structureOnly = false;
   private scopeSequence = 0;
   private stakes: Record<string, MessageStakes> = {};
   private tagCounts: WorkbenchSnapshot['tagCounts'] = {};
   private attentionUsers: WorkbenchSnapshot['attentionUsers'] = {};
   sequence = 0;
+  get size() { return this.messages.size; }
 
   apply(page: WorkbenchSnapshot, replace = false) {
     // A restored complete snapshot also confirms the absence of older records.
@@ -28,10 +30,12 @@ export class WorkbenchStore {
       this.stakes = {}; this.tagCounts = {}; this.attentionUsers = {}; this.sequence = 0; this.scopeSequence = 0;
       this.regionId = undefined;
       this.windowed = false;
+      this.structureOnly = false;
       this.baselineSequence = page.sequence;
     }
     if (page.regionId) this.regionId = page.regionId;
     if (page.windowed) this.windowed = true;
+    if (page.structureOnly) this.structureOnly = true;
     if (page.sequence >= this.scopeSequence) { this.scope = page.scope; this.scopeSequence = page.sequence; }
     const rejected = new Set<string>();
     for (const id of page.removedMessageIds ?? []) {
@@ -69,6 +73,7 @@ export class WorkbenchStore {
     return {
       ...(this.regionId ? { regionId: this.regionId } : {}),
       ...(this.windowed ? { windowed: true } : {}),
+      ...(this.structureOnly ? { structureOnly: true } : {}),
       scope: this.scope, messages: [...this.messages.values()], relations: [...this.relations.values()],
       users: [...this.users.values()], stakes: { ...this.stakes }, tagCounts: { ...this.tagCounts },
       attentionUsers: { ...this.attentionUsers }, sequence: this.sequence,

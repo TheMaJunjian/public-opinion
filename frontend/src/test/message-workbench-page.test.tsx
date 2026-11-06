@@ -1,9 +1,12 @@
 import { act, configure, fireEvent, getConfig, render, screen, waitFor, within } from '@testing-library/react';
-import { StrictMode } from 'react';
+import { StrictMode, useState } from 'react';
 import { afterAll, describe, beforeEach, expect, it, vi } from 'vitest';
 import MessageWorkbenchPage from '../pages/MessageWorkbenchPage';
 import { prepareCommandBatch, queueCommand } from '../api/commandBatch';
 import type { ExportData } from '../api/client';
+import * as notificationApi from '../api/client';
+import NotificationPanel from '../components/NotificationPanel';
+import { REVEAL_VIRTUAL_MESSAGE } from '../hooks/useVirtualMessageMounts';
 import type { Message, Relation, ScopeView, User } from '../types';
 import { PART_SELECTION_EVENT } from '../utils/messageElementSelection';
 import * as leaderboardMetrics from '../utils/leaderboardMetrics';
@@ -17,9 +20,14 @@ import {deriveReadingProgress,influenceReadingMarks} from '../pages/workbench/mo
 import { getZhihuDisplayFields, getZhihuInactiveRelationIds, getZhihuLocalRelations, getZhihuReplyRelations, prepareZhihuForViewing, serializeZhihuViewingData } from '../utils/zhihuArchive';
 import { serializeGonglunZhihuViewingData } from '../utils/zhihuGonglunExport';
 import { validateExportForViewing } from '../utils/exportArchive';
+import { largeStructuralFixture } from './zhihu-structural-fixture';
+import { nativeZhihuDocument, sendNativeZhihuRelation } from '../utils/nativeZhihuEditor';
 import * as exportViewerCache from '../utils/exportViewerCache';
-import { setTheme } from '../theme/theme';
+import { getTheme, setTheme, THEMES } from '../theme/theme';
 import { BrowserRouter, HashRouter, Route, Routes } from 'react-router-dom';
+const { readFileSync } = await vi.importActual<{ readFileSync(path: URL, encoding: 'utf8'): string }>('node:fs');
+const testFileUrl = import.meta.url;
+const readingPresentationCss = readFileSync(new URL('../theme/reading-presentation.css', testFileUrl), 'utf8');
 
 // These full-workbench scenarios include real layout frames and native history traversal.
 // Allow the UI to settle under parallel test load without weakening its behavior checks.
@@ -105,11 +113,12 @@ const { mockApi, mockNavigate, mockGraphView, graphRendering, viewerRoute } = vi
   });
   return { mockApi, mockNavigate: vi.fn(), mockGraphView: vi.fn(), graphRendering: { actual: false,
     tasks: null as ReturnType<typeof import('../context/WorkbenchDrawingContext')['createWorkbenchDrawingTasks']> | null,
-  }, viewerRoute: { archive: null as ExportData | null, key: '', query: '', nativeRouter: false } };
+  }, viewerRoute: { archive: null as ExportData | null, key: '', query: '', nativeRouter: false,
+    navigation: null as import('../utils/exportViewerCache').ExportNavigation | null } };
 });
 
 const catalogHarness = vi.hoisted(() => ({ callbacks: null as any, data: null as any,
-  progress: { ready: false, count: 0, syncing: true }, prioritize: vi.fn(), filters: vi.fn() }));
+  progress: { ready: false, count: 0, syncing: true }, prioritize: vi.fn(), filters: vi.fn(), leaderboard: vi.fn() }));
 vi.mock('../data/catalogClient', async () => {
   const { deriveCleanVisibleIds } = await import('../utils/cleanProjection');
   const { deriveHomeFilterResult } = await import('../pages/workbench/projections/homeFilterResult');
@@ -125,7 +134,7 @@ vi.mock('../data/catalogClient', async () => {
   }));
   return { createCatalogClient: (_user: string, _scope: string, callbacks: any) => {
     catalogHarness.callbacks = callbacks;
-    return { prioritize: catalogHarness.prioritize, filters: catalogHarness.filters, catchUp: vi.fn(), applyCommitted: vi.fn(),
+    return { prioritize: catalogHarness.prioritize, filters: catalogHarness.filters, leaderboard: catalogHarness.leaderboard, catchUp: vi.fn(), applyCommitted: vi.fn(),
       refresh: vi.fn().mockResolvedValue(false), stop: vi.fn(), getProgress: () => catalogHarness.progress, subscribe: () => () => {} };
   } };
 });
@@ -143,7 +152,7 @@ vi.mock('react-router-dom', async () => {
     ...actual,
     useParams: () => viewerRoute.nativeRouter ? actual.useParams() : viewerRoute.archive ? {} : ({ messageId: 'classification-1' }),
     useNavigate: () => viewerRoute.nativeRouter ? actual.useNavigate() : mockNavigate,
-    useLocation: () => viewerRoute.nativeRouter ? actual.useLocation() : ({ pathname: viewerRoute.archive ? '/viewer' : '/messages/classification-1', state: viewerRoute.archive ? { exportData: viewerRoute.archive } : null, key: viewerRoute.key, search: '', hash: '' }),
+    useLocation: () => viewerRoute.nativeRouter ? actual.useLocation() : ({ pathname: viewerRoute.archive ? '/viewer' : '/messages/classification-1', state: viewerRoute.archive ? { exportData: viewerRoute.archive, viewerNavigation: viewerRoute.navigation ?? undefined } : null, key: viewerRoute.key, search: '', hash: '' }),
     useSearchParams: () => viewerRoute.nativeRouter ? actual.useSearchParams() : [new URLSearchParams(viewerRoute.query), (next: URLSearchParams) => { viewerRoute.query = next.toString(); }] as const,
   };
 });
@@ -336,6 +345,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     const full = { ...snapshot, windowed: false, messages: [first, ...remote] };
     const projected = projectWorkbenchSnapshot(full);
     const rows = buildLeaderboardRows(leaderboardMetrics.buildLeaderboardMetrics(projected.messages, projected.edges, projected.relations, full.users), full.users, projected.counts, projected.bettors);
+    catalogHarness.leaderboard.mockResolvedValue(rows);
     const view = render(<MessageWorkbenchPage />);
     try {
       await waitFor(() => expect(catalogHarness.callbacks).not.toBeNull());
@@ -345,15 +355,17 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       expect(screen.queryByTestId('graph-view')).toBeNull();
       expect(screen.queryByRole('dialog', { name: '排行榜' })).toBeNull();
       act(() => {
-        catalogHarness.data = { snapshot: full, projected, rows };
+        catalogHarness.data = { snapshot: full, projected };
         catalogHarness.progress = { ready: true, count: 53, syncing: false };
         catalogHarness.callbacks.onReady(catalogHarness.data);
       });
       // A complete model still needs its lazy view modules and drawing tasks.
       // Wait until the browser would allow interaction before opening the board.
       await waitForWorkbenchIdle();
+      expect(catalogHarness.leaderboard).not.toHaveBeenCalled();
       fireEvent.click(await screen.findByRole('button', { name: '排行榜' }));
       const dialog = await screen.findByRole('dialog', { name: '排行榜' });
+      expect(catalogHarness.leaderboard).toHaveBeenCalledOnce();
       const row = within(dialog).getByText(remoteUser.username).closest('tr')!;
       expect(row.children[4]).toHaveTextContent('52');
       fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }));
@@ -370,6 +382,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       expect(visibleGraphMessages()).toHaveLength(53);
       expect(screen.queryByRole('status', { name: '消息加载进度' })).toBeNull();
       expect(screen.queryByRole('button', { name: '加载更多消息' })).toBeNull();
+      await waitForWorkbenchIdle();
       fireEvent.click(screen.getByRole('button', { name: '过滤' }));
       fireEvent.click(screen.getByRole('button', { name: '按发送者' }));
       const input = screen.getByPlaceholderText('例如: 张三');
@@ -478,6 +491,112 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       await waitFor(() => expect(card(hidden.id)).toBeNull());
       expect(card('unread-74')).not.toBeNull();
     } finally { view.unmount(); graphRendering.actual = false; mockApi.getWorkbenchSnapshot.mockImplementation(original); catalogHarness.callbacks = null; }
+  });
+
+  it.each(['graph', 'list'].flatMap(mode => [false, true].flatMap(worker => [{ home: true, trace: false }, { home: true, trace: true }, { home: false, trace: true }].map(selection => ({ mode, worker, ...selection })))))(
+  'keeps reading positions while dimming related and hiding unrelated read messages ($mode, worker: $worker, home: $home, trace: $trace)', async ({ mode, worker, home, trace }) => {
+    const original = mockApi.getWorkbenchSnapshot.getMockImplementation()!;
+    const records = ['read-context', 'pending-reply', 'isolated-read', 'remaining-unread'].map(id => receivedMessage(id, id));
+    const relation = { ...makeRelation(), id: 'reading-reply', sourceMessageId: 'pending-reply', targetRefs: [{ kind: 'message' as const, messageId: 'read-context' }] };
+    mockApi.getScope.mockResolvedValue({ messageId: 'classification-1', title: '稳定阅读位置' });
+    mockApi.getMessages.mockResolvedValue({ data: records }); mockApi.getRelations.mockResolvedValue({ data: [relation] });
+    mockApi.getReadingState.mockResolvedValue({ marks: [] });
+    const full = await original({ parent: 'classification-1' });
+    mockApi.getWorkbenchSnapshot.mockImplementation(async () => worker ? { ...full, windowed: true, messages: [], relations: [] } : full);
+    graphRendering.actual = true;
+    const geometry = trace ? vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400)) : undefined;
+    const view = render(<><style>{readingPresentationCss}</style><MessageWorkbenchPage /></>);
+    try {
+      if (worker) {
+        const { projectWorkbenchSnapshot } = await import('../utils/workbenchProjection');
+        await waitFor(() => expect(catalogHarness.callbacks).not.toBeNull());
+        act(() => {
+          catalogHarness.data = { snapshot: full, projected: projectWorkbenchSnapshot(full), rows: { userRows: [], messageRows: [] } };
+          catalogHarness.callbacks.onReady(catalogHarness.data);
+        });
+      }
+      await waitForWorkbenchIdle();
+      if (mode === 'list') fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      await waitForWorkbenchIdle();
+      const panel = view.container.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      const card = (id: string) => panel.querySelector<HTMLElement>(`[data-msgid="${id}"]:not([data-rel-overlay])`)!;
+      if (home) {
+        fireEvent.click(screen.getByRole('button', { name: '主页' }));
+        fireEvent.click(screen.getByRole('radio', { name: '待阅或有新提醒' }));
+      }
+      await waitForWorkbenchIdle();
+      if (trace) {
+        for (const id of ['read-context', 'isolated-read', 'remaining-unread']) fireEvent.click(card(id));
+        fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
+        await waitForWorkbenchIdle();
+      }
+      const remaining = card('remaining-unread'), context = card('read-context'), isolated = card('isolated-read');
+      const host = panel.querySelector('[data-workbench-view-cache]')!.firstElementChild;
+      const position = [remaining.style.left, remaining.style.top, remaining.style.width];
+      panel.scrollTop = 80;
+      const filterCalls = catalogHarness.filters.mock.calls.length;
+      if (!trace && !worker && mode === 'graph') {
+        mockApi.markReading.mockRejectedValueOnce(new Error('阅读状态保存失败'));
+        fireEvent.click(within(context).getByRole('button', { name: /^显示提示 / }));
+        await act(async () => fireEvent.click(within(screen.getByRole('tooltip')).getByRole('button', { name: '标记当前消息已阅' })));
+        expect(within(screen.getByRole('tooltip')).getByRole('alert')).toHaveTextContent('阅读状态保存失败');
+        expect(context).not.toHaveAttribute('data-reading-presentation');
+        expect(context).toBeVisible();
+        expect(catalogHarness.filters.mock.calls.length).toBe(filterCalls);
+        fireEvent.pointerDown(document.body);
+      }
+      const confirm = async (id: string) => {
+        fireEvent.click(within(card(id)).getByRole('button', { name: /^显示提示 / }));
+        const popup = screen.getByRole('tooltip');
+        await act(async () => fireEvent.click(within(popup).getByRole('button', { name: '标记当前消息已阅' })));
+        await waitFor(() => expect(within(popup).getByRole('button', { name: '当前消息已阅' })).toBeDisabled());
+        fireEvent.pointerDown(document.body);
+      };
+      await confirm('read-context');
+      expect(card('read-context')).toBe(context);
+      expect(context).toHaveAttribute('data-reading-presentation', 'dimmed');
+      expect(context).toBeVisible();
+      await confirm('isolated-read');
+      expect(card('isolated-read')).toBe(isolated);
+      expect(isolated).toHaveAttribute('data-reading-presentation', 'hidden');
+      expect(isolated).not.toBeVisible();
+      expect(card('remaining-unread')).toBe(remaining);
+      expect(remaining).toBeVisible();
+      expect([remaining.style.left, remaining.style.top, remaining.style.width]).toEqual(position);
+      expect(panel.scrollTop).toBe(80);
+      expect(panel.querySelector('[data-workbench-view-cache]')!.firstElementChild).toBe(host);
+      expect(catalogHarness.filters.mock.calls.length).toBe(filterCalls);
+      expect(screen.queryByText('正在准备全局筛选结果…')).toBeNull();
+      expect(screen.queryByRole('dialog', { name: '正在绘制' })).toBeNull();
+      if (trace) {
+        const next = within(screen.getByRole('region', { name: '追溯阅读' })).getByRole('button', { name: '本组已读并继续' });
+        expect(next).toBeEnabled();
+        fireEvent.click(next);
+        await waitForWorkbenchIdle();
+        expect(view.container.querySelector('[data-reading-current-id]')).toHaveAttribute('data-reading-current-id', 'pending-reply');
+      } else {
+        // Explicit revisits reveal an otherwise hidden read card, and unread restores it normally.
+        act(() => panel.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: ['isolated-read'] } })));
+        expect(isolated).toBeVisible();
+        fireEvent.click(within(isolated).getByRole('button', { name: /^显示提示 / }));
+        await act(async () => fireEvent.click(within(screen.getByRole('tooltip')).getByRole('button', { name: '将此消息标为未阅' })));
+        expect(isolated).not.toHaveAttribute('data-reading-presentation');
+        expect(isolated).toBeVisible();
+        fireEvent.pointerDown(document.body);
+        await confirm('isolated-read');
+        await confirm('pending-reply');
+        expect(context).toHaveAttribute('data-reading-presentation', 'hidden');
+        expect(context).not.toBeVisible();
+        if (!screen.queryByRole('radio', { name: '已阅且无新提醒' })) fireEvent.click(screen.getByRole('button', { name: '主页' }));
+        fireEvent.click(screen.getByRole('radio', { name: '已阅且无新提醒' }));
+        await waitForWorkbenchIdle();
+        fireEvent.click(screen.getByRole('radio', { name: '待阅或有新提醒' }));
+        await waitForWorkbenchIdle();
+        expect(card('isolated-read')).toBeNull();
+        expect(card('read-context')).toBeNull();
+        expect(card('remaining-unread')).toBeVisible();
+      }
+    } finally { view.unmount(); geometry?.mockRestore(); graphRendering.actual = false; mockApi.getWorkbenchSnapshot.mockImplementation(original); catalogHarness.callbacks = null; }
   });
 
   it('排行榜关闭重开复用统计与显示状态，不重新请求数据或读写设置，主动刷新仍可用', async () => {
@@ -791,6 +910,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       expect(group.getByRole('button',{name:/选择相关.*消息/})).toHaveTextContent('cross');
       fireEvent.click(group.getByRole('button',{name:/选择相关.*消息/}));
       await act(async()=>fireEvent.click(group.getByRole('button',{name:'查看'})));
+      await waitForWorkbenchIdle();
       expect(screen.getByRole('spinbutton',{name:'向上追溯距离'})).toHaveValue(1);
       expectTraceOrigin('cross');
       for(const id of ['source','target'])expect(document.querySelector(`[data-workbench-left-panel] [data-msgid="${id}"]`)).not.toBeNull();
@@ -857,27 +977,87 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     }finally{view.unmount();graphRendering.actual=false;}
   });
 
-  it('loads the other endpoint for a directly opened scope and discards it on exiting related view',async()=>{
+  it.each([['REPLY','回复'],['AGREE','支持'],['DISAGREE','反驳'],['RECOMMEND','推荐']])('locates a visible %s summary in its popup without moving or expanding the canvas',async(type,label)=>{
+    const relation:Relation={id:'summary-target',relationType:type,sourceMessageId:'source',targetRefs:[{kind:'message',messageId:'target'}],createdAt:'2026-01-01',createdBy:makeUser()};
+    mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'汇总通知'});
+    mockApi.getMessages.mockResolvedValue({data:[makeMessage('source','回复正文'),makeMessage('target','原消息')]});
+    mockApi.getRelations.mockResolvedValue({data:[relation]});
+    graphRendering.actual=true;
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockImplementation(function(this:HTMLElement){
+      if(this.hasAttribute('data-workbench-left-panel'))return new DOMRect(0,100,600,500);
+      return new DOMRect(100,200,300,80);
+    });
+    const view=render(<MessageWorkbenchPage/>);
+    try{
+      const summary=await screen.findByRole('button',{name:`汇总${label}：1`});await waitForWorkbenchIdle();
+      const panel=document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      panel.scrollTop=730;panel.scrollLeft=90;
+      const complete=vi.fn(),reveal=vi.fn();panel.addEventListener(REVEAL_VIRTUAL_MESSAGE,reveal);
+      await act(async()=>latest().onNavigateToMessage('summary-target',{select:false,onComplete:complete}));
+      await waitFor(()=>expect(complete).toHaveBeenCalledExactlyOnceWith(true));
+      await waitForWorkbenchIdle();
+      const row=screen.getByRole('dialog',{name:'其他相关消息：1'}).querySelector('[data-related-relation-id="summary-target"]');
+      expect(row).toHaveAttribute('data-view-target','true');
+      expect([panel.scrollTop,panel.scrollLeft]).toEqual([730,90]);
+      expect(screen.getByRole('button',{name:`汇总${label}：1`})).toBe(summary);
+      expect(panel.querySelector('[data-directed-edge-label="summary-target"]')).toBeNull();
+      expect(reveal).not.toHaveBeenCalled();
+      expect(latest().draftUnits).toEqual([]);expect(latest().discussionView.mode).toBe('discussion');
+      fireEvent.click(screen.getByRole('button',{name:'关闭其他相关消息'}));
+      await waitForWorkbenchIdle();expect([panel.scrollTop,panel.scrollLeft]).toEqual([730,90]);
+    }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;}
+  });
+
+  it.each(['loaded', 'failed', 'timed out'])('keeps related-view progress visible while an endpoint request is %s',async outcome=>{
     const user=makeUser();
     const relation:Relation={id:'cross',relationType:'REFERENCE',sourceMessageId:'source',targetRefs:[{kind:'message',messageId:'remote'}],createdAt:'2026-01-01',createdBy:user};
     mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'直接打开的分类'});
     mockApi.getMessages.mockResolvedValue({data:[makeMessage('source','本地消息')]});
     mockApi.getRelations.mockResolvedValue({data:[relation]});
-    mockApi.getMessageContext.mockResolvedValueOnce({messages:[makeMessage('remote','另一画布的消息')],relations:[]});
+    let complete!: (value: { messages: Message[]; relations: Relation[] }) => void, fail!: (error: Error) => void;
+    mockApi.getMessageContext.mockImplementationOnce(() => new Promise((resolve, reject) => { complete = resolve; fail = reject; }));
     graphRendering.actual=true;
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    const view=render(<MessageWorkbenchPage/>);
     try{
-      render(<MessageWorkbenchPage/>);
       await waitFor(()=>expect(latest()?.messages.some((message:Message)=>message.id==='source')).toBe(true));
+      await waitForWorkbenchIdle();
+      vi.useFakeTimers();
       fireEvent.click(screen.getByRole('button',{name:/其他相关消息：1/}));
       await act(async()=>fireEvent.click(screen.getByRole('button',{name:'查看'})));
+      expect(screen.getByRole('dialog',{name:'正在加载消息'})).toBeInTheDocument();
+      expect(mockApi.getMessageContext).not.toHaveBeenCalled();
+      await act(async()=>{await vi.advanceTimersByTimeAsync(64);});
       expect(mockApi.getMessageContext).toHaveBeenCalledWith(['remote'],expect.any(AbortSignal));
+      await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});
+      expect(screen.getByRole('dialog',{name:'正在加载消息'})).toBeInTheDocument();
+      if(outcome==='timed out'){
+        await act(async()=>{await vi.advanceTimersByTimeAsync(WORKBENCH_DRAWING_TIMEOUT_MS);});
+        expect(mockApi.getMessageContext.mock.lastCall![1].aborted).toBe(true);
+        expect(screen.getByRole('alert')).toHaveTextContent('超过 30 秒');
+        await act(async()=>complete({messages:[makeMessage('remote','迟到的消息')],relations:[]}));
+      }else if(outcome==='failed'){
+        await act(async()=>fail(new Error('关联端点读取失败')));
+        await waitForWorkbenchIdle();
+        expect(screen.getByText('关联端点读取失败')).toBeInTheDocument();
+      }else{
+        await act(async()=>complete({messages:[makeMessage('remote','另一画布的消息')],relations:[]}));
+        await waitForWorkbenchIdle();
+      }
+      expect(document.querySelector('[data-workbench-progress-active]')).toBeNull();
+      expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+      if(outcome!=='loaded'){
+        expect(document.querySelector('[data-workbench-left-panel] [data-msgid="remote"]')).toBeNull();
+        expect(screen.queryByRole('button',{name:'退出查看'})).toBeNull();
+        return;
+      }
       expect(document.querySelector('[data-workbench-left-panel] [data-msgid="remote"]')).not.toBeNull();
       expect(screen.getByRole('spinbutton',{name:'向上追溯距离'})).toHaveValue(1);
       fireEvent.click(screen.getByRole('button',{name:'退出查看'}));
       expect(document.querySelector('[data-workbench-left-panel] [data-msgid="remote"]')).toBeNull();
       expect(latest().relatedMessages.some((message:Message)=>message.id==='remote')).toBe(false);
       expect(screen.queryByRole('spinbutton',{name:'向上追溯距离'})).toBeNull();
-    }finally{graphRendering.actual=false;}
+    }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;vi.useRealTimers();}
   });
 
   it('shows one specific change for imported corrections instead of the legacy description or duplicate before/after panels',async()=>{
@@ -973,6 +1153,66 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       expect(latest().messages.some((message:Message)=>String(message.kind).toLowerCase()==='join')).toBe(false);
       expect(mockApi.createRelation).not.toHaveBeenCalled();
     }finally{geometry.mockRestore();graphRendering.actual=false;}
+  });
+
+  it.each(['graph', 'list'])('keeps the current %s scene and scroll position when a notification targets a visible member', async mode => {
+    fixture('CLASSIFY', true);
+    const response = await mockApi.getRelations();
+    mockApi.getRelations.mockResolvedValue({ data: response.data.filter((relation: Relation) => relation.id !== 'against-C') });
+    const notifications = vi.spyOn(notificationApi, 'getNotifications').mockResolvedValue({
+      through: 10, unseenCount: 1, sequence: 1, nextCursor: null,
+      items: [{ id: 10, sourceId: 'join-B', navigationId: 'B', targetId: 'C', actorId: 'other', actorName: '其他成员',
+        action: '加入已生效', excerpt: '通知里的可见成员', targetExcerpt: 'C', sourceRevision: 1, references: [],
+        reasons: ['你创建了分类'], watchedIds: [], category: 'direct', kind: 'member-of', groupKey: 'join-B',
+        createdAt: '2026-11-05T08:00:00Z', seenAt: null, muted: false }],
+    });
+    const seen = vi.spyOn(notificationApi, 'markNotificationsSeen').mockResolvedValue({ ok: true });
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.hasAttribute('data-workbench-left-panel') ? new DOMRect(0, 120, 600, 500) : new DOMRect(20, 160, 300, 100);
+    });
+    const previousUrl = window.location.href;
+    window.history.replaceState(null, '', '/messages/classification-1');
+    viewerRoute.nativeRouter = true; graphRendering.actual = true;
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return <><MessageWorkbenchPage /><button onClick={() => setOpen(true)}>打开测试通知</button>
+        {open && <NotificationPanel revision={0} onClose={() => setOpen(false)} />}</>;
+    }
+    const view = render(<BrowserRouter><Routes><Route path="/messages/:messageId" element={<Harness />} /></Routes></BrowserRouter>);
+    try {
+      await waitForWorkbenchIdle();
+      await act(async () => latest().onMessageDoubleClick(event(), 'A'));
+      await act(async () => latest().onMessageDoubleClick(event(), 'C'));
+      if (mode === 'list') fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      await waitForWorkbenchIdle();
+      const panel = document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      const card = panel.querySelector<HTMLElement>('[data-msgid="B"]:not([data-rel-overlay])')!;
+      expect(card).not.toBeNull();
+      fireEvent.change(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）'), { target: { value: '保留草稿' } });
+      const selection = latest().draftUnits;
+      panel.scrollTop = 340; panel.scrollLeft = 75;
+      const snapshots = mockApi.getWorkbenchSnapshot.mock.calls.length;
+      const reveal = vi.fn(); panel.addEventListener(REVEAL_VIRTUAL_MESSAGE, reveal);
+      fireEvent.click(screen.getByRole('button', { name: '打开测试通知' }));
+      fireEvent.click(await screen.findByText('通知里的可见成员'));
+      await waitFor(() => expect(document.querySelector('[data-message-jump-target="B"]')).not.toBeNull());
+      expect(panel.querySelector('[data-msgid="B"]:not([data-rel-overlay])')).toBe(card);
+      expect([panel.scrollTop, panel.scrollLeft]).toEqual([340, 75]);
+      expect(reveal.mock.calls.filter(([event]) => event.detail.ids.length)).toHaveLength(0);
+      await waitFor(() => expect(seen).toHaveBeenCalledExactlyOnceWith({ through: 10, ids: [10] }));
+      await waitFor(() => expect(document.querySelector('[data-message-jump-target="B"]')).toBeNull());
+      expect(panel.querySelector('[data-msgid="B"]:not([data-rel-overlay])')).toBe(card);
+      expect([panel.scrollTop, panel.scrollLeft]).toEqual([340, 75]);
+      expect(latest().draftUnits).toEqual(selection);
+      expect(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）')).toHaveValue('保留草稿');
+      expect(mockApi.getWorkbenchSnapshot).toHaveBeenCalledTimes(snapshots);
+      expect(window.location.pathname).toBe('/messages/classification-1');
+      expect(window.location.search).toBe('');
+    } finally {
+      view.unmount(); notifications.mockRestore(); seen.mockRestore(); geometry.mockRestore();
+      viewerRoute.nativeRouter = false; graphRendering.actual = false;
+      window.history.replaceState(null, '', previousUrl);
+    }
   });
 
   it.each([0.7, 1, 1.5])('locates the JOIN record itself after clicking its temporary-category header at scale %s', async scale => {
@@ -1201,7 +1441,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     }
   });
 
-  it('waits for background view positioning before saving a manually scrolled location', async () => {
+  it('keeps an already visible target in place while mode-switch positioning owns the progress dialog', async () => {
     mockApi.getScope.mockResolvedValue({ messageId: 'classification-1', title: '后台定位' });
     mockApi.getMessages.mockResolvedValue({ data: [makeMessage('background-location', '定位消息')] });
     mockApi.getRelations.mockResolvedValue({ data: [] });
@@ -1213,17 +1453,17 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       await act(async () => latest().onMessageClick(event(), 'background-location'));
       vi.useFakeTimers();
       fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
-      // aria-busy only describes the blocking load; mode-switch navigation has
-      // a live positioning ticket even though the workbench is interactive.
-      expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+      // Switching views stays in the same progress dialog until positioning finishes.
+      expect(document.querySelector('[aria-busy="true"]')).not.toBeNull();
+      expect(screen.getAllByRole('dialog')).toHaveLength(1);
       expect(graphRendering.tasks!.pending).toBeGreaterThan(0);
       const panel = document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      // The restored viewport can already expose the destination before its locator runs.
       panel.scrollTop = 730; panel.scrollLeft = 90;
       await waitForWorkbenchIdle();
-      // Reproduce the old test's race: the scheduled centering overwrites a
-      // position assigned while aria-busy is false but navigation is pending.
-      expect([panel.scrollTop, panel.scrollLeft]).not.toEqual([730, 90]);
-      panel.scrollTop = 730; panel.scrollLeft = 90;
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect([panel.scrollTop, panel.scrollLeft]).toEqual([730, 90]);
+      expect(document.querySelector('[data-message-jump-target="background-location"]')).not.toBeNull();
       await act(async () => { await vi.advanceTimersByTimeAsync(500); });
       expect([panel.scrollTop, panel.scrollLeft]).toEqual([730, 90]);
       expect(graphRendering.tasks!.pending).toBe(0);
@@ -1258,8 +1498,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     let view: ReturnType<typeof render> | undefined;
     try{
       view = render(<MessageWorkbenchPage/>);
-      // Ordinary navigation is non-blocking. Its delayed centering still owns a
-      // positioning task after aria-busy becomes false, so wait before scrolling.
+      // Save the user's scroll only after the restored view finishes positioning.
       const ready=waitForWorkbenchIdle;
       await waitFor(()=>expect(latest()?.messages.some((message:Message)=>message.id==='A')).toBe(true));
       await ready();
@@ -2093,7 +2332,7 @@ describe('directed reading and continuous traces',()=>{
       expect(shared.style.getPropertyValue('--reading-continue-offset')).toBe('9px');
     }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;mockApi.getReadingState.mockResolvedValue({marks:[]});}
   });
-  it('does not expand the two selected classifications or add duplicate reading history by reading the same group',async()=>{
+  it('keeps both selected classifications expanded without adding duplicate reading history for the same group',async()=>{
     const categoryIds=['cmtgyl9ph00zz13qjjl7gqoc0','cmt4dpf2s006dggsriy6ruf2a'];
     const categories=categoryIds.map((id,index):Relation=>({...makeRelation(),id,relationType:'CLASSIFY',sourceMessageId:null,
       targetRefs:[{kind:'message',messageId:index?'F':'B'}]}));
@@ -2105,7 +2344,7 @@ describe('directed reading and continuous traces',()=>{
       expect(screen.queryByRole('button',{name:'继续追溯本组消息'})).toBeNull();
       const button=screen.getByRole('button',{name:'设为阅读消息'});
       fireEvent.click(button);fireEvent.click(button);await waitForWorkbenchIdle();
-      expectReadingPath(categoryIds);expect(latest().traceExpandedFrameIds).toEqual(new Set());
+      expectReadingPath(categoryIds);expect(latest().traceExpandedFrameIds).toEqual(new Set(categoryIds));
       expect(screen.getByRole('button',{name:'阅读后退'})).toBeDisabled();expect(screen.getByRole('button',{name:'阅读前进'})).toBeDisabled();
       expect(view.container.querySelectorAll('[data-reading-message-section]')).toHaveLength(2);
     }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;mockApi.getReadingState.mockResolvedValue({marks:[]});}
@@ -2207,7 +2446,8 @@ describe('directed reading and continuous traces',()=>{
       await waitFor(()=>expect(mockApi.markReading).toHaveBeenCalledOnce());await waitForWorkbenchIdle();
       expect(readingCurrentMessage('F')).toBeInTheDocument();
       expect(view.container.querySelector('[data-msgid="F"]')).toHaveAttribute('data-reading-position','current');
-      expect(screen.getByRole('button',{name:'已读并继续'})).toBeDisabled();
+      expect(screen.getByRole('button',{name:'已读'})).toBeDisabled();
+      expect(screen.getByRole('button',{name:'下一条'})).toBeDisabled();
       expect(mockApi.markReading.mock.calls[0][0]).toEqual(expect.arrayContaining([expect.objectContaining({messageId:'F',scope:'message'}),expect.objectContaining({messageId:'B',scope:'influence'})]));
       fireEvent.click(screen.getByRole('button',{name:'关闭消息提示'}));
       expect(screen.getByRole('button',{name:'阅读前进'})).toBeDisabled();
@@ -2427,7 +2667,8 @@ describe('directed reading and continuous traces',()=>{
       fireEvent.click(screen.getByRole('button',{name:/临时显示并阅读.*N$/}));await waitForWorkbenchIdle();
       expectReadingPath(['N']);
       await waitFor(()=>expect(document.querySelector('[data-workbench-left-panel] [data-msgid="N"]:not([data-rel-overlay])')).not.toBeNull());
-      fireEvent.click(screen.getByRole('button',{name:'已读并继续'}));await waitForWorkbenchIdle();
+      expect(screen.getByRole('button',{name:'下一条'})).toBeDisabled();
+      fireEvent.click(screen.getByRole('button',{name:'已读'}));await waitForWorkbenchIdle();
       expect(mockApi.markReading.mock.calls.flatMap(([marks]:any)=>marks).some((mark:any)=>mark.messageId==='N'&&mark.scope==='message')).toBe(true);
       expectReadingPath(['N']);
       expect(screen.getByRole('button',{name:/过滤中/})).toBeInTheDocument();
@@ -2843,7 +3084,46 @@ describe('MessageWorkbenchPage composer refresh', () => {
     expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="visible-join"]')).not.toBeNull();
   });
 
-  it.each([false,true])('fully opens a sole traced classification only when it has no outside message (outside: %s)',async outside=>{
+  it.each(['trace','view'])('opens every nested frame by default in %s and preserves subsequent manual choices',async mode=>{
+    const members=Array.from({length:8},(_,index)=>makeMessage(`member-${index}`,`内部消息 ${index}`));
+    const container=(id:string,type:string,targets:string[]):Relation=>({...makeRelation(),id,relationType:type,sourceMessageId:null,
+      targetRefs:targets.map(messageId=>({kind:'message',messageId})),payload:{title:id}});
+    mockApi.getMessages.mockResolvedValue({data:members});
+    mockApi.getRelations.mockResolvedValue({data:[container('outer','CLASSIFY',['inner']),container('inner','SUMMARY',['arrangement']),
+      container('arrangement','ARRANGE',members.map(message=>message.id))]});
+    graphRendering.actual=true;
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    const view=render(<MessageWorkbenchPage/>),latest=()=>mockGraphView.mock.lastCall![0];
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      latest().frameViewStateRef.current={main:{sizes:{outer:{width:480,height:180}},scrolls:{},full:{outer:false,inner:false},collapsed:['inner']}};
+      if(mode==='view')await act(async()=>latest().onRelatedRelationView('outer'));
+      else {
+        await act(async()=>latest().onMessageClick({button:0,stopPropagation:vi.fn()},'outer'));
+        fireEvent.click(screen.getByRole('button',{name:'设为追溯消息'}));
+      }
+      await waitForWorkbenchIdle();
+      const panel=view.container.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      expect(latest().traceExpandedFrameIds).toEqual(new Set(['outer','inner']));
+      for(const id of ['outer','inner','arrangement']){
+        expect(panel.querySelector(`[data-frame-visual="${id}"]`)).not.toBeNull();
+        if(id!=='arrangement')expect(within(panel).getByRole('button',{name:`还原尺寸 ${id}`})).toHaveAttribute('aria-pressed','true');
+      }
+      expect(panel.querySelector('[data-frame-clip], [data-frame-scrollbar]')).toBeNull();
+      expect(panel.querySelector('[data-msgid="member-0"]:not([data-rel-overlay])')).not.toBeNull();
+      fireEvent.click(within(panel).getByRole('button',{name:'收起下方框架 inner'}));await waitForWorkbenchIdle();
+      fireEvent.click(within(panel).getByRole('button',{name:'还原尺寸 outer'}));await waitForWorkbenchIdle();
+      expect(within(panel).getByRole('button',{name:'展开下方框架 inner'})).toHaveAttribute('aria-expanded','false');
+      expect(within(panel).getByRole('spinbutton',{name:'框架宽度 outer'})).toHaveValue(480);
+      fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button',{name:'切换为消息图'}));await waitForWorkbenchIdle();
+      expect(within(panel).getByRole('button',{name:'完全展开 outer'})).toHaveAttribute('aria-pressed','false');
+      expect(within(panel).getByRole('button',{name:'展开下方框架 inner'})).toHaveAttribute('aria-expanded','false');
+      expect(panel.querySelector('[data-msgid="member-0"]:not([data-rel-overlay])')).toBeNull();
+    }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;}
+  });
+
+  it.each([false,true])('fully opens a traced classification even with outside messages (outside: %s)',async outside=>{
     const category:Relation={...makeRelation(),id:'sole-category',relationType:'CLASSIFY',sourceMessageId:null,
       targetRefs:['first','second'].map(messageId=>({kind:'message',messageId}))};
     mockApi.getRelations.mockResolvedValue({data:[category]});
@@ -2857,13 +3137,11 @@ describe('MessageWorkbenchPage composer refresh', () => {
       await act(async()=>latest().onMessageClick(event(),'sole-category'));
       if(outside)await act(async()=>latest().onMessageClick(event(),'outside'));
       fireEvent.click(screen.getByRole('button',{name:'设为追溯消息'}));await waitForWorkbenchIdle();
-      expect(latest().traceExpandedFrameIds.has('sole-category')).toBe(!outside);
+      expect(latest().traceExpandedFrameIds.has('sole-category')).toBe(true);
       if(outside)expect(latest().messages.some((message:{id:string})=>message.id==='outside')).toBe(true);
-      else {
-        expect(view.container.querySelector('[data-frame-visual="sole-category"]')).not.toBeNull();
-        expect(latest().messages.map((message:{id:string})=>message.id)).toEqual(expect.arrayContaining(['first','second']));
-        expect(view.container.querySelector('[data-frame-scrollbar="sole-category"]')).toBeNull();
-      }
+      expect(view.container.querySelector('[data-frame-visual="sole-category"]')).not.toBeNull();
+      expect(latest().messages.map((message:{id:string})=>message.id)).toEqual(expect.arrayContaining(['first','second']));
+      expect(view.container.querySelector('[data-frame-scrollbar="sole-category"]')).toBeNull();
     }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;}
   });
 
@@ -3008,7 +3286,62 @@ describe('MessageWorkbenchPage composer refresh', () => {
     }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;}
   });
 
-  it.each(['id','hint','first-hint'])('opens correction records and the selected record overlay from the %s entry',async entry=>{
+  it('shows drawing progress before a reference hint replaces the graph and waits for its slow layout and location', async () => {
+    const { computeSceneLayout } = await import('../utils/frameLayout');
+    const { planMessageStructures } = await import('../utils/messageStructurePlan');
+    type Request = import('../hooks/useSceneComputation').SceneComputationRequest;
+    const { createSceneRequestDecoder } = await import('../utils/sceneComputationTransport');
+    let hold = false;
+    const pending: Array<() => void> = [];
+    class SceneWorker {
+      decode = createSceneRequestDecoder();
+      onmessage!: (event: MessageEvent) => void;
+      terminated = false;
+      postMessage(request: Request) {
+        const job = this.decode(request);
+        const deliver = () => {
+          if (this.terminated) return;
+          const result = job.kind === 'layout' ? computeSceneLayout(job.input) : planMessageStructures(job.input);
+          this.onmessage({ data: { id: request.id, result } } as MessageEvent);
+        };
+        if (hold) pending.push(deliver); else queueMicrotask(deliver);
+      }
+      terminate() { this.terminated = true; }
+    }
+    vi.stubGlobal('Worker', SceneWorker);
+    graphRendering.actual = true;
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
+    mockApi.getMessages.mockResolvedValue({ data: [receivedMessage('hint-source', '来源正文'), receivedMessage('hint-target', '目标正文')] });
+    mockApi.getRelations.mockResolvedValue({ data: [{ ...receivedRelation(), id: 'hint-record', relationType: 'REFERENCE', sourceMessageId: 'hint-source', targetRefs: [{ kind: 'message', messageId: 'hint-target' }] }] });
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+      await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button', { name: /^显示提示 hint-source：/ }));
+      expandReadingEffects();
+      vi.useFakeTimers(); hold = true;
+      fireEvent.click(within(screen.getByRole('tooltip')).getByTitle('查看引用 hint-record'));
+      expect(screen.getByRole('dialog', { name: '正在加载消息' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '退出查看' })).toBeNull();
+      await act(async () => { await vi.advanceTimersByTimeAsync(16); });
+      expect(screen.queryByRole('button', { name: '退出查看' })).toBeNull();
+      for (let frame = 0; frame < 5; frame++) await act(async () => { await vi.advanceTimersByTimeAsync(16); });
+      expect(pending.length).toBeGreaterThan(0);
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      // The pending worker may still own a structure-loading task. Both stages
+      // must keep the progress barrier up until the target is actually laid out.
+      expect(screen.getByRole('dialog', { name: /^正在(?:绘制|加载消息)$/ })).toBeInTheDocument();
+      expect(document.querySelector('[data-message-jump-target="hint-record"]')).toBeNull();
+      hold = false;
+      await act(async () => { pending.splice(0).forEach(deliver => deliver()); });
+      await waitForWorkbenchIdle();
+      expect(document.querySelector('[data-workbench-progress-active]')).toBeNull();
+      expect(document.querySelector('[data-message-jump-target="hint-record"]')).not.toBeNull();
+      expect(screen.queryByText('目标消息未能定位，请重试')).toBeNull();
+    } finally { view.unmount(); geometry.mockRestore(); graphRendering.actual = false; vi.unstubAllGlobals(); vi.useRealTimers(); }
+  });
+
+  it.each(['id','hint','first-hint'])('locates a visible correction in place from an id and opens its history from a hint (%s)',async entry=>{
     graphRendering.actual=true;
     const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
     const corrections:Relation[]=['first-correction','unadopted-correction'].map((id,index)=>({...receivedRelation(),id,relationType:'CORRECT',sourceMessageId:null,
@@ -3019,16 +3352,22 @@ describe('MessageWorkbenchPage composer refresh', () => {
     try{
       await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
       const expected=entry==='first-hint'?'first-correction':'unadopted-correction';
+      const anchor=document.querySelector(`[data-workbench-left-panel] [data-msgid="${expected}"][data-rel-overlay]`);
       if(entry==='id'){
+        expect(anchor).not.toBeNull();
         await jumpToMessageId(expected);
       }else{
         fireEvent.click(screen.getByRole('button',{name:/^显示提示 msg-1：/}));
         expandReadingEffects();fireEvent.click(within(screen.getByRole('tooltip')).getByTitle(`查看更正 ${expected}`));
       }
-      await waitFor(()=>expect(screen.getByText('更正记录临时分类（2）')).toBeInTheDocument());
+      if(entry!=='id')await waitFor(()=>expect(screen.getByText('更正记录临时分类（2）')).toBeInTheDocument());
       await waitFor(()=>expect(document.querySelector(`[data-message-jump-target="${expected}"]`)).not.toBeNull());
       await waitForWorkbenchIdle();
-      expect(document.querySelector(`[data-workbench-left-panel] [data-msgid="${expected}"]:not([data-rel-overlay])`)).not.toBeNull();
+      if(entry==='id'){
+        expect(screen.queryByText('更正记录临时分类（2）')).toBeNull();
+        expect(document.querySelector(`[data-workbench-left-panel] [data-msgid="${expected}"][data-rel-overlay]`)).toBe(anchor);
+        expect(screen.getByRole('button',{name:'切换为消息表'})).toBeInTheDocument();
+      }else expect(document.querySelector(`[data-workbench-left-panel] [data-msgid="${expected}"]:not([data-rel-overlay])`)).not.toBeNull();
     }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;}
   });
 
@@ -3692,7 +4031,8 @@ describe('MessageWorkbenchPage composer refresh', () => {
       expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();expect(mockApi.castVote).not.toHaveBeenCalled();
     }finally{view.unmount();graphRendering.actual=false;}
   },15000);
-  it.each(['graph', 'list'] as const)('keeps a migrated classification name while double-clicking and correcting it in %s mode', async mode => {
+  it.each(THEMES.flatMap(({ id: theme }) => (['graph', 'list'] as const).map(mode => ({ theme, mode }))))('keeps a migrated classification name while double-clicking and correcting it in $theme / $mode', async ({ theme, mode }) => {
+    const previousTheme = getTheme();setTheme(theme);
     localStorage.setItem('token', 'test-token');
     const title = '图书馆开放时间', description = '建立关系：CLASSIFY；目标：msg-1';
     const container: Relation = { ...makeRelation(), id: 'legacy-container', revision: 1, relationType: 'CLASSIFY', sourceMessageId: null,
@@ -3752,11 +4092,12 @@ describe('MessageWorkbenchPage composer refresh', () => {
       fireEvent.click(screen.getByRole('button', { name: '清空' }));
       expect(within(card).queryByText('拖选文字即可选择片段，或点击已有高亮片段')).toBeNull();
       expect(window.getSelection()!.toString()).toBe('');
-    } finally { window.getSelection()?.removeAllRanges(); view.unmount(); geometry.mockRestore(); graphRendering.actual = false; mockApi.getWorkbenchSnapshot.mockImplementation(snapshotLoader); }
+    } finally { window.getSelection()?.removeAllRanges(); view.unmount(); geometry.mockRestore(); graphRendering.actual = false; mockApi.getWorkbenchSnapshot.mockImplementation(snapshotLoader); setTheme(previousTheme); }
   });
 
-  it.each(['CLASSIFY', 'SUMMARY'].flatMap(type => ['graph', 'list'].flatMap(mode => (['TEXT'] as const).map(correctionKind => ({ type, mode, correctionKind })))))(
-    'displays a body correction of $type from $mode ($correctionKind), restores the original on personal rejection and keeps correction history', async ({ type, mode, correctionKind }) => {
+  it.each(THEMES.flatMap(({ id: theme }) => ['CLASSIFY', 'SUMMARY'].flatMap(type => ['graph', 'list'].map(mode => ({ theme, type, mode, correctionKind: 'TEXT' as const })))))(
+    'displays a body correction of $type from $theme / $mode ($correctionKind), restores the original on personal rejection and keeps correction history', async ({ theme, type, mode, correctionKind }) => {
+    const previousTheme = getTheme();setTheme(theme);
     localStorage.setItem('token', 'test-token');
     const replacement = '加长的新正文';
     const before = '开头保留\n需要更正的旧正文\n结尾也保留', after = before.replace('旧正文', replacement);
@@ -3911,7 +4252,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
         expect(screen.getByText(/消息卡按本人立场及公共统计显示有效正文/)).toBeInTheDocument();
       }
       expect(mockApi.createMessage).not.toHaveBeenCalled();
-    } finally { window.getSelection()?.removeAllRanges(); view.unmount(); geometry.mockRestore(); graphRendering.actual = false; mockApi.getWorkbenchSnapshot.mockImplementation(snapshotLoader); }
+    } finally { window.getSelection()?.removeAllRanges(); view.unmount(); geometry.mockRestore(); graphRendering.actual = false; mockApi.getWorkbenchSnapshot.mockImplementation(snapshotLoader); setTheme(previousTheme); }
   },15000);
 
   it.each(['RECOMMEND', 'ARCHIVE'])('displays the %s returned by a value vote immediately in the annotation group', async type => {
@@ -4495,7 +4836,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;}
   });
 
-  it('locates text and every relation in send order within the current classification, skipping generated JOINs', async () => {
+  it.each(['graph', 'list'])('locates text and every relation in send order within the current classification in %s, skipping generated JOINs', async mode => {
     const displayedTargets: string[] = [];
     const transitions = new MutationObserver(() => {
       const active = document.querySelector<HTMLElement>('[data-message-jump-overlay="true"]');
@@ -4527,16 +4868,19 @@ describe('MessageWorkbenchPage composer refresh', () => {
       onCommitted?.(3);
     });
     const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
+    graphRendering.actual = mode === 'graph';
     try {
       render(<MessageWorkbenchPage />);
       await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+      await waitForWorkbenchIdle();
       const latest = () => mockGraphView.mock.lastCall![0];
       await act(async () => latest().onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, current.id));
+      await waitForWorkbenchIdle();
       await act(async () => {
         latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'msg-1');
         latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'msg-2');
       });
-      fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      if (mode === 'list') fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
       fireEvent.click(screen.getByRole('button', { name: '回复' }));
       fireEvent.change(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）'), { target: { value: sent.content } });
       fireEvent.click(screen.getByRole('button', { name: '发送' }));
@@ -4545,10 +4889,12 @@ describe('MessageWorkbenchPage composer refresh', () => {
       transitions.observe(document.body, { subtree: true, childList: true, attributes: true });
       await act(async () => finishCommit());
       // Each next overlay replaces the current one as soon as it is ready.
-      await waitFor(() => expect(displayedTargets).toEqual([sent.id, ...replies.map(reply => reply.id)]), { timeout: 1000 });
+      await waitFor(() => expect(displayedTargets).toEqual([sent.id, ...replies.map(reply => reply.id)]), { timeout: 5000 });
+      expect(screen.queryByRole('region', { name: '追溯阅读' })).toBeNull();
+      expect(screen.queryByRole('button', { name: '退出查看' })).toBeNull();
       expect(screen.getByText('已定位目标消息')).toBeInTheDocument();
       expect(document.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="sent-text"]')?.style.visibility).toBe('');
-      expect(document.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="sent-reply-0"]')?.style.visibility).toBe('');
+      expect(document.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="sent-reply-1"]')?.style.visibility).toBe('');
       expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('当前分类');
       await waitFor(() => expect(screen.queryByText('已定位目标消息')).toBeNull(), { timeout: 2500 });
       expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('当前分类');
@@ -4558,6 +4904,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     } finally {
       transitions.disconnect();
       geometry.mockRestore();
+      graphRendering.actual = false;
     }
   });
 
@@ -6093,7 +6440,7 @@ describe('MessageWorkbenchPage SUMMARY classification with CORRECT-related messa
     expect(latestProps.messages.some((m: { id: string }) => m.id === 'rel-summary')).toBe(true);
   });
 
-  it('keeps summary targets in the linear trace view without expanding the frame', async () => {
+  it('opens summary targets by default and keeps manual collapse reversible in trace', async () => {
     render(<MessageWorkbenchPage />);
     await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
 
@@ -6107,14 +6454,16 @@ describe('MessageWorkbenchPage SUMMARY classification with CORRECT-related messa
       const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
       const ids = new Set(props.messages.map((message: { id: string }) => message.id));
       expect(ids.has('rel-summary')).toBe(true);
-      expect(ids.has('msg-orig')).toBe(false);
-      expect(ids.has('msg-corr')).toBe(false);
-      expect(props.traceExpandedFrameIds.has('rel-summary')).toBe(false);
+      expect(ids.has('msg-orig')).toBe(true);
+      expect(ids.has('msg-corr')).toBe(true);
+      expect(props.traceExpandedFrameIds.has('rel-summary')).toBe(true);
       expect(props.hideMessageIds?.has('rel-summary') ?? false).toBe(false);
     });
 
-    const collapsedProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
-    collapsedProps.onMessageDoubleClick({ stopPropagation: vi.fn() }, 'rel-summary');
+    const expandedProps = mockGraphView.mock.lastCall![0];
+    await act(async()=>expandedProps.onMessageDoubleClick({ stopPropagation: vi.fn() }, 'rel-summary'));
+    await waitFor(()=>expect(mockGraphView.mock.lastCall![0].traceExpandedFrameIds.has('rel-summary')).toBe(false));
+    await act(async()=>mockGraphView.mock.lastCall![0].onMessageDoubleClick({ stopPropagation: vi.fn() }, 'rel-summary'));
     await waitFor(() => {
       const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
       const ids = new Set(props.messages.map((message: { id: string }) => message.id));
@@ -6164,7 +6513,7 @@ describe('MessageWorkbenchPage trace container frame projection', () => {
     });
   });
 
-  it('traces the classify relation as a classification card with direct reference text', async () => {
+  it('traces the classify relation as an expanded frame with direct reference text', async () => {
     render(<MessageWorkbenchPage />);
     await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
 
@@ -6178,13 +6527,13 @@ describe('MessageWorkbenchPage trace container frame projection', () => {
       const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
       const ids = new Set(props.messages.map((message: { id: string }) => message.id));
       expect(ids.has('rel-classify')).toBe(true);
-      expect(ids.has('frame-member-a')).toBe(false);
-      expect(ids.has('frame-member-b')).toBe(false);
+      expect(ids.has('frame-member-a')).toBe(true);
+      expect(ids.has('frame-member-b')).toBe(true);
       expect(ids.has('external-text')).toBe(true);
       expect(props.traceFrameIds.has('rel-classify')).toBe(true);
-      expect(props.traceExpandedFrameIds.has('rel-classify')).toBe(false);
+      expect(props.traceExpandedFrameIds.has('rel-classify')).toBe(true);
       expect(props.edges.map((edge: { relationMessageId: string }) => edge.relationMessageId)).toContain('rel-reference');
-      expect(props.edges.some((edge:{relationMessageId:string})=>edge.relationMessageId==='rel-classify')).toBe(false);
+      expect(props.edges.some((edge:{relationMessageId:string})=>edge.relationMessageId==='rel-classify')).toBe(true);
     });
   });
 
@@ -6322,8 +6671,8 @@ describe('MessageWorkbenchPage trace container frame projection', () => {
       const ids = new Set(props.messages.map((message: { id: string }) => message.id));
       expect(ids.has('rel-classify')).toBe(true);
       expect(ids.has('rel-summary')).toBe(true);
-      expect(ids.has('summary-member-a')).toBe(false);
-      expect(ids.has('summary-member-b')).toBe(false);
+      expect(ids.has('summary-member-a')).toBe(true);
+      expect(ids.has('summary-member-b')).toBe(true);
       expect(props.edges.some((edge: { relationMessageId: string }) => edge.relationMessageId === 'rel-classify')).toBe(true);
     });
 
@@ -6336,9 +6685,10 @@ describe('MessageWorkbenchPage trace container frame projection', () => {
     await waitFor(() => {
       const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
       const ids = new Set(props.messages.map((message: { id: string }) => message.id));
-      expect(ids.has('summary-member-a')).toBe(true);
-      expect(ids.has('summary-member-b')).toBe(true);
-      expect(props.traceExpandedFrameIds.has('rel-summary')).toBe(true);
+      expect(ids.has('summary-member-a')).toBe(false);
+      expect(ids.has('summary-member-b')).toBe(false);
+      expect(props.traceExpandedFrameIds.has('rel-summary')).toBe(false);
+      expect(props.traceExpandedFrameIds.has('rel-classify')).toBe(true);
     });
   });
 
@@ -6422,11 +6772,9 @@ describe('MessageWorkbenchPage trace container frame projection', () => {
       expect(props.edges.some((edge: { relationMessageId: string }) => edge.relationMessageId === 'rel-b')).toBe(true);
       expect(props.edges.some((edge: { relationMessageId: string }) => edge.relationMessageId === 'rel-c')).toBe(true);
       expect(props.traceExpandedFrameIds.has('rel-b')).toBe(true);
-      expect(props.traceExpandedFrameIds.has('rel-c')).toBe(false);
+      expect(props.traceExpandedFrameIds.has('rel-c')).toBe(true);
       expect(props.traceExpandedFrameIds.has('rel-e')).toBe(false);
     });
-    const expandedParentProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
-    expandedParentProps.onMessageDoubleClick({ stopPropagation: vi.fn() }, 'rel-c');
     await waitFor(() => {
       const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
       const ids = new Set(props.messages.map((message: { id: string }) => message.id));
@@ -6437,7 +6785,7 @@ describe('MessageWorkbenchPage trace container frame projection', () => {
     });
   });
 
-  it('keeps a nested classify as a card when its summary parent expands', async () => {
+  it('opens a nested classify and its summary parent together by default', async () => {
     mockApi.getMessages.mockResolvedValue({
       data: [makeMessage('classify-member', '分类内部消息')],
     });
@@ -6467,15 +6815,14 @@ describe('MessageWorkbenchPage trace container frame projection', () => {
     await waitFor(() => {
       const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
       expect(props.traceFrameIds.has('rel-summary')).toBe(true);
-      expect(props.messages.some((message: { id: string }) => message.id === 'rel-classify')).toBe(false);
+      expect(props.traceExpandedFrameIds).toEqual(new Set(['rel-summary','rel-classify']));
+      expect(props.messages.some((message: { id: string }) => message.id === 'rel-classify')).toBe(true);
     });
-    const traceProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
-    traceProps.onMessageDoubleClick({ stopPropagation: vi.fn() }, 'rel-summary');
     await waitFor(() => {
       const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
       const ids = new Set(props.messages.map((message: { id: string }) => message.id));
       expect(ids.has('rel-classify')).toBe(true);
-      expect(ids.has('classify-member')).toBe(false);
+      expect(ids.has('classify-member')).toBe(true);
     });
   });
 
@@ -7108,6 +7455,48 @@ describe('MessageWorkbenchPage nested classification and summary view history', 
       expect(latest().messages.map((message: Message) => message.id)).toEqual(['saved']);
       expect(mockApi.getWorkbenchSnapshot).not.toHaveBeenCalled();
     } finally { viewerRoute.archive = null; viewerRoute.key = ''; }
+  });
+
+  it('reopens the actual last category after exiting a saved category and preserves a resumed parent path', async () => {
+    const relations: Relation[] = ['outer', 'inner'].map(id => ({
+      id, relationType: 'CLASSIFY', sourceMessageId: null,
+      targetRefs: id === 'outer' ? [{ kind: 'relation', relationId: 'inner' }] : [{ kind: 'message', messageId: 'member' }],
+      payload: { title: id }, createdAt: '2024-01-01T00:00:00.000Z', createdBy: makeUser(),
+    }));
+    viewerRoute.archive = { formatVersion: 5, exportedAt: '', scope: { messageId: null, title: '分类位置回归' },
+      view: { username: 'tester', mode: 'graph', classificationId: 'inner', messageFilter: { hideJoin: true, hideSettlement: true }, homeFilter: null, cleanFilters: [] },
+      messages: [{ ...makeMessage('member', ''), authorId: 'user-1', author: 'tester' },
+        ...relations.map(relation => ({ ...relation, kind: 'RELATION', contentType: 'TEXT', content: '', relationPayload: relation.payload, authorId: 'user-1', author: 'tester' }))],
+      relations: relations.map(relation => ({ ...relation, payload: relation.payload ?? null, authorId: 'user-1', author: 'tester', supersededBy: null })),
+    };
+    viewerRoute.key = 'position-first';
+    const saved = vi.spyOn(exportViewerCache, 'saveExportNavigation').mockResolvedValue();
+    const view = render(<MessageWorkbenchPage />);
+    const header = () => screen.getByRole('button', { name: '退出分类' }).parentElement!;
+    const reopen = async (key: string) => {
+      fireEvent.click(screen.getByRole('button', { name: '退出阅览' }));
+      viewerRoute.navigation = saved.mock.lastCall![1]; viewerRoute.key = key;
+      view.rerender(<MessageWorkbenchPage />); await waitForWorkbenchIdle();
+    };
+    try {
+      await waitFor(() => expect(header()).toHaveTextContent('inner')); await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button', { name: '退出分类' })); await waitForWorkbenchIdle();
+      await reopen('position-root');
+      expect(screen.queryByRole('button', { name: '退出分类' })).toBeNull();
+      expect(viewerRoute.navigation).toEqual({ classificationId: null, classificationPath: [] });
+      for (const id of ['outer', 'inner']) {
+        await act(async () => mockGraphView.mock.lastCall![0].onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, id));
+        await waitForWorkbenchIdle();
+      }
+      await reopen('position-inner');
+      expect(header()).toHaveTextContent('inner');
+      expect(viewerRoute.navigation).toEqual({ classificationId: 'inner', classificationPath: ['outer', 'inner'] });
+      fireEvent.click(screen.getByRole('button', { name: '退出分类' })); await waitForWorkbenchIdle();
+      expect(header()).toHaveTextContent('outer');
+      await reopen('position-parent');
+      expect(header()).toHaveTextContent('outer');
+      expect(viewerRoute.archive.view!.classificationId).toBe('inner');
+    } finally { view.unmount(); saved.mockRestore(); viewerRoute.archive = null; viewerRoute.key = ''; viewerRoute.navigation = null; }
   });
 
   it.each(['CLASSIFY', 'SUMMARY'].flatMap(type => (['graph', 'list'] as const).map(mode => ({ type, mode }))))('returns to the exported starting $type in $mode after leaving its child', async ({ type, mode }) => {
@@ -7908,6 +8297,147 @@ describe('unified send preview integration',()=>{
 });
 
 describe('Zhihu local workbench', () => {
+  it('loads the JOIN history of a closed structural category without opening unrelated branches', async () => {
+    vi.clearAllMocks(); localStorage.clear(); setTheme('opus-paper');
+    viewerRoute.archive = nativeZhihuDocument(sendNativeZhihuRelation(largeStructuralFixture(), { relationType: 'CLASSIFY',
+      title: '技术测试分组', targetMessageIds: ['zhihu:comment:answer%3Aa:ca', 'zhihu:comment:answer%3Ab:cb'] }));
+    viewerRoute.key = 'large-structural-join-history';
+    const group = viewerRoute.archive.messages.find(row => row.relationType === 'CLASSIFY' && row.content === '技术测试分组')
+      ?? viewerRoute.archive.messages.find(row => row.relationType === 'CLASSIFY' && !row.id.startsWith('zhihu:'))!;
+    const latest = () => mockGraphView.mock.lastCall![0];
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitForWorkbenchIdle();
+      expect(latest().relatedMessages.length).toBeLessThan(5);
+      expect(latest().joinRelationsBySource.get(group.id)).toHaveLength(2);
+      await act(async () => latest().onJoinFilterClick(group.id, 'outgoing'));
+      await waitForWorkbenchIdle();
+      expect(screen.getByText('被加入记录临时分类（2）')).toBeInTheDocument();
+      expect(view.container.querySelectorAll(`[data-container-join-records="${group.id}"] [data-msgid]`).length).toBeGreaterThanOrEqual(2);
+      fireEvent.click(screen.getByRole('button', { name: '切换为消息图' }));
+      await waitForWorkbenchIdle();
+      expect(latest().messages.filter((row: Message) => row.kind === 'join')).toHaveLength(2);
+      expect(latest().relatedMessages.length).toBeLessThan(20);
+      fireEvent.click(screen.getByRole('button', { name: '退出临时分类' }));
+      await waitForWorkbenchIdle();
+      expect(latest().relatedMessages.length).toBeLessThan(5);
+    } finally { view.unmount(); viewerRoute.archive = null; viewerRoute.key = ''; }
+  });
+
+  it('follows a structural Zhihu trace across categories without loading unrelated branches', async () => {
+    vi.clearAllMocks(); localStorage.clear(); setTheme('opus-paper');
+    const source = largeStructuralFixture();
+    viewerRoute.archive = nativeZhihuDocument(sendNativeZhihuRelation(source, { relationType: 'REPLY',
+      sourceMessageIds: ['zhihu:comment:answer%3Aa:ca'], targetMessageIds: ['zhihu:item:answer:b'], currentClassificationId: 'zhihu:question:qa' }));
+    viewerRoute.key = 'large-structural-trace';
+    const latest = () => mockGraphView.mock.lastCall![0];
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitForWorkbenchIdle(); await enterAnswerType(view.container);
+      await act(async () => latest().onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, 'zhihu:question:qa'));
+      await waitForWorkbenchIdle();
+      await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'zhihu:comment:answer%3Aa:ca'));
+      fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
+      await waitFor(() => expect(latest().messages.some((row: Message) => row.id === 'zhihu:item:answer:b')).toBe(true));
+      await waitForWorkbenchIdle();
+      expect(latest().relatedMessages.length).toBeLessThan(20);
+      expect(latest().relatedMessages.some((row: Message) => row.id.includes('test999'))).toBe(false);
+      expect(mockApi.getMessageContext).not.toHaveBeenCalled();
+    } finally { view.unmount(); viewerRoute.archive = null; viewerRoute.key = ''; }
+  });
+
+  it('restores cached structural categories with asynchronous scene workers through repeated double-click navigation', async () => {
+    const { createSceneRequestDecoder } = await import('../utils/sceneComputationTransport');
+    const { planMessageStructures } = await import('../utils/messageStructurePlan');
+    const { computeSceneLayout } = await import('../utils/frameLayout');
+    class SceneWorker {
+      decode = createSceneRequestDecoder();
+      onmessage!: (event: MessageEvent) => void;
+      terminated = false;
+      postMessage(request: import('../utils/sceneComputationTransport').SceneComputationRequest) {
+        const job = this.decode(request);
+        setTimeout(() => {
+          if (!this.terminated) this.onmessage({ data: { id: request.id, result: job.kind === 'structures'
+            ? planMessageStructures(job.input) : computeSceneLayout(job.input) } } as MessageEvent);
+        }, 5);
+      }
+      terminate() { this.terminated = true; }
+    }
+    vi.stubGlobal('Worker', SceneWorker); vi.clearAllMocks(); localStorage.clear();
+    viewerRoute.archive = largeStructuralFixture(); viewerRoute.key = 'async-cached-structure'; graphRendering.actual = true;
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitForWorkbenchIdle(); await enterAnswerType(view.container); await waitForWorkbenchIdle();
+      for (let n = 0; n < 4; n++) {
+        fireEvent.doubleClick(screen.getByRole('group', { name: '分类 zhihu:question:qa，未选中' }));
+        await waitForWorkbenchIdle();
+        expect(document.querySelector('[data-workbench-left-panel] [data-msgid="zhihu:comment:answer%3Aa:ca"]')).not.toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: '退出分类' })); await waitForWorkbenchIdle();
+        expect(screen.getByRole('group', { name: '分类 zhihu:question:qa，未选中' })).toBeInTheDocument();
+      }
+      expect(screen.queryByRole('alert')).toBeNull();
+    } finally { view.unmount(); viewerRoute.archive = null; viewerRoute.key = ''; graphRendering.actual = false; vi.unstubAllGlobals(); }
+  });
+
+  it.each([false, true])('loads large Zhihu categories structurally, shows full counts and saves the complete document (paged=%s)', async paged => {
+    vi.clearAllMocks(); localStorage.clear(); setTheme('opus-paper');
+    viewerRoute.archive = largeStructuralFixture(); viewerRoute.key = 'large-structural-viewer';
+    const body = viewerRoute.archive.messages.find(row => row.id === 'zhihu:comment:answer%3Aa:ca')!;
+    body.content = '按需读取的完整原文'; body.parts = [{ id: 'body', type: 'text', text: body.content }];
+    if (paged) {
+      const { Blob: NativeBlob } = await vi.importActual<{ Blob: typeof Blob }>('node:buffer');
+      vi.stubGlobal('Blob', NativeBlob);
+      const { pageNativeZhihuData } = await import('../utils/pagedZhihuArchive');
+      viewerRoute.archive = await pageNativeZhihuData(viewerRoute.archive as ReturnType<typeof largeStructuralFixture>);
+    }
+    const originalCount = viewerRoute.archive.messages.length;
+    const saved = vi.spyOn(exportViewerCache, 'saveLastExportPersistent').mockResolvedValue();
+    const reference = vi.spyOn(exportViewerCache, 'getExportCacheReference').mockReturnValue({ archiveId: 'large-test', viewCacheId: 'large-test-view' });
+    const position = vi.spyOn(exportViewerCache, 'saveExportNavigation').mockResolvedValue();
+    const latest = () => mockGraphView.mock.lastCall![0];
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitForWorkbenchIdle();
+      expect(latest().messages.map((row: Message) => row.id)).toEqual(['zhihu:type:answer']);
+      expect(latest().relatedMessages).toHaveLength(1);
+      expect(latest().getMemberCounts('zhihu:type:answer').total).toBeGreaterThan(10_000);
+      await enterAnswerType(view.container);
+      expect(latest().messages.map((row: Message) => row.id).sort()).toEqual(['zhihu:question:qa', 'zhihu:question:qb', 'zhihu:question:qbulk']);
+      await act(async () => latest().onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, 'zhihu:question:qa'));
+      await waitFor(() => expect(latest().messages.some((row: Message) => row.id === 'zhihu:comment:answer%3Aa:ca')).toBe(true));
+      await waitForWorkbenchIdle();
+      expect(latest().relatedMessages.length).toBeLessThan(15);
+      expect(latest().relatedMessages.find((row: Message) => row.id === body.id)?.parts).toEqual(body.parts);
+      fireEvent.click(screen.getByText('阅览设置'));
+      fireEvent.click(screen.getByRole('button', { name: '保存阅览设置' }));
+      await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
+      expect(saved.mock.calls[0][0].messages).toHaveLength(originalCount);
+      expect(saved.mock.calls[0][0].view?.classificationId).toBe('zhihu:question:qa');
+      await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button', { name: '退出分类' })); await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button', { name: '退出分类' })); await waitForWorkbenchIdle();
+      expect(latest().relatedMessages).toHaveLength(1);
+      expect(position.mock.lastCall![1]).toEqual({ classificationId: null, classificationPath: [] });
+    } finally { view.unmount(); viewerRoute.archive = null; viewerRoute.key = ''; saved.mockRestore(); position.mockRestore(); reference.mockRestore(); if (paged) vi.unstubAllGlobals(); }
+  });
+
+  it('navigates by ID into an unloaded Zhihu category and restores the overview without loading other branches', async () => {
+    vi.clearAllMocks(); localStorage.clear(); setTheme('opus-paper');
+    viewerRoute.archive = largeStructuralFixture(); viewerRoute.key = 'large-structural-navigation';
+    const latest = () => mockGraphView.mock.lastCall![0];
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitForWorkbenchIdle();
+      await act(async () => latest().onNavigateToMessage('zhihu:comment:answer%3Ab:cb'));
+      await waitFor(() => expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('技术测试 b'));
+      await waitForWorkbenchIdle();
+      expect(latest().relatedMessages.length).toBeLessThan(15);
+      expect(latest().messages.some((row: Message) => row.id === 'zhihu:comment:answer%3Ab:cb')).toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: '退出分类' })); await waitForWorkbenchIdle();
+      expect(latest().messages.map((row: Message) => row.id)).toEqual(['zhihu:type:answer']);
+    } finally { view.unmount(); viewerRoute.archive = null; viewerRoute.key = ''; }
+  });
+
   it('opens compact Zhihu source files in the editable Zhihu workbench and saves native messages', async () => {
     vi.clearAllMocks(); localStorage.clear(); setTheme('opus-paper');
     const { zhihu: _source, ...native } = prepareZhihuForViewing({ format: 'gonglun-zhihu-archive', version: 1,
@@ -8234,7 +8764,7 @@ describe('Zhihu local workbench', () => {
       expect(mockApi.createRelation).not.toHaveBeenCalled();
     } finally { view.unmount(); viewerRoute.archive = null; viewerRoute.key = ''; }
   });
-  it.each(['gpt', 'opus-paper'] as const)('uses existing graph selections, relation buttons and send controls in %s without server actions', async theme => {
+  it.each(['gpt', 'gpt-arena', 'opus-paper'] as const)('uses existing graph selections, relation buttons and send controls in %s without server actions', async theme => {
     vi.clearAllMocks();
     localStorage.clear();
     setTheme(theme);

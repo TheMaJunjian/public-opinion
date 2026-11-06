@@ -238,7 +238,7 @@
   border-radius: 4px !important; background: var(--surface-card) !important; color: var(--text-secondary) !important;
   font: 400 12px/1.6 system-ui, sans-serif;
 }
-:root[data-theme='opus'][data-appearance='opus-paper'] [data-reading-version-dialog] button:enabled:hover { background: var(--surface-hover) !important; border-color: var(--paper-gold) !important; }
+:root[data-theme='opus'][data-appearance='opus-paper'] [data-reading-version-dialog] button:enabled:not([aria-checked='true']):hover { background: var(--surface-hover) !important; border-color: var(--paper-gold) !important; }
 :root[data-theme='opus'][data-appearance='opus-paper'] [data-reading-version-dialog] [role='radio'] { padding: 9px 10px !important; gap: 10px !important; }
 :root[data-theme='opus'][data-appearance='opus-paper'] [data-reading-version-dialog] [role='radio']::before {
   content: ''; width: 14px; height: 14px; flex: 0 0 14px; border: 1px solid var(--button-secondary-border); border-radius: 50%;

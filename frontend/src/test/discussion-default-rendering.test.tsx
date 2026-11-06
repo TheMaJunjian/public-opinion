@@ -25,11 +25,13 @@ describe('existing graph behavior with the discussion layout enabled', () => {
     const edges = members.map(member => ({ ...relation('group', 'classify', 'anon:group', member.id), id: `group-${member.id}` }));
     const state = { current: {} } as NonNullable<GraphViewProps['frameViewStateRef']>;
     const props = propsFor([group, ...members, message('outside', 20)], edges, {
-      traceFrameIds: new Set(['group']), traceExpandedFrameIds: new Set(['group']), frameViewStateRef: state,
+      traceFrameIds: new Set(['group']), traceExpandedFrameIds: new Set(['group']), frameViewStateRef: state, expandAllFrames: true,
     });
     let view = render(<GraphView {...props} />);
     expect(view.container.querySelector('[data-discussion-layout="true"]')).not.toBeNull();
     for (const member of members) expect(card(view.container, member.id)).not.toBeNull();
+    expect(view.queryByLabelText('框架垂直滚动条 group')).toBeNull();
+    fireEvent.click(view.getByRole('button', { name: '还原尺寸 group' }));
     fireEvent.change(view.getByRole('spinbutton', { name: '框架宽度 group' }), { target: { value: '480' } });
     fireEvent.change(view.getByRole('spinbutton', { name: '框架高度 group' }), { target: { value: '180' } });
     fireEvent.scroll(view.getByLabelText('框架垂直滚动条 group'), { target: { scrollTop: 100 } });

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useLayoutEffect, useReducer, useRef } from 'react';
 
-export type DrawingTaskKind = 'module' | 'projection' | 'measurement' | 'overlays' | 'positioning' | 'fonts';
+export type DrawingTaskKind = 'loading' | 'module' | 'projection' | 'measurement' | 'overlays' | 'positioning' | 'fonts';
 export type DrawingFailure = { kind: DrawingTaskKind | 'render'; reason: 'error' | 'timeout'; error?: unknown };
 export const WORKBENCH_DRAWING_TIMEOUT_MS = 30_000;
 
@@ -37,9 +37,10 @@ export interface WorkbenchDrawingTask {
 
 /** Tasks belong to one mounted workbench; stale completions only release their own ticket. */
 export function createWorkbenchDrawingTasks() {
-  const pending = new Map<symbol, { kind: DrawingTaskKind; cancel: () => void }>();
+  const pending = new Map<symbol, { kind: DrawingTaskKind; foreground: boolean; cancel: () => void }>();
   const listeners = new Set<() => void>();
   let revision = 0;
+  let foregroundRevision = 0;
   let blocking = true;
   let failure: DrawingFailure | null = null;
   const changed = () => { revision++; listeners.forEach(listener => listener()); };
@@ -51,7 +52,7 @@ export function createWorkbenchDrawingTasks() {
     changed();
   };
   const tasks = {
-    begin(kind: DrawingTaskKind) {
+    begin(kind: DrawingTaskKind, foreground = false) {
       const id = Symbol(kind);
       const cleanups = new Set<() => void>();
       const release = () => { if (pending.delete(id)) { cleanups.clear(); changed(); } };
@@ -62,7 +63,8 @@ export function createWorkbenchDrawingTasks() {
         }
         cleanups.clear();
       };
-      pending.set(id, { kind, cancel });
+      pending.set(id, { kind, foreground, cancel });
+      if (foreground) foregroundRevision++;
       changed();
       const registration = {
         release,
@@ -128,6 +130,13 @@ export function createWorkbenchDrawingTasks() {
     get blocking() { return blocking; },
     get revision() { return revision; },
     get pending() { return pending.size; },
+    get foregroundPending() { return [...pending.values()].some(task => task.foreground); },
+    get foregroundRevision() { return foregroundRevision; },
+    get stage(): 'loading' | 'drawing' | 'positioning' | null {
+      if ([...pending.values()].some(task => task.kind === 'loading' || task.kind === 'module')) return 'loading';
+      if ([...pending.values()].some(task => task.kind !== 'positioning')) return 'drawing';
+      return pending.size ? 'positioning' : null;
+    },
     subscribe(listener: () => void) {
       listeners.add(listener);
       return () => { listeners.delete(listener); };
@@ -139,7 +148,7 @@ export function createWorkbenchDrawingTasks() {
 export const WorkbenchDrawingContext = createContext<ReturnType<typeof createWorkbenchDrawingTasks> | null>(null);
 
 /** Complete asynchronous work only after its React state updates have committed. */
-export function useWorkbenchDrawingTask(kind: DrawingTaskKind) {
+export function useWorkbenchDrawingTask(kind: DrawingTaskKind, foreground = false) {
   const tasks = useContext(WorkbenchDrawingContext);
   type Registration = ReturnType<NonNullable<typeof tasks>['begin']>;
   const owned = useRef(new Set<Registration>());
@@ -156,7 +165,7 @@ export function useWorkbenchDrawingTask(kind: DrawingTaskKind) {
   }, []);
   return useCallback((): WorkbenchDrawingTask => {
     if (!tasks) return { active: true, complete() {}, cancel() {}, fail(error) { throw error; }, run(work) { work(); }, onCancel() {} };
-    const registration = tasks.begin(kind);
+    const registration = tasks.begin(kind, foreground);
     owned.current.add(registration);
     registration.onCancel(() => { owned.current.delete(registration); completed.current.delete(registration); });
     let done = false;
@@ -188,7 +197,7 @@ export function useWorkbenchDrawingTask(kind: DrawingTaskKind) {
         });
       },
     };
-  }, [tasks, kind]);
+  }, [tasks, kind, foreground]);
 }
 
 export function useWorkbenchDrawingFailure() {

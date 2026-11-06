@@ -20,11 +20,14 @@ import {bindRoles,targetInvestmentDimension} from '@gonglun/core';
 
 vi.mock('../../../frontend/src/api',()=>({api:{getMessageStakes:vi.fn(async()=>({stakes:[]})),cancelCommandBatch:vi.fn()}}));
 let app:Awaited<ReturnType<typeof createTestApp>>,user:Awaited<ReturnType<typeof app.store.user>>;
+let notificationAuthor:Awaited<ReturnType<typeof app.store.user>>;
 beforeAll(async()=>{
   vi.stubGlobal('window',Object.assign(new EventTarget(),{getSelection:()=>null,innerWidth:1024,innerHeight:768}));
   app=await createTestApp();
   const registration=await request(app).post('/api/register').send({name:'逐类计费核验',password:'local-test-password'});
   user=await app.store.user(registration.body.user.id);
+  const recipient=await request(app).post('/api/register').send({name:'通知目标作者',password:'local-test-password'});
+  notificationAuthor=await app.store.user(recipient.body.user.id);
 });
 afterAll(async()=>{await cleanupTestDatabases();vi.unstubAllGlobals();});
 
@@ -63,7 +66,9 @@ for(const scope of ['root','inside'] as const)for(const scenario of scenarios)it
     const parent=await invoke('/relations',{relationType:'CLASSIFY',payload:{title:'外层'}});
     const scopeMessageId=scope==='root'?'root':parent.id;
     const targets:ViewMessage[]=[],sources:ViewMessage[]=[];
-    for(const name of ['甲','乙'])targets.push(await invoke('/messages',{parentMessageId:scopeMessageId,content:name}));
+    for(const name of ['甲','乙'])targets.push(scenario.type==='notify'
+      ?await executeCommand({store:app.store,user:notificationAuthor,requestId:randomUUID()},'POST','/messages',{recommendation:1,parentMessageId:scopeMessageId,content:name})
+      :await invoke('/messages',{parentMessageId:scopeMessageId,content:name}));
     for(const name of ['来源甲','来源乙'])sources.push(await invoke('/messages',{content:name}));
     if(scenario.mode==='containers'){
       const inner=await invoke('/relations',{parentMessageId:scopeMessageId,relationType:'CLASSIFY',targetRefs:[{kind:'message',messageId:targets[0]!.id}],payload:{title:'内层容器'}});

@@ -572,7 +572,8 @@ function projectReviewedSource({ archive, overrides, relations, localOperations,
       { id: 'relation', type: 'relation', relation: type.toLowerCase(), roles } ];
     if (type === 'CLASSIFY') parts.push({ id: 'source-fields', type: 'data', value: { title: input.meta.kind === 'question' ? input.meta.questionTitle || '' : input.title || '' } });
     const payload = { source: 'zhihu-local-view', label: input.label, note: input.label, ...(input.title !== undefined ? { title: input.title } : {}),
-      ...(type === 'CLASSIFY' ? { separateTitle: true } : {}) };
+      // These classifications are source navigation, not user-authored moves.
+      ...(type === 'CLASSIFY' ? { separateTitle: true, sourceNavigation: true } : {}) };
     const sequence = messages.length + 1;
     const supersededBy = input.supersededBy || null;
     const record = { id, sequence, revision: 1, parts, relationType: type, sourceMessageId, targetRefs, payload, createdAt, authorId, author, supersededBy };
@@ -734,13 +735,26 @@ function projectReviewedSource({ archive, overrides, relations, localOperations,
   }
   for (const item of archive.items) if (item.type === 'answer' && item.question && !item.question.id)
     warnings.push(`作品 ${canonicalThread(item)} 的问题编号未取得，未按标题猜测归类。`);
+  // Index once, preserving the original message order. Scanning the entire
+  // discussion for every question makes opening large archives quadratic.
+  const questionsByThread = new Map<string, Set<string>>();
+  const membersByQuestion = new Map<string, string[]>();
+  for (const item of archive.items) if (item.type === 'answer' && item.question?.id) {
+    for (const thread of [canonicalThread(item), ...(rawItemCounts.get(item.id) === 1 ? [item.id] : [])]) {
+      const ids = questionsByThread.get(thread) ?? new Set<string>();
+      ids.add(item.question.id); questionsByThread.set(thread, ids);
+    }
+    if (!membersByQuestion.has(item.question.id)) membersByQuestion.set(item.question.id, []);
+  }
+  for (const message of messages) if (!message.supersededBy) {
+    for (const questionId of questionsByThread.get(byMessageId[message.id]?.threadId) ?? [])
+      membersByQuestion.get(questionId)!.push(message.id);
+  }
   const questionMembers = new Set<string>(), questionCategories: string[] = [];
   for (const question of questions.values()) {
     if (!question.id) continue;
-    const answers = archive.items.filter(item => item.type === 'answer' && item.question?.id === question.id);
-    if (!answers.length) continue;
-    const ownedThreads = new Set(answers.flatMap(item => [canonicalThread(item), ...(rawItemCounts.get(item.id) === 1 ? [item.id] : [])]));
-    const memberIds = messages.filter(message => !message.supersededBy && ownedThreads.has(byMessageId[message.id]?.threadId)).map(message => message.id);
+    const memberIds = membersByQuestion.get(question.id);
+    if (!memberIds) continue;
     const id = questionMessageId(question.id), known = typeof question.text === 'string'
       && (question.text.length > 0 || object(question.completeness) && question.completeness.body === 'complete');
     const questionTitle = typeof question.title === 'string' ? question.title : null;
@@ -917,13 +931,6 @@ function projectReviewedSource({ archive, overrides, relations, localOperations,
       label: '来源内容目录', author: CATEGORY_AUTHOR.name, authorId: CATEGORY_AUTHOR.id, createdAt: '',
       meta: { kind: 'source-category', threadId: `source:${source.scope}`, sourceId: source.scope, sourceUrl: null,
         authorName: CATEGORY_AUTHOR.name, createdAt: null, createdAtText: null, sourceLabels: [], activityScope: source.scope } });
-  }
-  // These categories are source navigation views, not user-authored moves.
-  // A shared original can remain reachable from several folders and the type index.
-  for (const relation of projectedRelations) if (relation.relationType === 'CLASSIFY') {
-    relation.payload = { ...(relation.payload as object), sourceNavigation: true };
-    const message = messages.find(entry => entry.id === relation.id)!;
-    message.relationPayload = relation.payload;
   }
   const pending = relations.filter(row => row.needsReview).length;
   if (pending) warnings.push(`${pending} 条评论的回复关系仍待核对；未猜测缺失的直接回复对象。`);

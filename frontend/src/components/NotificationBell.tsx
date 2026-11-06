@@ -1,0 +1,27 @@
+import { lazy, Suspense, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useNotifications } from '../hooks/useNotifications';
+import '../theme/notifications.css';
+
+const NotificationPanel = lazy(() => import('./NotificationPanel'));
+export default function NotificationBell({userId}:{userId:string}) {
+  const [open,setOpen] = useState(false);
+  const [mobile,setMobile] = useState(()=>window.matchMedia('(max-width: 600px)').matches);
+  useEffect(()=>{
+    const media=window.matchMedia('(max-width: 600px)'),update=()=>setMobile(media.matches);
+    update();media.addEventListener('change',update);
+    return()=>media.removeEventListener('change',update);
+  },[]);
+  const {summary,error,revision} = useNotifications(userId);
+  const button=<button type="button" className={`notification-bell${mobile?' is-mobile':''}`} aria-label={`通知，${summary.unseenCount} 条未查看`}
+      aria-expanded={open} aria-haspopup="dialog" title={error ? `通知暂未同步：${error}` : '消息通知'} onClick={() => setOpen(value=>!value)}>
+      <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M6 9a6 6 0 0 1 12 0v6l2 3H4l2-3V9Zm4 12h4"/></svg>
+      <span>通知</span>
+      {summary.unseenCount>0&&<span className="notification-count">{summary.unseenCount>99?'99+':summary.unseenCount}</span>}
+      {error&&<span aria-hidden="true">!</span>}
+    </button>;
+  return <>
+    {mobile?createPortal(button,document.body):button}
+    {open&&<Suspense fallback={<span role="status">正在打开通知…</span>}><NotificationPanel key={userId} revision={revision} onClose={()=>setOpen(false)}/></Suspense>}
+  </>;
+}

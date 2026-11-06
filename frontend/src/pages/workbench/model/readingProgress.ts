@@ -3,6 +3,7 @@ import {displayedBodyVersion} from '../../../utils/bodyVersions';
 import type {Relation} from '../../../types';
 import {buildStanceTargetMap,resolveDisplayedStance,computeCorrectionVersions,computeEffectiveSuppressedRelIds,isSettlementRecord,type DemoMessage,type DemoEdge,type CorrectionVersion} from '../../../utils/modelBridge';
 import {displaySignature,type DisplaySnapshot} from './displayHintSnapshot';
+import {comparedCorrectionVersions} from './comparisonReading';
 
 export type ReadingInfluence={messageId:string;key:string;type:string;versionId?:string;basisIds?:string[];context?:ReferenceContext;eventId?:string;resultKey?:string;causes?:string[];acknowledgementMessageId?:string};
 export const influenceAcknowledgementId=(target:string,item:ReadingInfluence)=>item.acknowledgementMessageId??target;
@@ -243,6 +244,16 @@ export function deriveReadingProgress(input:ReadingInput) {
   const observedOutcomes=new Set(marks.filter(mark=>mark.format===3&&mark.scope==='influence'&&mark.resultKey&&!mark.unknownContext)
     .map(mark=>JSON.stringify([mark.messageId,mark.key,mark.eventId])));
   for(const mark of marks)if(mark.format===3&&mark.scope==='influence'&&mark.eventId&&!mark.unknownContext&&mark.state!=='UNREAD')acknowledged.add(JSON.stringify([mark.messageId,mark.key,mark.eventId,mark.resultKey??'']));
+  const compared=comparedCorrectionVersions(marks);
+  if(compared.size){
+    const revisions=new Map(input.messages.map(message=>[message.id,message.revision??1]));
+    for(const [target,items] of influences)for(const item of items)if(item.type==='correct'&&item.resultKey==='effective'
+      &&compared.has(JSON.stringify([item.messageId,revisions.get(item.messageId)]))){
+      const owner=influenceAcknowledgementId(target,item);
+      acknowledged.add(JSON.stringify([owner,item.key,item.eventId,item.resultKey]));
+      observedOutcomes.add(JSON.stringify([owner,item.key,item.eventId]));
+    }
+  }
   const pendingInfluences=new Map<string,ReadingInfluence[]>(),otherVersionInfluences=new Map<string,ReadingInfluence[]>(),otherVersionUnread=new Map<string,Set<string>>(),pendingBodies=new Set<string>(),pendingOriginals=new Set<string>(),pendingCorrections=new Map<string,string[]>(),selectionChanges=new Map<string,ReadingInfluence>();
   const ownIds=authoredReadingMessageIds(input),authoredIds=new Set(input.messages.filter(message=>ownIds.has(message.id)&&(message.revision??1)===1).map(message=>message.id));
   const unreadCorrections=unreadCorrectionIndex(input,authoredIds);

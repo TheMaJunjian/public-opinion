@@ -13,6 +13,8 @@ import {bodyVersionSchema} from './reference-schema.js';
 import {validateBodyVersion} from './validation.js';
 import {activitySchema, updateUsagePoints} from './usage-points.js';
 import {pointTransactions} from './point-transactions.js';
+import { notificationPage, notificationSummary, notificationQuerySchema, notificationSeenSchema, notificationMuteSchema,
+    markNotificationsSeen, muteNotifications, notificationRecipients, notificationRecipientsSchema, deleteNotifications, notificationDeleteSchema } from './notifications.js';
 import { accountView, allUsers, attentionUsers, relationViewType, messageView, paginate, parentOf, roundView, scopeMessages, snapshot, stakesFor, tagCounts, tagCountsFor, scopeView, userView, viewsFor, type RecordData } from './ui-projections.js';
 /** Transport views for the established interaction model. The domain contains messages only. */
 export function createUiRouter(store: Store, publish: () => Promise<void>) {
@@ -33,6 +35,40 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
     get('/reading-state',async(req,res)=>{
         const session=await requireSession(store,req);
         res.set('Cache-Control','private, no-store').json({marks:await readingState(store,session.user.id)});
+    });
+    get('/notifications',async(req,res)=>{
+        const session=await requireSession(store,req);
+        res.set('Cache-Control','private, no-store').json(await notificationPage(store,session.user.id,notificationQuerySchema.parse(req.query)));
+    });
+    get('/notifications/summary',async(req,res)=>{
+        const session=await requireSession(store,req);
+        res.set('Cache-Control','private, no-store').json(await notificationSummary(store,session.user.id));
+    });
+    get('/notifications/recipients',async(req,res)=>{
+        const session=await requireSession(store,req);
+        const {ids}=notificationRecipientsSchema.parse({ids:typeof req.query.ids==='string'?req.query.ids.split(','):[]});
+        res.set('Cache-Control','private, no-store').json({users:await notificationRecipients(store,ids,session.user.id)});
+    });
+    router.post('/notifications/seen',async(req,res,next)=>{
+        try {
+            const session=await requireCsrf(store,req),input=notificationSeenSchema.parse(req.body);
+            await store.sessionTransaction(()=>markNotificationsSeen(store,session.user.id,input));
+            res.json({ok:true});
+        } catch(error){next(error);}
+    });
+    router.post('/notifications/delete',async(req,res,next)=>{
+        try {
+            const session=await requireCsrf(store,req),input=notificationDeleteSchema.parse(req.body);
+            await store.sessionTransaction(()=>deleteNotifications(store,session.user.id,input));
+            res.json({ok:true});
+        } catch(error){next(error);}
+    });
+    router.post('/notifications/mute',async(req,res,next)=>{
+        try {
+            const session=await requireCsrf(store,req),input=notificationMuteSchema.parse(req.body);
+            await store.sessionTransaction(()=>muteNotifications(store,session.user.id,input.targetId,input.muted));
+            res.json({ok:true});
+        } catch(error){next(error);}
     });
     router.post('/reading-state',async(req,res,next)=>{
         try {

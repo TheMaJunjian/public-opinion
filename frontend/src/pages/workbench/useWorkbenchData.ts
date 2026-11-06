@@ -1,6 +1,7 @@
 import { useWorkbenchRecords } from './useWorkbenchRecords';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, type NavigateFunction } from 'react-router-dom';
+import { flushSync } from 'react-dom';
 import { api } from '../../api';
 import type { ExportData } from '../../api/client';
 import type { syncWorkbench } from '../../data/workbench';
@@ -14,9 +15,15 @@ import { archiveToWorkbenchSnapshot, projectWorkbenchSnapshot } from '../../util
 import { beginWorkbenchDrawing, beginWorkbenchSync, finishWorkbenchSync } from '../../utils/workbenchActivity';
 import type { RelatedTraceContext } from '../../utils/relatedTraceContext';
 import { useWorkbenchDrawingTask } from '../../context/WorkbenchDrawingContext';
-import { inheritExportCacheReference, loadCachedExport, loadLastExport, loadReferencedExport, saveLastExportPersistent } from '../../utils/exportViewerCache';
+import { inheritExportCacheReference, loadCachedExport, loadLastExport, loadReferencedExport, loadExportNavigation, releaseDurableExportMemory, saveLastExportPersistent, type ExportNavigation } from '../../utils/exportViewerCache';
 import { isZhihuViewingData } from '../../utils/zhihuArchive';
 import { prepareExportForViewing } from '../../utils/exportArchive';
+import { getPreparedViewerExport, releasePreparedViewerExport, type ExportViewerRouteState } from '../../utils/exportViewerSession';
+import { createZhihuStructuralViewer, shouldUseZhihuStructuralViewer, structuralScopeKey, type ZhihuStructuralViewer, type ZhihuViewerScope } from '../../utils/zhihuStructuralViewer';
+import { hydratePagedArchive } from '../../utils/pagedZhihuArchive';
+import { useViewCacheSettings } from '../../context/ViewCacheSettingsContext';
+import { createScopedProjectionCache } from '../../utils/scopedProjectionCache';
+import { hydrateOnlineStructure, onlineSourceSnapshot, onlineStructuralSource } from '../../utils/onlineStructuralSource';
 
 export const VIEWER_USERNAME_KEY = 'export-viewer-username';
 
@@ -31,6 +38,7 @@ export interface WorkbenchDataInput {
 /** Owns snapshot loading, incremental synchronization and exported-data viewing. */
 export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, viewMode }: WorkbenchDataInput) {
   const records = useWorkbenchRecords();
+  const { limit: scopeCacheLimit } = useViewCacheSettings();
   const { tagCounts, scope, messages, edges, relations, attentionUsersByTarget, stakeCounts, messageBettorCounts, authorStakes, registeredUsers, setMessages, setEdges, setRelations, setStakeCounts, setMessageBettorCounts, setAuthorStakes } = records;
   const startProjection = useWorkbenchDrawingTask('projection');
   const graphViewRef = useRef(viewMode === 'graph');
@@ -62,7 +70,9 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     && messages === publishedCatalog.current.projected.messages && edges === publishedCatalog.current.projected.edges
     && relations === publishedCatalog.current.projected.relations && stakeCounts === publishedCatalog.current.projected.counts
     && messageBettorCounts === publishedCatalog.current.projected.bettors;
-  const ensureMessages = useCallback((ids: string[]) => syncRef.current?.ensureMessages(ids) ?? Promise.reject(new Error('讨论尚未载入')), []);
+  const viewerEnsure = useRef<((ids: string[]) => Promise<void>) | null>(null);
+  const ensureMessages = useCallback((ids: string[]) => viewerEnsure.current?.(ids)
+    ?? syncRef.current?.ensureMessages(ids) ?? Promise.reject(new Error('讨论尚未载入')), []);
   const [isPreloaded, setIsPreloaded] = useState(false);
   const [viewerUser, setViewerUser] = useState<User | null>(() => {
     const username = localStorage.getItem(VIEWER_USERNAME_KEY)?.trim();
@@ -83,25 +93,32 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const isViewerRoute = location.pathname === '/viewer';
-  const routeExport = (location.state as { exportData?: ExportData })?.exportData ?? null;
+  const viewerInstanceKey = (location.state as ExportViewerRouteState | null)?.viewerInstanceKey;
+  const preparedRouteExport = useMemo(() => getPreparedViewerExport(viewerInstanceKey), [viewerInstanceKey]);
+  useEffect(() => { releasePreparedViewerExport(viewerInstanceKey); }, [viewerInstanceKey]);
+  const routeExport = preparedRouteExport ?? (location.state as { exportData?: ExportData })?.exportData ?? null;
   const routeCacheReference = (location.state as { viewerCacheRef?: unknown })?.viewerCacheRef;
   const preloadedLoaded = useRef<ExportData | null>(null);
-  const [restoredViewer, setRestoredViewer] = useState<{ key: string; data: ExportData } | null>(null);
-  const needsCacheRestore = isViewerRoute && (!routeExport || isZhihuViewingData(routeExport) || routeCacheReference !== undefined)
+  const [restoredViewer, setRestoredViewer] = useState<{ key: string; data: ExportData; navigation?: ExportNavigation | null } | null>(null);
+  const needsCacheRestore = isViewerRoute && !preparedRouteExport && (!routeExport || isZhihuViewingData(routeExport) || routeCacheReference !== undefined)
     && (!routeExport || preloadedLoaded.current !== routeExport);
   const preloadedData = restoredViewer && restoredViewer.key === location.key ? restoredViewer.data : needsCacheRestore ? null : routeExport;
+  const viewerNavigation = (restoredViewer && restoredViewer.key === location.key ? restoredViewer.navigation : undefined)
+    ?? (location.state as ExportViewerRouteState | null)?.viewerNavigation;
   useEffect(() => {
     if (!needsCacheRestore) return;
     let cancelled = false;
     setLoading(true); setLoadError(null); setIsPreloaded(true);
     void (async () => {
-      const cached = routeCacheReference !== undefined ? await loadReferencedExport(routeCacheReference, { sourceOnly: true })
+      const cached = routeCacheReference !== undefined ? await loadReferencedExport(routeCacheReference, { sourceOnly: true, paged: true })
         : routeExport && isZhihuViewingData(routeExport) ? await loadCachedExport(routeExport.zhihu.archiveId, { sourceOnly: true })
-        : await loadLastExport({ sourceOnly: true });
+        : await loadLastExport({ sourceOnly: true, paged: true });
       const source = cached ?? routeExport;
       if (!source) throw new Error('没有可恢复的阅览文件，请从“阅览”入口选择 JSON 文件');
       const prepared = await prepareExportForViewing(source);
-      if (!cancelled) setRestoredViewer({ key: location.key, data: inheritExportCacheReference(prepared.data, source) });
+      const data = inheritExportCacheReference(prepared.data, source);
+      const navigation = await loadExportNavigation(data).catch(() => null);
+      if (!cancelled) setRestoredViewer({ key: location.key, data, navigation });
     })().catch(error => {
       if (!cancelled) { setLoadError(`恢复阅览失败：${error instanceof Error ? error.message : String(error)}`); setLoading(false); }
     });
@@ -112,59 +129,159 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     return catalogRef.current?.refresh() ?? syncRef.current?.refresh() ?? Promise.reject(new Error('讨论尚未载入'));
   }, [preloadedData]);
   const [loadedExport, setLoadedExport] = useState<ExportData | null>(null);
+  useEffect(() => { if (loadedExport) releaseDurableExportMemory(); }, [loadedExport]);
+  const [viewingExport, setViewingExport] = useState<ExportData | null>(null);
+  const [viewerStructure, setViewerStructure] = useState<ZhihuStructuralViewer | null>(null);
+  const [unloadedViewerContainers, setUnloadedViewerContainers] = useState<ReadonlySet<string>>(new Set());
+  const viewerIndex = useRef<ZhihuStructuralViewer | null>(null);
+  const viewerScope = useRef<ZhihuViewerScope>({ classificationId: null });
+  const appliedViewerScopeKey = useRef<string | null>(null);
+  const [appliedScopeKey, setAppliedScopeKey] = useState<string | null>(null);
+  const viewerUsername = useRef(viewerUser?.username ?? null); viewerUsername.current = viewerUser?.username ?? null;
+  const viewerScopeGeneration = useRef(0);
+  const cancelViewerScope = useRef<(() => void) | null>(null);
+  type ScopedProjection = { index: ZhihuStructuralViewer | null; window: { data: ExportData; unloadedContainers: Set<string> }; snapshot: import('../../data/workbench').WorkbenchSnapshot; projected: ReturnType<typeof projectWorkbenchSnapshot> };
+  const projectionCache = useRef(createScopedProjectionCache<ScopedProjection>());
+  const projectViewer = async (source: ExportData, scope: ZhihuViewerScope, username: string | null, signal?: AbortSignal) => {
+    projectionCache.current.select(source, username);
+    const key = structuralScopeKey(scope), cached = projectionCache.current.get(key);
+    if (cached) return cached;
+    const previous = viewerIndex.current;
+    const online = onlineSourceSnapshot(source);
+    const index = online || shouldUseZhihuStructuralViewer(source)
+      ? previous?.source === source && previous.username === username ? previous : createZhihuStructuralViewer(source, username,
+        online ? selected => hydrateOnlineStructure(source, selected) : undefined)
+      : null;
+    const selected = index?.window(scope) ?? { data: source, unloadedContainers: new Set<string>() };
+    const window = { ...selected, data: online ? await hydrateOnlineStructure(source, selected.data, signal) : await hydratePagedArchive(source, selected.data, signal) };
+    signal?.throwIfAborted();
+    const snapshot = { ...archiveToWorkbenchSnapshot(window.data), ...(online ? { sequence: online.sequence, regionId: online.regionId } : {}) };
+    const value = { index, window, snapshot, projected: projectWorkbenchSnapshot(snapshot, { loadedOnly: !!index && !scope.full }) };
+    if (!scope.full && projectionCache.current.isCurrent(source, username)) projectionCache.current.put(key, value, snapshot.messages.reduce((bytes, row) => bytes + 1024 + row.content.length * 4, 0), scopeCacheLimit);
+    return value;
+  };
+  const publishViewer = (value: Awaited<ReturnType<typeof projectViewer>>) => {
+    viewerIndex.current = value.index;
+    setViewerStructure(value.index);
+    setViewingExport(value.window.data);
+    setUnloadedViewerContainers(value.window.unloadedContainers);
+    appliedViewerScopeKey.current = structuralScopeKey(viewerScope.current);
+    setAppliedScopeKey(appliedViewerScopeKey.current);
+    records.replace(value.snapshot, value.projected);
+    if (value.index && onlineSourceSnapshot(value.index.source)) {
+      if (publishedCatalog.current) publishedCatalog.current = { ...publishedCatalog.current, projected: value.projected };
+      catalogReadyRef.current = true; setCatalogReady(true); setCatalogVersion(version => version + 1);
+      setIsPreloaded(false); setLoading(false); setLoadError(null);
+    }
+  };
+  const loadViewerScope = useCallback(async (scope: ZhihuViewerScope) => {
+    const index = viewerIndex.current;
+    if (!index) return;
+    const username = onlineSourceSnapshot(index.source) ? user?.username ?? null : viewerUsername.current;
+    cancelViewerScope.current?.();
+    viewerScope.current = scope;
+    const generation = ++viewerScopeGeneration.current;
+    if (structuralScopeKey(scope) === appliedViewerScopeKey.current && index.username === username) return;
+    const task = startProjection();
+    const controller = new AbortController();
+    await new Promise<void>((resolve, reject) => {
+      let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => {
+        if (!mounted.current || generation !== viewerScopeGeneration.current) { task.cancel(); resolve(); return; }
+        task.run(async () => {
+          try {
+            const next = await projectViewer(index.source, scope, username, controller.signal);
+            if (!mounted.current || generation !== viewerScopeGeneration.current) { resolve(); return; }
+            if (graphViewRef.current) beginWorkbenchDrawing();
+            // A parked scene suspends its old tree. Commit the bounded scope and
+            // its readiness ticket together so React cannot keep replaying the
+            // async update against that suspended tree during navigation.
+            flushSync(() => { publishViewer(next); task.complete(); });
+            resolve();
+          } catch (error) {
+            if (controller.signal.aborted) resolve();
+            else if (onlineSourceSnapshot(index.source) && (error as {status?: number}).status === 409) { catalogRef.current?.catchUp(); appliedViewerScopeKey.current = null; resolve(); }
+            else reject(error);
+          }
+          finally { if (generation === viewerScopeGeneration.current) cancelViewerScope.current = null; task.complete(); }
+        });
+      }); });
+      cancelViewerScope.current = () => { controller.abort(); cancelAnimationFrame(frame); task.cancel(); resolve(); };
+      task.onCancel(() => { controller.abort(); cancelAnimationFrame(frame); resolve(); });
+    });
+  }, [viewerUser?.username, user?.username, startProjection, records.replace, scopeCacheLimit]);
+  viewerEnsure.current = viewerStructure ? async ids => {
+    if (ids.some(id => !viewerIndex.current?.has(id))) throw new Error('这份阅览文件中没有该消息');
+    await loadViewerScope({ ...viewerScope.current, extraIds: [...new Set([...viewerScope.current.extraIds ?? [], ...ids])] });
+  } : null;
+  useEffect(() => () => { viewerScopeGeneration.current++; cancelViewerScope.current?.(); }, []);
 
   /** Publish only after the source or incremental local edit is durable. */
   const persistPreloadedExport = useCallback(async (next: ExportData, options?: { sourceUpdate?: boolean }) => {
     if (!preloadedData) throw new Error('当前未打开阅览文件');
     const origin = locationRef.current;
-    const snapshot = archiveToWorkbenchSnapshot(next);
-    const projected = projectWorkbenchSnapshot(snapshot);
+    let preparedScopeKey = structuralScopeKey(viewerScope.current), preparedUsername = viewerUsername.current;
+    let projection = await projectViewer(next, viewerScope.current, preparedUsername);
     if (options) await saveLastExportPersistent(next, loadedExport ?? preloadedData, options);
     else await saveLastExportPersistent(next, loadedExport ?? preloadedData);
     if (!mounted.current || locationRef.current.key !== origin.key || locationRef.current.pathname !== origin.pathname
       || locationRef.current.state?.exportData !== origin.state?.exportData) {
       throw new Error('文件已保存；阅览页面已切换，请重新打开上次阅览');
     }
+    // Synchronization can finish after category navigation. Publish the new
+    // revision in the latest requested layer, never the layer at save start.
+    while (preparedScopeKey !== structuralScopeKey(viewerScope.current) || preparedUsername !== viewerUsername.current) {
+      preparedScopeKey = structuralScopeKey(viewerScope.current); preparedUsername = viewerUsername.current;
+      projection = await projectViewer(next, viewerScope.current, viewerUsername.current);
+      if (!mounted.current || locationRef.current.key !== origin.key || locationRef.current.pathname !== origin.pathname)
+        throw new Error('文件已保存；阅览页面已切换，请重新打开上次阅览');
+    }
     preloadedLoaded.current = next;
+    viewerScopeGeneration.current++;
+    cancelViewerScope.current?.();
     setRelatedTraceContext(null);
     setLoadError(null);
     if (graphViewRef.current) beginWorkbenchDrawing();
-    records.replace(snapshot, projected);
+    publishViewer(projection);
     setIsPreloaded(true);
     setLoadedExport(next);
     setLoading(false);
     // The durable cache owns reload recovery. Replacing browser history here
     // clones the whole archive and can restart loading, unmounting the canvas.
     setRestoredViewer({ key: origin.key, data: next });
-  }, [preloadedData, loadedExport, records.replace]);
+  }, [preloadedData, loadedExport, viewerUser?.username, records.replace]);
 
   useLayoutEffect(() => {
     if (!preloadedData || preloadedLoaded.current === preloadedData) return;
     const task = startProjection();
+    const controller = new AbortController();
     setLoadError(null);
     // Let the drawing dialog paint before converting and laying out a large file.
     let frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => {
-        task.run(() => {
+        task.run(async () => {
           try {
-            preloadedLoaded.current = preloadedData;
-            const snapshot = archiveToWorkbenchSnapshot(preloadedData);
-            const projected = projectWorkbenchSnapshot(snapshot);
-            const names = [...new Set([...snapshot.users.map(user => user.username), ...projected.messages.map(message => message.author)])]
+            const names = [...new Set([...(preloadedData.users ?? []).map(user => user.username), ...preloadedData.messages.map(message => message.author)])]
               .filter(Boolean).sort((a, b) => a.localeCompare(b, 'zh-CN'));
             const savedUsername = localStorage.getItem(VIEWER_USERNAME_KEY);
             const username = preloadedData.view ? preloadedData.view.username
               : preloadedData.viewerUsername !== undefined ? preloadedData.viewerUsername
               : user?.username ?? (savedUsername && names.includes(savedUsername) ? savedUsername : names[0]);
-            setViewerUser(username ? snapshot.users.find(user => user.username === username) ?? { id: `viewer:${username}`, username, createdAt: '' } : null);
+            viewerScope.current = { classificationId: viewerNavigation ? viewerNavigation.classificationId : preloadedData.view?.classificationId ?? null,
+              full: !!preloadedData.view?.homeFilter || !!preloadedData.view?.cleanFilters.length,
+              includeJoinRecords: preloadedData.view?.messageFilter.hideJoin === false };
+            const projection = await projectViewer(preloadedData, viewerScope.current, username ?? null, controller.signal);
+            if (controller.signal.aborted || !mounted.current) return;
+            preloadedLoaded.current = preloadedData;
+            setViewerUser(username ? projection.snapshot.users.find(user => user.username === username) ?? { id: `viewer:${username}`, username, createdAt: '' } : null);
             setRelatedTraceContext(null);
             setLoadError(null);
             if (graphViewRef.current) beginWorkbenchDrawing();
-            records.replace(snapshot, projected);
+            publishViewer(projection);
             setLoading(false);
             setIsPreloaded(true);
             setLoadedExport(preloadedData);
           } catch (error) {
+            if (controller.signal.aborted) return;
             setLoadError(`阅览文件失败：${error instanceof Error ? error.message : String(error)}`);
             setLoading(false);
           } finally {
@@ -173,23 +290,31 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
         });
       });
     });
-    task.onCancel(() => cancelAnimationFrame(frame));
-    return () => { cancelAnimationFrame(frame); task.cancel(); };
+    task.onCancel(() => { controller.abort(); cancelAnimationFrame(frame); });
+    return () => { controller.abort(); cancelAnimationFrame(frame); task.cancel(); };
   }, [preloadedData, startProjection]);
 
+  // A collapsed category must not hide its authors from the viewer selector.
+  // This cheap source metadata is collected once per revision, not per layer.
+  const sourceViewerUsernames = useMemo(() => new Set(loadedExport?.messages.map(message => message.author)), [loadedExport]);
   const viewerUsers = useMemo(() => {
     if (!isPreloaded) return [];
     const usernames = new Set<string>(registeredUsers.map(user => user.username));
+    sourceViewerUsernames.forEach(username => { if (username) usernames.add(username); });
     messages.forEach(message => { if (message.author) usernames.add(message.author); });
     relations.forEach(relation => { if (relation.createdBy?.username) usernames.add(relation.createdBy.username); });
     return [...usernames].sort((a, b) => a.localeCompare(b, 'zh-CN'))
       .map(username => ({ id: `viewer:${username}`, username, createdAt: '' }));
-  }, [isPreloaded, messages, relations, registeredUsers]);
+  }, [isPreloaded, messages, relations, registeredUsers, sourceViewerUsernames]);
 
   useEffect(() => {
     if (!scopeMessageId || isViewerRoute || preloadedData || authLoading || !user) return;
     setLoading(true);
     setLoadError(null);
+    viewerScopeGeneration.current++;
+    cancelViewerScope.current?.(); cancelViewerScope.current = null;
+    viewerIndex.current = null; appliedViewerScopeKey.current = null;
+    setViewerStructure(null); setAppliedScopeKey(null); setViewingExport(null);
     catalogReadyRef.current = false;
     publishedCatalog.current = null;
     windowVersion.current = { regionId: undefined, sequence: 0 };
@@ -203,10 +328,21 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
       void import('../../data/catalogClient').then(({ createCatalogClient }) => {
         if (cancelled) return;
         const client = createCatalogClient(user.id, scopeMessageId, {
-          onReady({ snapshot, projected, rows }) {
+          onReady(data) {
+            const { snapshot, projected, rows, index } = data;
             if (cancelled) return;
             if (snapshot.regionId === windowVersion.current.regionId && snapshot.sequence < windowVersion.current.sequence) {
               catalogRef.current?.catchUp(); return;
+            }
+            if (index) {
+              const source = onlineStructuralSource(index, api.getWorkbenchSnapshot);
+              viewerIndex.current = createZhihuStructuralViewer(source, user.username, selected => hydrateOnlineStructure(source, selected));
+              publishedCatalog.current = data;
+              appliedViewerScopeKey.current = null;
+              void loadViewerScope(viewerScope.current).catch(error => {
+                if (!cancelled) { setLoadError(error instanceof Error ? error.message : String(error)); setLoading(false); }
+              });
+              return;
             }
             catalogReadyRef.current = true; setCatalogReady(true);
             publishedCatalog.current = { snapshot, projected, rows };
@@ -231,6 +367,8 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
         setLoading(false);
       });
     };
+    // Fetch the worker client module while the first window request is in flight.
+    void import('../../data/catalogClient').catch(() => {});
     void Promise.all([import('../../data/workbench'), import('../../data/workbenchCache')]).then(([{ syncWorkbench }, { createWorkbenchCache }]) => {
       if (cancelled) return;
       const sync = syncWorkbench({
@@ -300,7 +438,10 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
       setLoadError(error instanceof Error ? error.message : String(error));
       setLoading(false);
     });
-    return () => { cancelled = true; stop?.(); catalogRef.current?.stop(); catalogRef.current = null; };
+    return () => {
+      cancelled = true; viewerScopeGeneration.current++; cancelViewerScope.current?.(); cancelViewerScope.current = null;
+      stop?.(); catalogRef.current?.stop(); catalogRef.current = null;
+    };
   }, [scopeMessageId, authLoading, user?.id, preloadedData, isViewerRoute]);
 
   useEffect(() => {
@@ -336,6 +477,9 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     setStakeCounts, messageBettorCounts, setMessageBettorCounts, authorStakes, setAuthorStakes,
     refreshLeaderboard, registeredUsers, isPreloaded, viewerUser, setViewerUser,
     displayUser, correctionVersions, preloadedData, loadedExport, viewerUsers, loading, persistPreloadedExport, isViewerRoute,
+    viewerNavigation,
+    viewingExport, viewerStructure, unloadedViewerContainers, loadViewerScope,
+    appliedScopeKey,
     tagCounts,
     onDemand, ensureMessages,
     catalog, catalogReady, catalogVersion, catalogComputationsCurrent,

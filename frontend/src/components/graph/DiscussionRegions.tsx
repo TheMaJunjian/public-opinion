@@ -19,6 +19,7 @@ export default function DiscussionRegions({ regions, onToggle, clipFor, summaryC
   onHeaderWidthsChange?: (widths: Readonly<Record<string, number>>) => void;
 }) {
   const headerContents = useRef<Record<string, HTMLSpanElement | null>>({});
+  const reportedWidths = useRef<{callback: typeof onHeaderWidthsChange; widths: Record<string, number>}>({callback: undefined, widths: {}});
   useLayoutEffect(() => {
     if (!onHeaderWidthsChange) return;
     const measure = () => {
@@ -33,7 +34,15 @@ export default function DiscussionRegions({ regions, onToggle, clipFor, summaryC
           .reduce((sum, value) => sum + (parseFloat(value) || 0), 0);
         widths[region.key] = Math.ceil(width + padding);
       }
-      if (Object.keys(widths).length) onHeaderWidthsChange(widths);
+      // Layout and card folds re-render this layer frequently. Publishing an
+      // unchanged measurement from a layout effect can keep queuing updates
+      // while the parent is also committing new card geometry.
+      const previous = reportedWidths.current;
+      if (Object.keys(widths).length && (previous.callback !== onHeaderWidthsChange
+        || Object.entries(widths).some(([key, width]) => Math.abs((previous.widths[key] ?? 0) - width) > 1))) {
+        reportedWidths.current = {callback: onHeaderWidthsChange, widths: {...previous.widths, ...widths}};
+        onHeaderWidthsChange(widths);
+      }
     };
     measure();
     const observer = new ResizeObserver(measure);

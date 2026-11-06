@@ -6,7 +6,7 @@ function Pending({ label, blocksDrawing }: { label: string; blocksDrawing: boole
   const tasks = useContext(WorkbenchDrawingContext);
   useLayoutEffect(() => {
     if (!blocksDrawing || !tasks) return;
-    const task = tasks.begin('module');
+    const task = tasks.begin('module', true);
     return () => task.cancel();
   }, [tasks, blocksDrawing]);
   return <div role="status" aria-live="polite" style={{ padding: 24 }}>正在加载{label}…</div>;

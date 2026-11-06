@@ -37,7 +37,7 @@ export default function MessageJumpControl({knownIds,onJump}:{knownIds:ReadonlyS
     jump(id);
   };
   return <>
-    <button ref={trigger} type="button" className="workbench-jump-button" onClick={show} aria-haspopup="dialog" aria-expanded={open} title="从剪贴板跳转到消息">跳转</button>
+    <button ref={trigger} type="button" className="workbench-jump-button workbench-toolbar-action" onClick={show} aria-haspopup="dialog" aria-expanded={open} title="从剪贴板跳转到消息">跳转</button>
     <PromptModal open={open} title="跳转消息" confirmText="跳转" onConfirm={confirm} onCancel={close}
       dialogProps={{onKeyDown:event=>{
         event.stopPropagation();

@@ -77,7 +77,7 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
       // Readable relation messages (for example DELEGATION) are rendered as
       // cards. An edge targeting such a relation must end at that card rather
       // than at one of the relation's own target labels.
-      if (relationCardMsgIds.has(relId)) {
+      if (relationCardMsgIds.has(relId) && !['reference', 'reply', 'annotation'].includes(relEdges[0].relationType)) {
         const relCard = endpointBoxForNormal(relId)?.box ?? layout[relId];
         if (relCard) return relCard;
       }
@@ -525,6 +525,36 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
       const attached=attachLabelToCurve(labelSeeds[index],position,globalForbiddenRects);
       return {...pe,ctrl:attached.ctrl,labelAnchor:attached.anchor,labelX:position.x,labelY:position.y};
     });
+
+    // Resolve label-to-label dependencies against this layout's final labels,
+    // not the previous render's measurements. Each dependency is routed once.
+    const byRelation = new Map<string, typeof positionedEdges[number]>();
+    const seedsById = new Map(labelSeeds.map(seed => [seed.drawId, seed]));
+    for (const path of positionedEdges) if (!byRelation.has(path.edge.relationMessageId)) byRelation.set(path.edge.relationMessageId, path);
+    const resolving = new Set<string>(), resolved = new Set<string>();
+    const resolveLabelTarget = (path: typeof positionedEdges[number]) => {
+      if (resolved.has(path.drawId) || resolving.has(path.drawId)) return;
+      resolving.add(path.drawId);
+      const target = byRelation.get(path.edge.to.messageId);
+      if (target && target !== path && ['reference', 'annotation', 'reply'].includes(target.edge.relationType) && !resolving.has(target.drawId)) {
+        resolveLabelTarget(target);
+        const measured = labelBboxes[target.drawId];
+        const width = measured?.width ?? Math.max(28, target.edgeLabelText.length * 12), height = measured?.height ?? 16;
+        const box = { x: target.labelX - width / 2, y: target.labelY - height / 2, width, height };
+        const origin = { x: path.fromBox.x + path.fromBox.width / 2, y: path.fromBox.y + path.fromBox.height / 2 };
+        const destination = { x: target.labelX, y: target.labelY };
+        path.toBox = box;
+        path.start = rayRectIntersectionFirst(destination.x, destination.y, origin.x - destination.x, origin.y - destination.y, path.fromBox) ?? path.start;
+        path.end = rayRectIntersectionFirst(origin.x, origin.y, destination.x - origin.x, destination.y - origin.y, box) ?? path.end;
+        path.ctrl = curvedEdgeControl(path.start, path.end);
+        const seed = { ...seedsById.get(path.drawId)!, p0: path.start, p1: path.ctrl, p2: path.end };
+        const position = computeLabelPlacementsAlongCurve({ seeds: [seed], forbiddenRects: [...globalForbiddenRects, box] })[path.drawId] ?? quadAt(path.start, path.ctrl, path.end, 0.5);
+        const attached = attachLabelToCurve(seed, position, [...globalForbiddenRects, box]);
+        path.ctrl = attached.ctrl; path.labelAnchor = attached.anchor; path.labelX = position.x; path.labelY = position.y;
+      }
+      resolving.delete(path.drawId); resolved.add(path.drawId);
+    };
+    positionedEdges.forEach(resolveLabelTarget);
 
   return positionedEdges;
 }

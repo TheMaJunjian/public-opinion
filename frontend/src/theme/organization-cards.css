@@ -1,0 +1,15 @@
+/* Structural messages carry metadata, not another text body. */
+:root[data-appearance][data-theme] :is(.themed-message, [data-skin-frame-header])[data-structural-card='true'][data-skin-type] {
+  padding: 5px 10px !important;
+  gap: 3px !important;
+  min-height: 36px;
+}
+
+:root[data-appearance][data-theme] [data-structural-card='true'] [data-organization-card-header] {
+  flex-wrap: nowrap;
+}
+
+:root[data-appearance][data-theme] [data-structural-card='true'] :is(.organization-frame-id, .message-card-id) {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}

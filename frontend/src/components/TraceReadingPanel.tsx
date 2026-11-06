@@ -27,8 +27,10 @@ interface Props {
   order:ReadingOrder;onOrder:(order:ReadingOrder)=>void;focusId:string|null;pending:Visit[];added:Visit[];outside:Visit[];filtered:Visit[];
   busy:boolean;canRead:boolean;isWorking:boolean;error:string|null;notice?:string|null;onForward:()=>void;onBackward:()=>void;onRead:()=>void;onNew:()=>void;
   canGoBack:boolean;canGoForward:boolean;recentSelectedIds?:readonly string[];focusIds?:readonly string[];onSetReading:(ids:string[])=>void;
+  hasNext:boolean;onNext:()=>void;
   confirmations:ReadingConfirmationGroup[];
   readingDetails?:ReactNode;canConfirm?:boolean;
+  structureNavigation?:ReactNode;
   statistics:{bodies:number;influences:number;outsideInfluences:number};
   ready:boolean;focusLocated:boolean;
   onVisit:(visit:Visit)=>void;onBack:()=>void;path:string[][];
@@ -60,7 +62,8 @@ export default function TraceReadingPanel(p:Props){
     <details className="reading-help" data-reading-help>
       <summary>阅读操作说明</summary>
     <div style={{color:'var(--ink-94a3b8)'}}>{p.order==='breadth'?'以追溯消息为起点，其余消息先浏览同一层，再进入下一层。':p.order==='time'?'以追溯消息为起点，其余消息按发送时间从早到晚浏览。':'以追溯消息为起点，沿讨论分支依次浏览。'}</div>
-    <div style={{color:'var(--ink-94a3b8)'}}>「后退 / 前进」返回实际浏览过的阅读位置，不改变已读状态；「已读并继续」确认当前内容并前往待阅消息。</div>
+    <div style={{color:'var(--ink-94a3b8)'}}>「后退 / 前进」返回实际浏览过的阅读位置；「下一条」按所选方向前往待阅消息，这些操作不改变已读状态。「已读并继续」确认当前内容后跳转；没有下一条时显示「已读」，确认后留在当前消息。</div>
+    <div style={{color:'var(--ink-94a3b8)'}}>已阅消息与待阅消息有关联时置灰，其余隐藏并保留原位；仍有待确认影响的消息继续正常显示。</div>
     <div data-reading-marker-legend style={{color:'var(--ink-94a3b8)',fontSize:11}}>画布边中标记：<span style={{color:'var(--ink-22c55e)'}}>— 当前组</span> · ‹ 后退目标 · <span style={{color:'var(--ink-60a5fa)'}}>› 前进目标</span> · <span style={{color:'var(--ink-fbbf24)'}}>» 已读并继续目标</span>。标记组内在当前画布显示的消息；目标重叠时并列显示。</div>
     <div style={{color:'var(--ink-94a3b8)'}}>指定阅读消息时自动以它为追溯起点，按当前距离显示前因与后续；默认向上 1 层、向下 2 层。</div>
     </details>
@@ -74,11 +77,13 @@ export default function TraceReadingPanel(p:Props){
     <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
       <button aria-label="阅读后退" disabled={p.busy||!p.canGoBack} onClick={p.onBackward} title="返回上一次阅读的位置及追溯范围">后退</button>
       <button aria-label="阅读前进" disabled={p.busy||!p.canGoForward} onClick={p.onForward} title="前往后退前浏览的阅读位置">前进</button>
-      <button disabled={p.busy||!p.canRead||!p.focusId||!p.focusLocated||!(p.canConfirm??p.confirmations.length>0)} onClick={p.onRead} title={p.focusId&&!p.focusLocated?'请先跳转并定位当前消息':`仅确认当前阅读的 ${focusIds.length} 条消息正文及各自列出的影响`}>{focusIds.length>1?'本组已读并继续':'已读并继续'}</button>
+      <button disabled={p.busy||!p.canRead||!p.focusId||!p.focusLocated||!(p.canConfirm??p.confirmations.length>0)} onClick={p.onRead} title={p.focusId&&!p.focusLocated?'请先跳转并定位当前消息':`仅确认当前阅读的 ${focusIds.length} 条消息正文及各自列出的影响`}>{focusIds.length>1?'本组':''}{p.hasNext?'已读并继续':'已读'}</button>
+      <button disabled={p.busy||!p.hasNext} onClick={p.onNext} title={p.hasNext?'按所选方向前往下一条待阅消息，不标记当前消息已读':'当前阅读顺序或方向没有下一条待阅消息'}>下一条</button>
       {p.focusId&&!p.focusLocated&&<button disabled={p.busy} onClick={()=>p.onSetReading([...focusIds])}>重新定位当前消息</button>}
       {!!p.added.length&&<button disabled={p.busy} onClick={p.onNew}>阅读新增待阅</button>}
       {p.path.length>1&&<button onClick={p.onBack}>返回上一层追溯</button>}
     </div>
+    {p.structureNavigation}
     {p.readingDetails??(p.focusId&&p.confirmations.length>0&&<details open data-reading-confirmations style={{overflowWrap:'anywhere',color:'var(--ink-cbd5e1)'}}>
       <summary style={{cursor:'pointer'}}>本次将确认：正文 {p.confirmations.filter(group=>group.kind==='body').reduce((sum,group)=>sum+group.count,0)} 条 · 影响 {p.confirmations.filter(group=>group.kind!=='body').reduce((sum,group)=>sum+group.count,0)} 项</summary>
       <ReadingConfirmationGroups groups={p.confirmations} focusId={p.focusId} messageTypes={p.messageTypes} {...actions}/>

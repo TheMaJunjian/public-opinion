@@ -11,6 +11,7 @@ import {convertMessagesToDemoModel,computeCorrectionVersions} from '../utils/mod
 import {deriveContainerEffect} from '../pages/workbench/model/containerEffect';
 import {deriveDisplayHints} from '../pages/workbench/model/displayHints';
 import {influenceReadingMarks,readingMarksFor} from '../pages/workbench/model/readingProgress';
+import {comparisonCorrectionInfluences,comparisonReadingMark,createComparisonBasis} from '../pages/workbench/model/comparisonReading';
 
 const writer={id:'writer',username:'writer',createdAt:''};
 const text=(id:string):Message=>({id,kind:'TEXT',content:id,contentType:'TEXT',createdAt:'2026-01-01',createdBy:writer});
@@ -82,6 +83,7 @@ describe('one reading confirmation with separate message and influence records',
     expect(combined).not.toHaveTextContent('同时确认');
     expect(within(combined).getAllByRole('button',{name:'收起未阅影响（4 条）'})).toHaveLength(1);
     expect(within(influences).getByRole('button',{name:'收起未阅影响（4 条）'})).toHaveAttribute('aria-expanded','true');
+    for(const label of ['更正','标注','回复','被加入'])expect(within(influences).getByRole('button',{name:new RegExp(`^(?:展开|收起)${label}（1 条）$`)})).toBeVisible();
     expect(within(influences).getByRole('button',{name:'更正 · correction'})).toBeVisible();
     expect(within(influences).queryByRole('button',{name:'correction'})).toBeNull();
     expect(within(combined).getAllByRole('button',{name:'对比'})).toHaveLength(1);
@@ -125,6 +127,41 @@ describe('one reading confirmation with separate message and influence records',
     expect(screen.getByRole('button',{name:'收起已阅影响（2 条）'})).toHaveAttribute('aria-expanded','true');
     expect(screen.getByRole('button',{name:'当前消息已阅'})).toBeDisabled();
   });
+  it.each(['unread','read'])('accounts for all five %s influences with two opposition and three joined records',async state=>{
+    const base=fixture([relation('oppose-1','DISAGREE'),relation('oppose-2','DISAGREE'),relation('container','CLASSIFY',[]),
+      ...['join-1','join-2','join-3'].map(id=>relation(id,'JOIN',['m'],'container'))]);
+    const hints=deriveDisplayHints(base),marks=state==='read'?influenceReadingMarks('m',hints.reading.influences.get('m')!):[];
+    const input={...base,readingMarks:marks},save=vi.fn<(marks:ReadingMark[])=>Promise<void>>(async()=>{}),onView=vi.fn();
+    const element=(value:typeof input)=><MessageDisplayHintsProvider input={value} onView={onView} onMarkRead={save}><MessageDisplayMarker messageId="m"/></MessageDisplayHintsProvider>;
+    const view=render(element(input));fireEvent.click(screen.getByRole('button',{name:/^显示提示 m：/}));
+    const label=state==='read'?'已阅影响':'未阅影响',region=screen.getByRole('region',{name:label});
+    if(state==='read')fireEvent.click(within(region).getByRole('button',{name:'展开已阅影响（5 条）'}));
+    expect(within(region).getByRole('button',{name:`收起${label}（5 条）`})).toBeVisible();
+    const opposition=within(region).getByRole('region',{name:'反对影响'}),joins=within(region).getByRole('region',{name:'被加入影响'});
+    expect(within(opposition).getByRole('button',{name:'展开反对（2 条）'})).toBeVisible();
+    expect(within(joins).getByRole('button',{name:'收起被加入（3 条）'})).toBeVisible();
+    expect(region.querySelectorAll('[data-influence-category]')).toHaveLength(2);
+    const rows=joins.querySelectorAll('[data-influence-message-id]');
+    expect(rows).toHaveLength(3);
+    for(const [index,row] of Array.from(rows).entries()){
+      expect(row).toBeVisible();expect(row).toHaveTextContent(`被加入 · join-${index+1}`);expect(row).toHaveTextContent('分类：container（当前）');
+      expect(within(row as HTMLElement).queryByRole('button')).toBeNull();
+    }
+    expect(within(joins).getAllByText(state==='read'?'影响已阅':'影响待阅')).toHaveLength(3);
+    fireEvent.click(within(joins).getByRole('button',{name:'收起被加入（3 条）'}));
+    expect(rows[1]).not.toBeVisible();
+    fireEvent.click(within(joins).getByRole('button',{name:'展开被加入（3 条）'}));
+    expect(rows[1]).toBeVisible();expect(onView).not.toHaveBeenCalled();
+    if(state==='unread'){
+      await act(async()=>fireEvent.click(screen.getByRole('button',{name:'标记当前消息已阅'})));
+      view.rerender(element({...input,readingMarks:save.mock.calls[0][0]}));
+      expect(screen.queryByRole('region',{name:'未阅影响'})).toBeNull();
+      fireEvent.click(screen.getByRole('button',{name:'展开已阅影响（5 条）'}));
+      const read=within(screen.getByRole('region',{name:'已阅影响'}));
+      expect(read.getByRole('button',{name:'展开反对（2 条）'})).toBeVisible();
+      expect(read.getByRole('button',{name:'收起被加入（3 条）'})).toBeVisible();
+    }
+  });
   it.each(['correction','stance'])('confirms only the frozen comparison after a failed save and retry, leaving a later %s unread',async change=>{
     const input=fixture([relation('first','CORRECT')]);
     const save=vi.fn<(marks:ReadingMark[])=>Promise<void>>().mockRejectedValueOnce(new Error('保存失败')).mockResolvedValue(undefined);
@@ -142,10 +179,11 @@ describe('one reading confirmation with separate message and influence records',
     expect(screen.queryByRole('dialog')).toBeNull();
     const marks=save.mock.calls[1][0];
     expect(marks).toEqual(save.mock.calls[0][0]);
-    expect(marks).toHaveLength(1);expect(marks[0]).toMatchObject({scope:'comparison',messageId:'m'});
+    expect(marks).toHaveLength(2);expect(marks[0]).toMatchObject({scope:'comparison',messageId:'m'});
+    expect(marks[1]).toMatchObject({scope:'influence',messageId:'first',key:'correct:first',resultKey:'effective'});
     expect(marks[0].version?.corrections.map(item=>item.messageId)).toEqual(['first']);
     const hint=deriveDisplayHints({...later,readingMarks:marks}).hints.get('m')!;
-    expect(hint.unread).toBe(true);expect(new Set(hint.pendingInfluences.map(item=>item.messageId))).toEqual(new Set(['first','later']));
+    expect(hint.unread).toBe(true);expect(new Set(hint.pendingInfluences.map(item=>item.messageId))).toEqual(new Set(change==='correction'?['first','later']:['later']));
     expect(screen.getByRole('button',{name:'标记当前消息已阅'})).toBeEnabled();
     expect(screen.getByRole('button',{name:'对比'})).toHaveAttribute('data-comparison-reading','unread');
   });
@@ -166,11 +204,13 @@ describe('one reading confirmation with separate message and influence records',
     fireEvent.click(screen.getByRole('button',{name:'更正装饰'}));
     await act(async()=>fireEvent.click(within(screen.getByRole('dialog')).getByRole('button',{name:'已阅'})));
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(save.mock.calls[0][0]).toEqual([expect.objectContaining({scope:'comparison',messageId:'m'})]);
+    expect(save.mock.calls[0][0]).toEqual([expect.objectContaining({scope:'comparison',messageId:'m'}),
+      expect.objectContaining({scope:'influence',messageId:'correction',key:'correct:correction',resultKey:'effective'})]);
     expect(screen.getByRole('button',{name:'对比'})).toHaveAttribute('data-comparison-reading','read');
     expect(screen.getByRole('button',{name:'对比'})).toHaveStyle({color:'var(--ink-64748b)'});
     expect(screen.getByRole('button',{name:'标记当前消息已阅'})).toBeEnabled();
-    expect(screen.getByRole('region',{name:'未阅影响'})).toHaveTextContent('未阅影响（1 条）');
+    expect(screen.queryByRole('region',{name:'未阅影响'})).toBeNull();
+    expect(screen.getByRole('region',{name:'已阅影响'})).toHaveTextContent('已阅影响（1 条）');
     const saved=save.mock.calls[0][0];view.unmount();
     const restored=render(<Harness initialMarks={saved}/>);fireEvent.click(screen.getByRole('button',{name:/^显示提示 m：/}));
     expect(screen.getByRole('button',{name:'对比'})).toHaveAttribute('data-comparison-reading','read');
@@ -203,12 +243,56 @@ describe('one reading confirmation with separate message and influence records',
     const view=render(<Harness source={input}/>);fireEvent.click(screen.getByRole('button',{name:/^显示提示 m：/}));
     const compare=async()=>{fireEvent.click(screen.getByRole('button',{name:'对比'}));await act(async()=>fireEvent.click(within(screen.getByRole('dialog')).getByRole('button',{name:'已阅'})));};
     await compare();expect(screen.getByRole('button',{name:'对比'})).toHaveAttribute('data-comparison-reading','read');
+    expect(screen.queryByRole('region',{name:'未阅影响'})).toBeNull();
+    expect(save.mock.calls[0][0]).toContainEqual(expect.objectContaining({scope:'influence',messageId:'correction',resultKey:'effective'}));
     const inactive={...input,corrections:computeCorrectionVersions(input.messages,input.edges,new Set(['correction']))};
     view.rerender(<Harness source={inactive}/>);expect(screen.getByRole('button',{name:'对比'})).toHaveAttribute('data-comparison-reading','unread');
+    expect(screen.getByRole('region',{name:'未阅影响'})).toHaveTextContent('未阅影响（1 条）');
     await compare();expect(screen.getByRole('button',{name:'对比'})).toHaveAttribute('data-comparison-reading','read');
+    expect(screen.queryByRole('region',{name:'未阅影响'})).toBeNull();
+    expect(save.mock.calls[1][0]).toContainEqual(expect.objectContaining({scope:'influence',messageId:'correction',resultKey:'ineffective'}));
     view.rerender(<Harness source={input}/>);expect(screen.getByRole('button',{name:'对比'})).toHaveAttribute('data-comparison-reading','read');
     view.rerender(<Harness source={inactive}/>);expect(screen.getByRole('button',{name:'对比'})).toHaveAttribute('data-comparison-reading','read');
     expect(save).toHaveBeenCalledTimes(2);expect(screen.getByRole('button',{name:'标记当前消息已阅'})).toBeEnabled();
+  });
+  it('moves compared corrections into read influences while keeping other categories and message bodies unread',async()=>{
+    const input=fixture([relation('correction','CORRECT'),relation('reply','REPLY'),
+      {...relation('width','CORRECT'),payload:{correctionKind:'WIDTH',correctionWidth:420}}]);
+    const save=vi.fn<(marks:ReadingMark[])=>Promise<void>>(async()=>{});
+    const element=(value:typeof input)=><MessageDisplayHintsProvider input={value} onView={vi.fn()} onMarkRead={save}><MessageDisplayMarker messageId="m"/></MessageDisplayHintsProvider>;
+    const view=render(element(input));fireEvent.click(screen.getByRole('button',{name:/^显示提示 m：/}));
+    fireEvent.click(screen.getByRole('button',{name:'对比'}));
+    await act(async()=>fireEvent.click(within(screen.getByRole('dialog')).getByRole('button',{name:'已阅'})));
+    const marks=save.mock.calls[0][0];expect(marks.map(mark=>mark.scope)).toEqual(['comparison','influence']);
+    view.rerender(element({...input,readingMarks:marks}));
+    const unread=within(screen.getByRole('region',{name:'未阅影响'}));
+    expect(unread.getByRole('button',{name:'收起未阅影响（2 条）'})).toBeVisible();
+    expect(unread.getByRole('region',{name:'回复影响'})).toBeVisible();
+    expect(unread.getByRole('region',{name:'显示调整影响'})).toBeVisible();
+    expect(unread.queryByRole('region',{name:'更正影响'})).toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:'展开已阅影响（1 条）'}));
+    expect(within(screen.getByRole('region',{name:'已阅影响'})).getByRole('button',{name:'收起更正（1 条）'})).toBeVisible();
+    const after=deriveDisplayHints({...input,readingMarks:marks});
+    for(const id of ['m','correction','reply','width'])expect(after.hints.get(id)?.unread).toBe(true);
+  });
+  it('restores applied correction acknowledgements from existing comparison-only records without reading later revisions',()=>{
+    const input=fixture([relation('correction','CORRECT')]),hint=deriveDisplayHints(input).hints.get('m')!;
+    const mark=comparisonReadingMark(hint.displayed.version!,'m',hint.displayed.content,createComparisonBasis(input)('m'));
+    const restored=deriveDisplayHints({...input,readingMarks:[mark]});
+    expect(restored.hints.get('m')?.pendingInfluences).toEqual([]);
+    expect(restored.hints.get('m')?.unread).toBe(true);expect(restored.hints.get('correction')?.unread).toBe(true);
+    const revised={...input,messages:input.messages.map(message=>message.id==='correction'?{...message,revision:2}:message),readingMarks:[mark]};
+    expect(deriveDisplayHints(revised).hints.get('m')?.pendingInfluences.map(item=>item.messageId)).toEqual(['correction']);
+    const unread={...mark,state:'UNREAD' as const,position:1};
+    expect(deriveDisplayHints({...input,readingMarks:[mark,unread]}).hints.get('m')?.pendingInfluences.map(item=>item.messageId)).toEqual(['correction']);
+  });
+  it('excludes outgoing corrections to another message from the current body comparison',()=>{
+    const input=fixture([relation('correction','CORRECT'),relation('outgoing','CORRECT',['peer'],'m')]);
+    input.corrections=computeCorrectionVersions(input.messages,input.edges,new Set(['outgoing']));
+    const hint=deriveDisplayHints(input).hints.get('m')!;
+    expect(hint.pendingInfluences).toContainEqual(expect.objectContaining({messageId:'outgoing',type:'correct',resultKey:'ineffective'}));
+    const compared=comparisonCorrectionInfluences(hint.displayed.version!,hint.pendingInfluences,input.personalEffect.msgMap,input.edges);
+    expect(compared.map(item=>item.messageId)).toEqual(['correction']);
   });
   it('keeps classification members visible and independently unread',async()=>{
     const input=fixture([relation('container','CLASSIFY',['m','peer'])]),save=vi.fn<(_marks:ReadingMark[])=>Promise<void>>(async()=>{}),onView=vi.fn();

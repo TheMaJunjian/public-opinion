@@ -1,17 +1,43 @@
 import {readingInfluences,influenceReadingMarks} from '../pages/workbench/model/readingProgress';
 import {bodyVersion,messageReadingKey} from '@gonglun/core';
-import { IDBFactory } from 'fake-indexeddb';
+import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createCatalogEngine, type CatalogData } from '../data/catalogEngine';
 import type { Message, Relation, User } from '../types';
 import type { WorkbenchSnapshot, ReadingMark } from '@gonglun/core';
 import {computeCorrectionVersions,computeEffectiveSuppressedRelIds} from '../utils/modelBridge';
-import {} from '../pages/workbench/model/readingProgress';
+import { structureSnapshot } from '@gonglun/core';
 
 afterEach(() => { vi.unstubAllGlobals(); });
 
+it('requests structure-only pages at startup and downloads complete bodies only for an explicitly opened global feature', async () => {
+  vi.stubGlobal('indexedDB', new IDBFactory()); vi.stubGlobal('IDBKeyRange', IDBKeyRange);
+  const user = { id: 'u', username: '甲', createdAt: '' };
+  const snapshot: WorkbenchSnapshot = { sequence: 10, regionId: 'structural', scope: { messageId: null, title: '讨论' },
+    users: [user], stakes: {}, tagCounts: {}, attentionUsers: {}, relations: [],
+    messages: [{ id: 'm', revision: 1, kind: 'TEXT', contentType: 'TEXT', content: '只在按需读取时出现的原文', createdAt: '', createdBy: user }] };
+  const fetch = vi.fn(async (url: string) => {
+    const query = new URL(url).searchParams, page = query.has('after') ? { ...snapshot, messages: [] } : snapshot;
+    return new Response(JSON.stringify(query.get('detail') === 'structure' ? structureSnapshot(page) : page));
+  });
+  vi.stubGlobal('fetch', fetch);
+  const ready = vi.fn<(value: CatalogData) => void>();
+  const engine = createCatalogEngine({ parent: 'root', key: 'only-structure', deviceId: 'd', baseUrl: 'https://example.invalid', structural: true },
+    { idle: async () => {}, onReady: ready, onProgress: vi.fn() });
+  try {
+    await vi.waitFor(() => expect(ready).toHaveBeenCalledOnce());
+    expect(fetch.mock.calls.every(([url]) => new URL(url).searchParams.get('detail') === 'structure')).toBe(true);
+    expect(ready.mock.lastCall![0].projected.messages).toEqual([]);
+    expect(ready.mock.lastCall![0].index?.messages[0].content).toBe('x');
+    expect((await engine.leaderboard()).messageRows[0].preview).toContain('按需读取');
+    expect(fetch.mock.calls.some(([url]) => !new URL(url).searchParams.has('detail'))).toBe(true);
+    expect(ready).toHaveBeenCalledOnce(); // A leaderboard must not replace the scoped canvas with a full catalog.
+  } finally { engine.stop(); }
+});
+
 it('uses closed-container members, marks, rounds, references and stakes in global calculations, retaining the previous complete result during updates', async () => {
   vi.stubGlobal('indexedDB', new IDBFactory());
+  vi.stubGlobal('IDBKeyRange', IDBKeyRange);
   const alice: User = { id: 'alice', username: '甲', createdAt: '' }, bob: User = { id: 'bob', username: '乙', createdAt: '' };
   const message = (id: string, author = alice): Message => ({ id, revision: 1, kind: 'TEXT', contentType: 'TEXT', content: id, createdAt: '', createdBy: author });
   const relation = (id: string, relationType: string, sourceMessageId: string | null): Relation => ({ id, relationType, sourceMessageId,
@@ -46,18 +72,21 @@ it('uses closed-container members, marks, rounds, references and stakes in globa
   ], home: {scope:'related' as const,status:'all' as const}, user: alice };
   try {
     await vi.waitFor(() => expect(ready).toHaveBeenCalledOnce());
-    expect(engine.filters(query).clean?.visibleTextIds).toEqual(new Set(['closed-member']));
-    expect(engine.filters(query).home?.matchIds.has('closed-member')).toBe(true);
-    const rows = ready.mock.lastCall![0].rows;
+    expect((await engine.filters(query)).clean?.visibleTextIds).toEqual(new Set(['closed-member']));
+    expect((await engine.filters(query)).home?.matchIds.has('closed-member')).toBe(true);
+    expect(ready.mock.lastCall![0].rows).toBeUndefined();
+    const rows = await engine.leaderboard();
+    expect(await engine.leaderboard()).toBe(rows);
     expect(rows.userRows.find(row => row.userId === bob.id)).toMatchObject({ messageCount: 1, receivedTruthStake: 10, netSupportRate: 60, referenceHeat: 1 });
     expect(rows.messageRows.find(row => row.messageId === 'closed-member')).toMatchObject({ truthStake: 10, referenceHeat: 1, settlementActivity: 1 });
     updating = true; engine.catchUp();
     await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
     expect(ready).toHaveBeenCalledOnce();
-    expect(engine.filters(query).clean?.visibleTextIds).toEqual(new Set(['closed-member']));
+    expect((await engine.filters(query)).clean?.visibleTextIds).toEqual(new Set(['closed-member']));
     finish(new Response(JSON.stringify(page(14))));
     await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(2));
-    expect(engine.filters(query).clean?.visibleTextIds.size).toBe(0);
+    expect((await engine.filters(query)).clean?.visibleTextIds.size).toBe(0);
+    expect(await engine.leaderboard()).not.toBe(rows);
   } finally { engine.stop(); }
 });
 
@@ -90,7 +119,7 @@ it('uses the viewer\'s chosen composition for home reading filters when public r
     const marks=[...messages.map(message=>mark(message.id,message.content)),...personal.versions.map(version=>mark('m',version.content,[version.correctionId])),
       mark('m',personal.current!.content,personal.current!.appliedCorrectionIds),...([...readingInfluences({messages,edges,relations,corrections:new Map([['m',personal]])})].flatMap(([id,items])=>influenceReadingMarks(id,items)))];
     const query={rules:[],user:alice,readingMarks:marks};
-    expect(engine.filters({...query,home:{scope:'all',status:'confirmed'}}).home?.matchIds.has('m')).toBe(true);
-    expect(engine.filters({...query,home:{scope:'all',status:'pending'}}).home?.matchIds.has('m')).toBe(false);
+    expect((await engine.filters({...query,home:{scope:'all',status:'confirmed'}})).home?.matchIds.has('m')).toBe(true);
+    expect((await engine.filters({...query,home:{scope:'all',status:'pending'}})).home?.matchIds.has('m')).toBe(false);
   }finally{engine.stop();}
 });

@@ -72,7 +72,10 @@ describe('view-only hidden endpoints in graph routing', () => {
     const original = structuredClone(addressed);
     const result = routeGraphEdges({ ...input, edges: [second, addressed], hiddenMessageIds: new Set(['first-target']) });
     const incoming = result.find(path => path.edge.id === addressed.id)!;
-    expect(incoming.toBox).toEqual(openLabel);
+    const target = result.find(path => path.edge.id === second.id)!;
+    const currentLabel = { ...openLabel, x: target.labelX - openLabel.width / 2, y: target.labelY - openLabel.height / 2 };
+    expect(incoming.toBox).toEqual(currentLabel);
+    expect(pointOnRect(incoming.end, currentLabel)).toBe(true);
     expect(incoming.toBox).not.toEqual(closedLabel);
     expect(incoming.edge).toBe(addressed);
     expect(addressed).toEqual(original);

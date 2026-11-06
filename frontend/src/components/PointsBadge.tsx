@@ -173,6 +173,7 @@ export default function PointsBadge() {
       {open && (
         <div
           ref={panelRef}
+          role="dialog" aria-label="贡献点记录"
           data-guide-points-panel="true"
           className="absolute right-0 top-full mt-2 w-80 z-50 max-h-96 overflow-auto"
           style={dialogStyles.panel}

@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { Z_INDEX } from '../constants/zIndex';
 import ThemeSwitcher from '../theme/ThemeSwitcher';
 import PointsBadge from './PointsBadge';
+import NotificationBell from './NotificationBell';
 import AboutLink from './AboutLink';
 import { useInterfaceZoom } from '../context/InterfaceZoomContext';
 
@@ -92,9 +93,9 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
           type="button"
           onClick={onOpenWelfare}
           className="text-[color:var(--ink-c7d2fe)] hover:text-[color:var(--ink-fff-2)] text-sm font-medium transition-colors"
-          title="打开工具"
+          title="打开福利"
         >
-          工具
+          福利
         </button>
       </div>
       <div aria-hidden="true" className="min-w-0 flex-1" />
@@ -110,6 +111,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
               阅览
             </button>
             <PointsBadge />
+            <NotificationBell key={user.id} userId={user.id} />
             <span className="text-[color:var(--ink-c7d2fe)] text-sm">
               {user.username}
             </span>

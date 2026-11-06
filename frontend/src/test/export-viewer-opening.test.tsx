@@ -4,10 +4,12 @@ import { useState } from 'react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import ExportViewerModal from '../components/ExportViewerModal';
 import type { ExportData } from '../api/client';
-import { getExportCacheReference, loadCachedExport, loadLastExport, saveLastExport } from '../utils/exportViewerCache';
+import { getExportCacheReference, loadCachedExport, loadLastExport, loadLastExportPreview, loadReferencedExport, loadExportNavigation, saveLastExport } from '../utils/exportViewerCache';
+import { getPreparedViewerExport } from '../utils/exportViewerSession';
 import { isZhihuViewingData, prepareZhihuForViewing, updateZhihuRelations } from '../utils/zhihuArchive';
 
 vi.mock('../utils/exportViewerCache', () => ({ loadCachedExport: vi.fn(), loadLastExport: vi.fn(), saveLastExport: vi.fn(),
+  loadLastExportPreview: vi.fn(), loadReferencedExport: vi.fn(), loadExportNavigation: vi.fn(),
   getExportCacheReference: vi.fn(() => null), inheritExportCacheReference: (data: ExportData) => data }));
 
 const data: ExportData = {
@@ -24,7 +26,7 @@ function Chooser() {
     <output data-testid="location">{JSON.stringify({ pathname: location.pathname, state: location.state })}</output></>;
 }
 
-beforeEach(() => { vi.mocked(getExportCacheReference).mockReturnValue(null); vi.mocked(loadCachedExport).mockResolvedValue(null); vi.mocked(loadLastExport).mockResolvedValue(null); vi.mocked(saveLastExport).mockResolvedValue(); });
+beforeEach(() => { vi.mocked(loadExportNavigation).mockResolvedValue(null); vi.mocked(loadLastExportPreview).mockResolvedValue(null); vi.mocked(getExportCacheReference).mockReturnValue(null); vi.mocked(loadCachedExport).mockResolvedValue(null); vi.mocked(loadLastExport).mockResolvedValue(null); vi.mocked(saveLastExport).mockResolvedValue(); });
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.useRealTimers(); });
 
 it.each(['file', 'drop', 'cache'])('paints a waiting dialog before processing %s and opens exactly the saved data', async source => {
@@ -50,10 +52,10 @@ it.each(['file', 'drop', 'cache'])('paints a waiting dialog before processing %s
   await act(async () => { vi.advanceTimersByTime(34); });
   if (source === 'cache') {
     expect(saveLastExport).not.toHaveBeenCalled();
-    expect(loadLastExport).toHaveBeenLastCalledWith({ sourceOnly: true, fresh: true });
+    expect(loadLastExport).toHaveBeenLastCalledWith({ sourceOnly: true, fresh: true, paged: true });
   }
-  else expect(saveLastExport).toHaveBeenCalledWith(data);
-  expect(JSON.parse(screen.getByTestId('location').textContent!)).toEqual({ pathname: '/viewer', state: { exportData: data } });
+  else expect(saveLastExport).toHaveBeenCalledWith(data, { immutable: true });
+  expect(JSON.parse(screen.getByTestId('location').textContent!)).toEqual({ pathname: '/viewer', state: { exportData: data, viewerInstanceKey: expect.any(String) } });
   expect(screen.queryByRole('dialog')).toBeNull();
 });
 
@@ -64,7 +66,9 @@ it('carries a durable file-cache identity through route state without adding it 
   fireEvent.change(screen.getByLabelText('选择导出文件'), { target: { files: [new File([JSON.stringify(data)], '结构测试.json')] } });
   fireEvent.click(await screen.findByRole('button', { name: '阅览此文件' }));
   await waitFor(() => expect(JSON.parse(screen.getByTestId('location').textContent!).pathname).toBe('/viewer'));
-  expect(JSON.parse(screen.getByTestId('location').textContent!).state).toEqual({ exportData: data, viewerCacheRef: reference });
+  const state = JSON.parse(screen.getByTestId('location').textContent!).state;
+  expect(state).toEqual({ viewerInstanceKey: expect.any(String), viewerCacheRef: reference });
+  expect(getPreparedViewerExport(state.viewerInstanceKey)).toEqual(data);
   expect(data).not.toHaveProperty('viewerCacheRef');
 });
 
@@ -112,7 +116,7 @@ it('shows a cache read error and still permits opening a valid selected file',as
   fireEvent.change(screen.getByLabelText('选择导出文件'),{target:{files:[new File([JSON.stringify(data)],'有效.json')]}});
   fireEvent.click(await screen.findByRole('button',{name:'阅览此文件'}));
   await waitFor(()=>{
-    expect(saveLastExport).toHaveBeenCalledWith(data);
+    expect(saveLastExport).toHaveBeenCalledWith(data, { immutable: true });
     expect(JSON.parse(screen.getByTestId('location').textContent!).pathname).toBe('/viewer');
   });
 });
@@ -167,4 +171,29 @@ it('rereads Zhihu changes made in another tab before reopening cached data and n
   expect(loadCachedExport).toHaveBeenCalledWith(original.zhihu.archiveId, { fresh: true, sourceOnly: true });
   expect(saveLastExport).not.toHaveBeenCalled();
   expect(JSON.parse(screen.getByTestId('location').textContent!).state.exportData).toEqual(latest);
+  expect(JSON.parse(screen.getByTestId('location').textContent!).state.viewerNavigation).toBeUndefined();
+});
+
+it.each([null, 'saved-category'])('shows a cached title without loading its bodies, then restores the actual last classification (%s)', async classificationId => {
+  const reference = { archiveId: 'native-preview', viewCacheId: 'native-view' };
+  const native = { ...data, format: 'gonglun-view-3' as const,
+    source: { provider: 'zhihu' as const, version: 1, ownerId: 'fixture', ownerUrl: null, scope: 'collections' as const },
+    view: { ...data.view!, classificationId: 'saved-category', username: '本地整理者' } };
+  vi.mocked(loadLastExportPreview).mockResolvedValue({ title: data.scope.title, reference });
+  vi.mocked(loadReferencedExport).mockResolvedValue(native);
+  vi.mocked(loadExportNavigation).mockResolvedValue({ classificationId });
+  vi.mocked(getExportCacheReference).mockReturnValue(reference);
+  render(<MemoryRouter><Chooser /></MemoryRouter>);
+  const button = await screen.findByRole('button', { name: /上次阅览/ });
+  expect(loadLastExport).not.toHaveBeenCalled();
+  expect(loadReferencedExport).not.toHaveBeenCalled();
+  fireEvent.click(button);
+  await waitFor(() => expect(JSON.parse(screen.getByTestId('location').textContent!).pathname).toBe('/viewer'));
+  const state = JSON.parse(screen.getByTestId('location').textContent!).state;
+  expect(state).toEqual({ viewerInstanceKey: expect.any(String), viewerCacheRef: reference, viewerNavigation: { classificationId } });
+  expect(getPreparedViewerExport(state.viewerInstanceKey)).toBe(native);
+  expect(loadReferencedExport).toHaveBeenCalledTimes(1);
+  expect(loadReferencedExport).toHaveBeenCalledWith(reference, { sourceOnly: true, paged: true });
+  expect(saveLastExport).not.toHaveBeenCalled();
+  expect(native.view.classificationId).toBe('saved-category');
 });

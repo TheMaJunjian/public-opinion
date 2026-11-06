@@ -1,7 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import MessagePagination from '../components/MessagePagination';
-import MessageWindowStatus from '../components/MessageWindowStatus';
 import { createWorkbenchDrawingTasks, WorkbenchDrawingContext } from '../context/WorkbenchDrawingContext';
 import { useMessageWindow } from '../hooks/useMessageWindow';
 import type { DemoMessage } from '../utils/modelBridge';
@@ -54,8 +53,7 @@ it('resumes visible batches after classification drawing finishes without scroll
   function Classification() {
     const window = useMessageWindow(messages, edges, true, 'last-classification', []);
     return <>
-      <MessageWindowStatus loadedCount={window.messages.length} totalCount={window.totalCount}
-        loading={window.loading} />
+      <output data-testid="loading">{window.loading ? 'loading' : ''}</output>
       <MessagePagination parent="last-classification" loadedCount={window.messages.length} hasMore={window.hasMore}
         loading={window.loading} showLoadingNotice={false} panelRef={{ current: null }} onMore={window.more} onError={vi.fn()} />
     </>;
@@ -64,16 +62,16 @@ it('resumes visible batches after classification drawing finishes without scroll
   vi.spyOn(screen.getByText(/^当前已显示 50 条消息/), 'getBoundingClientRect').mockReturnValue(rect(100));
   await tick();
   expect(screen.getByText(/当前已显示 50 条消息/)).toBeInTheDocument();
-  expect(screen.queryByRole('status', { name: '消息加载进度' })).toBeNull();
+  expect(screen.getByTestId('loading')).toBeEmptyDOMElement();
   act(() => tasks.setBlocking(false));
   let sawLoading = false;
   for (let attempt = 0; attempt < 12; attempt++) {
     await tick();
-    sawLoading ||= !!screen.queryByRole('status', { name: '消息加载进度' })?.textContent?.includes('/ 120 条');
+    sawLoading ||= screen.getByTestId('loading').textContent === 'loading';
   }
   expect(sawLoading).toBe(true);
   expect(screen.getByText(/当前已显示 120 条消息/)).toHaveTextContent('当前范围已全部显示');
-  expect(screen.queryByRole('status', { name: '消息加载进度' })).toBeNull();
+  expect(screen.getByTestId('loading')).toBeEmptyDOMElement();
 });
 
 it('stops repeated automatic attempts after a failure and cancels scheduled work on unmount', async () => {

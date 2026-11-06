@@ -4,6 +4,7 @@ import { createOverrides } from './zhihuRelations.mjs';
 import { buildZhihuLocalSend, projectZhihuLocalAdditions } from './zhihuLocalModel';
 import { correctionBase } from './zhihuCorrections';
 import { isNativeLocalMessage, nativeZhihuIdentity, type NativeZhihuView } from './nativeZhihuView';
+import { pagedArchiveSource } from './pagedZhihuArchive';
 
 const LOCAL_AUTHOR = '本地整理者';
 const views = new WeakMap<NativeZhihuView, ZhihuViewingData>();
@@ -109,6 +110,7 @@ export function nativeZhihuDocument(view: ZhihuViewingData): NativeZhihuView {
 }
 
 export function serializeNativeZhihuView(data: NativeZhihuView): string {
+  if (pagedArchiveSource(data)) throw new Error('分段阅览文件须通过原文片段导出，不能直接序列化索引');
   return `${JSON.stringify({ ...data, messages: data.messages.map(compactNativeRecord), relations: data.relations.map(compactNativeRecord), exportedAt: new Date().toISOString() }, null, 2)}\n`;
 }
 export function compactNativeRecord<T extends object>(row: T): T | Omit<T, 'content'> {

@@ -10,6 +10,10 @@
   --text-muted: #94a3b8;
   --border-default: #444;
   --selection-accent: #fbbf24;
+  --edge-selection-accent: var(--selection-accent);
+  --edge-selection-bg: var(--selection-bg);
+  --edge-fragment-accent: var(--fragment-accent);
+  --edge-fragment-bg: var(--fragment-bg);
   --selection-bg: rgba(91,65,0,.55);
   --fragment-accent: #60a5fa;
   --fragment-bg: #243448;

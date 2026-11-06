@@ -16,7 +16,9 @@ it('removes proven included container reads and duplicate placement keys, preser
       await tx.create('user',[{id:'relation',type:'relation',relation:type,roles:bindRoles({members:[{messageId:'member'}]})}],undefined,id);
     for(const [id,parent] of [['join','container'],['disabled-join','disabled-container']])
       await tx.create('user',[{id:'relation',type:'relation',relation:'member-of',roles:bindRoles({parent:[{messageId:parent!}],member:[{messageId:'member'}]})}],undefined,id);
-    await db.prepare('INSERT INTO membership_actions(id,body,disabled) VALUES($1,$2,TRUE)').run('disabled-join','{}');
+    await db.prepare('INSERT INTO membership_actions(id,body,disabled) VALUES($1,$2,TRUE)').run('disabled-join',JSON.stringify({
+      id:'disabled-join',memberId:'member',parentId:'disabled-container',previousId:null,previousParentId:null,order:1,
+    }));
     await tx.commit();
   });
   const rows:Array<{userId:string;mark:ReadingMark}>=[];

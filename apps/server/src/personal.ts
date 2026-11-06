@@ -127,15 +127,9 @@ export async function personalMessages(store: Store, userId: string, options: Pe
 export async function notifications(store: Store, userId: string, options: PersonalQuery): Promise<PersonalPage> {
     const { clauses, values, parameter } = filters(options,userId,true);
     const limit = Math.min(100, Math.max(1, options.limit || 30));
-    const sql = `${marksCte}, watched(id,since) AS (
-    SELECT "targetId",sequence FROM latest WHERE family='follow' AND action='follow'
-    UNION SELECT mm."memberId",w.since FROM memberships mm JOIN watched w ON mm."parentId"=w.id
-  ) SELECT m.body FROM messages m WHERE m."authorId"<>$1 AND (
-    EXISTS (SELECT 1 FROM notification_receipts nr WHERE nr."sourceId"=m.id AND nr."userId"=$1) OR
-    EXISTS (SELECT 1 FROM refs r JOIN watched w ON r."targetId"=w.id WHERE r."sourceId"=m.id AND m.sequence>w.since)
-    OR EXISTS (SELECT 1 FROM refs r JOIN messages original ON original.id=r."targetId" WHERE r."sourceId"=m.id AND original."authorId"=$1
-      AND EXISTS(SELECT 1 FROM jsonb_array_elements(m.body::jsonb->'parts') p,jsonb_array_elements(p.value #> '{roles,target}') b WHERE p.value->>'relation'='notify' AND b.value #>> '{reference,messageId}'=original.id))
-  ) AND NOT EXISTS (SELECT 1 FROM latest WHERE "targetId"=m.id AND family='block' AND action='block')
+    const sql = `${marksCte} SELECT m.body FROM messages m WHERE
+    EXISTS (SELECT 1 FROM notifications n WHERE n."sourceId"=m.id AND n."userId"=$1 AND n."deletedAt" IS NULL)
+    AND NOT EXISTS (SELECT 1 FROM latest WHERE "targetId"=m.id AND family='block' AND action='block')
   ${clauses.length ? `AND ${clauses.join(' AND ')}` : ''} ORDER BY m.sequence DESC,m.id DESC LIMIT ${parameter(limit+1)}`;
     return (await response(store, userId, (await store.db.prepare(sql).all(...values)), limit));
 }

@@ -10,11 +10,13 @@ import { EXPORT_DISCUSSION_VIEW_SAVED, loadCachedExport, loadCachedNativeExport,
 import { prepareExportForViewing } from '../utils/exportArchive';
 import { nativeZhihuDocument, sendNativeZhihuRelation } from '../utils/nativeZhihuEditor';
 import { isNativeLocalMessage, isNativeZhihuView } from '../utils/nativeZhihuView';
+import { getPreparedViewerExport } from '../utils/exportViewerSession';
 
 vi.mock('../utils/zhihuDirectory', () => ({ canLinkZhihuDirectory: () => true, chooseZhihuDirectory: vi.fn(),
   getZhihuDirectory: vi.fn(), readZhihuDirectory: vi.fn(), refreshZhihuDirectory: vi.fn(),
   appendZhihuJournal: vi.fn(), rememberZhihuDirectory: vi.fn(), requireDirectoryPermission: vi.fn() }));
 vi.mock('../utils/exportViewerCache', () => ({ loadCachedExport: vi.fn(), loadCachedNativeExport: vi.fn(), loadLastExport: vi.fn(async () => null), saveLastExport: vi.fn(),
+  loadLastExportPreview: vi.fn(async () => null),
   getExportCacheReference: () => ({ archiveId: 'fixture-cache', viewCacheId: 'fixture-view' }), inheritExportCacheReference: (data: unknown) => data,
   EXPORT_DISCUSSION_VIEW_SAVED: 'export-discussion-view-saved', loadExportDiscussionView: vi.fn() }));
 const connection: LinkedDirectory = { directory: { name: 'collections' } as FileSystemDirectoryHandle,
@@ -125,7 +127,7 @@ it('associates the chosen folder and preserves the existing local edits before n
   await waitFor(() => expect(rememberZhihuDirectory).toHaveBeenCalled());
   const route = JSON.parse(screen.getByTestId('route').textContent!);
   expect(route.pathname).toBe('/viewer');
-  const data = route.state.exportData as ZhihuViewingData;
+  const data = getPreparedViewerExport(route.state.viewerInstanceKey) as ZhihuViewingData;
   expect(data.zhihu.archive.items).toHaveLength(2);
   expect(data.zhihu.localOperations).toEqual(edited.zhihu.localOperations);
   expect(saveLastExport).toHaveBeenCalledBefore(vi.mocked(rememberZhihuDirectory));
@@ -155,7 +157,7 @@ it('preserves native edits still pending on this machine when relinking the dire
   fireEvent.click(screen.getByRole('button', { name: '关联知乎导出目录' }));
   fireEvent.click(await screen.findByRole('button', { name: '关联并阅览' }));
   await waitFor(() => expect(rememberZhihuDirectory).toHaveBeenCalled());
-  const data = JSON.parse(screen.getByTestId('route').textContent!).state.exportData;
+  const data = getPreparedViewerExport(JSON.parse(screen.getByTestId('route').textContent!).state.viewerInstanceKey)!;
   expect(data.messages.filter(isNativeLocalMessage).map((message: { id: string }) => message.id))
     .toEqual(edited.messages.filter(isNativeLocalMessage).map(message => message.id));
   expect(data.messages.some((message: { id: string }) => !initial.messages.some(original => original.id === message.id) && !isNativeLocalMessage(message))).toBe(true);

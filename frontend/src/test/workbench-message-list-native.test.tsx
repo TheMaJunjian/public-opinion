@@ -41,6 +41,14 @@ const renderList = (messages: DemoMessage[], props = listProps(messages)) => ren
 afterEach(() => { cleanup(); vi.restoreAllMocks(); window.getSelection()?.removeAllRanges(); });
 
 describe('native list content and navigation regressions', () => {
+  it('uses the existing reading marker without a redundant read stamp in message rows', () => {
+    const rows = [message('read')], props = listProps(rows);
+    props.display.readStatusByMessageId.set('read', 'READ');
+    props.display.preserveReadingLayout = true;
+    const view = renderList(rows, props);
+    expect(view.container.querySelector('.message-read-stamp')).toBeNull();
+    expect(view.queryByRole('button', { name: '已阅' })).toBeNull();
+  });
   it.each([undefined, 'agree', 'disagree'] as const)('labels an inactive correction using the actual personal stance (%s)', stance => {
     const correction = message('correction', { kind: 'relation', relationType: 'correct', content: '更正消息' });
     const props = listProps([correction]);

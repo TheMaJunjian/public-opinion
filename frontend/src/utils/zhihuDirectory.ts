@@ -5,6 +5,8 @@ import type { ExportData } from '../api/client';
 import { prepareExportForViewing } from './exportArchive';
 import { isNativeZhihuView, mergeNativeZhihuUpdate, nativeZhihuIdentity } from './nativeZhihuView';
 import { appendNativeJournal, nativeJournalSignature, restoreNativeJournal } from './nativeZhihuJournal';
+import { readViewerFile } from './readViewerFile';
+import { pagedArchiveSource } from './pagedZhihuArchive';
 
 // The exporter owns gonglun.json. Gonglun alone owns this append-only sidecar.
 export const ZHIHU_LOCAL_JOURNAL = 'gonglun-local.ndjson';
@@ -46,7 +48,7 @@ export async function requireDirectoryPermission(connection: LinkedDirectory, re
 export async function readZhihuDirectory(directory: FileSystemDirectoryHandle): Promise<{ data: ExportData; connection: LinkedDirectory }> {
   // gonglun.json is atomically replaced by the exporter after a completed export.
   const file = await (await directory.getFileHandle('gonglun.json')).getFile();
-  const parsed = JSON.parse(await file.text());
+  const parsed = (await readViewerFile(file)).data;
   if (isNativeZhihuView(parsed)) {
     const data = (await prepareExportForViewing(parsed)).data;
     if (!isNativeZhihuView(data)) throw new Error('精简阅览文件格式无效。');
@@ -144,11 +146,12 @@ export async function refreshZhihuDirectory(connection: LinkedDirectory, current
   if (isNativeZhihuView(current)) {
     const journalSignature = await nativeJournalSignature(connection);
     if (signature === connection.signature && journalSignature === connection.journalSignature) return { data: current, signature, journalSignature };
-    const incoming = signature === connection.signature ? current : (await prepareExportForViewing(JSON.parse(await file.text()))).data;
+    const incoming = signature === connection.signature ? current : (await readViewerFile(file)).data;
     if (!isNativeZhihuView(incoming)) throw new Error('关联目录中的文件格式已改变，已保留当前阅览。');
     const restored = await restoreNativeJournal(connection, incoming);
     const merged = mergeNativeZhihuUpdate(current, restored);
-    const unchanged = sameZhihuValue(current.messages, merged.messages) && sameZhihuValue(current.relations, merged.relations)
+    const unchanged = (signature === connection.signature || !pagedArchiveSource(current) && !pagedArchiveSource(incoming))
+      && sameZhihuValue(current.messages, merged.messages) && sameZhihuValue(current.relations, merged.relations)
       && sameZhihuValue(current.scope, merged.scope) && sameZhihuValue(current.users, merged.users);
     return { data: unchanged ? current : merged, signature, journalSignature };
   }

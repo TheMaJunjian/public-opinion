@@ -63,7 +63,7 @@ export default function GovernancePanel({ scopeMessageId }: { scopeMessageId: st
         <button
           onClick={handleSubmit}
           disabled={submitting || !content.trim()}
-          className="px-3 py-1.5 bg-[color:var(--surface-4f46e5)] hover:bg-[color:var(--surface-4338ca)] text-[color:var(--ink-fff-2)] text-xs font-medium rounded transition-colors disabled:opacity-50"
+          className="record-action px-3 py-1.5 bg-[color:var(--surface-4f46e5)] hover:bg-[color:var(--surface-4338ca)] text-[color:var(--ink-fff-2)] text-xs font-medium rounded transition-colors disabled:opacity-50"
         >
           {submitting ? '提交中...' : '发起提案'}
         </button>

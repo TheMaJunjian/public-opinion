@@ -42,6 +42,12 @@ describe('unified send rehearsal',()=>{
   it.each(['AGREE','DISAGREE','REFERENCE','REPLY','ANNOTATION','TAG','RECOMMEND','ARCHIVE','ATTENTION','BLOCK','NOTIFY'])('previews %s through its real rules and preserves the same generated identities',async relationType=>{
     const {app,session,post,batch,create}=await setup();
     const target=await create('/messages',{content:'预览的目标'});
+    if(relationType==='NOTIFY'){
+      const follower=request.agent(app),registration=await follower.post('/api/register').send({name:'通知预览接收者',password:'preview-password'});
+      const follow=await follower.post('/api/ui/relations').set('x-csrf-token',registration.body.csrf)
+        .send({relationType:'ATTENTION',recommendation:1,targetRefs:[{kind:'message',messageId:target.id}],payload:{subType:'YES'}});
+      expect(follow.status,follow.text).toBe(201);
+    }
     const body=batch('/relations',{relationType,targetRefs:[{kind:'message',messageId:target.id}],payload:{content:'预览关系',label:'标记',subType:'YES'}});
     const before=await app.store.latestSequence(),balance=await app.store.account(session.user.id);
     const preview=await post('/commands/preview',{batch:body}); expect(preview.status,preview.text).toBe(200);

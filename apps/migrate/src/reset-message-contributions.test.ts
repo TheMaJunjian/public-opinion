@@ -162,7 +162,7 @@ it('已清零的版本30数据库自动补扣一次，保留切换后已付费�
   }
   const recent = await send([{ id: 'body', type: 'text', text: '新规则已付费' }], { recommendation: 1 });
   const original = await store.message(recent.id);
-  await store.db.prepare('DELETE FROM schema_migrations WHERE version=31').run();
+  await store.db.prepare('DELETE FROM schema_migrations WHERE version>=31').run();
   const upgraded = await Store.open(testDatabaseUrl(), { schema: store.db.schema });
   try {
     expect((await upgraded.account(userId)).available).toBe(-5);

@@ -16,14 +16,38 @@ const shapes = {
   pin: <path d="m9 3 12 12-3 1-4-2-5 5-4-4 5-5-2-4 1-3ZM5 19l-3 3" />,
 } satisfies Record<string, ReactNode>;
 
-/** CSS swaps only the paint; labels, handlers and the other appearances stay intact. */
-export default function ThemeIcon({ name, fallback, beforeLabel = false }: { name: keyof typeof shapes; fallback: ReactNode; beforeLabel?: boolean }) {
-  return <><span className="theme-icon-legacy">{fallback}</span><svg className={`theme-icon-arena${beforeLabel ? ' theme-icon-before-label' : ''}`} aria-hidden="true" focusable="false"
-    width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{shapes[name]}</svg></>;
+const paperShapes = {
+  ...shapes,
+  points: <><circle cx="12" cy="12" r="9" /><path d="M9 9h6v6H9zM12 3v3m9 6h-3m-6 9v-3m-9-6h3" /></>,
+  agree: <><rect x="3" y="3" width="18" height="18" rx="1" /><path d="m7 12 3 3 7-7" /></>,
+  disagree: <><rect x="3" y="3" width="18" height="18" rx="1" /><path d="m8 8 8 8m0-8-8 8" /></>,
+  annotation: <><path d="M4 3h12l4 4v14H4V3Zm12 0v5h4M7 12h10M7 16h7" /></>,
+  reference: <><path d="M10 7H4v7h6V7Zm10 0h-6v7h6V7ZM10 14l-3 4m13-4-3 4" /></>,
+  reply: <path d="m9 5-6 6 6 6M3 11h11a7 7 0 0 1 7 7v2" />,
+  notify: <><path d="M6 9a6 6 0 0 1 12 0v6l2 3H4l2-3V9Zm4 12h4M12 1v2" /></>,
+  tag: <><path d="M3 3h9l9 9-9 9-9-9V3Z" /><circle cx="8" cy="8" r="1" /></>,
+  arrange: <><path d="M7 4h14v4H7zM7 16h14v4H7zM14 8v8M1 6h2m-2 12h2" /></>,
+  classify: <path d="M3 6h7l2-3h9v18H3V6Zm0 4h18M7 14h10M7 17h7" />,
+  merge: <path d="M4 3v4l8 6 8-6V3M12 13v8m-4-4 4 4 4-4" />,
+  summary: <path d="M5 3h14v18H5V3Zm4 5h6m-6 4h6m-6 4h4M3 6h2m-2 6h2m-2 6h2" />,
+  correct: <><path d="m15 4 5 5M4 15 16 3l5 5L9 20H4v-5ZM3 23h18" /></>,
+} satisfies Record<string, ReactNode>;
+type IconName = keyof typeof paperShapes;
+
+/** Each appearance paints the same controls; icon changes never remount their handlers. */
+export default function ThemeIcon({ name, fallback, beforeLabel = false }: { name: IconName; fallback: ReactNode; beforeLabel?: boolean }) {
+  const arenaShape = shapes[name as keyof typeof shapes];
+  const spacing = beforeLabel ? ' theme-icon-before-label' : '';
+  return <><span className={`theme-icon-legacy${arenaShape ? ' theme-icon-arena-fallback' : ''}`}>{fallback}</span>
+    {arenaShape && <svg className={`theme-icon-arena${spacing}`} aria-hidden="true" focusable="false"
+      width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{arenaShape}</svg>}
+    <svg className={`theme-icon-paper${spacing}`} aria-hidden="true" focusable="false"
+      width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="square" strokeLinejoin="miter">{paperShapes[name]}</svg></>;
 }
 
-const prefixes = [['🏛️', 'proposal'], ['🤝', 'delegation'], ['💻', 'code'], ['📊', 'operations'], ['⚖️', 'truth'], ['💎', 'value']] as const;
-const labelIcons: Partial<Record<string, keyof typeof shapes>> = {
+const prefixes = [['🏛️', 'proposal'], ['🤝', 'delegation'], ['💻', 'code'], ['📊', 'operations'], ['⚖️', 'truth'], ['💎', 'value'], ['👍', 'agree'], ['👎', 'disagree']] as const;
+// Only governance message types opt into label icons; other relation glyphs stay in paperShapes for reuse.
+const labelIcons: Partial<Record<string, IconName>> = {
   '提案': 'proposal', '治理提案': 'proposal', '委托': 'delegation', '创建委托': 'delegation', '完成委托': 'delegation',
   '代码': 'code', '运营': 'operations', '真假仲裁': 'truth', '真假仲裁结算': 'truth', '价值仲裁': 'value', '价值仲裁结算': 'value',
 };

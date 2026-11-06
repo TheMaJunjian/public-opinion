@@ -10,6 +10,7 @@ import { layoutDiscussion } from '../utils/discussionLayout';
 import { summarizeDiscussionEdges } from '../utils/discussionSummaries';
 import { isDiscussionView } from '../utils/discussionView';
 import { rectsIntersect } from '../utils/graphEdgeGeometry';
+import { REVEAL_VIRTUAL_MESSAGE } from '../hooks/useVirtualMessageMounts';
 
 const body = (id: string): DemoMessage => ({ id, kind: 'normal', author: 'fixture', content: id, createdAt: '',
   parts: [{ id: 'body', type: 'text', text: id }] });
@@ -27,6 +28,30 @@ const handlers = (): Omit<GraphViewProps, 'messages' | 'edges'> => ({ draftUnits
   onEdgeLabelDoubleClick: vi.fn(), onFragmentAnchorClick: vi.fn(), isFragmentSelected: () => false });
 
 describe('four independent lightweight stance regions', () => {
+  it.each(['reply', 'agree', 'disagree', 'recommend', 'archive'] as const)('temporarily reveals only the navigated %s record without opening a related view', async type => {
+    const links = [relation('first', type, 'one'), relation('second', type, 'two')];
+    const onRelatedRelationView = vi.fn();
+    const ui = render(<div data-workbench-left-panel><GraphView {...handlers()}
+      messages={[body('root'), body('one'), body('two'), ...links.map(link => link.record)]}
+      edges={links.map(link => link.edge)} discussionView={{ mode: 'discussion', collapsed: [] }}
+      onRelatedRelationView={onRelatedRelationView} /></div>);
+    const host = ui.container.querySelector('[data-workbench-left-panel]')!;
+    const original = (id: string) => ui.container.querySelector(`[data-directed-edge-label="${id}"]`);
+    const reveal = (ids: string[]) => fireEvent(host, new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids } }));
+    const summary = await screen.findByRole('button', { name: `汇总${discussionLabels[type]}：2` });
+    expect(original('first')).toBeNull(); expect(original('second')).toBeNull();
+    // Locating a text card also mounts its related labels, but must keep summaries intact.
+    reveal(['one']);
+    expect(original('first')).toBeNull(); expect(original('second')).toBeNull();
+    reveal(['first']);
+    await waitFor(() => expect(original('first')).not.toBeNull());
+    expect(original('second')).toBeNull();
+    expect(screen.getByRole('button', { name: `汇总${discussionLabels[type]}：2` })).toBe(summary);
+    reveal([]);
+    await waitFor(() => expect(original('first')).toBeNull());
+    expect(onRelatedRelationView).not.toHaveBeenCalled();
+  });
+
   it('keeps the summary label and its hit area clear of expanded recommendation and cold badges', async () => {
     const archived=relation('archived','archive','one'),recommended=relation('recommended','recommend','anon:recommended');
     const ui=render(<GraphView {...handlers()} messages={[body('root'),body('one'),archived.record,recommended.record]}
@@ -101,7 +126,7 @@ describe('four independent lightweight stance regions', () => {
     expect(selectedParts()).toHaveLength(3);
     for(const part of selectedParts())expect(part).toHaveAttribute('data-label-selection','whole');
     const path=ui.container.querySelector('.relation-edge-path')!;
-    expect(path).toHaveAttribute('stroke','var(--selection-accent)');
+    expect(path).toHaveAttribute('stroke','var(--edge-selection-accent, var(--selection-accent))');
     const row=screen.getByRole('dialog').querySelector<HTMLElement>('[data-related-relation-id="first"]')!;
     fireEvent.click(within(row).getByRole('button',{name:`显示原始${label}关系 first`}));
     await waitFor(()=>expect(original('first')).not.toBeNull());
@@ -115,7 +140,7 @@ describe('four independent lightweight stance regions', () => {
     expect(within(row).getByRole('button',{name:`显示原始${label}关系 first`})).toHaveTextContent('汇 · 隐藏');
     fireEvent.click(screen.getByRole('button',{name:'关闭其他相关消息'}));
     for(const part of selectedParts())expect(part).not.toHaveAttribute('data-label-selection');
-    expect(path).not.toHaveAttribute('stroke','var(--selection-accent)');
+    expect(path).not.toHaveAttribute('stroke','var(--edge-selection-accent, var(--selection-accent))');
   });
 
   it('keeps native relation-only cold records as badges without counting generated previews as discussion text', async () => {
@@ -213,6 +238,12 @@ describe('four independent lightweight stance regions', () => {
       const titleBottom = parseFloat(region.style.top) + Number(region.dataset.discussionHeaderHeight);
       expect(parseFloat(toggle.style.top)).toBeGreaterThan(titleBottom);
       expect(parseFloat(toggle.style.left)).toBeGreaterThan(parseFloat(region.style.left));
+      const frame=ui.container.querySelector('rect[data-jump-visual-msgids="arrangement"]')!;
+      expect(parseFloat(toggle.style.top)+parseFloat(toggle.style.height)).toBe(Number(frame.getAttribute('y')));
+      expect(Number(frame.getAttribute('x'))-parseFloat(region.style.left)).toBe(4);
+      expect(parseFloat(toggle.style.left)).toBeLessThan(Number(frame.getAttribute('x'))+Number(frame.getAttribute('width'))/2);
+      const card=ui.container.querySelector<HTMLElement>('[data-frame-header][data-msgid="arrangement"]');
+      if(card)expect(parseFloat(card.style.top)-parseFloat(toggle.style.top)-parseFloat(toggle.style.height)).toBe(8);
     };
     await waitFor(check);
     fireEvent.click(ui.container.querySelector('[data-arrange-card-toggle="arrangement"]')!);

@@ -117,9 +117,10 @@ export default function CleanFilterPanel({
   };
 
   return (
-    <div ref={panelRef} style={{ position: 'relative', flexShrink: 0 }}>
+    <div ref={panelRef} data-clean-filter={active ? 'active' : 'inactive'} style={{ position: 'relative', flexShrink: 0 }}>
       {/* Toggle 按钮 */}
       <button
+        className="workbench-toolbar-action" data-filter-active={active || undefined}
         onClick={handleToggle}
         title="打开或编辑过滤规则"
         aria-expanded={open}
@@ -140,6 +141,7 @@ export default function CleanFilterPanel({
       {/* 下拉面板 */}
       {open && (
         <div
+          role="dialog" aria-label="过滤器"
           style={{
             position: 'absolute',
             top: '100%',
@@ -532,6 +534,7 @@ function EditorButtons({ onConfirm, onCancel }: { onConfirm: () => void; onCance
   return (
     <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
       <button
+        className="clean-filter-confirm"
         onClick={onConfirm}
         style={{
           padding: '2px 12px',

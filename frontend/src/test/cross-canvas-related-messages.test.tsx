@@ -1,4 +1,4 @@
-import { fireEvent, render, within } from '@testing-library/react';
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import CrossCanvasRelatedMessages from '../components/CrossCanvasRelatedMessages';
 import { deriveCrossCanvasRelations } from '../utils/crossCanvasRelations';
@@ -9,6 +9,7 @@ import { MessageDisplayHintsProvider } from '../components/MessageDisplayHints';
 import { deriveContainerEffect } from '../pages/workbench/model/containerEffect';
 import type { DemoMessage } from '../utils/modelBridge';
 import { PART_SELECTION_EVENT } from '../utils/messageElementSelection';
+import { LOCATE_RELATED_MESSAGE, type RelatedMessageLocation } from '../utils/relatedMessageNavigation';
 
 const edge = (type: DemoEdge['relationType'], id = 'relation', from = 'source', to = 'target'): DemoEdge => ({
   id: `${id}:${to}`, relationMessageId: id, relationType: type, relationLabel: '自定义标签',
@@ -164,6 +165,23 @@ it('closes from its button, Escape or an outside click and keeps long lists insi
   expect(view.queryByRole('dialog')).toBeNull(); expect(toggle).toHaveFocus();
   fireEvent.click(toggle); fireEvent.pointerDown(document.body);
   expect(view.queryByRole('dialog')).toBeNull(); expect(toggle).toHaveAttribute('aria-expanded', 'false');
+});
+
+it('opens and highlights a requested summarized record past the first page without scrolling the canvas',async()=>{
+  const ids=Array.from({length:12},(_,index)=>`summary-${index}`),onLocated=vi.fn();
+  const view=render(<CrossCanvasRelatedMessages messages={new Map()} groups={{outgoing:{},incoming:{'回复':ids}}}/>);
+  const trigger=view.getByRole('button',{name:/其他相关消息：12/});
+  const native=vi.spyOn(HTMLElement.prototype,'scrollIntoView');
+  const detail:RelatedMessageLocation={messageId:'summary-10',onLocated};
+  act(()=>trigger.dispatchEvent(new CustomEvent(LOCATE_RELATED_MESSAGE,{detail})));
+  const popup=view.getByRole('dialog'),row=popup.querySelector('[data-related-relation-id="summary-10"]');
+  expect(detail.handled).toBe(true);expect(row).toHaveAttribute('data-view-target','true');
+  expect(popup.querySelector('[data-related-relation-id="summary-0"]')).not.toHaveAttribute('data-view-target');
+  await waitFor(()=>expect(onLocated).toHaveBeenCalledExactlyOnceWith(row));
+  expect(native).not.toHaveBeenCalled();
+  fireEvent.click(view.getByRole('button',{name:'关闭其他相关消息'}));fireEvent.click(trigger);
+  expect(view.getByRole('dialog').querySelector('[data-related-relation-id="summary-10"]')).toHaveAttribute('data-view-target','true');
+  native.mockRestore();
 });
 
 it('loads missing endpoints through transparent relation targets without fetching known cards or following cycles',async()=>{

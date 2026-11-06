@@ -18,13 +18,20 @@ function Opened({ open, onReady }: { open: boolean; onReady: () => void }) {
 }
 
 // Local open state prevents opening and closing the leaderboard from redrawing the workbench.
-export default forwardRef<LeaderboardHandle, Omit<LeaderboardModalProps, 'open' | 'onClose'> & { catalog?: CatalogClient | null; globalReady?: boolean }>(function LeaderboardController({ catalog, globalReady = true, ...props }, ref) {
+export default forwardRef<LeaderboardHandle, Omit<LeaderboardModalProps, 'open' | 'onClose'> & {
+  catalog?: CatalogClient | null; globalReady?: boolean; catalogVersion?: number; useCatalogRows?: boolean;
+}>(function LeaderboardController({ catalog, globalReady = true, catalogVersion = 0, useCatalogRows = true, ...props }, ref) {
   const [initialized, setInitialized] = useState(false);
   const [open, setOpen] = useState(false);
   const [opening, setOpening] = useState(false);
   const [failed, setFailed] = useState(false);
   const requested = useRef(false);
   const ready = useRef(false);
+  type Rows = NonNullable<LeaderboardModalProps['globalRows']>;
+  const [remoteRows, setRemoteRows] = useState<{ client: CatalogClient; version: number; rows: Rows } | null>(null);
+  const cachedRows = useRef(remoteRows); cachedRows.current = remoteRows;
+  const needsRows = !!catalog && useCatalogRows && !props.globalRows;
+  const rows = needsRows ? remoteRows?.client === catalog ? remoteRows.rows : undefined : props.globalRows;
   const close = useCallback(() => {
     requested.current = false;
     setOpen(false);
@@ -50,24 +57,37 @@ export default forwardRef<LeaderboardHandle, Omit<LeaderboardModalProps, 'open' 
   } }), []);
 
   useEffect(() => {
-    if (!opening) return;
+    if (!opening && !open) return;
     if (!globalReady) { catalog?.prioritize(); return; }
+    const cached = cachedRows.current;
+    const current = cached?.client === catalog && cached?.version === catalogVersion;
+    if (!opening && (!needsRows || current)) return;
     let cancelled = false;
-    // Paint the lightweight feedback before importing, computing or laying out the leaderboard.
-    let frame = requestAnimationFrame(() => {
-      frame = requestAnimationFrame(() => {
+    const prepare = async () => {
+      try {
+        if (needsRows && catalog && !current) {
+          const rows = await catalog.leaderboard();
+          if (cancelled || !requested.current) return;
+          setRemoteRows({ client: catalog, version: catalogVersion, rows });
+        }
         if (cancelled || !requested.current) return;
-        setInitialized(true);
-        setOpen(true);
+        setInitialized(true); setOpen(true);
+      } catch { if (!cancelled && requested.current) onError(); }
+    };
+    // Paint the lightweight feedback before importing, computing or laying out the leaderboard.
+    let frame = 0;
+    if (opening) {
+      frame = requestAnimationFrame(() => {
+        frame = requestAnimationFrame(() => { if (!cancelled) void prepare(); });
       });
-    });
+    } else void prepare();
     return () => { cancelled = true; cancelAnimationFrame(frame); };
-  }, [opening, globalReady, catalog]);
+  }, [opening, open, globalReady, catalog, catalogVersion, needsRows, onError]);
 
   return <>
-    {initialized && globalReady && <ErrorBoundary onError={onError}>
+    {initialized && globalReady && (!needsRows || rows) && <ErrorBoundary onError={onError}>
       <Suspense fallback={null}>
-        <LeaderboardModal {...props} open={open} onClose={close} />
+        <LeaderboardModal {...props} globalRows={rows} open={open} onClose={close} />
         <Opened open={open} onReady={onReady} />
       </Suspense>
     </ErrorBoundary>}

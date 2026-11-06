@@ -254,6 +254,7 @@ function LeaderboardModal({
         <div style={{ flex: 'var(--leaderboard-body-flex, 0 1 auto)', minHeight: 0, overflow: 'var(--leaderboard-body-overflow, visible)', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: 12, display: 'flex', gap: 8, borderBottom: '1px solid var(--line-2b3440)', flexShrink: 0 }}>
           <button
+            className="leaderboard-tab" aria-pressed={tab === 'user'}
             onClick={() => setTab('user')}
             style={{
               padding: '4px 10px',
@@ -268,6 +269,7 @@ function LeaderboardModal({
             人榜
           </button>
           <button
+            className="leaderboard-tab" aria-pressed={tab === 'message'}
             onClick={() => setTab('message')}
             style={{
               padding: '4px 10px',

@@ -33,6 +33,9 @@ import {migrateDailyUsagePoints} from './daily-usage-points.js';
 import {migrateUsageRewardStorage} from './usage-reward-storage.js';
 import {migrateUsageContributionLabels} from './usage-contribution-labels.js';
 import {fundResetMessageContributions} from './reset-message-contributions.js';
+import {migratePrivateNotifications} from './private-notifications.js';
+import {notificationDeletionSchema} from '../../server/src/notification-schema.js';
+import {migrateNotificationMemberships} from './notification-memberships.js';
 
 export interface Migration { version: number; name: string; changesFinances?: boolean; up(): Promise<void> }
 
@@ -100,7 +103,10 @@ export function migrationsFor(store: Store): Migration[] {
   {version:28,name:'daily-usage-points-refresh',up:()=>migrateDailyUsagePoints(store)},
   {version:29,name:'daily-usage-reward-ledger',up:()=>migrateUsageRewardStorage(store)},
   {version:30,name:'usage-contribution-wording',up:()=>migrateUsageContributionLabels(store)},
-  {version:31,name:'fund-reset-message-contributions',changesFinances:true,up:()=>fundResetMessageContributions(store).then(()=>{})}];
+  {version:31,name:'fund-reset-message-contributions',changesFinances:true,up:()=>fundResetMessageContributions(store).then(()=>{})},
+  {version:32,name:'persistent-private-notifications',up:()=>migratePrivateNotifications(store)},
+  {version:33,name:'private-notification-deletion',up:()=>store.db.exec(notificationDeletionSchema)},
+  {version:34,name:'membership-notification-state-changes',up:()=>migrateNotificationMemberships(store)}];
 }
 
 /** Runs under the cross-process write lock. Failed upgrades roll back together. */

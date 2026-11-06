@@ -81,7 +81,7 @@ it.each(['whole', 'fragment'] as const)('colors the entire selected %s relation 
   const group = (layer: 'paths' | 'labels', id = 'native-edge') => layers(view.container)[layer].querySelector<SVGGElement>(`g[data-frame-edge-id="${id}"]`)!;
   const path = () => group('paths').querySelector<SVGPathElement>('.relation-edge-path')!;
   const originalPath = path().getAttribute('d'), originalColor = path().getAttribute('stroke');
-  const paint = kind === 'whole' ? 'var(--selection-accent)' : 'var(--fragment-accent)';
+  const paint = kind === 'whole' ? 'var(--edge-selection-accent, var(--selection-accent))' : 'var(--edge-fragment-accent, var(--fragment-accent))';
   view.rerender(<GraphView {...props} draftUnits={[{ messageId: 'native-record', selection: kind === 'whole' ? { kind: 'whole' } : { kind: 'edge', edgeId: 'native-edge' } }]} />);
   expect(path()).toHaveAttribute('d', originalPath);
   for (const [selector, property] of [['.relation-edge-path', 'stroke'], ['.relation-edge-arrow', 'fill'],
@@ -115,14 +115,14 @@ it('keeps annotation purple across native and decorative paint and restores it a
   ];
   expect(paint()).toEqual(Array(5).fill('var(--graph-label-annotation)'));
   view.rerender(<GraphView {...props} draftUnits={[{messageId:'native-record',selection:{kind:'whole'}}]}/>);
-  expect(paint()).toEqual(Array(5).fill('var(--selection-accent)'));
+  expect(paint()).toEqual(Array(5).fill('var(--edge-selection-accent, var(--selection-accent))'));
   view.rerender(<GraphView {...props}/>);
   expect(paint()).toEqual(Array(5).fill('var(--graph-label-annotation)'));
 });
 
 it('retains the same native relation, edge and appearance addresses in both visual layers and the selectable label', async () => {
   const props = base();
-  props.stakeCounts = { 'native-record': { truth: { pro: 100, con: 0 }, value: { pro: 0, con: 0 } } };
+  props.stakeCounts = { 'native-record': { truth: { pro: 100_000, con: 0 }, value: { pro: 0, con: 0 } } };
   const view = render(<GraphView {...props} />);
   const hit = await waitFor(() => {
     const value = view.container.querySelector<HTMLElement>('[data-directed-edge-label="native-record"]');
@@ -134,7 +134,7 @@ it('retains the same native relation, edge and appearance addresses in both visu
     expect(record).toHaveAttribute('data-jump-visual-msgids', 'native-record');
     expect(record).toHaveAttribute('data-relation-type', 'reference');
     expect(record).toHaveAttribute('data-stake-level', '2');
-    expect(record).toHaveAttribute('data-stake-total', '100');
+    expect(record).toHaveAttribute('data-stake-total', '100000');
   }
   expect(hit.style.zIndex).toBe('13'); expect(hit.style.pointerEvents).toBe('auto');
   expect(hit).toHaveAttribute('data-frame-edge-id', 'native-edge');

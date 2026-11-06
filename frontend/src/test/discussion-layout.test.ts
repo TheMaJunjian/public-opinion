@@ -24,6 +24,21 @@ function expectNoOverlap(nodes: DiscussionLayoutItem[], result: ReturnType<typeo
 }
 
 describe('discussion branches on measured rectangles', () => {
+  it.each(['reply', 'agree', 'disagree'] as const)('uses the same region inset for a native frame and an ordinary card in a %s region', type => {
+    const nodes = [item('target'), {...item('frame', 1, 420, 200), outset: FRAME_PAD}, item('text', 2, 420, 200)];
+    const links = [edge('frame-link', 'frame', 'target', type), edge('text-link', 'text', 'target', type)];
+    const result = layoutDiscussion(nodes, links, {regions: [region('region', 'target', type, false, 2)]});
+    const box = result.regions[0], framed = result.positions.get('frame')!, text = result.positions.get('text')!;
+    expect(framed.x - box.x).toBe(DISCUSSION_REGION_PADDING);
+    expect(text.x - box.x).toBe(DISCUSSION_REGION_PADDING);
+    expect(framed.y - box.y - box.headerHeight).toBe(DISCUSSION_REGION_PADDING);
+    expect(box.x + box.width - framed.x - 420).toBe(DISCUSSION_REGION_PADDING);
+    expect(text.y - framed.y - 200).toBe(ROW_GAP);
+    expect(box.y + box.height - DISCUSSION_REGION_FOOTER - text.y - 200).toBe(DISCUSSION_REGION_PADDING);
+    expectNoOverlap(nodes, result);
+    const separate = layoutDiscussion([nodes[1]], []);
+    expect(separate.positions.get('frame')).toMatchObject({x:FRAME_PAD, y:FRAME_PAD});
+  });
   it('puts support, reply and opposition in vertically ordered bands to the target right', () => {
     const nodes = [item('target', 0, 470, 220), item('reply', 1, 350, 170), item('support', 2, 390, 130), item('opposition', 3, 340, 190)];
     const links = [edge('reply-link', 'reply', 'target'), edge('support-link', 'support', 'target', 'agree'), edge('opposition-link', 'opposition', 'target', 'disagree')];
@@ -318,7 +333,7 @@ describe('discussion mode through the existing scene layout', () => {
     expect(boxes.get('a-region')!.x).toBe(result.layout.a1.x + result.layout.a1.width + COL_GAP);
     expect(boxes.get('b-region')!.x).toBe(result.layout.b1.x + result.layout.b1.width + COL_GAP);
     expect(boxes.get('frame-region')!.x).toBe(result.frameRects.A.x + result.frameRects.A.width + COL_GAP);
-    expect(boxes.get('frame-region')!.x + DISCUSSION_REGION_PADDING + FRAME_PAD).toBe(result.frameRects.B.x);
+    expect(boxes.get('frame-region')!.x + DISCUSSION_REGION_PADDING).toBe(result.frameRects.B.x);
     expect(boxes.get('b-region')!.x + boxes.get('b-region')!.width).toBeLessThanOrEqual(boxes.get('frame-region')!.x + boxes.get('frame-region')!.width - DISCUSSION_REGION_PADDING);
   });
 

@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createWorkbenchDrawingTasks } from '../context/WorkbenchDrawingContext';
-import { findMessageElements, scrollMsgToCenter } from '../pages/workbench/actions/scrollNavigation';
+import { findMessageElements, findVisibleMessageElement, scrollMsgToCenter } from '../pages/workbench/actions/scrollNavigation';
 import { REVEAL_VIRTUAL_MESSAGE, type VirtualMessageRevealDetail } from '../hooks/useVirtualMessageMounts';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); document.body.replaceChildren(); });
@@ -15,6 +15,68 @@ function navigation(panel: HTMLDivElement) {
     pendingScrollDependencyIdsRef: { current: [] as string[] }, leftPanelRef: { current: panel }, scrollRafRef: { current: null as number | null },
     findMessageElements, relationsRef: { current: [] }, edgesRef: { current: [] }, showMessagePulse: pulse, cancelScrollRafs: vi.fn() };
 }
+
+it.each(['card', 'label'])('only prompts an already visible %s without revealing virtual content or writing scroll offsets', kind => {
+  vi.useFakeTimers();
+  const panel = document.createElement('div'), target = document.createElement('div');
+  target.dataset.msgid = 'visible';
+  if (kind === 'label') { target.dataset.directedEdgeLabel = 'visible'; target.dataset.relOverlay = 'true'; }
+  panel.append(target); document.body.append(panel);
+  dimensions(panel, { clientWidth: 400, clientHeight: 300, scrollWidth: 3000, scrollHeight: 5000 });
+  const setTop = vi.fn(), setLeft = vi.fn();
+  Object.defineProperties(panel, {
+    scrollTop: { configurable: true, get: () => 500, set: setTop },
+    scrollLeft: { configurable: true, get: () => 120, set: setLeft },
+  });
+  vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 100, 400, 300));
+  vi.spyOn(target, 'getBoundingClientRect').mockReturnValue(new DOMRect(40, 170, 200, 80));
+  const reveal = vi.fn(), nativeScroll = vi.spyOn(target, 'scrollIntoView');
+  panel.addEventListener(REVEAL_VIRTUAL_MESSAGE, reveal);
+  const dependencies = navigation(panel), completed = vi.fn();
+  scrollMsgToCenter(dependencies, 'visible', { onComplete: completed });
+  vi.advanceTimersByTime(100);
+  expect(dependencies.showMessagePulse).toHaveBeenCalledWith('visible', target, 1, expect.any(Function));
+  expect(completed).toHaveBeenCalledExactlyOnceWith(true);
+  expect(reveal).not.toHaveBeenCalled(); expect(nativeScroll).not.toHaveBeenCalled();
+  expect(setTop).not.toHaveBeenCalled(); expect(setLeft).not.toHaveBeenCalled();
+});
+
+it('rejects clipped labels and invisible curve starts, and finds a visible copy of the actual label', () => {
+  const panel = document.createElement('div'), nested = document.createElement('div');
+  const start = document.createElement('div'), label = document.createElement('div'), copy = document.createElement('div');
+  start.dataset.directedEdgeStart = 'reply'; start.dataset.jumpMsgids = 'reply';
+  for (const element of [label, copy]) { element.dataset.msgid = 'reply'; element.dataset.directedEdgeLabel = 'reply'; }
+  nested.style.overflow = 'clip'; nested.append(label); panel.append(start, nested); document.body.append(panel);
+  vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 100, 600, 400));
+  vi.spyOn(nested, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 200, 100));
+  vi.spyOn(start, 'getBoundingClientRect').mockReturnValue(new DOMRect(40, 150, 16, 16));
+  vi.spyOn(label, 'getBoundingClientRect').mockReturnValue(new DOMRect(40, 300, 100, 30));
+  vi.spyOn(copy, 'getBoundingClientRect').mockReturnValue(new DOMRect(300, 160, 100, 30));
+  expect(findVisibleMessageElement(panel, 'reply')).toBeNull();
+  label.remove(); expect(findVisibleMessageElement(panel, 'reply')).toBeNull();
+  nested.append(label); panel.append(copy);
+  expect(findVisibleMessageElement(panel, 'reply')).toBe(copy);
+  copy.style.visibility = 'hidden'; expect(findVisibleMessageElement(panel, 'reply')).toBeNull();
+});
+
+it('uses a visible summary trigger even when the individual edge has an offscreen navigation anchor', () => {
+  vi.useFakeTimers();
+  const panel=document.createElement('div'),start=document.createElement('div'),summary=document.createElement('button');
+  start.dataset.directedEdgeStart='reply';start.dataset.jumpMsgids='reply';
+  summary.dataset.relatedMessagesTrigger='true';summary.dataset.jumpMsgids='other reply';summary.dataset.relOverlay='true';
+  panel.append(start,summary);document.body.append(panel);
+  vi.spyOn(panel,'getBoundingClientRect').mockReturnValue(new DOMRect(0,100,600,500));
+  vi.spyOn(summary,'getBoundingClientRect').mockReturnValue(new DOMRect(200,200,90,30));
+  vi.spyOn(start,'getBoundingClientRect').mockReturnValue(new DOMRect(200,1200,16,16));
+  panel.scrollTop=730;panel.scrollLeft=90;
+  const reveal=vi.fn();panel.addEventListener(REVEAL_VIRTUAL_MESSAGE,reveal);
+  const dependencies=navigation(panel),completed=vi.fn();
+  expect(findVisibleMessageElement(panel,'reply')).toBe(summary);
+  scrollMsgToCenter(dependencies,'reply',{onComplete:completed});vi.advanceTimersByTime(100);
+  expect(dependencies.showMessagePulse).toHaveBeenCalledWith('reply',summary,1,expect.any(Function));
+  expect([panel.scrollTop,panel.scrollLeft]).toEqual([730,90]);expect(reveal).not.toHaveBeenCalled();
+  expect(completed).toHaveBeenCalledExactlyOnceWith(true);
+});
 
 it.each([
   {name:'an already visible message',top:150,height:80,initial:100,expected:100},
@@ -39,7 +101,7 @@ it.each([
   expect(native).not.toHaveBeenCalled();expect(completed).toHaveBeenCalledExactlyOnceWith(true);
 });
 
-it.each([true,false])('prefers a measurable directed start and falls back to its label when the start is unavailable (start=%s)',available=>{
+it.each([true,false])('locates the relation label and falls back to its start only while the label is unavailable (label=%s)',available=>{
   vi.useFakeTimers();
   const panel=document.createElement('div'),label=document.createElement('div'),start=document.createElement('div');
   label.dataset.msgid='citation';label.dataset.directedEdgeLabel='citation';label.dataset.relOverlay='true';
@@ -47,12 +109,12 @@ it.each([true,false])('prefers a measurable directed start and falls back to its
   panel.append(label,start);document.body.append(panel);
   dimensions(panel,{clientWidth:400,offsetWidth:400,clientHeight:300,offsetHeight:300,scrollWidth:4000,scrollHeight:5000});
   vi.spyOn(panel,'getBoundingClientRect').mockReturnValue(new DOMRect(0,100,400,300));
-  vi.spyOn(label,'getBoundingClientRect').mockImplementation(()=>new DOMRect(1700-panel.scrollLeft,100+2400-panel.scrollTop,80,30));
-  vi.spyOn(start,'getBoundingClientRect').mockImplementation(()=>new DOMRect(800-panel.scrollLeft,100+1200-panel.scrollTop,available?16:0,available?16:0));
+  vi.spyOn(label,'getBoundingClientRect').mockImplementation(()=>new DOMRect(1700-panel.scrollLeft,100+2400-panel.scrollTop,available?80:0,available?30:0));
+  vi.spyOn(start,'getBoundingClientRect').mockImplementation(()=>new DOMRect(800-panel.scrollLeft,100+1200-panel.scrollTop,16,16));
   const dependencies=navigation(panel),completed=vi.fn();
   scrollMsgToCenter(dependencies,'citation',{onComplete:completed});vi.advanceTimersByTime(100);
-  expect(panel.scrollLeft).toBe(available?416:1380);expect(panel.scrollTop).toBe(available?916:2130);
-  expect(dependencies.showMessagePulse).toHaveBeenCalledWith('citation',available?start:label,1,expect.any(Function));
+  expect(panel.scrollLeft).toBe(available?1380:416);expect(panel.scrollTop).toBe(available?2130:916);
+  expect(dependencies.showMessagePulse).toHaveBeenCalledWith('citation',available?label:start,1,expect.any(Function));
   expect(completed).toHaveBeenCalledExactlyOnceWith(true);
 });
 

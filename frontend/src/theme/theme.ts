@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 export interface ThemeLayout {
-  readonly messageJump: 'inline' | 'clipboard-dialog';
+  readonly messageJump: 'toolbar' | 'view';
   readonly relationControls: 'toolbar' | 'desk';
 }
 
@@ -16,11 +16,11 @@ interface ThemeDefinition {
 /** Each appearance explicitly declares its controls; a new name never implies a layout. */
 export const THEMES = [
   { id: 'gpt', base: 'gpt', name: '原版', description: '保留原来的深色界面',
-    layout: { messageJump: 'inline', relationControls: 'toolbar' } },
+    layout: { messageJump: 'toolbar', relationControls: 'toolbar' } },
   { id: 'gpt-arena', base: 'gpt', name: 'gpt6astra-max · 议事厅·卡牌', description: '深色桌面、金属边缘与独立的关系载体',
-    layout: { messageJump: 'clipboard-dialog', relationControls: 'desk' } },
+    layout: { messageJump: 'view', relationControls: 'desk' } },
   { id: 'opus-paper', base: 'opus', name: 'opus5.5-high · 案卷·印信', description: '暖纸案卷、页签框架与印信装饰',
-    layout: { messageJump: 'clipboard-dialog', relationControls: 'desk' } },
+    layout: { messageJump: 'view', relationControls: 'desk' } },
 ] as const satisfies readonly ThemeDefinition[];
 export type Theme = typeof THEMES[number]['id'];
 export const THEME_STORAGE_KEY = 'gonglun.theme';

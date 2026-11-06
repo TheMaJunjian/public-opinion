@@ -1,16 +1,17 @@
 import type { ExportData } from '../api/client';
-import { prepareExportForViewing } from './exportArchive';
 import { serializeNativeZhihuView } from './nativeZhihuEditor';
 import { isNativeZhihuView, mergeNativeZhihuUpdate, type NativeZhihuView } from './nativeZhihuView';
 import type { PreparedExport } from './exportTask';
+import { exportPagedArchive, pagedArchiveSource } from './pagedZhihuArchive';
+import { readViewerFile } from './readViewerFile';
 
 /** A local snapshot update never asks the Gonglun server for Zhihu records. */
 export async function prepareZhihuViewExport(source: NativeZhihuView, view: ExportData['view'], file: Blob | undefined,
-  progress: (message: string) => void): Promise<PreparedExport> {
+  progress: (message: string) => void, signal?: AbortSignal): Promise<PreparedExport> {
   let data = source, added = 0;
   if (file) {
     progress('正在读取已有阅览文件…');
-    const original = (await prepareExportForViewing(JSON.parse(await file.text()))).data;
+    const original = (await readViewerFile(file, signal)).data;
     if (!isNativeZhihuView(original)) throw new Error('请选择精简格式的知乎阅览文件。');
     progress('正在合并新增内容和本地消息…');
     // Source omissions and diverging local histories are rejected by the same
@@ -21,5 +22,6 @@ export async function prepareZhihuViewExport(source: NativeZhihuView, view: Expo
   }
   data = { ...data, ...(view ? { view } : {}) };
   progress('正在生成阅览文件…');
-  return { blob: new Blob([serializeNativeZhihuView(data)], { type: 'application/json' }), added, messageCount: data.messages.length };
+  return { blob: pagedArchiveSource(data) ? await exportPagedArchive(data, signal)
+    : new Blob([serializeNativeZhihuView(data)], { type: 'application/json' }), added, messageCount: data.messages.length };
 }

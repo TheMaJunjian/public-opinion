@@ -31,4 +31,7 @@ export const DATABASE_MIGRATIONS = [
   'daily-usage-reward-ledger',
   'usage-contribution-wording',
   'fund-reset-message-contributions',
+  'persistent-private-notifications',
+  'private-notification-deletion',
+  'membership-notification-state-changes',
 ] as const;

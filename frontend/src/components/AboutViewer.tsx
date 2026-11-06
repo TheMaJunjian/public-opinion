@@ -6,7 +6,10 @@ import { applyDocumentTheme } from '../theme/documentTheme';
 import { ABOUT_HISTORY_KEY, ABOUT_HOME_STATE_KEY, aboutDocumentUrl, aboutHistoryEntry, replaceAboutDocument, scrollAboutDocument, type AboutHistoryEntry } from '../utils/aboutNavigation';
 
 /** The static document stays isolated from app styles; the workbench and loaded document stay mounted. */
-export default function AboutViewer({ appRoot }: { appRoot: RefObject<HTMLDivElement> }) {
+export default function AboutViewer({ appRoot, onDocumentKeyDown }: {
+  appRoot: RefObject<HTMLDivElement>;
+  onDocumentKeyDown?: (event: KeyboardEvent) => void;
+}) {
   const theme = useTheme();
   const location = useLocation();
   const navigate = useNavigate();
@@ -16,7 +19,6 @@ export default function AboutViewer({ appRoot }: { appRoot: RefObject<HTMLDivEle
   const [prepared, setPrepared] = useState(Boolean(initialEntry.current));
   const [open, setOpen] = useState(Boolean(initialEntry.current));
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const closeRef = useRef<HTMLButtonElement>(null);
   const documentCleanup = useRef<() => void>();
   const activeEntry = useRef(initialEntry.current);
   const documentUrl = useRef(initialEntry.current?.url ?? '/about.html');
@@ -125,9 +127,9 @@ export default function AboutViewer({ appRoot }: { appRoot: RefObject<HTMLDivEle
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const wasInert = root?.inert ?? false;
     if (root) root.inert = true;
-    closeRef.current?.focus({ preventScroll: true });
+    frameRef.current?.focus({ preventScroll: true });
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+      if (event.key !== 'Escape' || document.fullscreenElement) return;
       event.preventDefault(); event.stopImmediatePropagation(); close();
     };
     window.addEventListener('keydown', escape, true);
@@ -185,15 +187,17 @@ export default function AboutViewer({ appRoot }: { appRoot: RefObject<HTMLDivEle
       }
     };
     const escape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); close(); }
+      if (event.key === 'Escape' && !document.fullscreenElement) { event.preventDefault(); close(); }
     };
     doc.addEventListener('click', click);
     doc.addEventListener('keydown', escape);
+    if (onDocumentKeyDown) doc.addEventListener('keydown', onDocumentKeyDown, true);
     frame.contentWindow?.addEventListener('hashchange', restoreScroll);
     frame.contentWindow?.addEventListener('scroll', saveScroll, { passive: true });
     documentCleanup.current = () => {
       doc.removeEventListener('click', click);
       doc.removeEventListener('keydown', escape);
+      if (onDocumentKeyDown) doc.removeEventListener('keydown', onDocumentKeyDown, true);
       frame.contentWindow?.removeEventListener('hashchange', restoreScroll);
       frame.contentWindow?.removeEventListener('scroll', saveScroll);
     };
@@ -204,9 +208,6 @@ export default function AboutViewer({ appRoot }: { appRoot: RefObject<HTMLDivEle
     style={{ display: open ? 'flex' : 'none', position: 'fixed', inset: 0, zIndex: 4000, flexDirection: 'column', background: 'var(--surface-page)' }}>
     <div className="about-viewer-toolbar">
       <span>公论介绍与文档</span>
-      <button ref={closeRef} type="button" onClick={close} className="about-viewer-close" aria-label="关闭介绍" title="返回原页面（Esc）">
-        <span aria-hidden="true">×</span>关闭
-      </button>
     </div>
     <iframe ref={frameRef} title="公论介绍与文档" src={initialUrl.current} onLoad={connectDocument}
       sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"

@@ -5,10 +5,12 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import App from '../App';
 import AboutLink from '../components/AboutLink';
 import TutorialModal from '../components/TutorialModal';
+import { getTheme, setTheme, THEMES } from '../theme/theme';
 import * as aboutNavigation from '../utils/aboutNavigation';
 import { useBrowsingHistory } from '../pages/workbench/useBrowsingHistory';
 
 const replaceRealDocument = aboutNavigation.replaceAboutDocument;
+let previousTheme = getTheme();
 
 const { mounted, unmounted, routed, auth } = vi.hoisted(() => ({
   mounted: vi.fn(), unmounted: vi.fn(), routed: vi.fn(),
@@ -36,6 +38,7 @@ vi.mock('../pages/MessageWorkbenchPage', () => ({ default: function Workbench() 
 } }));
 
 beforeEach(() => {
+  previousTheme = getTheme();
   vi.clearAllMocks(); auth.user = { id: 'user', username: '与会者' };
   window.history.replaceState(null, '', '/messages/classification?view=graph');
   vi.spyOn(aboutNavigation, 'replaceAboutDocument').mockImplementation((frame, url) => {
@@ -47,6 +50,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  setTheme(previousTheme);
   vi.restoreAllMocks(); vi.unstubAllEnvs();
 });
 
@@ -66,6 +70,48 @@ function writeFrame(frame: HTMLIFrameElement, body: string) {
   return doc;
 }
 
+it.each([{ key: 'Enter', altKey: true }, { key: 'Escape' }])('介绍内使用 Alt+Enter 进入整个页面全屏，%j 退出全屏后保留文档', async exitKey => {
+  let fullscreenElement: Element | null = null;
+  const request = vi.fn(async () => { fullscreenElement = document.documentElement; });
+  const exit = vi.fn(async () => { fullscreenElement = null; });
+  const savedRequest = Object.getOwnPropertyDescriptor(document.documentElement, 'requestFullscreen');
+  const savedExit = Object.getOwnPropertyDescriptor(document, 'exitFullscreen');
+  const savedElement = Object.getOwnPropertyDescriptor(document, 'fullscreenElement');
+  Object.defineProperty(document.documentElement, 'requestFullscreen', { configurable: true, value: request });
+  Object.defineProperty(document, 'exitFullscreen', { configurable: true, value: exit });
+  Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => fullscreenElement });
+  try {
+    render(<App />);
+    const input = await screen.findByRole('textbox', { name: '消息输入' });
+    fireEvent.change(input, { target: { value: '全屏阅读后继续写' } });
+    fireEvent.click(screen.getByRole('link', { name: '介绍' }));
+    const frame = screen.getByTitle('公论介绍与文档') as HTMLIFrameElement;
+    const doc = writeFrame(frame, '<p>介绍正文</p>');
+    fireEvent.keyDown(doc, { key: 'Enter', altKey: true });
+    expect(request).toHaveBeenCalledExactlyOnceWith({ navigationUI: 'hide' });
+    await act(async () => {});
+    // Reconnecting a loaded document must not leave duplicate shortcut listeners.
+    fireEvent.load(frame);
+    expect(fireEvent.keyDown(doc, exitKey)).toBe(false);
+    expect(exit).toHaveBeenCalledOnce();
+    await act(async () => {});
+    expect(screen.getByRole('dialog', { name: '公论介绍' })).toBeVisible();
+    fireEvent.keyDown(doc, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '公论介绍' })).toBeNull());
+    expect(input).toHaveValue('全屏阅读后继续写');
+    expect(mounted).toHaveBeenCalledOnce();
+  } finally {
+    for (const [target, key, descriptor] of [
+      [document.documentElement, 'requestFullscreen', savedRequest],
+      [document, 'exitFullscreen', savedExit],
+      [document, 'fullscreenElement', savedElement],
+    ] as const) {
+      if (descriptor) Object.defineProperty(target, key, descriptor);
+      else Reflect.deleteProperty(target, key);
+    }
+  }
+});
+
 it.each([false, true])('阅读介绍后保留同一个工作台、原地址和未发送输入（生产模式：%s）', async production => {
   vi.stubEnv('PROD', production);
   if (production) window.history.replaceState(null, '', '/#/messages/classification?view=graph');
@@ -78,7 +124,7 @@ it.each([false, true])('阅读介绍后保留同一个工作台、原地址和�
   expect(screen.getByRole('dialog', { name: '公论介绍' })).toBeVisible();
   expect(app.inert).toBe(true);
   const frame = screen.getByTitle('公论介绍与文档');
-  fireEvent.click(screen.getByRole('button', { name: '关闭介绍' }));
+  fireEvent.keyDown(window, { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('dialog', { name: '公论介绍' })).toBeNull());
   expect(screen.getByRole('textbox', { name: '消息输入' })).toBe(input);
   expect(input).toHaveValue('尚未发送的内容');
@@ -218,7 +264,8 @@ it('悬停预加载介绍，打开和再次打开都复用同一个文档', asyn
   await waitFor(() => expect(screen.queryByRole('dialog', { name: '公论介绍' })).toBeNull());
 });
 
-it('完整文档入口可直接打开指定章节，返回后保留工作台与草稿', async () => {
+it.each(THEMES)('$id：教程入口打开指定章节，返回后保留工作台与草稿', async theme => {
+  setTheme(theme.id);
   const onClose = vi.fn();
   render(<><App /><TutorialModal open onClose={onClose} /></>);
   const input = await screen.findByRole('textbox', { name: '消息输入' });
@@ -227,12 +274,36 @@ it('完整文档入口可直接打开指定章节，返回后保留工作台与�
   expect(onClose).toHaveBeenCalledTimes(1);
   const frame = screen.getByTitle('公论介绍与文档');
   expect(frame).toHaveAttribute('src', '/about.html#quick-start');
+  expect(screen.queryByRole('button', { name: '关闭介绍' })).toBeNull();
+  expect(frame).toHaveFocus();
   expect(aboutNavigation.aboutHistoryEntry(window.history.state)?.url).toBe('/about.html#quick-start');
-  fireEvent.click(screen.getByRole('button', { name: '关闭介绍' }));
+  fireEvent.keyDown(window, { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('dialog', { name: '公论介绍' })).toBeNull());
   expect(screen.getByRole('textbox', { name: '消息输入' })).toBe(input);
   expect(input).toHaveValue('阅读教程后继续写');
   expect(mounted).toHaveBeenCalledTimes(1);
+});
+
+it.each(THEMES)('$id：教程链接保留 Ctrl 点击行为，不关闭教程或在原页导航', theme => {
+  setTheme(theme.id);
+  const onClose = vi.fn(), openDocument = vi.fn();
+  window.addEventListener('open-about-viewer', openDocument);
+  render(<TutorialModal open onClose={onClose} />);
+  const prevented = vi.fn();
+  const stopNavigation = (event: MouseEvent) => { prevented(event.defaultPrevented); event.preventDefault(); };
+  document.addEventListener('click', stopNavigation);
+  try {
+    const link = screen.getByRole('link', { name: '上手与界面导览' });
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true });
+    // Observe whether the component intercepts the native new-tab action, then stop jsdom navigation.
+    fireEvent(link, event);
+    expect(prevented).toHaveBeenCalledWith(false);
+    expect(onClose).not.toHaveBeenCalled();expect(openDocument).not.toHaveBeenCalled();
+    expect(link).toHaveAttribute('href', '/about.html#quick-start');
+  } finally {
+    window.removeEventListener('open-about-viewer', openDocument);
+    document.removeEventListener('click', stopNavigation);
+  }
 });
 
 it('预加载的帮助页显示后才定位，再次点同一帮助仍定位，普通介绍入口保留阅读位置', async () => {
@@ -247,11 +318,11 @@ it('预加载的帮助页显示后才定位，再次点同一帮助仍定位，�
   expect(frame.closest('[hidden]')).not.toBeNull();
   fireEvent.click(help);
   expect(target.scrollIntoView).toHaveBeenCalledExactlyOnceWith({ block: 'start' });
-  fireEvent.click(screen.getByRole('button', { name: '关闭介绍' }));
+  fireEvent.keyDown(window, { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('dialog', { name: '公论介绍' })).toBeNull());
   fireEvent.click(screen.getByRole('link', { name: '介绍' }));
   expect(target.scrollIntoView).toHaveBeenCalledTimes(1);
-  fireEvent.click(screen.getByRole('button', { name: '关闭介绍' }));
+  fireEvent.keyDown(window, { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('dialog', { name: '公论介绍' })).toBeNull());
   fireEvent.click(help);
   expect(target.scrollIntoView).toHaveBeenCalledTimes(2);
@@ -269,13 +340,13 @@ it.each([false, true])('指定帮助链接打开对应章节，默认入口继�
   const frame = screen.getByTitle('公论介绍与文档');
   expect(frame).toHaveAttribute('src', '/about.html#guide-selection');
   expect(aboutNavigation.aboutHistoryEntry(window.history.state)?.url).toBe('/about.html#guide-selection');
-  fireEvent.click(screen.getByRole('button', { name: '关闭介绍' }));
+  fireEvent.keyDown(window, { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('dialog', { name: '公论介绍' })).toBeNull());
   expect(input).toHaveValue('先查帮助，再继续编辑');
   fireEvent.click(screen.getByRole('link', { name: '介绍' }));
   expect(screen.getByTitle('公论介绍与文档')).toBe(frame);
   expect(aboutNavigation.aboutHistoryEntry(window.history.state)?.url).toBe('/about.html#guide-selection');
-  fireEvent.click(screen.getByRole('button', { name: '关闭介绍' }));
+  fireEvent.keyDown(window, { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('dialog', { name: '公论介绍' })).toBeNull());
   expect(screen.getByRole('textbox', { name: '消息输入' })).toBe(input);
   expect(input).toHaveValue('先查帮助，再继续编辑');
@@ -331,7 +402,7 @@ it.each([false, true])('分类与介绍共用浏览器历史，关闭介绍后�
   await waitFor(() => expect(screen.getByLabelText('当前分类')).toHaveTextContent('分类 A'));
   await traverseHistory(1);
   expect(screen.getByRole('dialog', { name: '公论介绍' })).toBeVisible();
-  fireEvent.click(screen.getByRole('button', { name: '关闭介绍' }));
+  fireEvent.keyDown(window, { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('dialog', { name: '公论介绍' })).toBeNull());
   expect(screen.getByLabelText('当前分类')).toHaveTextContent('分类 A');
   expect(screen.getByRole('textbox', { name: '消息输入' })).toBe(input);
@@ -380,8 +451,7 @@ it('关闭多层文档一次返回工作台，不留下无反应的回退步骤�
   const doc = writeFrame(frame, '<a href="/docs/usage.html">规则</a><a href="/docs/promotion.html">推广</a>');
   fireEvent.click(doc.querySelector('a')!);
   fireEvent.click(doc.querySelectorAll('a')[1]);
-  const close = screen.getByRole('button', { name: '关闭介绍' });
-  fireEvent.click(close); fireEvent.click(close);
+  fireEvent.keyDown(window, { key: 'Escape' }); fireEvent.keyDown(window, { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('dialog', { name: '公论介绍' })).toBeNull());
   expect(window.location.pathname).toBe('/messages');
   await traverseHistory(1);
@@ -391,7 +461,7 @@ it('关闭多层文档一次返回工作台，不留下无反应的回退步骤�
   await traverseHistory(1);
   expect(frame.contentWindow!.location.pathname).toBe('/docs/promotion.html');
   expect(aboutNavigation.replaceAboutDocument).toHaveBeenLastCalledWith(frame, '/docs/promotion.html');
-  fireEvent.click(screen.getByRole('button', { name: '关闭介绍' }));
+  fireEvent.keyDown(window, { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('dialog', { name: '公论介绍' })).toBeNull());
   await traverseHistory(-1);
   expect(window.location.pathname).toBe('/login');

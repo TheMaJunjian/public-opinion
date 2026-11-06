@@ -1,7 +1,9 @@
 import {useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
 import {MessageReadingDetails,useMessagesReadingConfirmation,useReadingDisplayContext} from './MessageDisplayHints';
 import TraceReadingPanel,{ReadingConfirmationGroups} from './TraceReadingPanel';
-import {nextReadingVisit,readingTasks,type ReadingTask,type ReadingOrder} from '../pages/workbench/model/readingTasks';
+import {readingTasks,type ReadingTask,type ReadingOrder} from '../pages/workbench/model/readingTasks';
+import {indexReadingStructure,readingNeighbors,nextStructuredReadingVisit,type ReadingNavigationMode} from '../pages/workbench/model/readingStructure';
+import ReadingStructureNavigation from './ReadingStructureNavigation';
 import {useReadingQueue} from '../hooks/useReadingQueue';
 import type {TraceDirection} from '../utils/traceRange';
 import {getMessageCardContent,getMessageTypeLabel,getOrganizationTitle} from '../utils/messageDisplay';
@@ -45,6 +47,12 @@ function ReadingController(p:Props&{context:NonNullable<ReturnType<typeof useRea
     return [...values.values()];
   },[model,p.incoming]);
   const queue=useReadingQueue(p.scopeKey,tasks,p.ready,model.navigationIds),[busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null);
+  const [navigationMode,setNavigationMode]=useState<ReadingNavigationMode>('auto');
+  const structure=useMemo(()=>indexReadingStructure(context.readingInput.messages,context.readingInput.edges,context.readingInput.suppressedIds),
+    [context.readingInput.messages,context.readingInput.edges,context.readingInput.suppressedIds]);
+  const neighbors=useMemo(()=>readingNeighbors(structure,readingIds,model.navigationIds),[structure,readingIds,model.navigationIds]);
+  const pendingIds=useMemo(()=>new Set(context.readingInput.messages.filter(message=>!model.progress.confirmed(message.id)).map(message=>message.id)),
+    [context.readingInput.messages,model.progress]);
   const currentTasks=tasks.filter(task=>readingIds.includes(task.destinationId));
   const visitInfluenceKey=JSON.stringify(currentTasks.filter(task=>task.influence).map(task=>[task.destinationId,task.targetId,task.influence]));
   useEffect(()=>{
@@ -64,8 +72,9 @@ function ReadingController(p:Props&{context:NonNullable<ReturnType<typeof useRea
       return JSON.stringify(previous)===JSON.stringify(next)?previous:next;
     });
   },[p.focusId,queue.focusId,visitInfluenceKey,context.setInfluenceVisits]);
-  const continueId=p.ready&&p.focusLocated&&queue.focusId===p.focusId&&confirmation.ready&&confirmation.pending&&context.onMarkRead
-    ?nextReadingVisit(queue,currentTasks)?.id??null:null;
+  const nextVisit=p.ready&&p.focusId&&queue.focusId===p.focusId
+    ?nextStructuredReadingVisit(queue,currentTasks,navigationMode,neighbors):undefined;
+  const continueId=p.focusLocated&&confirmation.ready&&confirmation.pending&&context.onMarkRead?nextVisit?.id??null:null;
   useLayoutEffect(()=>{
     p.onNavigationChange?.({current:p.focusId,previous:null,next:null,continue:continueId});
   },[p.onNavigationChange,p.focusId,continueId]);
@@ -109,7 +118,7 @@ function ReadingController(p:Props&{context:NonNullable<ReturnType<typeof useRea
       if(!marks.length||incomplete)throw new Error('当前正文尚未准备好，请稍后重试');
       await context.onMarkRead(marks);
       if(!isCurrent())return;
-      const next=nextReadingVisit(latest.current.queue,current);
+      const next=nextStructuredReadingVisit(latest.current.queue,current,navigationMode,neighbors);
       if(next)await visit(next.id,next.tasks);
     }catch(reason){if(isCurrent())setError(reason instanceof Error?reason.message:'保存阅读状态失败，请重试');}
     finally{if(activeOperation.current===operation){activeOperation.current=null;setBusy(false);}}
@@ -124,7 +133,13 @@ function ReadingController(p:Props&{context:NonNullable<ReturnType<typeof useRea
         <MessageReadingDetails messageId={id} disabled={busy||!p.ready||!p.focusLocated}/>
       </details>)}</RecentWorkbenchViews>:undefined} canConfirm={confirmation.ready&&confirmation.pending}
       canGoBack={!!p.canGoBack} canGoForward={!!p.canGoForward} onBackward={()=>{setError(null);p.onBackward?.();}} onForward={()=>{setError(null);p.onForward?.();}} recentSelectedIds={p.recentSelectedIds}
+      structureNavigation={<ReadingStructureNavigation mode={navigationMode} onMode={setNavigationMode} neighbors={neighbors}
+        scopeIds={p.scopeIds} allowedIds={p.allowedIds} pendingIds={pendingIds} nextId={nextVisit?.id??null} disabled={busy||!p.ready||!readingIds.length}
+        confirmationPending={confirmation.pending}
+        messageTypes={messageTypes} getMessageSummary={getMessageSummary}
+        onVisit={id=>void visit(id,tasks.filter(task=>task.destinationId===id),!p.scopeIds.has(id))}/>}
       onSetReading={ids=>{if(ids.length)void visit(ids[0],tasks.filter(task=>ids.includes(task.destinationId)),false,ids);}}
+      hasNext={!!nextVisit} onNext={()=>{if(!busy&&nextVisit)void visit(nextVisit.id,nextVisit.tasks);}}
       onRead={()=>void confirm()} onNew={()=>{const first=queue.added[0];queue.acceptNew();if(first)void visit(first.id,first.tasks);}}
       onVisit={item=>void visit(item.id,item.tasks)} onBack={p.onBack} path={p.path}/>
   </>;

@@ -22,7 +22,7 @@ interface Props {
   correctionWidth?: number;
   onCorrectionWidthChange?: (width: number) => void;
   nativeDocument?: boolean;
-  buildRelation?: (input: ZhihuLocalSendInput) => ZhihuViewingData;
+  buildRelation?: (input: ZhihuLocalSendInput) => ZhihuViewingData | Promise<ZhihuViewingData>;
 }
 const MISSING_PAGE_SIZE = 50;
 
@@ -144,12 +144,12 @@ export default function ZhihuReplyEditor({ data, sourceUnits, targetUnits, draft
     return `${meta?.kind === 'item' ? itemType : meta?.kind === 'question' ? '问题' : number ? `第${number}条评论` : '消息'} · ${meta?.authorName || (isOriginal ? '作者未记录' : '本地整理')} · ${text}`;
   };
   const labels = { REPLY: '回复', AGREE: '赞同', DISAGREE: '反对', CLASSIFY: '分类', SUMMARY: '总结', MERGE: '归并', ARRANGE: '排列', CORRECT: '更正' };
-  async function apply(change: () => ZhihuViewingData, message: string, clearSelection = false) {
+  async function apply(change: () => ZhihuViewingData | Promise<ZhihuViewingData>, message: string, clearSelection = false) {
     if (saving.current) return;
     saving.current = true; setBusy(true); setError(''); setNotice('');
     try {
       await sendingProgress.prepare();
-      const next = change();
+      const next = await change();
       // Local operations leave the source archive intact. Compare only the
       // editing records instead of materializing and serializing it twice.
       const changed = JSON.stringify([next.zhihu.overrides, next.zhihu.localOperations])
@@ -201,7 +201,7 @@ export default function ZhihuReplyEditor({ data, sourceUnits, targetUnits, draft
         }), `${labels[relationType]}已发送，只保存在本机。`, true);
       },
     })}
-    <section aria-label="知乎资料整理" style={{ border: '1px solid var(--line-444)', borderRadius: 6, padding: 8, display: 'grid', gap: 8, fontSize: 12 }}>
+    <section className="workbench-record-section" aria-label="知乎资料整理" style={{ border: '1px solid var(--line-444)', borderRadius: 6, padding: 8, display: 'grid', gap: 8, fontSize: 12 }}>
     <div style={{ fontWeight: 600 }}>知乎资料整理</div>
     <p style={{ margin: 0, opacity: 0.8 }}>在图形或列表中选择消息和关系，可直接作为目标，也可加入来源／目标集合。操作只保存到本机阅览文档，无需登录。</p>
     {!nativeDocument && <details open={missingOpen} onToggle={event => setMissingOpen(event.currentTarget.open)}><summary>缺失或待确认的内容（{missingContent.length}）</summary>

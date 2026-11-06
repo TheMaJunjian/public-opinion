@@ -80,6 +80,7 @@ it('unmasks only the directed edge label, leaving its long path and other decora
     const regions=document.querySelectorAll('[data-message-jump-region]');expect(regions).toHaveLength(1);
     expect(regions[0]).toHaveAttribute('x','220');expect(regions[0]).toHaveAttribute('width','120');
     expect(regions[0]).toHaveAttribute('height','28');
+    expect(firstGuide()).toMatchObject({endX:280,endY:194});
   }finally{view.unmount();geometry.mockRestore();canvas.remove();}
 });
 

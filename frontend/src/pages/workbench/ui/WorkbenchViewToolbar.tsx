@@ -102,13 +102,13 @@ export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId,
           </div>
         </div>
         <div className="workbench-view-actions" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <button onClick={() => onLocalExport && !nativeZhihuExport ? onLocalExport(exportView) : setExportOpen(true)} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-fff)", fontSize: 12, cursor: "pointer", fontWeight: 400 }}>
+          <button className="workbench-toolbar-action" onClick={() => onLocalExport && !nativeZhihuExport ? onLocalExport(exportView) : setExportOpen(true)} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-fff)", fontSize: 12, cursor: "pointer", fontWeight: 400 }}>
             {onLocalExport || nativeZhihuExport ? '下载阅览文件' : '导出'}
           </button>
-          {layout.messageJump==='clipboard-dialog'&&<MessageJumpControl knownIds={new Set(messages.map(message=>message.id))} onJump={onJump}/>}
+          {layout.messageJump==='view'&&<MessageJumpControl knownIds={new Set(messages.map(message=>message.id))} onJump={onJump}/>}
           <HomeFilterPanel {...home} />
           <DeferredWorkbench label="过滤选项" blocksDrawing><CleanFilterPanel {...clean} /></DeferredWorkbench>
-          {!comparisonMode && !comparisonReviewed && <button
+          {!comparisonMode && !comparisonReviewed && <button className="workbench-toolbar-action"
             onClick={onStartComparison}
             style={{ padding: "2px 8px", borderRadius: 4, border: comparisonMode ? "1px solid var(--line-22c55e)" : "1px solid var(--line-666)", background: comparisonMode ? "var(--surface-12351f)" : "var(--surface-333)", color: comparisonMode ? "var(--ink-86efac)" : "var(--ink-fff)", fontSize: 12, cursor: "pointer" }}
             title="查看赞同/反对生效后的不同显示效果"

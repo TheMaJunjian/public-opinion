@@ -5,6 +5,7 @@ import { Postgres } from './postgres.js';
 import { DATABASE_MIGRATIONS } from './database-version.js';
 import { initializeDatabase } from './initialize-database.js';
 import { upgradeDatabase } from './database-upgrade.js';
+import { recordNotifications } from './notifications.js';
 
 class DatabaseUpgradeRequired extends Error {}
 
@@ -193,6 +194,7 @@ export class Mutation {
     if (this.createdAccountIds) change.createdAccountIds = this.createdAccountIds;
     if (this.usageRewardTotals) change.usageRewardTotals = this.usageRewardTotals;
     await this.store.db.prepare('UPDATE changes SET body=$1 WHERE sequence=$2').run(JSON.stringify(change),sequence);
+    await recordNotifications(this.store, change);
     return change;
   }
 }

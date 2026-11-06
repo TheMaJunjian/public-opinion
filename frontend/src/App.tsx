@@ -1,5 +1,6 @@
 import { BrowserRouter, HashRouter, Route } from 'react-router-dom';
 import { Suspense, lazy, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import AuthEntryGate from './components/AuthEntryGate';
 import { InterfaceZoomContext } from './context/InterfaceZoomContext';
@@ -13,6 +14,8 @@ import WorkbenchStartup, { PageLoadingPrompt } from './components/WorkbenchStart
 import GestureShortcutManager from './components/GestureShortcutManager';
 import { useSkinMotion } from './theme/useSkinMotion';
 import { GestureDirection, ShortcutSymbol } from './utils/gestureShortcut';
+import { useFullscreenShortcut } from './hooks/useFullscreenShortcut';
+import { Z_INDEX } from './constants/zIndex';
 
 const LoginPage = lazy(() => import('./pages/LoginPage'));
 const RegisterPage = lazy(() => import('./pages/RegisterPage'));
@@ -33,6 +36,7 @@ function OnlineWorkbenchRoute() {
 
 function AppContent() {
   useSkinMotion();
+  const fullscreen = useFullscreenShortcut();
   const [viewerOpen, setViewerOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const [welfareOpen, setWelfareOpen] = useState(false);
@@ -187,7 +191,9 @@ function AppContent() {
             </Suspense>
           )}
         </div>
-        <AboutViewer appRoot={appRootRef} />
+        <AboutViewer appRoot={appRootRef} onDocumentKeyDown={fullscreen.onKeyDown} />
+        {fullscreen.notice && createPortal(<div role="alert" className="fullscreen-shortcut-feedback"
+          style={{ zIndex: Z_INDEX.shortcutStatus }}>{fullscreen.notice.message}</div>, document.body)}
       </InterfaceZoomContext.Provider>
     </Router>
   );

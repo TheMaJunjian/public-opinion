@@ -122,7 +122,7 @@ describe('authoritative personal views', () => {
     expect(since.body.messages.map((message: Message) => message.id).sort()).toEqual([explicit.id, update.id].sort());
     await send(alice, [relation('follow', group.id, 'target', 'NO')]);
     await send(bob, [text('取消关注后的进展'), relation('reply', child.id)]);
-    expect((await alice.agent.get('/api/me/notifications')).body.messages.map((message: Message) => message.id)).toEqual([explicit.id]);
+    expect((await alice.agent.get('/api/me/notifications').query({after:cutoff})).body.messages.map((message: Message) => message.id)).toEqual([explicit.id,update.id]);
   });
 
   it('does not execute an old personal action again when its message is publicly amended', async () => {

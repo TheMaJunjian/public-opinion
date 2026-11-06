@@ -2,6 +2,7 @@ import { useRef, type MouseEvent } from 'react';
 import PopupOverlay from './PopupOverlay';
 import { DIALOG_BACKDROP, dialogStyles } from './dialogStyles';
 import { getThemeSettings, useTheme } from '../theme/theme';
+import AboutLink from './AboutLink';
 
 interface Props {
   open: boolean;
@@ -18,13 +19,10 @@ function TutorialModalContent({ onClose }: { onClose: () => void }) {
   const contentRef = useRef<HTMLDivElement>(null);
   const isOpus = getThemeSettings(useTheme()).base === 'opus';
   const openDocument = (event: MouseEvent<HTMLAnchorElement>) => {
-    if (!isOpus || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-    event.preventDefault();
-    const url = event.currentTarget.getAttribute('href');
+    if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     onClose();
-    window.dispatchEvent(new CustomEvent('open-about-viewer', { detail: { url } }));
   };
-  const documentLinks = <p style={{ margin: isOpus ? 0 : '18px 0 0' }}><a href="/about.html#quick-start" onClick={openDocument} style={{ color: 'var(--ink-dbe4f0)', textUnderlineOffset: 3 }}>上手与界面导览</a> · <a href="/docs/usage.html" onClick={openDocument} style={{ color: 'var(--ink-dbe4f0)', textUnderlineOffset: 3 }}>阅读完整收费与操作规则</a> · <a href="/about.html#documents" onClick={openDocument} style={{ color: 'var(--ink-dbe4f0)', textUnderlineOffset: 3 }}>查看完整文档</a></p>;
+  const documentLinks = <p style={{ margin: isOpus ? 0 : '18px 0 0' }}><AboutLink href="/about.html#quick-start" onClick={openDocument} style={{ color: 'var(--ink-dbe4f0)', textUnderlineOffset: 3 }}>上手与界面导览</AboutLink> · <AboutLink href="/docs/usage.html" onClick={openDocument} style={{ color: 'var(--ink-dbe4f0)', textUnderlineOffset: 3 }}>阅读完整收费与操作规则</AboutLink> · <AboutLink href="/about.html#documents" onClick={openDocument} style={{ color: 'var(--ink-dbe4f0)', textUnderlineOffset: 3 }}>查看完整文档</AboutLink></p>;
 
   return (
     <PopupOverlay
@@ -59,6 +57,7 @@ function TutorialModalContent({ onClose }: { onClose: () => void }) {
             <ol style={{ margin: 0, paddingLeft: 20 }}>
               <li>登录后即可参与讨论。</li>
               <li>左侧为消息显示视图，右侧为消息操作面板。</li>
+              <li>按 Alt + Enter 切换进入／退出全屏；也可按 Esc 退出全屏。工作台和其中打开的介绍文档均可使用。</li>
             </ol>
           </section>
 

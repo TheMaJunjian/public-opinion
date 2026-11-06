@@ -10,3 +10,5 @@ export * from './annotations.js';
 export * from './conversion-failure.js';
 export * from './display-dependency.js';
 export * from './body-versions.js';
+export * from './notifications.js';
+export { structureSnapshot } from './structure-snapshot.js';

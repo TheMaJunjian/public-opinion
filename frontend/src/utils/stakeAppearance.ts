@@ -3,9 +3,18 @@ export interface StakeAmounts {
   truth: { pro: number; con: number };
   value: { pro: number; con: number };
 }
-export const STAKE_TIER_THRESHOLDS = [0, 10, 100, 1000] as const;
+export const STAKE_TIER_THRESHOLDS = [0, 1_000, 100_000, 1_000_000] as const;
 export type StakeTier = 0 | 1 | 2 | 3;
 const amount = (value: number) => Number.isFinite(value) ? Math.max(0, value) : 0;
+
+/** Keep the legend in step with the thresholds used by every message carrier. */
+export const STAKE_TIER_RANGES = STAKE_TIER_THRESHOLDS.map((lower, index) => {
+  const upper = STAKE_TIER_THRESHOLDS[index + 1];
+  const format = (value: number) => value.toLocaleString('zh-CN');
+  return upper === undefined ? `${format(lower)} 点及以上`
+    : index === 0 ? `小于 ${format(upper)} 点`
+      : `${format(lower)}–${format(upper - 1)} 点`;
+});
 
 export function getStakeAppearance(counts: StakeAmounts | undefined) {
   if (!counts) return { level: undefined, total: undefined, description: '押注统计尚未载入' };

@@ -411,7 +411,7 @@ describe('rendered graph scene', () => {
         expect(selectPart).not.toHaveBeenCalled();
       } finally { window.removeEventListener(PART_SELECTION_EVENT, selectPart); }
     });
-  it.each([false, true])('selects a collapsed arrangement from its descriptive type label, with home match %s', homeMatch => {
+  it.each([false, true])('shows arrangement metadata only after opening its card, with home match %s', homeMatch => {
     const target: DemoMessage = { ...message('arrangement'), kind: 'relation', relationType: 'arrange',
       parts: [{ id: 'members', type: 'relation', relation: 'arrange', roles: { members: [{ id: 'one', reference: { messageId: 'member' } }] } }] };
     const select = vi.fn(), inspect = vi.fn(), selectPart = vi.fn();
@@ -419,6 +419,10 @@ describe('rendered graph scene', () => {
     try {
       const view = renderScene([target, message('member')], [relation(target.id, 'arrange', 'anon:arrangement', 'member')],
         { homeMatchIds: homeMatch ? new Set([target.id]) : undefined, onMessageClick: select, onMessageDoubleClick: inspect });
+      expect(view.queryByText('排列')).toBeNull();
+      expect(view.container.querySelector('[data-home-filter-label]')).toBeNull();
+      fireEvent.click(view.getByRole('button', {name:'显示排列消息卡 arrangement'}));
+      expect(select).not.toHaveBeenCalled(); expect(inspect).not.toHaveBeenCalled();
       const label = view.getByText('排列');
       expect(label).not.toHaveAttribute('role'); expect(label).not.toHaveAttribute('data-message-reference');
       if (homeMatch) expect(label.nextElementSibling).toHaveAttribute('data-home-filter-label', '命中');
@@ -852,6 +856,7 @@ describe('rendered graph scene', () => {
     const target=type==='normal'?message('target'):{...message('target'),kind:'relation' as const,relationType:type};
     const edges=type==='arrange'||type==='merge'?[relation('target',type,'anon:target','member')]:[];
     const view=renderScene([target,message('member')],edges,{homeMatchIds:new Set(['target']),homeReasonByMessageId:new Map([['target','由本人发送\n待确认：正文未阅']])});
+    if(type==='arrange')fireEvent.click(view.getByRole('button',{name:'显示排列消息卡 target'}));
     const badge=view.container.querySelector('[data-home-filter-label="命中"]')!;
     expect(badge.getAttribute('title')).toContain('由本人发送');
     expect(badge.getAttribute('title')).toContain('正文未阅');
@@ -1155,7 +1160,7 @@ describe('rendered graph scene', () => {
     expect(card()).toBeNull();
     fireEvent.click(view.getByRole('button', { name: '显示排列消息卡 arrange' }));
     expect(props.onMessageClick).toHaveBeenCalledTimes(1);
-    expect(card()).toHaveTextContent('排列消息卡');
+    expect(card()).not.toHaveTextContent('排列消息卡');
     expect(card()?.querySelector('[data-message-member-count]')).toHaveTextContent(`${empty ? 0 : 2} 条消息`);
     if (!empty) {
       expect(parseFloat(memberTop()!)).toBeGreaterThan(parseFloat(before!));
@@ -1188,7 +1193,7 @@ describe('rendered graph scene', () => {
       getMemberCounts: id => ({ direct: id === outer.id ? 1 : 0, total: id === outer.id ? 1 : 0 }) });
     if (type === 'arrange') fireEvent.click(view.getByRole('button', { name: `显示排列消息卡 ${merge.id}` }));
     const header = view.getByRole('group', { name: `组织消息 ${merge.id}` });
-    expect(header).toHaveTextContent('原组织');
+    expect(header).not.toHaveTextContent('原组织');
     expect(header.querySelector('[data-message-member-count]')).toHaveTextContent('0 条消息');
     expect(view.container.querySelector(`rect[data-jump-visual-msgids="${merge.id}"]`)).not.toBeNull();
     fireEvent.click(header);

@@ -13,14 +13,18 @@ import {comparisonReadingMark,isComparisonRead} from '../pages/workbench/model/c
 import {displayedBodyVersion} from '../utils/bodyVersions';
 
 export function CurrentBodyComparison({before,after,version,basis,onClose}:{before:string;after:string;version?:BodyVersion;basis?:string;onClose:()=>void}) {
-  const context=useContext(ComparisonReadingContext),[snapshot]=useState(()=>({before,after,version,basis:basis??(version?context?.basisFor(version.messageId):undefined)??''}));
+  const context=useContext(ComparisonReadingContext),[snapshot]=useState(()=>({before,after,version,
+    basis:basis??(version?context?.basisFor(version.messageId):undefined)??'',influences:version?context?.influencesFor(version)??[]:[]}));
   const [busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null),saving=useRef(false);
   const confirm=async()=>{
     if(saving.current)return;
     saving.current=true;setBusy(true);setError(null);
     try{
-      if(snapshot.version&&context?.onMarkRead&&!isComparisonRead(context.marks,snapshot.version,snapshot.before,snapshot.after,snapshot.basis))
-        await context.onMarkRead([comparisonReadingMark(snapshot.version,snapshot.before,snapshot.after,snapshot.basis)]);
+      if(snapshot.version&&context?.onMarkRead){
+        const marks=[...(!isComparisonRead(context.marks,snapshot.version,snapshot.before,snapshot.after,snapshot.basis)
+          ?[comparisonReadingMark(snapshot.version,snapshot.before,snapshot.after,snapshot.basis)]:[]),...snapshot.influences];
+        if(marks.length)await context.onMarkRead(marks);
+      }
       onClose();
     }catch(reason){setError(reason instanceof Error?reason.message:'对比已阅保存失败，请重试');}
     finally{saving.current=false;setBusy(false);}
@@ -28,7 +32,7 @@ export function CurrentBodyComparison({before,after,version,basis,onClose}:{befo
   return <PromptModal open title="原文与当前版本正文对比" confirmText={busy?'保存中…':'已阅'} confirmDisabled={busy} onConfirm={()=>void confirm()} onCancel={onClose}
     lockScroll={false} zIndex={10100} dialogProps={{style:{width:'min(700px, 100%)'}}} message={<>
       <CorrectionTextComparison before={snapshot.before} after={snapshot.after} beforeLabel="原文" afterLabel="当前版本正文"/>
-      <div style={{color:'var(--ink-94a3b8)',fontSize:11,marginTop:8}}>确认本次对比已阅；消息和影响需另行确认。</div>
+      <div style={{color:'var(--ink-94a3b8)',fontSize:11,marginTop:8}}>确认本次对比及对应的更正影响已阅；消息正文仍需单独确认。</div>
       {error&&<div role="alert" style={{color:'var(--ink-fca5a5)',fontSize:11,marginTop:6}}>{error}</div>}
     </>}/>;
 }

@@ -6,6 +6,7 @@ import { ALL_RELATION_TYPES } from '../model/relationComposition';
 import { useThemeSettings } from '../../../theme/theme';
 import { ThemeLabel } from '../../../theme/ThemeIcon';
 import AboutLink from '../../../components/AboutLink';
+import MessageJumpControl from '../../../components/MessageJumpControl';
 
 interface ComposerMode {
   relationType: RelationType | null; secondaryRelationType: string; newMessageContent: string; subType: string | null;
@@ -25,40 +26,21 @@ export interface LocalRelationMode {
 interface Props {
   barRef: Ref<HTMLDivElement>; leftControlsRef: RefObject<HTMLDivElement>; rightControlsRef: RefObject<HTMLDivElement>;
   top: number; springWidth: number; rightOffset: number; viewer: boolean;
-  messageIdInput: string; onMessageIdChange: (value: string) => void; onJump: () => void;
+  knownIds: ReadonlySet<string>; onJump: (id: string) => void;
   composer: ComposerMode;
   localMode?: LocalRelationMode;
 }
 export default function RelationToolbar({ barRef: relationBarRef, leftControlsRef: relationLeftControlsRef, rightControlsRef: relationRightControlsRef,
-  top, springWidth: relationSpringWidth, rightOffset: relationControlsRightOffset, viewer: isPreloaded, messageIdInput, onMessageIdChange: setMessageIdInput, onJump: confirmMessageIdNavigation, composer, localMode }: Props) {
+  top, springWidth: relationSpringWidth, rightOffset: relationControlsRightOffset, viewer: isPreloaded, knownIds, onJump, composer, localMode }: Props) {
   const {layout}=useThemeSettings();
-  const showJump=layout.messageJump==='inline';
+  const showJump=layout.messageJump==='toolbar';
   const showRelations=(!isPreloaded||Boolean(localMode))&&layout.relationControls==='toolbar';
   if(!showJump&&!showRelations)return null;
 
   return (
     <div ref={relationBarRef} className="workbench-relation-toolbar" style={{ padding: "8px 16px", borderBottom: "1px solid var(--line-333)", background: "var(--surface-181818)", display: "flex", flexWrap: "wrap", rowGap: 8, alignItems: "center", fontSize: 14, flexShrink: 0, position: "sticky", top, zIndex: Z_INDEX.popover }}>
       {showJump&&<div ref={relationLeftControlsRef} className="workbench-jump-controls" style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, padding: "3px 8px", border: "1px solid var(--line-334155)", borderRadius: 6, background: "var(--surface-111827)", boxShadow: "inset 0 1px 0 var(--shadow-rgba-255-255-255-0-04)" }}>
-          <span style={{ color: "var(--ink-94a3b8)", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>跳转消息</span>
-          <input
-            aria-label="消息 ID"
-            value={messageIdInput}
-            onChange={event => setMessageIdInput(event.target.value)}
-            onKeyDown={event => {
-              if (event.key === 'Enter') confirmMessageIdNavigation();
-            }}
-            placeholder="输入消息 ID"
-            style={{ width: 170, padding: "5px 7px", borderRadius: 4, border: "1px solid var(--line-475569)", background: "var(--surface-0f172a)", color: "var(--ink-e2e8f0)", outline: "none", fontSize: 12 }}
-          />
-          <button
-            type="button"
-            onClick={confirmMessageIdNavigation}
-            style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid var(--line-3b82f6)", background: "var(--surface-1d4ed8)", color: "var(--ink-fff)", cursor: "pointer", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}
-          >
-            确认
-          </button>
-        </div>
+        <MessageJumpControl knownIds={knownIds} onJump={onJump}/>
       </div>}
       <div aria-hidden="true" style={{ flex: "1 1 0", width: relationSpringWidth, minWidth: 0 }} />
       {showRelations && (

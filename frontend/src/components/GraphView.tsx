@@ -4,7 +4,7 @@ import { useEffect } from 'react';
 import { annotationAtReference, oppositeAnnotation } from '@gonglun/core';
 import { stakeAppearanceAttributes, groupStakeAppearanceAttributes } from '../utils/stakeAppearance';
 import StakeTierBadge, { SkinOrnament } from '../theme/StakeTierBadge';
-import { ThemeLabel } from '../theme/ThemeIcon';
+import ThemeIcon, { ThemeLabel } from '../theme/ThemeIcon';
 import SettlementMessageContent from './SettlementMessageContent';
 import { isSettlementRecord } from '../utils/modelBridge';
 import { FrameSkin } from '../theme/GraphSkin';
@@ -70,7 +70,7 @@ import { comparisonNavigationTarget, navigateComparisonPane } from '../pages/wor
 import type { MessagePulse } from '../pages/workbench/actions/scrollNavigation';
 import { MessageJumpOverlay } from './PopupOverlay';
 import {indexRelatedMessages,isRejectedRelation,hiddenInactiveRelationIds} from '../utils/relatedMessages';
-import { CARD_W, GRID_LEFT, CANVAS_BOTTOM_PAD, CANVAS_RIGHT_PAD, FRAME_PAD, MERGE_CARD_H } from '../utils/layout';
+import { CARD_W, GRID_LEFT, CANVAS_BOTTOM_PAD, CANVAS_RIGHT_PAD, FRAME_PAD, MERGE_CARD_H, ORGANIZATION_CARD_W } from '../utils/layout';
 import { getPresentationSpec, type Relation } from '../types';
 import { noteWorkbenchDrawingProgress, reportWorkbenchDrawingDuration } from '../utils/workbenchActivity';
 import { useWorkbenchDrawingCommit, useWorkbenchDrawingTask } from '../context/WorkbenchDrawingContext';
@@ -83,7 +83,7 @@ export type Rect = { x: number; y: number; width: number; height: number };
 
 
 export interface GraphViewProps {
-  /** Initially expand review frames; local controls may restore bounded views. */
+  /** Default to full-size frames; local controls may restore bounded views. */
   expandAllFrames?: boolean;
   /** Counts come from the complete effective membership snapshot, not visible edges. */
   getMemberCounts?: ContainerOwnership['memberCounts'];
@@ -93,6 +93,8 @@ export interface GraphViewProps {
   pendingMessageIds?: readonly string[];
   decorationExpansion?: {requestId:number;messageIds:readonly string[]};
   highlightedMessageIds?: ReadonlySet<string>;
+  /** Locator marks do not change the user's decoration expansion choices. */
+  locatedMessageIds?: ReadonlySet<string>;
   frameViewStateRef?: React.MutableRefObject<GraphFrameViewState>;
   frameViewRestoreKey?: number;
   messages: DemoMessage[];
@@ -243,7 +245,7 @@ function ComparisonGraphPair(props: GraphViewProps) {
   const [focusOnly,setFocusOnly] = useState(true);
   const focusedChange = changes[Math.min(changeIndex,Math.max(0,changes.length-1))];
   useEffect(()=>{setChangeIndex(0);setFocusOnly(true);},[props.comparisonTargetId]);
-  const startPositioning = useWorkbenchDrawingTask('positioning');
+  const startPositioning = useWorkbenchDrawingTask('positioning', true);
   const pairRef = useRef<HTMLDivElement | null>(null);
   const agreeViewportRef = useRef<HTMLDivElement | null>(null);
   const disagreeViewportRef = useRef<HTMLDivElement | null>(null);
@@ -356,7 +358,7 @@ function ComparisonGraphPair(props: GraphViewProps) {
 }
 
 function GraphViewCanvas(props: GraphViewProps) {
-  const startPositioning = useWorkbenchDrawingTask('positioning');
+  const startPositioning = useWorkbenchDrawingTask('positioning', true);
   const renderStartedAt = performance.now();
   const {
     messages: inputMessages, edges: inputEdges, invalidCorrectionIds, draftUnits, activeTextSelectId, lastClickedMessageId,
@@ -411,6 +413,7 @@ function GraphViewCanvas(props: GraphViewProps) {
     return next;
   }), []);
   const [discussionRelationVisibility, setDiscussionRelationVisibility] = useState<ReadonlyMap<string, boolean>>(() => new Map());
+  const [revealedDiscussionRelationIds, setRevealedDiscussionRelationIds] = useState<string[]>([]);
   const toggleDiscussionSummary = useCallback((key: string) => setHiddenDiscussionSummaries(previous => {
     const next = new Set(previous);
     if (next.has(key)) next.delete(key); else next.add(key);
@@ -468,9 +471,12 @@ function GraphViewCanvas(props: GraphViewProps) {
 
   const canvasRef = useRef<HTMLDivElement|null>(null);
   const frameViewKey=props.comparisonDisplay??'main';
+  // A new comparison opens both sides fully. Tracing and viewing restore their
+  // own manual choices after switching presentations or returning in history.
+  const resetFullOverrides=props.expandAllFrames&&!!props.comparisonDisplay&&!props.comparisonSingle;
   const [frameViewSizes,setFrameViewSizes]=useState<Record<string,FrameViewSize>>(()=>props.frameViewStateRef?.current[frameViewKey]?.sizes??{});
   const [frameScrolls,setFrameScrolls]=useState<Record<string,FrameScroll>>(()=>props.frameViewStateRef?.current[frameViewKey]?.scrolls??{});
-  const [frameFullOverrides,setFrameFullOverrides]=useState<Record<string,boolean>>(()=>props.expandAllFrames?{}:props.frameViewStateRef?.current[frameViewKey]?.full??{});
+  const [frameFullOverrides,setFrameFullOverrides]=useState<Record<string,boolean>>(()=>resetFullOverrides?{}:props.frameViewStateRef?.current[frameViewKey]?.full??{});
   const [collapsedFrameIds,setCollapsedFrameIds]=useState<Set<string>>(()=>new Set(props.frameViewStateRef?.current[frameViewKey]?.collapsed));
   const [hiddenFrameHeaderIds,setHiddenFrameHeaderIds]=useState<Set<string>>(()=>new Set(props.frameViewStateRef?.current[frameViewKey]?.hiddenHeaders));
   const toggleFrameVisibility=(id:string,header=false)=>{
@@ -483,14 +489,14 @@ function GraphViewCanvas(props: GraphViewProps) {
     if(restoredFrameKey.current===props.frameViewRestoreKey)return;
     restoredFrameKey.current=props.frameViewRestoreKey;
     const saved=props.frameViewStateRef?.current[frameViewKey];
-    setFrameViewSizes(saved?.sizes??{});setFrameScrolls(saved?.scrolls??{});setFrameFullOverrides(props.expandAllFrames?{}:saved?.full??{});
+    setFrameViewSizes(saved?.sizes??{});setFrameScrolls(saved?.scrolls??{});setFrameFullOverrides(resetFullOverrides?{}:saved?.full??{});
     setCollapsedFrameIds(new Set(saved?.collapsed));setHiddenFrameHeaderIds(new Set(saved?.hiddenHeaders));
-  },[props.frameViewRestoreKey,props.frameViewStateRef,frameViewKey,props.expandAllFrames]);
+  },[props.frameViewRestoreKey,props.frameViewStateRef,frameViewKey,resetFullOverrides]);
   useLayoutEffect(()=>{
     if(props.frameViewStateRef)props.frameViewStateRef.current[frameViewKey]={sizes:frameViewSizes,scrolls:frameScrolls,full:frameFullOverrides,collapsed:[...collapsedFrameIds],hiddenHeaders:[...hiddenFrameHeaderIds]};
   },[props.frameViewStateRef,frameViewKey,frameViewSizes,frameScrolls,frameFullOverrides,collapsedFrameIds,hiddenFrameHeaderIds]);
   const frameViewsRef=useRef<ReturnType<typeof projectFrameViewports>|null>(null);
-  const edgeStartsRef=useRef(new Map<string,{x:number;y:number}>());
+  const edgeNavigationAnchorsRef=useRef(new Map<string,{start:LayoutBox;label?:LayoutBox}>());
   const resizeFrame=useCallback((id:string,value:FrameViewSize|undefined)=>{
     setFrameViewSizes(previous=>{const next={...previous};if(value)next[id]=value;else delete next[id];return next;});
     if(!value)setFrameScrolls(previous=>{const next={...previous};delete next[id];return next;});
@@ -569,6 +575,15 @@ function GraphViewCanvas(props: GraphViewProps) {
     const decorationEdges=new Map<string,DemoEdge[]>();
     const relationEdges=new Map<string,DemoEdge[]>();
     for(const edge of edges)relationEdges.set(edge.relationMessageId,[...(relationEdges.get(edge.relationMessageId)??[]),edge]);
+    // A summarized record still needs its own label during navigation (including
+    // post-send positioning). Reveal explicit targets, not every attached edge,
+    // and restore the user's visibility choices when the locator releases them.
+    const revealedRelations = detail.ids.filter(id => relationEdges.has(id));
+    if (revealedRelations.length !== revealedDiscussionRelationIds.length
+      || revealedRelations.some((id, index) => id !== revealedDiscussionRelationIds[index])) {
+      detail.positioningPending = true;
+      setRevealedDiscussionRelationIds(revealedRelations);
+    }
     for(const edge of edges)if(['agree','disagree','tag'].includes(edge.relationType)||getPresentationSpec(edge.relationType).kind==='inline-badge')
       decorationEdges.set(edge.relationMessageId,[...(decorationEdges.get(edge.relationMessageId)??[]),edge]);
     const revealedDecorations=new Set<string>(),revealedAnnotations=new Set<string>(),visited=new Set<string>(),queue=[...ids];
@@ -589,8 +604,8 @@ function GraphViewCanvas(props: GraphViewProps) {
         if(reopen.length)setCollapsedFrameIds(previous=>new Set([...previous].filter(id=>!reopen.includes(id))));
         if(showHeaders.length)setHiddenFrameHeaderIds(previous=>new Set([...previous].filter(id=>!showHeaders.includes(id))));
       }
-      // Reveal an edge's routed start, including a fragment of a tall card,
-      // rather than centering the entire source message in every frame.
+      // Reveal the relation's label inside its enclosing frames before the
+      // outer pane and navigation mask locate that same label.
       const anchorBoxes=new Map<string,LayoutBox>();
       const host=(id:string,seen=new Set<string>()):string=>{
         if(views.layout[id]||views.frameRects[id]||seen.has(id))return id;
@@ -614,11 +629,15 @@ function GraphViewCanvas(props: GraphViewProps) {
         }
         return (directed.length?directed:owned).slice(0,1).map(edge=>{
           const directed=getPresentationSpec(edge.relationType).kind==='edge-label'&&!edge.from.messageId.startsWith('anon:');
-          const anchor=host(directed?edge.from.messageId:edge.to.messageId),start=directed?edgeStartsRef.current.get(id):undefined;
-          if(start){
-            let {x,y}=start;
+          const anchor=host(directed?edge.from.messageId:edge.to.messageId),geometry=directed?edgeNavigationAnchorsRef.current.get(id):undefined;
+          // Cross-frame edges only render after their endpoint is visible.
+          // Their label is outside that source viewport; the pane locates it next.
+          const sharedViewport=JSON.stringify(views.ancestors(anchor))===JSON.stringify(views.ancestors(host(edge.to.messageId)));
+          const label=geometry&&(sharedViewport?geometry.label??geometry.start:geometry.start);
+          if(label){
+            let {x,y}=label;
             for(const parent of views.ancestors(anchor)){x+=views.offsets[parent]?.left??0;y+=views.offsets[parent]?.top??0;}
-            anchorBoxes.set(anchor,{x:x-8,y:y-8,width:16,height:16});
+            anchorBoxes.set(anchor,{...label,x,y});
           }
           return anchor;
         });
@@ -642,9 +661,13 @@ function GraphViewCanvas(props: GraphViewProps) {
     setExpandedDecorationIds(previous=>[...revealedDecorations].every(id=>previous.has(id))?previous:new Set([...previous,...revealedDecorations]));
     setExpandedAnnotationIds(previous=>[...revealedAnnotations].every(id=>previous.has(id))?previous:new Set([...previous,...revealedAnnotations]));
     setRevealedFrameIds(previous => previous.length === frames.length && previous.every((id, index) => id === frames[index]) ? previous : frames);
+    // Keep an explicitly visited arrangement card open when the locator fades,
+    // so its header does not disappear and move the destination out of view.
+    const visitedFrames=frames.filter(id=>detail.ids.includes(id));
+    if(visitedFrames.length)setExpandedFrameIds(previous=>visitedFrames.every(id=>previous.includes(id))?previous:[...new Set([...previous,...visitedFrames])]);
     // Keep jumped-to decorations expanded until the user collapses them.
     return [...new Set([...ids,...revealedDecorations,...revealedAnnotations,...frames])];
-  }, [messages, edges,discussionEnabled,discussionView,activeDiscussionCollapsed,availableMessages,availableEdges,changeDiscussionView,props.expandAllFrames,frameFullOverrides,collapsedFrameIds,hiddenFrameHeaderIds]);
+  }, [messages, edges,discussionEnabled,discussionView,activeDiscussionCollapsed,availableMessages,availableEdges,changeDiscussionView,props.expandAllFrames,frameFullOverrides,collapsedFrameIds,hiddenFrameHeaderIds,revealedDiscussionRelationIds]);
 
   const { msgMap, edgesByRelMsg, classifyRelMsgIds, relationCardMsgIds, normals,
     layoutEdges, hiddenTargetIds, correctionsByTargetMsgId: renderedCorrectionsByTargetMsgId, frameBlocks, frameDepthMap,
@@ -660,7 +683,7 @@ function GraphViewCanvas(props: GraphViewProps) {
   const savedWidths = useMemo(() => props.cardWidths ?? widthContext?.widths ?? effectiveCardWidths(messages, edges), [props.cardWidths, widthContext?.widths, messages, edges]);
   const measuredWidths = useMemo(() => {
     const result: Record<string, number> = {};
-    for (const message of messages) result[message.id] = Math.max(CARD_W, headerWidths[message.id] ?? 0,
+    for (const message of messages) result[message.id] = Math.max(['merge','arrange'].includes(message.relationType??'') ? ORGANIZATION_CARD_W : CARD_W, headerWidths[message.id] ?? 0,
       widthContext?.editing?.messageId === message.id ? widthContext.editing.width : savedWidths[message.id] ?? 0);
     return result;
   }, [messages, headerWidths, savedWidths, widthContext?.editing]);
@@ -794,8 +817,8 @@ function GraphViewCanvas(props: GraphViewProps) {
   }), [messages, edges, discussionEnabled, props.visibleEdgeIds, props.visibleMessageIds, discussionRegions, naturalScene]);
   const discussionSummaryCounts = useMemo(() => new Map(summaryProjection.summaries.map(summary => [summary.region.key, summary.recordIds.length])), [summaryProjection]);
   const hiddenSummarizedRelationIds = useMemo(() => new Set([...summaryProjection.hiddenRecordIds].filter(id =>
-    !(discussionRelationVisibility.get(id) ?? props.standaloneMessageIds?.has(id) ?? false))),
-    [summaryProjection, discussionRelationVisibility, props.standaloneMessageIds]);
+    !revealedDiscussionRelationIds.includes(id) && !(discussionRelationVisibility.get(id) ?? props.standaloneMessageIds?.has(id) ?? false))),
+    [summaryProjection, discussionRelationVisibility, props.standaloneMessageIds, revealedDiscussionRelationIds]);
   const showDiscussionRelation = (id: string, shown: boolean) => {
     setDiscussionRelationVisibility(previous => new Map(previous).set(id, shown));
     if (shown && discussionEnabled && activeDiscussionCollapsed.length) {
@@ -936,8 +959,13 @@ function GraphViewCanvas(props: GraphViewProps) {
     labelViewport: virtual.viewport, labelRetainedIds: virtual.retained,
     canvasRef, normalIds: visibleNormalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals: visibleNormals, headerRefs, contentRefs, edges: drawableEdges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, textRefs, actualCanvasWidth, actualCanvasHeight,
   });
-  edgeStartsRef.current=new Map();
-  for(const positioned of overlays.positionedEdges)if(!edgeStartsRef.current.has(positioned.edge.relationMessageId))edgeStartsRef.current.set(positioned.edge.relationMessageId,positioned.start);
+  edgeNavigationAnchorsRef.current=new Map();
+  for(const positioned of overlays.positionedEdges)if(!edgeNavigationAnchorsRef.current.has(positioned.edge.relationMessageId)){
+    const label=overlays.labelBboxes[positioned.drawId];
+    edgeNavigationAnchorsRef.current.set(positioned.edge.relationMessageId,{
+      label:label?{x:label.x-8,y:label.y-6,width:label.width+16+EDGE_LABEL_HINT_GAP+EDGE_HINT_W,height:label.height+12}:undefined,
+      start:{x:positioned.start.x-8,y:positioned.start.y-8,width:16,height:16}});
+  }
   const { labelBboxes, decorationsByMsgState, relDecByRelMsgState, tagsByRelMsgState } = overlays;
   const summaryLabelObstacles = useMemo(() => [...Object.values(layout), ...Object.values(labelBboxes),
     ...(overlays.decorationObstacles ?? []), ...discussionRegions.map(region => ({ ...region, height: region.headerHeight }))],
@@ -989,9 +1017,14 @@ function GraphViewCanvas(props: GraphViewProps) {
     !effectiveHideMessageIds.has(frame.relMsgId) &&
     (!isTraceWindow || !['classify', 'summary'].includes(frame.relType)
       || traceExpandedFrameIds.has(frame.relMsgId)),
-  // Paint enclosing fills first so they cannot cover a nested frame's border.
-  ).sort((a,b)=>(frameDepthMap.get(a.relMsgId)??0)-(frameDepthMap.get(b.relMsgId)??0)),
-  [renderedGroupFrames, effectiveHideMessageIds, isTraceWindow, traceExpandedFrameIds,frameDepthMap]);
+  ), [renderedGroupFrames, effectiveHideMessageIds, isTraceWindow, traceExpandedFrameIds]);
+  // All frame types share one paint order. An opaque outer fill must precede
+  // its descendants, including arrangements nested inside other arrangements.
+  const visibleFrameVisuals = useMemo(() => [
+    ...visibleArrangeFrames.map(frame => ({ type: 'arrange' as const, frame })),
+    ...visibleGroupFrames.map(frame => ({ type: 'group' as const, frame })),
+  ].sort((a, b) => (frameDepthMap.get(a.frame.relMsgId) ?? 0) - (frameDepthMap.get(b.frame.relMsgId) ?? 0)),
+  [visibleArrangeFrames, visibleGroupFrames, frameDepthMap]);
 
   const relatedCatalog = useMemo(() => new Map((props.relatedMessages ?? messages).map(message => [message.id, message])), [props.relatedMessages, messages]);
   const relatedConnections = useMemo(() => props.relatedEdges ? deriveCrossCanvasRelations({
@@ -1003,8 +1036,9 @@ function GraphViewCanvas(props: GraphViewProps) {
       ...overlays.positionedEdges.map(positioned => positioned.edge.relationMessageId)]),
     renderedEdges: overlays.positionedEdges.map(positioned => positioned.edge),
   }) : crossCanvasRelations, [props.relatedEdges, visibleNormalIds, effectiveHideMessageIds, overlays, isTraceWindow, traceExpandedFrameIds, crossCanvasRelations]);
+  const relatedHighlightedMessageIds = useMemo(() => new Set([...(props.highlightedMessageIds ?? []), ...(props.locatedMessageIds ?? [])]), [props.highlightedMessageIds, props.locatedMessageIds]);
   const renderRelatedConnections = (messageId: string) => <CrossCanvasRelatedMessages groups={mergeRelatedGroups(relatedConnections?.get(messageId), summaryProjection.related.get(messageId))}
-    messages={relatedCatalog} selectedUnits={draftUnits} highlightedMessageIds={props.highlightedMessageIds}
+    messages={relatedCatalog} selectedUnits={draftUnits} highlightedMessageIds={relatedHighlightedMessageIds}
     summarizedRelationIds={summaryProjection.hiddenRecordIds} hiddenRelationIds={hiddenSummarizedRelationIds}
     onToggleRelationVisibility={toggleDiscussionRelation} onView={viewRelatedRelation} />;
 
@@ -1181,14 +1215,9 @@ function GraphViewCanvas(props: GraphViewProps) {
     <div ref={canvasRef} data-jump-canvas="true" data-discussion-layout={discussionEnabled||undefined} data-scene-instance={sceneInstance} data-layout-revision={sceneRevision.current.revision} style={{position:"relative",width:actualCanvasWidth,height:actualCanvasHeight,zIndex:0}}
       onDoubleClick={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
       {props.visibleMessageIds && <div data-message-window-boundary="true" aria-hidden="true" style={{ position: 'absolute', top: visibleBottom, left: 0, height: 1, width: 1 }} />}
-      <DiscussionRegions regions={discussionRegions.filter(region=>(!props.visibleMessageIds||props.visibleMessageIds.has(region.targetId))
-        &&(!virtual.viewport||intersectsViewport(frameViews.extent(region.targetId,region),virtual.viewport,100)))}
-        onToggle={toggleDiscussionBranch} clipFor={frameViews.clipFor} summaryCounts={discussionSummaryCounts}
-        onHeaderWidthsChange={measureDiscussionHeaders}
-        hiddenSummaryKeys={hiddenDiscussionSummaries} onToggleSummary={toggleDiscussionSummary}/>
       <DiscussionSummaries summaries={summaryProjection.summaries.filter(summary => (!props.visibleMessageIds || props.visibleMessageIds.has(summary.region.targetId))
         && !hiddenDiscussionSummaries.has(summary.region.key) && intersectsViewport(summary.region, virtual.viewport, 100))}
-        boxes={{...finalFrameRects,...layout}} labelObstacles={summaryLabelObstacles} messages={relatedCatalog} selectedUnits={draftUnits} highlightedMessageIds={props.highlightedMessageIds}
+        boxes={{...finalFrameRects,...layout}} labelObstacles={summaryLabelObstacles} messages={relatedCatalog} selectedUnits={draftUnits} highlightedMessageIds={relatedHighlightedMessageIds}
         onView={viewRelatedRelation} hiddenRelationIds={hiddenSummarizedRelationIds} onToggleRelationVisibility={toggleDiscussionRelation}
         clipFor={frameViews.clipFor} width={actualCanvasWidth} height={actualCanvasHeight}/>
       <div data-graph-cards="true" style={{position:"absolute",left:0,top:0,width:actualCanvasWidth,height:actualCanvasHeight}}>
@@ -1530,21 +1559,21 @@ function GraphViewCanvas(props: GraphViewProps) {
           unrelated cards that happen to share the same horizontal range. */}
       {(arrangeFrames.length>0||groupFrames.length>0)&&(
         <svg width={actualCanvasWidth} height={actualCanvasHeight} style={{position:"absolute",left:0,top:0,zIndex:0,pointerEvents:"none"}}>
-          {/* arrange frames — stroke and fill reflect selection state; hidden when blank-corrected */}
-          {visibleArrangeFrames.map(sf=>{
-            if (sf.isBlankCorrected) return null;
-            const isWhole=isRelWholeSel(sf.relMsgId);
-            return (
-              <g key={`supp-frame-${sf.relMsgId}`} data-frame-visual={sf.relMsgId} data-frame-depth={frameDepthMap.get(sf.relMsgId) ?? 0} {...skinForMessage(sf.relMsgId)} data-skin-type="arrange" data-whole-selected={isWhole || undefined}><rect data-jump-visual-msgids={sf.relMsgId} x={sf.rect.x} y={sf.rect.y} width={sf.rect.width} height={sf.rect.height}
-                rx={FRAME_RADIUS} ry={FRAME_RADIUS}
-                fill={isWhole?"var(--ink-rgba-251-191-36-0-22)":"var(--ink-rgba-130-80-200-0-04)"}
-                stroke={isWhole?"var(--ink-rgba-251-191-36-1)":"var(--ink-rgba-130-80-200-0-55)"}
-                strokeWidth={isWhole?3:2} strokeDasharray={isWhole?undefined:"5 3"}/>
-              <FrameSkin box={sf.rect} /><ViewTargetCorners {...sf.rect}/></g>
-            );
-          })}
-          {/* GROUP frames (CLASSIFY/MERGE) and REPLACE-OVERLAY (SUMMARY); hidden when blank-corrected */}
-          {visibleGroupFrames.map(gf=>{
+          {visibleFrameVisuals.map(visual=>{
+            if (visual.type === 'arrange') {
+              const sf = visual.frame;
+              if (sf.isBlankCorrected) return null;
+              const isWhole=isRelWholeSel(sf.relMsgId);
+              return (
+                <g key={`supp-frame-${sf.relMsgId}`} data-frame-visual={sf.relMsgId} data-frame-depth={frameDepthMap.get(sf.relMsgId) ?? 0} {...skinForMessage(sf.relMsgId)} data-skin-type="arrange" data-whole-selected={isWhole || undefined}><rect data-jump-visual-msgids={sf.relMsgId} x={sf.rect.x} y={sf.rect.y} width={sf.rect.width} height={sf.rect.height}
+                  rx={FRAME_RADIUS} ry={FRAME_RADIUS}
+                  fill={isWhole?"var(--ink-rgba-251-191-36-0-22)":"var(--ink-rgba-130-80-200-0-04)"}
+                  stroke={isWhole?"var(--ink-rgba-251-191-36-1)":"var(--ink-rgba-130-80-200-0-55)"}
+                  strokeWidth={isWhole?3:2} strokeDasharray={isWhole?undefined:"5 3"}/>
+                <FrameSkin box={sf.rect} /><ViewTargetCorners {...sf.rect}/></g>
+              );
+            }
+            const gf = visual.frame;
             if (gf.isBlankCorrected||collapsedFrameIds.has(gf.relMsgId)) return null;
             const isWhole=isRelWholeSel(gf.relMsgId);
             const isReplaceOverlay = gf.relKind === 'replace-overlay';
@@ -1563,6 +1592,12 @@ function GraphViewCanvas(props: GraphViewProps) {
           })}
         </svg>
       )}
+      {/* Region outlines must follow opaque frame fills to remain visible inside them. */}
+      <DiscussionRegions regions={discussionRegions.filter(region=>(!props.visibleMessageIds||props.visibleMessageIds.has(region.targetId))
+        &&(!virtual.viewport||intersectsViewport(frameViews.extent(region.targetId,region),virtual.viewport,100)))}
+        onToggle={toggleDiscussionBranch} clipFor={frameViews.clipFor} summaryCounts={discussionSummaryCounts}
+        onHeaderWidthsChange={measureDiscussionHeaders}
+        hiddenSummaryKeys={hiddenDiscussionSummaries} onToggleSummary={toggleDiscussionSummary}/>
       {/* Ordinary cards < paths/arrowheads < labels < selected cards. */}
       {positionedEdges.length>0&&(['paths','labels'] as const).map(layer=>(
         <svg key={layer} data-graph-edge-layer={layer} width={actualCanvasWidth} height={actualCanvasHeight} style={{position:"absolute",left:0,top:0,zIndex:layer==='paths'?GRAPH_EDGE_PATH_LAYER:GRAPH_EDGE_LABEL_LAYER,pointerEvents:"none",overflow:'visible'}}>
@@ -1702,7 +1737,7 @@ function GraphViewCanvas(props: GraphViewProps) {
             if (count<=0) continue;
             const isSelected=isDecorationSelected(relId,kind);
             const bgColor=kind==="agree"?"var(--ink-rgba-2-150-80-0-9)":"var(--ink-rgba-200-40-40-0-9)";
-            const icon=kind==="agree"?"👍":"👎";
+            const icon=<ThemeIcon name={kind} fallback={kind==="agree"?"👍":"👎"} />;
             const label=kind==="agree"?"赞":"反";
             items.push(
               <div key={`reldec-${kind}-${relId}`} {...skinForGroup(kind==='agree'?dec?.agreeRelMsgIds:dec?.disagreeRelMsgIds)} data-skin-decoration={kind} data-skin-selected={isSelected} data-msgid={relId}
@@ -1773,8 +1808,8 @@ function GraphViewCanvas(props: GraphViewProps) {
 
 
       {/* arrange frame border-strip hit areas — 4 thin divs at zIndex:4 covering the frame border,
-          one strip per side.  Each strip is FRAME_PAD wide (half inside, half outside the rect),
-          so it exactly covers the padding zone between the visible SVG border and the message cards.
+          one strip per side. Each strip stays inside the frame's padding so it does not
+          intercept the controls of a surrounding discussion region.
           arrange relation messages are treated as first-class messages: single-click toggles whole
           selection (like a normal message card), double-click uses the message double-click handler.
           When isBlankCorrected, the frame border is invisible so border strips are omitted; only the
@@ -1796,16 +1831,16 @@ function GraphViewCanvas(props: GraphViewProps) {
             {!sf.isBlankCorrected&&<>
               {/* Top strip — full width including corners */}
               <div data-msgid={sf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
-                style={{...stripBase,left:x-HH,top:y-HH,width:width+HH*2,height:HH*2}}/>
+                style={{...stripBase,left:x,top:y,width,height:HH}}/>
               {/* Bottom strip — full width including corners */}
               <div data-msgid={sf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
-                style={{...stripBase,left:x-HH,top:y+height-HH,width:width+HH*2,height:HH*2}}/>
+                style={{...stripBase,left:x,top:y+height-HH,width,height:HH}}/>
               {/* Left strip — between top and bottom strips */}
               <div data-msgid={sf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
-                style={{...stripBase,left:x-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
+                style={{...stripBase,left:x,top:y+HH,width:HH,height:height-HH*2}}/>
               {/* Right strip — between top and bottom strips */}
               <div data-msgid={sf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
-                style={{...stripBase,left:x+width-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
+                style={{...stripBase,left:x+width-HH,top:y+HH,width:HH,height:height-HH*2}}/>
             </>}
             {!sf.isBlankCorrected && <button type="button" data-arrange-card-toggle={sf.relMsgId}
               aria-label={`${cardFrameIds.has(sf.relMsgId) ? '收起' : '显示'}排列消息卡 ${sf.relMsgId}`}
@@ -1813,22 +1848,12 @@ function GraphViewCanvas(props: GraphViewProps) {
               onMouseDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
               onClick={event => { event.stopPropagation(); setExpandedFrameIds(previous => previous.includes(sf.relMsgId)
                 ? previous.filter(id => id !== sf.relMsgId) : [...previous, sf.relMsgId]); }}
-              style={{position:'absolute',left:x+(sfCorrInfo?100:8),top:y-HH+1,zIndex:frameZ+2,
-                height:16,padding:'0 6px',border:'1px solid var(--line-rgba-167-139-250-0-4)',borderRadius:4,
+              style={{position:'absolute',left:x+(sfCorrInfo?100:8),top:y-EDGE_HINT_W,zIndex:frameZ+2,
+                width:EDGE_HINT_W,height:EDGE_HINT_W,padding:0,border:'1px solid var(--line-rgba-167-139-250-0-4)',borderRadius:4,
                 background:'var(--surface-171324)',color:'var(--ink-c4b5fd)',fontSize:10,cursor:'pointer',pointerEvents:'auto'}}>
               {cardFrameIds.has(sf.relMsgId) ? '▾' : '▸'}
             </button>}
-            {!cardFrameIds.has(sf.relMsgId) && <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick}
-              style={{position:'absolute',left:x+(sfCorrInfo?100:8)+26,top:y-HH+1,zIndex:frameZ+2,pointerEvents:'auto',background:'var(--surface-101010)',display:'flex',alignItems:'center',gap:6}}>
-              <MessageElement className="graph-frame-type-label"
-                label="排列" style={{fontSize:10,color:'var(--ink-c4b5fd)'}}>排列</MessageElement><HomeFilterBadge label={homeRoleLabel(sf.relMsgId)} reason={props.homeReasonByMessageId?.get(sf.relMsgId)}/>
-              <MessageDisplayMarker messageId={sf.relMsgId} />
-              {renderCorrectionRecords(sf.relMsgId)}
-              {relatedConnections?.has(sf.relMsgId) && <div data-msgid={sf.relMsgId} data-rel-overlay="true">
-                {renderRelatedConnections(sf.relMsgId)}
-              </div>}
-            </div>}
-            {cardFrameIds.has(sf.relMsgId) && virtual.mounted.has(sf.relMsgId) && <div data-msgid={sf.relMsgId} data-rel-overlay="true" data-frame-header="true" data-frame-depth={frameDepthMap.get(sf.relMsgId) ?? 0} data-skin-frame-header="true" {...skinForMessage(sf.relMsgId)} data-skin-type="arrange" data-skin-selected={isRelWholeSel(sf.relMsgId)}
+            {cardFrameIds.has(sf.relMsgId) && virtual.mounted.has(sf.relMsgId) && <div data-msgid={sf.relMsgId} data-rel-overlay="true" data-frame-header="true" data-structural-card="true" data-frame-depth={frameDepthMap.get(sf.relMsgId) ?? 0} data-skin-frame-header="true" {...skinForMessage(sf.relMsgId)} data-skin-type="arrange" data-skin-selected={isRelWholeSel(sf.relMsgId)}
               data-measure-min-height={MERGE_CARD_H} ref={el => { cardRefs.current[sf.relMsgId] = el; }}
               role="group" tabIndex={0} aria-label={`组织消息 ${sf.relMsgId}`} aria-keyshortcuts="Enter Space Shift+Enter"
               onKeyDown={activateMessageFromKeyboard} onClick={handleClick} onDoubleClick={handleDblClick} title={title}
@@ -1897,13 +1922,13 @@ function GraphViewCanvas(props: GraphViewProps) {
             {/* Border strips — omitted when blank-corrected (no visible frame border) */}
             {!gf.isBlankCorrected&&!collapsedFrameIds.has(gf.relMsgId)&&<>
               <div data-msgid={gf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
-                style={{...stripBase,left:x-HH,top:y-HH,width:width+HH*2,height:HH*2}}/>
+                style={{...stripBase,left:x,top:y,width,height:HH}}/>
               <div data-msgid={gf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
-                style={{...stripBase,left:x-HH,top:y+height-HH,width:width+HH*2,height:HH*2}}/>
+                style={{...stripBase,left:x,top:y+height-HH,width,height:HH}}/>
               <div data-msgid={gf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
-                style={{...stripBase,left:x-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
+                style={{...stripBase,left:x,top:y+HH,width:HH,height:height-HH*2}}/>
               <div data-msgid={gf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
-                style={{...stripBase,left:x+width-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
+                style={{...stripBase,left:x+width-HH,top:y+HH,width:HH,height:height-HH*2}}/>
             </>}
             {/* Correction badge — embedded in frame top border when this group frame is a CORRECT target */}
             {gfCorrInfo&&(()=>{
@@ -1927,7 +1952,7 @@ function GraphViewCanvas(props: GraphViewProps) {
               );
             })()}
             {virtual.mounted.has(gf.relMsgId) && (gf.relType === "classify" || gf.relType === "summary" || gf.relType === "merge") && (
-              <div key={headerHidden?'controls':'card'} data-msgid={gf.relMsgId} data-rel-overlay="true" data-frame-header="true" data-frame-card-hidden={headerHidden||undefined} data-frame-depth={frameDepthMap.get(gf.relMsgId) ?? 0} data-skin-frame-header={headerHidden?undefined:'true'} {...(headerHidden?{}:skinForMessage(gf.relMsgId))} data-skin-type={headerHidden?undefined:gf.relType} data-skin-selected={isRelWholeSel(gf.relMsgId)}
+              <div key={headerHidden?'controls':'card'} data-msgid={gf.relMsgId} data-rel-overlay="true" data-frame-header="true" data-structural-card={gf.relType==='merge'||undefined} data-frame-card-hidden={headerHidden||undefined} data-frame-depth={frameDepthMap.get(gf.relMsgId) ?? 0} data-skin-frame-header={headerHidden?undefined:'true'} {...(headerHidden?{}:skinForMessage(gf.relMsgId))} data-skin-type={headerHidden?undefined:gf.relType} data-skin-selected={isRelWholeSel(gf.relMsgId)}
                 data-measure-min-height={headerHidden?COMPACT_FRAME_HEADER_HEIGHT:gf.relType === 'merge' ? MERGE_CARD_H : GROUP_HEADER_HEIGHT}
                 ref={el => { cardRefs.current[gf.relMsgId] = el; }}
                 role="group" tabIndex={0} aria-label={`${headerHidden?'框架控制':'组织消息'} ${gf.relMsgId}`} aria-keyshortcuts="Enter Space Shift+Enter" onKeyDown={activateMessageFromKeyboard}
@@ -2033,7 +2058,7 @@ function GraphViewCanvas(props: GraphViewProps) {
           if (count<=0) continue;
           const isSelected=isDecorationSelected(sf.relMsgId,kind);
           const bgColor=kind==="agree"?"var(--ink-rgba-2-150-80-0-9)":"var(--ink-rgba-200-40-40-0-9)";
-          const icon=kind==="agree"?"👍":"👎";
+          const icon=<ThemeIcon name={kind} fallback={kind==="agree"?"👍":"👎"} />;
           const label=kind==="agree"?"赞":"反";
           nodes.push(
             <div key={`sf-${kind}-${sf.relMsgId}`} {...skinForGroup(kind==='agree'?sf.relAgreeMsgIds:sf.relDisagreeMsgIds)} data-skin-decoration={kind} data-skin-selected={isSelected} data-msgid={sf.relMsgId}
@@ -2074,7 +2099,7 @@ function GraphViewCanvas(props: GraphViewProps) {
           if (count<=0) continue;
           const isSelected=isDecorationSelected(gf.relMsgId,kind);
           const bgColor=kind==="agree"?"var(--ink-rgba-2-150-80-0-9)":"var(--ink-rgba-200-40-40-0-9)";
-          const icon=kind==="agree"?"👍":"👎";
+          const icon=<ThemeIcon name={kind} fallback={kind==="agree"?"👍":"👎"} />;
           const label=kind==="agree"?"赞":"反";
           nodes.push(
             <div key={`gf-${kind}-${gf.relMsgId}`} {...skinForGroup(kind==='agree'?gf.relAgreeMsgIds:gf.relDisagreeMsgIds)} data-skin-decoration={kind} data-skin-selected={isSelected} data-msgid={gf.relMsgId}
@@ -2173,7 +2198,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                   const isDecorationSel=selectedDecorationIds.some(isRelWholeSel);
                   const top=curTop; curTop+=DEC_H+DEC_GAP;
                   const bgColor=kind==="agree"?"var(--ink-rgba-2-150-80-0-9)":"var(--ink-rgba-200-40-40-0-9)";
-                  const icon=kind==="agree"?"👍":"👎";
+                  const icon=<ThemeIcon name={kind} fallback={kind==="agree"?"👍":"👎"} />;
                   const label=kind==="agree"?"赞":"反";
                   return (
                     <div key={`tag-dec-${kind}-${_mid}-${group.label}`} {...skinForGroup(selectedDecorationIds)} data-skin-decoration={kind} data-skin-selected={isDecorationSel} data-msgid={tagIconRelMsgId} data-jump-msgids={selectedDecorationIds.join(' ')}
@@ -2223,7 +2248,7 @@ function GraphViewCanvas(props: GraphViewProps) {
         const counts=decorationsByMsgState[v.messageId]; if (!counts) return null;
         const cnt=v.kind==="agree"?counts.agreeCount:counts.disagreeCount;
         const baseBg=v.kind==="agree"?"var(--surface-rgba-2-150-80-0-9)":"var(--surface-rgba-200-40-40-0-9)";
-        const icon=v.kind==="agree"?"👍":"👎";
+        const icon=<ThemeIcon name={v.kind} fallback={v.kind==="agree"?"👍":"👎"} />;
         const decKey=`${v.messageId}::${v.kind}`;
         const isSel=selectedDecorations?.has(decKey)??false;
         const bgColor=isSel
@@ -2338,7 +2363,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                   <div onClick={event=>{event.stopPropagation();onDecorationIconClick?.(id,kind);}}
                     title={`点击：快速发送${kind==='agree'?'赞同':'反对'}`}
                     style={{width:DEC_ICON_W,height:'100%',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',
-                      flexShrink:0,background:'var(--surface-rgba-0-0-0-0-15)',fontSize:12}}>{kind==='agree'?'👍':'👎'}</div>
+                      flexShrink:0,background:'var(--surface-rgba-0-0-0-0-15)',fontSize:12}}><ThemeIcon name={kind} fallback={kind==='agree'?'👍':'👎'} /></div>
                   <div onClick={event=>{event.stopPropagation();onDecorationBodyClick?.(event,id,kind);}}
                     style={{flex:1,height:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:2,cursor:'pointer'}}>
                     <span style={{fontWeight:700}}>{count}</span><span style={{fontSize:9,opacity:0.85}}>{kind==='agree'?'赞':'反'}</span>

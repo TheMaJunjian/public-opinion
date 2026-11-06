@@ -4,6 +4,7 @@ interface Props {
   children: React.ReactNode;
   fallback?: React.ReactNode;
   onError?: (error: Error) => void;
+  onReload?: () => void;
 }
 
 interface State {
@@ -49,6 +50,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
   render() {
     if (this.state.hasError) {
       if (this.props.fallback) return this.props.fallback;
+      const moduleFailed = /Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed|Loading chunk .+ failed/i.test(this.state.error?.message ?? '');
       return (
         <div style={{
           padding: 24,
@@ -58,7 +60,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
           fontFamily: 'system-ui, sans-serif',
         }}>
           <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 12, color: 'var(--ink-ff6b6b)' }}>
-            渲染错误
+            {moduleFailed ? '页面组件加载失败' : '渲染错误'}
           </div>
           <pre style={{
             whiteSpace: 'pre-wrap',
@@ -73,7 +75,11 @@ export default class ErrorBoundary extends React.Component<Props, State> {
             {this.state.error?.message ?? '未知错误'}
           </pre>
           <button
-            onClick={() => this.setState({ hasError: false, error: null })}
+            // React.lazy caches rejected imports. Resetting this boundary alone
+            // repeats the same rejection; a user-triggered reload fetches anew.
+            onClick={() => moduleFailed
+              ? (this.props.onReload ?? (() => window.location.reload()))()
+              : this.setState({ hasError: false, error: null })}
             style={{
               marginTop: 12,
               padding: '6px 16px',
@@ -85,7 +91,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
               fontSize: 13,
             }}
           >
-            重试
+            {moduleFailed ? '重新加载页面' : '重试'}
           </button>
         </div>
       );

@@ -7,6 +7,8 @@ import { createWorkbenchDrawingTasks, WorkbenchDrawingContext } from '../context
 import type { DemoMessage } from '../utils/modelBridge';
 import {useMessageWindow} from '../hooks/useMessageWindow';
 import WorkbenchLoadingBoundary,{useWorkbenchLoadingProgress} from '../components/WorkbenchLoadingBoundary';
+import { createSceneRequestDecoder } from '../utils/sceneComputationTransport';
+import RecentWorkbenchViews from '../components/RecentWorkbenchViews';
 
 class FakeWorker {
   static instances: FakeWorker[] = [];
@@ -15,8 +17,10 @@ class FakeWorker {
   postMessage = vi.fn();
   terminate = vi.fn();
   constructor() { FakeWorker.instances.push(this); }
+  decode = createSceneRequestDecoder();
   finish(request: SceneComputationRequest) {
-    const result=request.job.kind==='structures'?planMessageStructures(request.job.input):computeSceneLayout(request.job.input);
+    const job = this.decode(request);
+    const result=job.kind==='structures'?planMessageStructures(job.input):computeSceneLayout(job.input);
     this.onmessage({ data: { id: request.id, result } } as MessageEvent);
   }
 }
@@ -24,6 +28,32 @@ const job = (id: string) => ({ kind: 'structures' as const, input: {
   messages: [{ id, kind: 'normal', author: 'test', content: id, createdAt: '' } satisfies DemoMessage], edges: [],
 } });
 afterEach(() => { vi.unstubAllGlobals(); FakeWorker.instances = []; });
+
+it('finishes work after a cached scene is parked and resumed repeatedly', () => {
+  vi.stubGlobal('Worker', FakeWorker);
+  const tasks = createWorkbenchDrawingTasks();
+  const inputs = { A: job('a'), B: job('b') };
+  function Scene({ id }: { id: 'A' | 'B' }) {
+    const result = useSceneComputation(inputs[id], true, id);
+    return <div data-testid="scene">{result?.order.join(',') ?? 'waiting'}</div>;
+  }
+  const element = (id: 'A' | 'B') => <WorkbenchDrawingContext.Provider value={tasks}>
+    <RecentWorkbenchViews viewKey={id}><Scene id={id} /></RecentWorkbenchViews>
+  </WorkbenchDrawingContext.Provider>;
+  const view = render(element('A'));
+  act(() => FakeWorker.instances[0].finish(FakeWorker.instances[0].postMessage.mock.calls[0][0]));
+  expect(tasks.pending).toBe(0);
+  view.rerender(element('B'));
+  act(() => FakeWorker.instances[1].finish(FakeWorker.instances[1].postMessage.mock.calls[0][0]));
+  for (let n = 0; n < 6; n++) {
+    view.rerender(element('A'));
+    expect(screen.getByTestId('scene')).toHaveTextContent('a');
+    expect(tasks.pending).toBe(0);
+    view.rerender(element('B'));
+    expect(screen.getByTestId('scene')).toHaveTextContent('b');
+    expect(tasks.pending).toBe(0);
+  }
+});
 
 it('reuses a completed layout for equal restored inputs and recomputes changed message data',()=>{
   vi.stubGlobal('Worker',FakeWorker);
@@ -53,7 +83,7 @@ it('promotes preview metadata to committed data without another scene computatio
 it('updates visible body text without a structure job and retains the previous scene during a real structure update',async()=>{
   vi.stubGlobal('Worker',FakeWorker);
   function Window({input,scope}:{input:ReturnType<typeof job>;scope:string}){
-    useWorkbenchLoadingProgress(false,null,scope);
+    useWorkbenchLoadingProgress(false,null);
     const window=useMessageWindow(input.input.messages,input.input.edges,true,scope,[]);
     return <>{window.messages.map(message=><div key={message.id} data-testid={message.id}>{message.content}</div>)}</>;
   }
@@ -67,12 +97,16 @@ it('updates visible body text without a structure job and retains the previous s
   const added={...next,input:{...next.input,messages:[...next.input.messages,{...next.input.messages[0],id:'second'}]}};
   view.rerender(<WorkbenchLoadingBoundary><Window input={added} scope="root"/></WorkbenchLoadingBoundary>);
   expect(screen.getByTestId('m')).toBe(card);
+  expect(screen.queryByRole('dialog')).toBeNull();
   act(()=>worker.finish(worker.postMessage.mock.calls[1][0]));
   expect(screen.getByTestId('m')).toBe(card);
+  expect(screen.queryByRole('dialog')).toBeNull();
   view.rerender(<WorkbenchLoadingBoundary><Window input={job('child')} scope="child"/></WorkbenchLoadingBoundary>);
   expect(screen.queryByTestId('m')).toBeNull();expect(card.isConnected).toBe(false);
+  expect(screen.getByRole('dialog',{name:'正在加载消息'})).toBeInTheDocument();
   act(()=>worker.finish(worker.postMessage.mock.calls[2][0]));
   expect(screen.getByTestId('child')).toHaveTextContent('child');
+  await waitFor(()=>expect(screen.queryByRole('dialog')).toBeNull());
   view.unmount();
 });
 
@@ -99,6 +133,24 @@ it('recomputes structural visibility when clearing the readable body of an annot
   expect(worker.postMessage).toHaveBeenCalledTimes(2);
 });
 
+it('coalesces repeated measurements into one geometry update against the last transmitted input', () => {
+  vi.stubGlobal('Worker',FakeWorker);
+  const messages=job('a').input.messages.concat(job('b').input.messages);
+  const first={kind:'layout' as const,input:{normals:messages,allMessages:messages,colOf:{a:0,b:0},maxCol:0,
+    measuredHeights:{a:100,b:100},measuredWidths:{}}};
+  const view=renderHook(({input})=>useSceneComputation(input),{initialProps:{input:first}});
+  const worker=FakeWorker.instances[0], request=worker.postMessage.mock.calls[0][0];
+  view.rerender({input:{...first,input:{...first.input,measuredHeights:{a:300,b:100}}}});
+  const final={...first,input:{...first.input,measuredHeights:{a:600,b:100}}};
+  view.rerender({input:final});
+  expect(worker.postMessage).toHaveBeenCalledOnce();
+  act(()=>worker.finish(request));
+  const update=worker.postMessage.mock.calls[1][0];
+  expect(update.patch).toEqual({baseId:request.id,input:{measuredHeights:{a:600,b:100}},removed:[]});
+  act(()=>worker.finish(update));
+  expect(view.result.current).toEqual(computeSceneLayout(final.input));
+});
+
 it('runs one job at a time, skips superseded requests and never publishes stale scope results', () => {
   vi.stubGlobal('Worker', FakeWorker);
   const tasks = createWorkbenchDrawingTasks(); tasks.setBlocking(false);
@@ -113,7 +165,7 @@ it('runs one job at a time, skips superseded requests and never publishes stale 
   act(() => worker.finish(worker.postMessage.mock.calls[0][0]));
   expect(result.current).toBeNull();
   expect(worker.postMessage).toHaveBeenCalledTimes(2);
-  expect(worker.postMessage.mock.calls[1][0].job).toBe(third);
+  expect(worker.postMessage.mock.calls[1][0].job.input.messages.map((message: DemoMessage) => message.id)).toEqual(['latest']);
   act(() => worker.finish(worker.postMessage.mock.calls[1][0]));
   expect(result.current?.order).toEqual(['latest']);
   expect(tasks.pending).toBe(0);
@@ -130,7 +182,8 @@ it('starts an opened classification immediately instead of waiting for an obsole
   view.rerender({ input: child, scope: 'classification' });
   expect(oldWorker.terminate).toHaveBeenCalledOnce();
   const currentWorker = FakeWorker.instances[1];
-  expect(currentWorker.postMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ job: child }));
+  expect(currentWorker.postMessage).toHaveBeenCalledOnce();
+  expect(currentWorker.postMessage.mock.calls[0][0].job.input.messages.map((message: DemoMessage) => message.id)).toEqual(['classification-message']);
   act(() => oldWorker.finish(oldRequest));
   expect(view.result.current).toBeNull();
   act(() => currentWorker.finish(currentWorker.postMessage.mock.calls[0][0]));

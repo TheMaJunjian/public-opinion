@@ -32,6 +32,9 @@ export default defineConfig({
           if (['frameLayoutCore', 'graphColumnRules', 'discussionLayout'].some(name => path.endsWith(`/src/utils/${name}.ts`))) return 'graph-layout';
           if (path.endsWith('/src/pages/workbench/model/readingProgress.ts')) return 'reading-progress';
           if (path.endsWith('/src/pages/workbench/useSendPreview.ts')) return 'send-preview';
+          // Keep synchronization and scoped source loading independent of the route UI.
+          if (path.endsWith('/src/pages/workbench/useWorkbenchData.ts')
+            || ['zhihuStructuralViewer', 'onlineStructuralSource', 'scopedProjectionCache'].some(name => path.endsWith(`/src/utils/${name}.ts`))) return 'workbench-data';
         },
       },
     },

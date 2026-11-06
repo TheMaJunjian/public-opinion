@@ -196,6 +196,8 @@ export function isRelationView(view: NativeMessageView): view is NativeMessageVi
 }
 
 export interface WorkbenchSnapshot {
+  /** Contains topology and body-presence placeholders, never displayable body text. */
+  structureOnly?: boolean;
   regionId?: string;
   windowed?: boolean;
   scope: ScopeView;

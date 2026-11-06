@@ -15,7 +15,7 @@ import { bodyVersion } from '@gonglun/core';
 const route = vi.hoisted(() => ({ current: { pathname: '/viewer', search: '', hash: '', key: 'first', state: null as { exportData: ExportData; viewerInstanceKey?: string } | null } }));
 vi.mock('react-router-dom', () => ({ useLocation: () => route.current }));
 vi.mock('../utils/exportViewerCache', () => ({ loadCachedExport: vi.fn(), loadLastExport: vi.fn(), saveLastExportPersistent: vi.fn(),
-  loadReferencedExport: vi.fn(), inheritExportCacheReference: (data: unknown) => data }));
+  loadReferencedExport: vi.fn(), loadExportNavigation: vi.fn(async () => null), releaseDurableExportMemory: vi.fn(), inheritExportCacheReference: (data: unknown) => data }));
 vi.mock('../api', () => ({ api: { getWorkbenchSnapshot: vi.fn(), subscribeChanges: vi.fn() } }));
 
 // Empty-body structural fixtures; no invented discussion content is presented as a sample.
@@ -72,13 +72,13 @@ beforeEach(() => {
   route.current = { pathname: '/viewer', search: '', hash: '', key: 'first', state: { exportData: fixture() } };
 });
 
-it.each(['gpt', 'opus-paper'] as const)('shares reply, agreement, opposition and organization choices in %s without touching the online composer', theme => {
+it.each(['gpt', 'gpt-arena', 'opus-paper'] as const)('shares reply, agreement, opposition and organization choices in %s without touching the online composer', theme => {
   setTheme(theme);
   const composer = composerFixture(), onChange = vi.fn();
   const localMode = { relationType: 'reply' as const, onChange };
   const ref = createRef<HTMLDivElement>();
   const toolbarProps = { barRef: ref, leftControlsRef: ref, rightControlsRef: ref, top: 0, springWidth: 0, rightOffset: 0,
-    viewer: true, messageIdInput: '', onMessageIdChange: vi.fn(), onJump: vi.fn(), composer };
+    viewer: true, knownIds: new Set<string>(), onJump: vi.fn(), composer };
   const view = render(<><RelationToolbar {...toolbarProps} localMode={localMode} /><RelationChoices placement="desk" composer={composer} localMode={localMode} /></>);
   expect(screen.getAllByRole('button', { name: '回复' })).toHaveLength(1);
   expect(screen.getAllByRole('button', { name: '赞同' })).toHaveLength(1);
@@ -109,7 +109,7 @@ it('persists before updating the local snapshot without replacing browser histor
   const next = changed();
   let pending!: Promise<void>;
   act(() => { pending = result.current.persistPreloadedExport(next); });
-  expect(saveLastExportPersistent).toHaveBeenCalledWith(next, previous);
+  await waitFor(() => expect(saveLastExportPersistent).toHaveBeenCalledWith(next, previous));
   expect(result.current.loadedExport).toBe(previous);
   expect(result.current.edges.filter(edge => edge.relationType === 'reply')).toHaveLength(2);
   expect(navigate).not.toHaveBeenCalled();
@@ -169,6 +169,7 @@ it('does not reopen the viewer if the user leaves while a local save is pending'
   let finish!: () => void;
   vi.mocked(saveLastExportPersistent).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
   const pending = result.current.persistPreloadedExport(changed());
+  await waitFor(() => expect(finish).toBeTypeOf('function'));
   unmount();
   finish();
   await expect(pending).rejects.toThrow('页面已切换');

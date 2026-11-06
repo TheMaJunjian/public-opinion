@@ -7,11 +7,11 @@ import { isNativeZhihuView } from './nativeZhihuView';
 import { nativeZhihuEditingView } from './nativeZhihuEditor';
 
 /** Online snapshots and archive viewing must derive exactly the same display data. */
-export function projectWorkbenchSnapshot(snapshot: WorkbenchSnapshot) {
+export function projectWorkbenchSnapshot(snapshot: WorkbenchSnapshot, options?: { loadedOnly?: boolean }) {
   const active = snapshot.messages.filter(message => !message.supersededBy);
   const activeIds = new Set(active.map(message => message.id));
   const relations = snapshot.relations.filter(relation => activeIds.has(relation.id));
-  const converted = convertMessagesToDemoModel(active, relations);
+  const converted = convertMessagesToDemoModel(active, relations, options?.loadedOnly ? activeIds : undefined);
   const counts: Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }> = {};
   const authorAmounts: Record<string, number> = {};
   const bettors: Record<string, number> = {};

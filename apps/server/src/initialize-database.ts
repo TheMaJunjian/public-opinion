@@ -14,5 +14,7 @@ export async function initializeDatabase(store: Store): Promise<void> {
     .run(DEFAULT_RULES.version,JSON.stringify(DEFAULT_RULES),new Date().toISOString());
   await initializeProjections(store);
   await initializePersonal(store);
+  await store.set('notifications-start-sequence', 0);
+  await store.set('notification-membership-start-sequence', 0);
   await store.set('usage-points-start', { sequence: 0, ledgerPosition: 0, archiveId: null, createdAt: new Date().toISOString() });
 }

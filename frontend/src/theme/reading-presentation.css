@@ -1,0 +1,13 @@
+/* Reading changes paint only: retain each card's footprint and every other position. */
+[data-reading-presentation-active] .themed-message:not([data-reading-presentation]) {
+  opacity: 1 !important;
+}
+[data-reading-presentation="hidden"],
+[data-reading-presentation="hidden"] * {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+[data-reading-presentation="dimmed"] {
+  opacity: .55 !important;
+  filter: grayscale(1);
+}

@@ -16,11 +16,11 @@ self.onmessage = (event: MessageEvent<{ type: string; id: number; options: Catal
   } else if (type === 'catch-up') engine?.catchUp();
   else if (type === 'reload') engine?.reload();
   else if (type === 'committed') event.data.pages.forEach(page => engine?.applyCommitted(page));
-  else if (type === 'refresh' || type === 'filters') {
+  else if (type === 'refresh' || type === 'filters' || type === 'leaderboard') {
     void (async () => {
       try {
         if (!engine) throw new Error('全局消息尚未载入');
-        const result = type === 'refresh' ? await engine.refresh() : engine.filters(query);
+        const result = type === 'refresh' ? await engine.refresh() : type === 'leaderboard' ? await engine.leaderboard() : await engine.filters(query);
         self.postMessage({ type: 'result', id, result });
       } catch (error) { self.postMessage({ type: 'result', id, error: error instanceof Error ? error.message : String(error) }); }
     })();

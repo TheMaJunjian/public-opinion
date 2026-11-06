@@ -1,5 +1,6 @@
 import { relations, targets, type Message } from '@gonglun/core';
 import type { Store } from './db.js';
+import { notificationRecipients } from './notifications.js';
 
 const families: Record<string, string> = { read: 'read', unread: 'read', follow: 'follow', block: 'block', recommend: 'archive', archive: 'archive', unarchive: 'archive' };
 /** Personal actions execute once when a message is sent, independently of later edits. */
@@ -13,12 +14,9 @@ export async function recordPersonal(store: Store, message: Message) {
     for (const part of relations(message)) {
         if (part.relation === 'notify')
             for (const reference of targets(part, 'target')) {
-                const recipients = await store.db.prepare(`SELECT "authorId" FROM personal_marks WHERE "targetId"=$1 AND family='follow' AND action='follow'`).all(reference.messageId);
-                const original = await store.message(reference.messageId);
-                if (original.authorId !== 'system')
-                    recipients.push({ authorId: original.authorId });
+                const recipients = await notificationRecipients(store, [reference.messageId], message.authorId);
                 for (const recipient of recipients)
-                    await store.db.prepare(`INSERT INTO notification_receipts("sourceId","userId","targetId") VALUES ($1,$2,$3) ON CONFLICT ("sourceId","userId","targetId") DO NOTHING`).run(message.id, String(recipient.authorId), reference.messageId);
+                    await store.db.prepare(`INSERT INTO notification_receipts("sourceId","userId","targetId") VALUES ($1,$2,$3) ON CONFLICT ("sourceId","userId","targetId") DO NOTHING`).run(message.id, recipient.id, reference.messageId);
             }
         const family = families[part.relation];
         if (!family)

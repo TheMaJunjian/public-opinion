@@ -79,7 +79,7 @@ describe('visible organization card elements', () => {
   it.each(['merge','arrange'] as const)('places the %s ID above its arbitration entries', kind => {
     const message={...category,id:'frame',relationType:kind};
     const view=render(<OrganizationFrameHeader message={message} messageId="frame" kind={kind} memberCount={1} selectedUnits={[]} activeText={false} onTruth={vi.fn()} onValue={vi.fn()}/>);
-    const identity=view.getByText('frame'),actions=view.container.querySelector('[data-message-settlement-actions]')!;
+    const identity=view.getByText('frame'),actions=view.container.querySelector<HTMLElement>('[data-message-settlement-actions]')!;
     expect(identity.compareDocumentPosition(actions)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(identity.closest('[data-card-header]')!.parentElement).toBe(actions.parentElement);
     const header=view.container.querySelector('[data-organization-card-header]')!;

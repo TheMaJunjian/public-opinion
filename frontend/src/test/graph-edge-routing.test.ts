@@ -104,9 +104,26 @@ describe('routing preserves original endpoint evidence', () => {
     expect(path).toBeDefined();
     expect(path.edge).toEqual(original);
     expect(path.edge.to.messageId).toBe(previous.relationMessageId);
-    expect(path.toBox).toEqual(label);
-    expect(pointOnRect(path.end, label)).toBe(true);
+    const target = paths.find(value => value.edge.id === previous.id)!;
+    const currentLabel = { ...label, x: target.labelX - label.width / 2, y: target.labelY - label.height / 2 };
+    expect(path.toBox).toEqual(currentLabel);
+    expect(pointOnRect(path.end, currentLabel)).toBe(true);
     expect(path.drawId).toBe(`${next.id}__toRel__${previous.relationMessageId}`);
+  });
+
+  it('resolves a chain of references to this frame\'s label positions without prior measurements', () => {
+    const layout = { a: { x: 0, y: 0, width: 180, height: 90 }, b: { x: 400, y: 0, width: 180, height: 90 },
+      c: { x: 400, y: 400, width: 180, height: 90 }, d: { x: 0, y: 600, width: 180, height: 90 } };
+    const first = routingEdge('one', 'b', 'a', 'reference'), second = routingEdge('two', 'c', first.relationMessageId, 'reference');
+    const third = routingEdge('three', 'd', second.relationMessageId, 'reference');
+    const records: DemoMessage[] = [first, second, third].map(edge => ({ id: edge.relationMessageId, kind: 'relation', relationType: 'reference', author: '', createdAt: '', content: '' }));
+    const paths = routeGraphEdges(routingFixture(layout, [third, second, first], { messages: records }));
+    for (const edge of [second, third]) {
+      const path = paths.find(value => value.edge.id === edge.id)!, target = paths.find(value => value.edge.relationMessageId === edge.to.messageId)!;
+      expect(path.toBox.x + path.toBox.width / 2).toBeCloseTo(target.labelX);
+      expect(path.toBox.y + path.toBox.height / 2).toBeCloseTo(target.labelY);
+      expect(pointOnRect(path.end, path.toBox)).toBe(true);
+    }
   });
 
   it('detects a thin interior crossing while permitting a boundary-only touch in the geometry oracle', () => {

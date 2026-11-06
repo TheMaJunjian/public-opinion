@@ -22,8 +22,10 @@ import { zhihuStanceReference, zhihuWholeMessageUnit } from '../utils/zhihuSelec
 import { getZhihuDisplayFields, getZhihuInactiveRelationIds, isZhihuViewingData } from '../utils/zhihuArchive';
 import ZhihuDirectorySync from '../components/ZhihuDirectorySync';
 import { isNativeZhihuView } from '../utils/nativeZhihuView';
-import { nativeZhihuDocument, nativeZhihuEditingView, sendNativeZhihuRelation } from '../utils/nativeZhihuEditor';
-import { getExportCacheReference } from '../utils/exportViewerCache';
+import { nativeZhihuDocument, nativeZhihuEditingView } from '../utils/nativeZhihuEditor';
+import { sendPagedZhihuRelation } from '../utils/pagedZhihuEditor';
+import { getExportCacheReference, saveExportNavigation } from '../utils/exportViewerCache';
+import { structuralScopeKey } from '../utils/zhihuStructuralViewer';
 import { serializeGonglunZhihuViewingData } from '../utils/zhihuGonglunExport';
 import type { LocalRelationType } from './workbench/ui/RelationToolbar';
 import { downloadExport } from '../utils/saveExport';
@@ -55,7 +57,7 @@ import { blockCorrectionForSecondBettor as runBlockCorrectionForSecondBettor, ha
 import { clearDraftAll as runClearDraftAll, commitDraftTo as runCommitDraftTo, handleCanvasBlankClick as runHandleCanvasBlankClick, handleFragmentAnchorClick as runHandleFragmentAnchorClick, handleMessageClick as runHandleMessageClick, handleMessageDoubleClick as runHandleMessageDoubleClick, handleMessageMouseDown as runHandleMessageMouseDown, handleMessageMouseUp as runHandleMessageMouseUp, handleTextMouseUp as runHandleTextMouseUp, toggleFragmentSelection as runToggleFragmentSelection, toggleWholeUnit as runToggleWholeUnit, undoRecentClickActionsForMessage as runUndoRecentClickActionsForMessage } from './workbench/actions/cardSelection';
 import { renderAlertMessage as runRenderAlertMessage, renderMessageContentWithAnchorsForList as runRenderMessageContentWithAnchorsForList, renderRelationContentWithTargets as runRenderRelationContentWithTargets } from './workbench/actions/messageRendering';
 import { confirmReverseCorrection as runConfirmReverseCorrection, handleComparisonVote as runHandleComparisonVote, handleDecorationBodyClick as runHandleDecorationBodyClick, handleDecorationIconClick as runHandleDecorationIconClick, handleGroupFrameClick as runHandleGroupFrameClick, handleGroupFrameDoubleClick as runHandleGroupFrameDoubleClick, handleInlineBadgeClick as runHandleInlineBadgeClick, handleInlineBadgeDoubleClick as runHandleInlineBadgeDoubleClick, handleTagBodyClick as runHandleTagBodyClick } from './workbench/actions/relationActions';
-import { clampAndSetScroll, findMessageElements, cancelScrollRafs as runCancelScrollRafs, scheduleViewNavigation as runScheduleViewNavigation, scrollMsgToCenter as runScrollMsgToCenter, showMessagePulse as runShowMessagePulse } from './workbench/actions/scrollNavigation';
+import { clampAndSetScroll, findMessageElements, findVisibleMessageElement, cancelScrollRafs as runCancelScrollRafs, scheduleViewNavigation as runScheduleViewNavigation, scrollMsgToCenter as runScrollMsgToCenter, showMessagePulse as runShowMessagePulse } from './workbench/actions/scrollNavigation';
 import type { ScrollMessageOptions } from './workbench/actions/scrollNavigation';
 import { REVEAL_VIRTUAL_MESSAGE } from '../hooks/useVirtualMessageMounts';
 import { handleQuickSendAndRelateFromDraftTargets as runHandleQuickSendAndRelateFromDraftTargets } from './workbench/actions/sendDraft';
@@ -74,6 +76,8 @@ import { comparisonViewMessageIds, hasComparisonDisplayEffect } from './workbenc
 import { projectGraphScene } from '../utils/graphProjection';
 import { deriveHiddenInGraphView } from './workbench/projections/hiddenInGraphView';
 import { deriveHomeFilterResult } from './workbench/projections/homeFilterResult';
+import { normalizeHomeFilter } from './workbench/model/homeFilter';
+import { useHomeFilterReadingMarks } from '../hooks/useHomeFilterReadingMarks';
 import { deriveMessagesToShow } from './workbench/projections/messagesToShow';
 import { deriveNormalGraphProjection } from './workbench/projections/normalGraphProjection';
 import {deriveContainerEffect,isContainerType} from './workbench/model/containerEffect';
@@ -111,10 +115,11 @@ import { type HomeFilterMode } from '../components/HomeFilterPanel';
 import { applyMessageFilter, type MessageFilterSettings } from '../components/MessageFilterPanel';
 import { useCleanView } from '../hooks/useCleanView';
 import { useViewedMessageHighlight,type ReadingNavigationMarkers } from '../hooks/useViewedMessageHighlight';
+import { useNotificationNavigation } from '../hooks/useNotificationNavigation';
+import { useNotificationRecipients } from '../hooks/useNotificationRecipients';
 import { useCatalogFilters } from '../hooks/useCatalogFilters';
 import {useReadingState} from '../hooks/useReadingState';
 import {messageReadingKey} from '@gonglun/core';
-import {singleTraceClassification} from './workbench/model/singleTraceClassification';
 import {expandedFrameScope} from './workbench/model/expandedFrameCategory';
 import {createDisplayHintWindow} from './workbench/model/displayHintWindow';
 import {createCurrentContainerLookup} from './workbench/model/displayHintContainers';
@@ -134,12 +139,12 @@ const RelationChoices = lazy(() => import('./workbench/ui/RelationToolbar').then
 const WorkbenchViewToolbar = lazy(() => import('./workbench/ui/WorkbenchViewToolbar'));
 const ClassificationHeader = lazy(() => import('./workbench/ui/ClassificationHeader'));
 const TraceReadingController = lazy(() => import('../components/TraceReadingController'));
+const ReadingCanvasPresentation = lazy(() => import('../components/ReadingCanvasPresentation'));
 const AuthoredReadingBackfill = lazy(() => import('../components/AuthoredReadingBackfill'));
 const WorkbenchMessageList = lazy(() => import('./workbench/ui/WorkbenchMessageList'));
 const CorrectionComparisonPopup = lazy(() => import('../components/CorrectionComparisonPopup'));
 const RelationRecordPopups = lazy(() => import('./workbench/ui/RelationRecordPopups'));
 const MessagePagination = lazy(() => import('../components/MessagePagination'));
-const MessageWindowStatus = lazy(() => import('../components/MessageWindowStatus'));
 const CatalogStatus = lazy(() => import('../components/CatalogStatus'));
 const RegistrationGuideHint = lazy(() => import('../components/RegistrationGuideHint'));
 
@@ -171,14 +176,16 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   } = composer;
   const reportDrawingFailure = useWorkbenchDrawingFailure();
   useWorkbenchDrawingCommit();
-  const beginPositioning = useWorkbenchDrawingTask('positioning');
-  const beginProjection = useWorkbenchDrawingTask('projection');
+  const beginPositioning = useWorkbenchDrawingTask('positioning', true);
+  const beginLoading = useWorkbenchDrawingTask('loading', true);
+  const beginProjection = useWorkbenchDrawingTask('projection', true);
   const prepareCategoryDrawing = useWorkbenchDrawingPreparation();
   const renderStartedAt = performance.now();
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const { messageId: routeMessageId } = useParams<{ messageId: string }>();
   const scopeMessageId = routeMessageId ?? 'root';
   const [searchParams, setSearchParams] = useSearchParams();
+  const [notificationFocusIds,setNotificationFocusIds] = useState<string[]>([]);
   const navigate = useNavigate();
   const { user, logout, loading: authLoading } = useAuth();
   const {
@@ -187,14 +194,16 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     showUnauthenticatedNotice, setShowUnauthenticatedNotice, showRegistrationGuide, setShowRegistrationGuide, stakeCounts,
     setStakeCounts, messageBettorCounts, setMessageBettorCounts, authorStakes, setAuthorStakes,
     refreshLeaderboard, registeredUsers, isPreloaded, viewerUser, setViewerUser,
-    displayUser, correctionVersions:personalCorrectionVersions, preloadedData, loadedExport, viewerUsers, loading, persistPreloadedExport, isViewerRoute,
+    displayUser, correctionVersions:personalCorrectionVersions, preloadedData, loadedExport, viewerUsers, loading, persistPreloadedExport, isViewerRoute, viewerNavigation,
     tagCounts, setRelatedTraceContext, captureOptimisticRollback,
     onDemand, ensureMessages,
     catalog, catalogReady, catalogVersion, catalogComputationsCurrent, globalRows,
+    viewingExport, viewerStructure, unloadedViewerContainers, loadViewerScope, appliedScopeKey,
     captureTransient, showSendPreview, clearSendPreview, confirmSendPreview, liveSequence,
   } = useWorkbenchData({ user, authLoading, scopeMessageId, navigate, viewMode });
   const nativeZhihuData = isNativeZhihuView(loadedExport) ? loadedExport : null;
-  const zhihuData = useMemo(() => nativeZhihuData ? nativeZhihuEditingView(nativeZhihuData) : isZhihuViewingData(loadedExport) ? loadedExport : null, [loadedExport, nativeZhihuData]);
+  const zhihuData = useMemo(() => nativeZhihuData ? nativeZhihuEditingView(isNativeZhihuView(viewingExport) ? viewingExport : nativeZhihuData)
+    : isZhihuViewingData(loadedExport) ? loadedExport : null, [loadedExport, nativeZhihuData, viewingExport]);
   const discussion = useDiscussionView(loadedExport);
   const readingTextLinks = useMemo(() => isViewerRoute && zhihuData ? { linksForMessage: createZhihuReadingLinks(zhihuData) } : false, [isViewerRoute, zhihuData]);
   const [localRelationType, setLocalRelationType] = useState<LocalRelationType | null>('reply');
@@ -204,6 +213,12 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     setLocalRelationType(type);
   }, disabled: localSending } : undefined;
   const localInactiveRelationIds = useMemo(() => zhihuData ? getZhihuInactiveRelationIds(zhihuData) : new Set<string>(), [zhihuData]);
+  const localPanelData = useMemo(() => localInactiveRelationIds.size ? {
+    messages: messages.filter(message => !localInactiveRelationIds.has(message.id)),
+    edges: edges.filter(edge => !localInactiveRelationIds.has(edge.relationMessageId)
+      && !localInactiveRelationIds.has(edge.from.messageId) && !localInactiveRelationIds.has(edge.to.messageId)),
+  } : { messages, edges }, [messages, edges, localInactiveRelationIds]);
+  const knownMessageIds = useMemo(() => viewerStructure?.knownIds ?? new Set(messages.map(message => message.id)), [messages, viewerStructure]);
   useWorkbenchLoadingProgress(loading && !preloadedData, loadError, preloadedData);
   const { relationBarRef, relationLeftControlsRef, relationRightControlsRef, relationBarHeight, relationBarMinWidth, relationControlsRightOffset } = useRelationToolbar(loading);
 
@@ -264,7 +279,6 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       scheduleViewNavigation(msgId, 150);
     }
   }, [searchParams, setSearchParams]);
-  const [messageIdInput, setMessageIdInput] = useState("");
   useEffect(() => {
     const selectPart = (event: Event) => {
       const { reference, label } = (event as CustomEvent<PartSelectionDetail>).detail;
@@ -318,6 +332,11 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const isTemporaryFrameCategory=!!classifyStackRef.current.at(-1)?.frameScopeIds;
   const graphFrameViewStateRef=useRef<import('../utils/frameViewports').GraphFrameViewState>({});
   const [frameViewRestoreKey,setFrameViewRestoreKey]=useState(0);
+  function resetFrameExpansion():void {
+    graphFrameViewStateRef.current=Object.fromEntries(Object.entries(graphFrameViewStateRef.current)
+      .map(([key,state])=>[key,{...state,full:{},collapsed:[]}]));
+    setFrameViewRestoreKey(key=>key+1);
+  }
   const temporaryCategoryStackRef = useRef<Array<{
     snapshot: TraceSnapshot;
     hideJoin: boolean;
@@ -369,12 +388,14 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     cleanMode, cleanFilters, cleanVisibleIds: localCleanVisibleIds,
     addFilter: addCleanFilter, removeFilter: removeCleanFilter,
     updateFilter: updateCleanFilter, clearFilters: clearCleanFilters,
-  } = useCleanView({ messages, edges, stakeCounts, tagCounts, defer: onDemand && !isPreloaded && (!catalogReady || catalogComputationsCurrent) });
+  } = useCleanView({ messages, edges, stakeCounts, tagCounts, defer: onDemand && !isPreloaded && !viewerStructure && (!catalogReady || catalogComputationsCurrent) });
   const [homeFilterMode, setHomeFilterMode] = useState<HomeFilterMode | null>(null);
   const readingState=useReadingState(user?.id,!isPreloaded && !isViewerRoute);
+  const homeReadingStatus = normalizeHomeFilter(homeFilterMode).status;
+  const homeFilterReadingMarks = useHomeFilterReadingMarks(homeFilterMode, JSON.stringify([user?.id, scopeMessageId, isPreloaded, viewMode, cleanFilters]), readingState.marks, readingState.ready);
   const displayHintWindow=useMemo(()=>createDisplayHintWindow(),[scopeMessageId,loadedExport,displayUser?.username]);
-  const workerFilters = onDemand && !isPreloaded && (!catalogReady || catalogComputationsCurrent);
-  const globalFilters = useCatalogFilters(workerFilters ? catalog : null, catalogVersion, catalogReady, { rules: cleanFilters, home: homeFilterMode, user: displayUser, readingMarks:readingState.marks });
+  const workerFilters = onDemand && !isPreloaded && !viewerStructure && (!catalogReady || catalogComputationsCurrent);
+  const globalFilters = useCatalogFilters(workerFilters ? catalog : null, catalogVersion, catalogReady, { rules: cleanFilters, home: homeFilterMode, user: displayUser, readingMarks: homeReadingStatus === 'all' ? undefined : homeFilterReadingMarks });
   const globalFilterPending = workerFilters && globalFilters.pending;
   useLayoutEffect(() => {
     if (!globalFilterPending || globalFilters.error) return;
@@ -433,15 +454,31 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       setHomeFilterMode(view?.homeFilter ?? null);
       clearCleanFilters();
       view?.cleanFilters.forEach(addCleanFilter);
-      const classificationId = view?.classificationId ?? null;
+      const navigation = viewerNavigation;
+      const requestedId = navigation ? navigation.classificationId : view?.classificationId ?? null;
+      const classificationId = requestedId && loadedExport.messages.some(message => message.id === requestedId) ? requestedId : null;
       // An archive can open inside a container without an enter action. Keep
       // that starting layer in history so leaving a child returns to it, and
       // replace history from any previously opened archive at the same time.
-      classifyStackRef.current = classificationId ? [{ relMsgId: classificationId, snapshot: null }] : [];
+      const path = classificationId && navigation?.classificationPath?.at(-1) === classificationId
+        ? navigation.classificationPath : classificationId ? [classificationId] : [];
+      const knownIds = new Set(loadedExport.messages.map(message => message.id));
+      classifyStackRef.current = path.filter(id => knownIds.has(id)).map(relMsgId => ({ relMsgId, snapshot: null }));
       setClassifyRelMsgId(classificationId);
       task.complete();
     });
   }, [loadedExport, clearCleanFilters, addCleanFilter, beginProjection]);
+  const previousViewerPosition = useRef({ data: loadedExport, classificationId: classifyRelMsgId });
+  const saveViewerPosition = () => {
+    if (loadedExport) void saveExportNavigation(loadedExport, { classificationId: classifyRelMsgId,
+      classificationPath: classifyStackRef.current.map(entry => entry.relMsgId) }).catch(() => undefined);
+  };
+  useEffect(() => {
+    const previous = previousViewerPosition.current;
+    previousViewerPosition.current = { data: loadedExport, classificationId: classifyRelMsgId };
+    // Skip the intermediate render before a newly loaded file restores its view.
+    if (previous.data === loadedExport && previous.classificationId !== classifyRelMsgId) saveViewerPosition();
+  }, [loadedExport, classifyRelMsgId]);
   const [joinFilterTargetId, setJoinFilterTargetId] = useState<string | null>(null);
   const [joinFilterDirection, setJoinFilterDirection] = useState<'incoming' | 'outgoing'>('incoming');
   const [correctionFilterTargetId, setCorrectionFilterTargetId] = useState<string | null>(null);
@@ -809,6 +846,27 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     setAlertMessage(message);
   }, []);
 
+  const requestedViewerScope = {
+    classificationId: classifyRelMsgId,
+    ...(traceEntries.length ? { trace: { ids: traceEntries.at(-1)!.ids, depths: traceDepths,
+      expandedIds: [...traceExpandedFrameIds].sort() } } : {}),
+    full: cleanMode || homeFilterMode !== null || comparisonMode || comparisonReviewed
+      || previewClassifyId !== null || containerPreviewId !== null || isTemporaryFrameCategory,
+    includeJoinRecords: !msgFilter.hideJoin,
+    recordIds: [...(recordCategory?.recordIds ?? []), ...(joinFilterTargetId
+      ? viewerStructure?.joinRecordIds(joinFilterTargetId, joinFilterDirection) ?? [] : [])],
+    extraIds: [...new Set([...draftUnits, ...sourceUnits, ...targetUnits].map(unit => unit.messageId))],
+  };
+  const requestedViewerScopeKey = structuralScopeKey(requestedViewerScope);
+  const scopedViewerSource = useRef<typeof loadedExport>(null);
+  useLayoutEffect(() => {
+    if (!viewerStructure) return;
+    // The first projection has already loaded the saved navigation. Wait for
+    // its restore above to install the category state before requesting a layer.
+    if (scopedViewerSource.current !== loadedExport) { scopedViewerSource.current = loadedExport; return; }
+    void loadViewerScope(requestedViewerScope).catch(error => showAlert(error instanceof Error ? error.message : '分类加载失败'));
+  }, [loadedExport, viewerStructure, requestedViewerScopeKey, loadViewerScope, showAlert]);
+
   function renderAlertMessage(message: string): React.ReactNode {
     return runRenderAlertMessage({ handleNavigateToMessage }, message);
   }
@@ -961,7 +1019,14 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     const inactive = joinStatus ? joinStatus !== 'valid' : statistics.suppressed.has(comparisonTargetId);
     return inactive ? 'disagree' as const : 'agree' as const;
   }, [messages,relations,edges,stakeCounts,comparisonTargetId]);
-  const containerEffect = useMemo(() => deriveContainerEffect({messages,relations,edges,username:displayUser?.username??null,stakeCounts}),[messages,relations,edges,displayUser?.username,stakeCounts]);
+  const containerEffect = useMemo(() => {
+    const effect = deriveContainerEffect({messages,relations,edges,username:displayUser?.username??null,stakeCounts});
+    if (viewerStructure) {
+      effect.ownership.memberCounts = viewerStructure.memberCounts;
+      effect.context.getMemberCounts = viewerStructure.memberCounts;
+    }
+    return effect;
+  },[messages,relations,edges,displayUser?.username,stakeCounts,viewerStructure]);
   const effectiveSuppressedRelIdsForLayout = containerEffect.suppressed;
   const rejectedContainerIds = containerEffect.rejectedContainerIds;
   const rejectedJoinRelationIds = containerEffect.rejectedJoinRelationIds;
@@ -1025,7 +1090,8 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const joinOnlyAction = appendContainerType !== null;
   const reclassificationJoinCount = useMemo(() => deriveReclassificationJoinCount({ relationType, draftUnits, targetUnits, relations, rejectedJoinRelationIds }), [relationType, draftUnits, targetUnits, relations, rejectedJoinRelationIds]);
 
-  const costContext=contributionContext({relationType,draftUnits,targetUnits,sourceUnits,relations,containerEffect,joinOnlyAction});
+  const costContext=useMemo(()=>contributionContext({relationType,draftUnits,targetUnits,sourceUnits,relations,containerEffect,joinOnlyAction}),
+    [relationType,draftUnits,targetUnits,sourceUnits,relations,containerEffect,joinOnlyAction]);
   const { effectiveMinStake, totalConsumption, stakeFeeAmountRef,setProtocolFee } = useStakeCalculation({
     relationType, secondaryRelationType, subType, ...costContext, sourceUnits, newMessageContent: joinOnlyAction ? '' : newMessageContent,
     stakeAmount, relStakeAmount, recommendationAmount, relationStakeMap, subTypeStakeMap,
@@ -1254,17 +1320,17 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
 
   const effectiveJoinRelationIds = containerEffect.effectiveJoinIds;
 
-  const joinRelationsByTarget = useMemo(() => indexJoinRelationsByTarget(relations), [relations]);
+  const joinRelationsByTarget = useMemo(() => indexJoinRelationsByTarget(viewerStructure?.joinRelations ?? relations), [relations, viewerStructure]);
   const joinRelationsBySource = useMemo(() => {
     const map = new Map<string, Relation[]>();
-    for (const relation of relations) {
+    for (const relation of viewerStructure?.joinRelations ?? relations) {
       if (relation.relationType?.toUpperCase() !== 'JOIN' || !relation.sourceMessageId) continue;
       const existing = map.get(relation.sourceMessageId) ?? [];
       existing.push(relation);
       map.set(relation.sourceMessageId, existing);
     }
     return map;
-  }, [relations]);
+  }, [relations, viewerStructure]);
 
   const traceContainerMemberships = containerEffect.memberships;
 
@@ -1283,7 +1349,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const isRelatedView = traceEntries.some(entry => entry.relatedView);
   // The unread/home filter describes the view we came from. An explicit related
   // view must retain both endpoints, including already-read context messages.
-  const homeFilterResult = useMemo(() => isRelatedView || homeFilterMode===null ? null : workerFilters ? globalFilters.result?.home ?? null : deriveHomeFilterResult({ displayUser, homeFilterMode, msgMap, messages, readStatusByMessageId, edges, traceContainerMemberships,relations,readingMarks:readingState.marks,corrections:personalCorrectionVersions }), [isRelatedView, workerFilters, globalFilters.result, displayUser?.username, displayUser?.id, edges, effectiveSuppressedRelIdsForLayout, homeFilterMode, isPreloaded, messages, msgMap, readStatusByMessageId, relations, traceContainerMemberships, user?.id,readingState.marks,personalCorrectionVersions]);
+  const homeFilterResult = useMemo(() => isRelatedView || homeFilterMode===null ? null : workerFilters ? globalFilters.result?.home ?? null : deriveHomeFilterResult({ displayUser, homeFilterMode, msgMap, messages, readStatusByMessageId, edges, traceContainerMemberships,relations,readingMarks:homeFilterReadingMarks,corrections:personalCorrectionVersions }), [isRelatedView, workerFilters, globalFilters.result, displayUser?.username, displayUser?.id, edges, effectiveSuppressedRelIdsForLayout, homeFilterMode, isPreloaded, messages, msgMap, readStatusByMessageId, relations, traceContainerMemberships, user?.id,homeFilterReadingMarks,personalCorrectionVersions]);
   const homeNavigationRef=useRef({mode:homeFilterMode,result:homeFilterResult});
   homeNavigationRef.current={mode:homeFilterMode,result:homeFilterResult};
 
@@ -1305,7 +1371,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     }
     return roles;
   }, [edges, homeFilterResult]);
-  const joinStatusByMessage = containerEffect.context.joinStatusByMessage;
+  const joinStatusByMessage = viewerStructure?.joinStatusByMessage ?? containerEffect.context.joinStatusByMessage;
 
   // Real-time: if the previewed classify becomes active (no longer rejected),
   // exit preview mode so the user gets full interaction capabilities.
@@ -1542,6 +1608,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const highlightedMessageIds=useMemo(()=>new Set(readingMessageIds.length&&traceEntries.length?readingMessageIds:[
     ...currentTraceIds??[],...[containerPreviewId,comparisonReviewed?comparisonTargetId:null,correctionFilterTargetId,joinFilterTargetId].filter((id):id is string=>!!id),
   ]),[readingMessageIds,currentTraceIds,traceEntries.length,containerPreviewId,comparisonReviewed,comparisonTargetId,correctionFilterTargetId,joinFilterTargetId]);
+  const viewTargetMessageIds = useMemo(() => new Set([...highlightedMessageIds, ...notificationFocusIds]), [highlightedMessageIds, notificationFocusIds]);
 
   function showMessagePulse(targetId: string, element: HTMLElement, requestId = scrollRequestIdRef.current, onShown?: (shown: boolean) => void): void {
     return runShowMessagePulse({ task: positioningTaskRef.current, scrollRequestIdRef, messagePulseTimerRef, messagePulseRafRef, leftPanelRef, findMessageElements, setMessagePulse }, targetId, element, requestId, onShown);
@@ -1584,34 +1651,19 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       displayHintWindow:pending?pending.displayHintWindow??null:displayHintWindow.capture(),
       // Viewport and scope must return together when tracing and temporary
       // categories are entered from one another. Records remain in the store.
-      restoreScope() {
-        setRecordCategory(recordCategory);
-        classifyStackRef.current = [...classifyStack];
-        temporaryCategoryStackRef.current = [...temporaryStack];
-        containerPreviewStack.current = [...previewStack];
-        comparisonOrigin.current = comparison;
-        setClassifyRelMsgId(classifyRelMsgId);
-        setHomeFilterMode(homeFilterMode);skipCleanSenderInitRef.current=skipSender;
-        clearCleanFilters();rules.forEach(rule=>addCleanFilter({...rule}));
-        setTraceDepths({...traceDepths});setReadingOrder(readingOrder);
-        setReadingFocusAnchorId(readingFocusId);setReadingMessageIds([...readingMessageIds]);setReadingAnchorId(null);setTemporaryReadingIds(new Set(temporaryReadingIds));
-        // A restored viewport already owns its position. Reusing a completed
-        // layout can finish restoration before the trace effect runs.
-        prevTraceLenRef.current = traceEntries.length;
-        setTraceEntries(traceEntries);
-        setTraceExpandedFrameIds(new Set(expandedFrames));
-        setPreviewClassifyId(previewClassifyId);
-        setContainerPreviewId(containerPreviewId);
-        setJoinFilterTargetId(joinFilterTargetId);
-        setJoinFilterDirection(joinFilterDirection);
-        setCorrectionFilterTargetId(correctionFilterTargetId);
-        setComparisonMode(comparisonMode);
-        setComparisonReviewed(comparisonReviewed);
-        setComparisonTargetId(comparisonTargetId);
-        setComparisonSide(comparisonSide);
-        setComparisonReviewBaseMessages(comparisonReviewBaseMessages);
-        setComparisonReviewBaseEdges(comparisonReviewBaseEdges);
-      },
+      restoreScope: restoreViewState({
+        refs: [[classifyStackRef, classifyStack], [temporaryCategoryStackRef, temporaryStack], [containerPreviewStack, previewStack],
+          [comparisonOrigin, comparison], [skipCleanSenderInitRef, skipSender], [prevTraceLenRef, traceEntries.length]],
+        values: [[setRecordCategory, recordCategory], [setClassifyRelMsgId, classifyRelMsgId], [setHomeFilterMode, homeFilterMode],
+          [setTraceDepths, { ...traceDepths }], [setReadingOrder, readingOrder], [setReadingFocusAnchorId, readingFocusId],
+          [setReadingMessageIds, [...readingMessageIds]], [setReadingAnchorId, null], [setTemporaryReadingIds, new Set(temporaryReadingIds)],
+          [setTraceEntries, traceEntries], [setTraceExpandedFrameIds, expandedFrames], [setPreviewClassifyId, previewClassifyId],
+          [setContainerPreviewId, containerPreviewId], [setJoinFilterTargetId, joinFilterTargetId], [setJoinFilterDirection, joinFilterDirection],
+          [setCorrectionFilterTargetId, correctionFilterTargetId], [setComparisonMode, comparisonMode], [setComparisonReviewed, comparisonReviewed],
+          [setComparisonTargetId, comparisonTargetId], [setComparisonSide, comparisonSide],
+          [setComparisonReviewBaseMessages, comparisonReviewBaseMessages], [setComparisonReviewBaseEdges, comparisonReviewBaseEdges]],
+        filters: { clear: clearCleanFilters, add: addCleanFilter, rules },
+      }),
     };
   }
 
@@ -1623,16 +1675,11 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       list: viewModeScrollRef.current.list ? { ...viewModeScrollRef.current.list } : null,
     };
     const skipSender = skipCleanSenderInitRef.current;
-    return { ...snapshot, restoreScope() {
-      snapshot.restoreScope?.();
-      setMsgFilter({ ...filter });
-      setHomeFilterMode(homeFilterMode);
-      skipCleanSenderInitRef.current = skipSender;
-      clearCleanFilters(); rules.forEach(rule => addCleanFilter({ ...rule }));
-      // The explicit snapshot owns the active mode's viewport; retain the other
-      // mode's position for the next graph/list switch.
-      viewModeScrollRef.current = { ...modeScroll, [snapshot.viewMode]: null };
-    } };
+    return { ...snapshot, restoreScope: restoreViewState({ before: snapshot.restoreScope,
+      values: [[setMsgFilter, filter], [setHomeFilterMode, homeFilterMode]],
+      refs: [[skipCleanSenderInitRef, skipSender], [viewModeScrollRef, { ...modeScroll, [snapshot.viewMode]: null }]],
+      filters: { clear: clearCleanFilters, add: addCleanFilter, rules },
+    }) };
   }
 
   function restoreBrowsingSnapshot(snapshot: TraceSnapshot): void {
@@ -1659,7 +1706,8 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const readingHistory = useBrowsingHistory(browsingHistoryKey, captureSnapshot, restoreBrowsingSnapshot);
   function recordReadingNavigation():void {if(!loading&&traceEntries.length&&readingFocusId)readingHistory.record();}
   const historyReadingIds=(snapshot:TraceSnapshot|undefined)=>snapshot?.readingMessageIds??(snapshot?.readingFocusId?[snapshot.readingFocusId]:[]);
-  useViewedMessageHighlight(leftPanelRef,[...highlightedMessageIds],traceEntries.length?{
+  useEffect(()=>setNotificationFocusIds([]),[lastClickedMessageId]);
+  useViewedMessageHighlight(leftPanelRef,[...viewTargetMessageIds],traceEntries.length?{
     current:readingMessageIds,previous:historyReadingIds(readingHistory.backSnapshot),next:historyReadingIds(readingHistory.forwardSnapshot),
     continue:readingNavigation.current===readingFocusId?readingNavigation.continue:null,
   }:undefined);
@@ -1696,6 +1744,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     });
     const originalId=msgMap.get(id)?.relationType==='correct'?edges.find(edge=>edge.relationMessageId===id&&edge.relationType==='correct')?.to.messageId:undefined;
     prepareComparisonReview(originalId??id);
+    resetFrameExpansion();
     setContainerPreviewId(id);
   }
   function exitContainerPreview():void {
@@ -1904,6 +1953,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     if (!isPreloaded && onDemand) void ensureMessages([messageId]).catch(error => showAlert(error.message));
     cancelViewNavigation();
     runEnterTrace({ captureSnapshot, classifyRelMsgId, classifyStackRef, setTraceExpandedFrameIds, setTraceEntries, setClassifyRelMsgId, setClassifyKey, cancelScrollRafs, scrollRequestIdRef, leftPanelRef }, messageId, options);
+    resetFrameExpansion();
     setRecordCategory(null);
     if(options?.mode!=='scope')viewModeScrollRef.current={graph:null,list:null};
     initializeTraceReading([messageId],options?.mode);
@@ -1916,6 +1966,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     recordBrowsingNavigation();
     cancelViewNavigation();
     runEnterTraceMultiple({ captureSnapshot, classifyRelMsgId, classifyStackRef, setTraceExpandedFrameIds, setTraceEntries, setClassifyRelMsgId, setClassifyKey, cancelScrollRafs, scrollRequestIdRef, leftPanelRef, setTraceKey }, messageIds, options);
+    resetFrameExpansion();
     setRecordCategory(null);
     if(options?.mode!=='scope')viewModeScrollRef.current={graph:null,list:null};
     initializeTraceReading(messageIds,options?.mode);
@@ -1938,35 +1989,49 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     relatedViewAbortRef.current?.abort();
     const controller = new AbortController();
     relatedViewAbortRef.current = controller;
-    let context;
-    try {
-      context = await loadRelatedTraceContext(messageId, messages, edges, ids => {
-        if (isPreloaded) throw new Error('导出的数据不包含关联消息的另一端');
-        return api.getMessageContext(ids, controller.signal);
-      });
-    } catch (error) {
-      if (!controller.signal.aborted) showAlert(error instanceof Error ? error.message : '关联消息加载失败，请重试');
-      return false;
-    }
-    if (controller.signal.aborted) return false;
-    if (context.messages.length) setRelatedTraceContext(previous => ({
-      messages: [...previous?.messages ?? [], ...context.messages],
-      edges: [...previous?.edges ?? [], ...context.edges], relations: [...previous?.relations ?? [], ...context.relations],
-    }));
-    enterTrace(messageId, { relatedView: true });
-    setTraceDepths({...DEFAULT_TRACE_DEPTHS});
-    setViewMode('graph');
-    closeSettlement();
-    setContainerPreviewId(null);
-    setComparisonMode(false); setComparisonReviewed(false);
-    setJoinFilterTargetId(null); setCorrectionFilterTargetId(null);
-    setComparisonReviewBaseMessages(null); setComparisonReviewBaseEdges(null);
-    setLastClickedMessageId(messageId);
-    pendingScrollMsgRef.current=messageId;
-    pendingScrollDependencyIdsRef.current=[];
-    setScrollKey(key=>key+1);
-    setTraceKey(key => key + 1);
-    return true;
+    return new Promise<boolean>(resolve => {
+      let cancelPreparation = () => {};
+      const cancel = () => { cancelPreparation(); };
+      controller.signal.addEventListener('abort', cancel, { once: true });
+      // Paint progress before loading endpoints or replacing the scene. Keep
+      // the preparation registered across the request, then let layout and
+      // positioning tasks own the dialog until the destination is visible.
+      flushSync(() => { cancelPreparation = prepareCategoryDrawing(async () => {
+        try {
+          const context = await loadRelatedTraceContext(messageId, messages, edges, async ids => {
+            if (viewerStructure) return viewerStructure.readContext(ids);
+            if (isPreloaded) throw new Error('导出的数据不包含关联消息的另一端');
+            return api.getMessageContext(ids, controller.signal);
+          });
+          if (controller.signal.aborted) { resolve(false); return; }
+          if (context.messages.length) setRelatedTraceContext(previous => ({
+            messages: [...previous?.messages ?? [], ...context.messages],
+            edges: [...previous?.edges ?? [], ...context.edges], relations: [...previous?.relations ?? [], ...context.relations],
+          }));
+          enterTrace(messageId, { relatedView: true });
+          setTraceDepths({...DEFAULT_TRACE_DEPTHS});
+          setViewMode('graph');
+          closeSettlement();
+          setContainerPreviewId(null);
+          setComparisonMode(false); setComparisonReviewed(false);
+          setJoinFilterTargetId(null); setCorrectionFilterTargetId(null);
+          setComparisonReviewBaseMessages(null); setComparisonReviewBaseEdges(null);
+          setLastClickedMessageId(messageId);
+          pendingScrollMsgRef.current=messageId;
+          pendingScrollDependencyIdsRef.current=[];
+          setScrollKey(key=>key+1);
+          setTraceKey(key => key + 1);
+          resolve(true);
+        } catch (error) {
+          if (!controller.signal.aborted) showAlert(error instanceof Error ? error.message : '关联消息加载失败，请重试');
+          resolve(false);
+        } finally { controller.signal.removeEventListener('abort', cancel); }
+      }, () => {
+        controller.signal.removeEventListener('abort', cancel);
+        controller.abort();
+        resolve(false);
+      }, 'loading'); });
+    });
   }
 
   function clearDraftAll(): void {
@@ -2145,6 +2210,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     setActiveTextSelectId(null);setReadingAnchorId(null);window.getSelection()?.removeAllRanges();
   }
   function findContainingClassification(messageId: string): string | null {
+    if (viewerStructure) return viewerStructure.containingClassification(messageId);
     return runFindContainingClassification({ relationById, relations, rejectedContainerIds, rejectedJoinRelationIds,
       containerOwnership: containerEffect.ownership, edges, msgMap }, messageId);
   }
@@ -2334,6 +2400,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const isTagWithQuickAnnotate = relationType === "tag" && secondaryRelationType !== "none";
   const isTagWithInlineBadge = relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive" || secondaryRelationType === "attention" || secondaryRelationType === "block");
   const notifyTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
+  const notificationRecipients = useNotificationRecipients(isNotifyType&&!isPreloaded,user?.id,notifyTargets.map(target=>target.messageId));
   const attentionTargetMessageIds = useMemo(() => {
     const followers = new Map(Object.entries(attentionUsersByTarget).map(([id,users]) => [id,new Set(users)]));
     for (const relation of [...relations].sort((a,b) => (a.sequence ?? Date.parse(a.createdAt)) - (b.sequence ?? Date.parse(b.createdAt)))) {
@@ -2349,9 +2416,10 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     }
     return new Set([...followers].filter(([,users]) => users.size>0).map(([id]) => id));
   }, [attentionUsersByTarget, relations]);
-  const hasAttentionNotifyTarget = notifyTargets.length > 0 && notifyTargets.every(target =>
-    attentionTargetMessageIds.has(target.messageId)
-  );
+  const hasAttentionNotifyTarget = isPreloaded ? notifyTargets.length > 0 && notifyTargets.every(target => attentionTargetMessageIds.has(target.messageId))
+    : notificationRecipients.users.length>0&&!notificationRecipients.loading;
+  const notifyRecipientLabel = notificationRecipients.loading ? '正在确认通知接收者…' : notificationRecipients.error ? `接收者加载失败：${notificationRecipients.error}`
+    : notificationRecipients.users.length ? `发送通知（${notificationRecipients.users.slice(0,3).map(user=>user.username).join('、')}${notificationRecipients.users.length>3?'等':''}，共 ${notificationRecipients.users.length} 人）` : undefined;
 
   // Whether any draft unit points to a relation message (vs. text message or fragment)
   const draftHasRelationTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation' && !msgMap.get(u.messageId)?.parts);
@@ -2505,7 +2573,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const singleButtonEnabled = !annotationOppositionError && deriveSingleButtonEnabled({ relationType, newMessageContent, hasTextContent, stakeAmount, joinOnlyAction, relStakeAmount, effectiveMinStake, totalConsumption, availablePoints, draftUnits, targetUnits, hasInvalidCorrectTarget, hasInvalidContainerSource, hasInvalidJoinTarget, hasCrossLinkValidationError, hasOrphanContainerLabel, hasClassifyCycle, hasInvalidDelegationFormat, hasInvalidProposalFormat, hasCorrectionRelationTarget, isClassifyType, sourceUnits, relations, hasTargetsAvailable, isSummaryType, isMergeType, secondaryRelationType, effectiveTargetUnits, isGovernanceOrOpsType, msgMap, isTagWithInlineBadge, subType, subTypeCustomLabel, isTagWithQuickAnnotate, isAgreeDisagreeType, isArrangeType, isNotifyType, hasAttentionNotifyTarget });
 
   // Dynamic label describing what the send button will do
-  const singleButtonLabel = deriveSingleButtonLabel({ relationType, newMessageContent, draftUnits, isClassifyType, sourceUnits, relations, getClassifyTargetRefs, targetUnits, joinOnlyAction, hasTargetsAvailable, isSummaryType, isMergeType, hasCorrectionRelationTarget, hasInvalidCorrectTarget, hasTextContent, isNotifyType, hasAttentionNotifyTarget, isGovernanceOrOpsType, secondaryRelationType, msgMap, isAgreeDisagreeType, isArrangeType, isTagWithInlineBadge, subType, subTypeCustomLabel, isTagWithQuickAnnotate });
+  const singleButtonLabel = deriveSingleButtonLabel({ notifyRecipientLabel, relationType, newMessageContent, draftUnits, isClassifyType, sourceUnits, relations, getClassifyTargetRefs, targetUnits, joinOnlyAction, hasTargetsAvailable, isSummaryType, isMergeType, hasCorrectionRelationTarget, hasInvalidCorrectTarget, hasTextContent, isNotifyType, hasAttentionNotifyTarget, isGovernanceOrOpsType, secondaryRelationType, msgMap, isAgreeDisagreeType, isArrangeType, isTagWithInlineBadge, subType, subTypeCustomLabel, isTagWithQuickAnnotate });
 
   const sendValidationLabel = annotationOppositionError ?? deriveSendValidationLabel({ singleButtonEnabled, relationType, hasTextContent, draftUnits, targetUnits, stakeAmount, joinOnlyAction, relStakeAmount, effectiveMinStake, totalConsumption, availablePoints, hasCorrectionRelationTarget, hasInvalidCorrectTarget, hasInvalidContainerSource, hasInvalidJoinTarget, invalidJoinTargetMessage, hasCrossLinkValidationError, crossLinkValidationMessage, hasOrphanContainerLabel, hasClassifyCycle, hasInvalidDelegationFormat, secondaryRelationType, hasInvalidProposalFormat, hasTargetsAvailable, isClassifyType, isGovernanceOrOpsType, isAgreeDisagreeType, isArrangeType, isMergeType, isTagWithQuickAnnotate, isTagWithInlineBadge });
 
@@ -2543,19 +2611,32 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   }
 
   const { messagesToShow, edgesToShow, traceExpandableContainerIds, traceAncestorContainerIds, traceScopeIds } = useMemo(() => deriveMessagesToShow({ traceEntries, messages, edges:containerEffect.traceEdges, traceContainerMemberships, effectiveSuppressedRelIdsForLayout, traceDistance, traceDepths, traceDirection, traceExpandedFrameIds }), [containerEffect, messages, edges, traceContainerMemberships, effectiveSuppressedRelIdsForLayout, traceEntries, traceDistance, traceDepths, traceDirection, msgMap, traceExpandedFrameIds]);
-  const soleTraceClassification=traceEntries.length?singleTraceClassification(messagesToShow,edgesToShow,containerEffect.ownership):null;
-  const traceAncestorKey = JSON.stringify([...new Set([...traceAncestorContainerIds,...(soleTraceClassification?[soleTraceClassification]:[])])].sort());
-  const initializedTraceAncestors = useRef(new WeakMap<TraceEntry, string>());
+  const defaultTraceFrameKey=useMemo(()=>{
+    const ids=new Set([...traceAncestorContainerIds,...traceExpandableContainerIds]);
+    // Open the selected container's entire tree at once. Ancestors retain only
+    // the members already reached by the trace, without adding their siblings.
+    for(const id of currentTraceEntry?.ids??[])if(getPresentationSpec(msgMap.get(id)?.relationType??'').isContainer){
+      ids.add(id);
+      for(const child of containerEffect.ownership.owned(id).relationIds)ids.add(child);
+    }
+    return JSON.stringify([...ids].filter(id=>['classify','summary'].includes(msgMap.get(id)?.relationType??'')
+      &&!rejectedContainerIds.has(id)).sort());
+  },[traceAncestorContainerIds,traceExpandableContainerIds,currentTraceEntry,containerEffect,msgMap,rejectedContainerIds]);
+  const initializedTraceFrames = useRef(new WeakMap<TraceEntry, {range:string;ids:Set<string>}>());
   useLayoutEffect(() => {
     if (!currentTraceEntry) return;
-    const rangeKey = JSON.stringify([traceAncestorKey, traceDepths]);
-    if (initializedTraceAncestors.current.get(currentTraceEntry) === rangeKey) return;
-    initializedTraceAncestors.current.set(currentTraceEntry, rangeKey);
-    // Initialize each trace range once, retaining manually collapsed frames
-    // when returning from a nested view or the browsing history.
-    const ids = JSON.parse(traceAncestorKey) as string[];
+    const range=JSON.stringify(traceDepths);
+    let initialized=initializedTraceFrames.current.get(currentTraceEntry);
+    if(initialized?.range!==range){
+      initialized={range,ids:new Set()};
+      initializedTraceFrames.current.set(currentTraceEntry,initialized);
+    }
+    // Initialize each new frame once. A manual collapse changes the visible
+    // projection, but must not reopen frames already initialized in this range.
+    const ids=(JSON.parse(defaultTraceFrameKey) as string[]).filter(id=>!initialized.ids.has(id));
+    for(const id of ids)initialized.ids.add(id);
     if (ids.length) setTraceExpandedFrameIds(previous => new Set([...previous, ...ids]));
-  }, [traceAncestorKey, currentTraceEntry, traceDepths]);
+  }, [defaultTraceFrameKey, currentTraceEntry, traceDepths]);
 
   const canSetTrace = (!!lastClickedMessageId && messages.some(m => m.id === lastClickedMessageId)) || getSelectedWholeMessageIds().length > 0;
   const canExitTrace = traceEntries.length > 0;
@@ -2641,8 +2722,9 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       rejectedContainerIds:effect.rejectedContainerIds,effectiveJoinIds:effect.effectiveJoinIds};
   },[containerPreviewId,comparisonInput,joinFilterTargetId]);
   const displayHintsInput = useMemo(() => ({messages,relations,edges,username:displayUser?.username ?? null,userId:displayUser?.id,
+    unloadedContainers: unloadedViewerContainers,
     readStatus:readStatusByMessageId,readingMarks:readingState.marks,personalEffect:containerEffect,displayEffect:containerPreview?.effect,corrections:personalCorrectionVersions,recommendedCorrections:recommendedCorrectionVersions,displayCorrections:correctionVersions}),
-    [messages,relations,edges,displayUser?.username,displayUser?.id,readStatusByMessageId,readingState.marks,containerEffect,containerPreview?.effect,personalCorrectionVersions,recommendedCorrectionVersions,correctionVersions]);
+    [messages,relations,edges,displayUser?.username,displayUser?.id,readStatusByMessageId,readingState.marks,containerEffect,containerPreview?.effect,personalCorrectionVersions,recommendedCorrectionVersions,correctionVersions,unloadedViewerContainers]);
   const hintContainerId=containerPreview&&['classify','summary','merge','arrange'].includes(containerPreview.target.relationType??'')
     ?containerPreviewId:previewClassifyId??currentClassifyRelMsgId??scopeMessageId;
   async function viewDisplayHint(id:string,_event:React.MouseEvent,record:boolean):Promise<void> {
@@ -2751,12 +2833,34 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       messageId=settlement.settlementTargetId;
       openSettlement(messageId,settlement.roundPayload?.settlementType==='VALUE'?'VALUE':'TRUTH');
     }
-    if (!isPreloaded && onDemand && !messagesRef.current.some(message => message.id === messageId)) {
-      pendingRemoteNavigationRef.current = { messageId, options };
+    if (findVisibleMessageElement(leftPanelRef.current, messageId, relationsRef.current, edgesRef.current)) {
+      // Locating a message already on screen must preserve the current scope,
+      // reading trace, filters, expanded frames and composer selections.
+      pendingRemoteNavigationRef.current = null;
+      pendingScrollMsgRef.current = null;
+      pendingScrollDependencyIdsRef.current = [];
+      pendingScrollCompletionRef.current = undefined;
+      pendingViewportRestoreRef.current = null;
+      setAutoClassifyMsgId(null);
+      navigationTaskRef.current?.cancel();
+      if (viewNavigationTimerRef.current !== null) clearTimeout(viewNavigationTimerRef.current);
+      viewNavigationTimerRef.current = null;
+      if (options?.select !== false) setDraftUnits([{ messageId, selection: { kind: 'whole' } }]);
+      setLastClickedMessageId(messageId);
+      scrollMsgToCenter(messageId, { onComplete: options?.onComplete });
+      return;
+    }
+    if ((viewerStructure || !isPreloaded && onDemand) && !messagesRef.current.some(message => message.id === messageId)) {
+      const request = { messageId, options };
+      pendingRemoteNavigationRef.current = request;
+      const task = beginLoading();
+      task.onCancel(() => { if (pendingRemoteNavigationRef.current === request) pendingRemoteNavigationRef.current = null; });
       void ensureMessages([messageId]).catch(error => {
-        if (pendingRemoteNavigationRef.current?.messageId === messageId) pendingRemoteNavigationRef.current = null;
-        showAlert(error instanceof Error ? error.message : '消息加载失败');
-      });
+        if (pendingRemoteNavigationRef.current === request) {
+          pendingRemoteNavigationRef.current = null;
+          showAlert(error instanceof Error ? error.message : '消息加载失败');
+        }
+      }).finally(task.complete);
       return;
     }
     const joinMessage=messagesRef.current.find(message=>message.id===messageId);
@@ -2863,9 +2967,11 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     pendingScrollMsgRef.current = messageId;
     pendingScrollCompletionRef.current = options?.onComplete;
     setScrollKey(k => k + 1);
-  }, [cleanMode, joinFilterTargetId, joinFilterDirection, recordCategory, correctionFilterTargetId, msgFilter, clearCleanView, showAlert, hiddenInGraphView, isPreloaded, onDemand, ensureMessages, openSettlement]);
+  }, [cleanMode, joinFilterTargetId, joinFilterDirection, recordCategory, correctionFilterTargetId, msgFilter, clearCleanView, showAlert, hiddenInGraphView, isPreloaded, onDemand, viewerStructure, ensureMessages, openSettlement, beginLoading]);
 
   const pendingRemoteNavigationRef = useRef<{ messageId: string; options?: { select?: boolean; preserveScope?: boolean; recordHistory?: boolean; onComplete?: ScrollMessageOptions['onComplete'] } } | null>(null);
+  useNotificationNavigation({ready:!loading&&!isPreloaded&&!loadError,navigate:handleNavigateToMessage,openSettlement,onError:showAlert,
+    onLocated:(source,target)=>setNotificationFocusIds(target?[source,target]:[source])});
   useEffect(() => {
     const pending = pendingRemoteNavigationRef.current;
     if (!pending || !messages.some(message => message.id === pending.messageId)) return;
@@ -2879,10 +2985,10 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
 
   const activePageParent = recordCategory?`related:${recordCategory.targetId}`:joinFilterTargetId ? `related:${joinFilterTargetId}` : correctionFilterTargetId ? `related:${correctionFilterTargetId}` : containerPreviewId ?? currentClassifyRelMsgId ?? scopeMessageId;
 
-  function confirmMessageIdNavigation(value = messageIdInput): void {
+  function confirmMessageIdNavigation(value: string): void {
     const id = value.trim();
-    if (id && !isPreloaded && onDemand && !messagesRef.current.some(message => message.id === id)) { handleNavigateToMessage(id); return; }
-    return runConfirmMessageIdNavigation({ messageIdInput: value, showAlert, messagesRef, handleNavigateToMessage, setAutoClassifyMsgId });
+    if (id && (viewerStructure || !isPreloaded && onDemand) && !messagesRef.current.some(message => message.id === id)) { handleNavigateToMessage(id); return; }
+    return runConfirmMessageIdNavigation({ messageIdInput: value, showAlert, messagesRef, handleNavigateToMessage });
   }
 
   const handleNavigateFromCorrectionTemporaryCategory = useCallback((messageId: string, switchToList: boolean) => {
@@ -3092,6 +3198,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
         ...entry,ids:[...ids],mode:'trace',scopeRelationMessageId:undefined,relatedView:undefined,readingContext:tasks,
       }:entry));
       setTraceExpandedFrameIds(new Set());
+      resetFrameExpansion();
       classifyStackRef.current=[];setClassifyRelMsgId(null);setClassifyKey(key=>key+1);setTraceKey(key=>key+1);
     }
   }
@@ -3099,11 +3206,13 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     pendingReadingLoadRef.current?.reject(new DOMException('已切换到其他消息','AbortError'));
     pendingReadingLoadRef.current=null;
     const missing=groupIds.filter(id=>!messagesRef.current.some(message=>message.id===id));
-    if(missing.length&&!isPreloaded&&onDemand){
+    if(missing.length&&(viewerStructure||!isPreloaded&&onDemand)){
       return new Promise<void>((resolve,reject)=>{
         const request={id,ids:[...groupIds],tasks,force:forceTrace,loaded:false,resolve,reject};pendingReadingLoadRef.current=request;
+        const task=beginLoading();
+        task.onCancel(()=>{if(pendingReadingLoadRef.current===request){pendingReadingLoadRef.current=null;reject(new DOMException('已取消消息加载','AbortError'));}});
         void ensureMessages(missing).then(()=>{if(pendingReadingLoadRef.current===request){request.loaded=true;setScrollKey(key=>key+1);}})
-          .catch(error=>{if(pendingReadingLoadRef.current===request){pendingReadingLoadRef.current=null;reject(error);}});
+          .catch(error=>{if(pendingReadingLoadRef.current===request){pendingReadingLoadRef.current=null;reject(error);}}).finally(task.complete);
       });
     }
     if(groupIds.some(id=>!messagesRef.current.some(message=>message.id===id)))throw new Error('目标消息暂未加载，请重试');
@@ -3195,17 +3304,20 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
 
   // And the active stance messages: which of the user's own agree/disagree messages
   // are the "current" stance on each target, for bidirectional visual linking.
-  const activeStanceMap = computeUserActiveStanceRelIds(edges, messages, displayUser?.username ?? null);
+  const activeStanceMap = useMemo(() => computeUserActiveStanceRelIds(edges, messages, displayUser?.username ?? null),
+    [edges, messages, displayUser?.username]);
   // Reverse map: stance relation message ID → { target, type } for quick lookup.
-  const activeStanceByRelMsgId = (() => {
+  const activeStanceByRelMsgId = useMemo(() => {
     const m = new Map<string, { targetRelId: string; type: 'agree' | 'disagree' }>();
     for (const [targetId, v] of activeStanceMap) m.set(v.relMsgId, { targetRelId: targetId, type: v.type });
     return m;
-  })();
+  }, [activeStanceMap]);
   // Overridden stances: the user's previous stance messages that are no longer active.
-  const overriddenStanceRelIds = computeUserOverriddenStanceRelIds(rawEdgesToRender, messages, displayUser?.username ?? null);
+  const overriddenStanceRelIds = useMemo(() => computeUserOverriddenStanceRelIds(rawEdgesToRender, messages, displayUser?.username ?? null),
+    [rawEdgesToRender, messages, displayUser?.username]);
   // Navigation identities contain view choices, never live message/reading data.
   const recentViewOwner = JSON.stringify([scopeMessageId, displayUser?.username, !!loadedExport]);
+  const readingPresentationActive = !isPreloaded && readingState.ready && !sendPreview.active && !comparisonMode && !containerPreview && (homeReadingStatus === 'pending' || traceEntries.length > 0);
   const recentViewKey = JSON.stringify({
     mode:viewMode,classify:classifyRelMsgId,
     classifyPath:classifyStackRef.current.map(entry=>[entry.relMsgId,entry.frameScopeIds,entry.frameKnownIds]),
@@ -3265,7 +3377,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
           <DeferredWorkbench label="关系工具栏" blocksDrawing><RelationToolbar barRef={relationBarRef} leftControlsRef={relationLeftControlsRef} rightControlsRef={relationRightControlsRef}
             top={0} springWidth={relationSpringWidth} rightOffset={relationControlsRightOffset} viewer={isPreloaded}
             localMode={localRelationMode}
-            messageIdInput={messageIdInput} onMessageIdChange={setMessageIdInput} onJump={()=>confirmMessageIdNavigation()}
+            knownIds={knownMessageIds} onJump={confirmMessageIdNavigation}
             composer={{ relationType, secondaryRelationType, newMessageContent, subType, setRelationType, setSecondaryRelationType, setNewMessageContent, lastTagSecondaryRef, lastDelegationSecondaryRef, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, guideTargetIdRef }} /></DeferredWorkbench>
 
           {/* 两侧内容必须自然展开，不得给内容层添加 height/maxHeight 等高度上限。
@@ -3313,8 +3425,10 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                   if (t.closest?.("[data-msgid]") || t.closest?.("svg") || t.closest?.('[title^="relation="]') || t.closest?.("[data-rel-overlay]")) return;
                   handleCanvasBlankClick();
                 }}>
+                <ReadingCanvasPresentation viewport={leftPanelRef} active={readingPresentationActive} />
                 {messagePulse && <MessageJumpOverlay messageId={messagePulse.messageId} targetElement={messagePulse.element} targetRect={messagePulse.rect} />}
-                <RecentWorkbenchViews key={recentViewOwner} ownerKey={recentViewOwner} viewKey={recentViewKey}>
+                <RecentWorkbenchViews key={recentViewOwner} ownerKey={recentViewOwner} viewKey={recentViewKey}
+                  pending={!!viewerStructure && appliedScopeKey !== requestedViewerScopeKey}>
                 {globalFilterPending ? (
                   <div role="status" style={{ padding: 48, textAlign: 'center', color: 'var(--ink-94a3b8)' }}>
                     {globalFilters.error ?? '正在准备全局筛选结果…'}
@@ -3336,14 +3450,14 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                 ) : viewMode === "list" ? (
                   <DeferredWorkbench label="消息列表" blocksDrawing>
                   <WorkbenchMessageList
-                    highlightedMessageIds={highlightedMessageIds}
+                    highlightedMessageIds={viewTargetMessageIds}
                     crossCanvasRelations={containerPreview?.context.crossCanvasRelations??crossCanvasRelations} onRelatedRelationView={viewRelatedRelation}
                     onRelatedNavigate={viewRelatedContainer} standaloneMessageIds={recordCategory?new Set(recordCategory.recordIds):comparisonViewIds??correctionTemporaryViewIds??standaloneMessageIds}
                     showJoinRecords={comparisonMode||joinFilterTargetId!==null||recordCategory!==null}
                     visibleMessages={messageWindow.messages}
                     joinRecordContext={joinFilterTargetId&&joinFilterDirection==='outgoing'?{containerId:joinFilterTargetId,effect:containerPreview?.effect??containerEffect}:undefined}
                     catalog={{ messages:containerPreview?.allMessages??containerEffect.messages, edges:containerPreview?.edges??edges, msgMap:containerPreview?new Map(containerPreview.allMessages.map(message=>[message.id,message])):containerEffect.msgMap, relationById:containerPreview?new Map(containerPreview.relations.map(relation=>[relation.id,relation])):containerEffect.relationById, relationTypeByRelMsgId, joinRelationsByTarget, joinRelationsBySource, effectiveJoinRelationIds:containerPreview?.effectiveJoinIds??effectiveJoinRelationIds, joinStatusByMessage:containerPreview?.context.joinStatusByMessage??joinStatusByMessage, joinEffectSourcesByMessage:containerPreview?.context.joinEffectSourcesByMessage??containerEffect.context.joinEffectSourcesByMessage, containerOwnership:containerPreview?.effect.ownership??containerEffect.ownership, summaryCoverageByMessageId, correctionVersions }}
-                    display={{ embeddedMessageIds:comparisonMode?new Set<string>():embeddedMessageIds, suppressedRelIds:containerPreview?.suppressed??suppressedRelIds, rejectedContainerIds:containerPreview?.rejectedContainerIds??rejectedContainerIds, overriddenStanceRelIds, readStatusByMessageId, homeMatchIds: homeFilterResult?.matchIds, homeReasonByMessageId: homeFilterResult?.reasonByMessageId, homeDisplayRoleByMessageId, authorStakes, stakeCounts:correctionStances.counts, correctionFilterTargetId, joinFilterTargetId }}
+                    display={{ embeddedMessageIds:comparisonMode?new Set<string>():embeddedMessageIds, suppressedRelIds:containerPreview?.suppressed??suppressedRelIds, rejectedContainerIds:containerPreview?.rejectedContainerIds??rejectedContainerIds, overriddenStanceRelIds, readStatusByMessageId, preserveReadingLayout:readingPresentationActive, homeMatchIds: homeFilterResult?.matchIds, homeReasonByMessageId: homeFilterResult?.reasonByMessageId, homeDisplayRoleByMessageId, authorStakes, stakeCounts:correctionStances.counts, correctionFilterTargetId, joinFilterTargetId }}
                     comparison={{ comparisonReviewed, comparisonTargetId, comparisonRecommendedDisplay, activeStanceByRelMsgId, activeStanceMap }}
                     settlement={{ settlementOpenMsgId, settlementOpenType, settlementEntryHighlight, closeSettlement, openSettlement }}
                     selection={{ draftUnits, activeTextSelectId, lastClickedMessageId }}
@@ -3415,9 +3529,11 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                     onInlineBadgeDoubleClick={handleInlineBadgeDoubleClick}
                     hideMessageIds={containerPreview?containerPreview.hideMessageIds:hideMessageIds}
                     traceExpandedFrameIds={traceExpandedFrameIds}
+                    expandAllFrames={traceEntries.length>0||!!containerPreview}
                     frameViewStateRef={graphFrameViewStateRef}
                     frameViewRestoreKey={frameViewRestoreKey}
                     highlightedMessageIds={highlightedMessageIds}
+                    locatedMessageIds={viewTargetMessageIds}
                     decorationExpansion={traceEntries.length&&readingDecorationExpansion.messageIds[0]===readingFocusId?readingDecorationExpansion:undefined}
                     traceFrameIds={traceFrameIds}
                     stakeCounts={correctionStances.counts}
@@ -3449,8 +3565,9 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
               {!isPreloaded && onDemand && <div style={{ position: 'absolute', bottom: 16, right: 16, maxWidth: 'calc(100% - 32px)', zIndex: 26, pointerEvents: 'none' }}>
                 <React.Suspense fallback={null}>
                   {catalog && <CatalogStatus client={catalog} inline />}
-                  {catalogReady && !globalFilterPending && messageWindow.enabled && <MessageWindowStatus
-                    loadedCount={messageWindow.messages.length} totalCount={messageWindow.totalCount} loading={messageWindow.loading} />}
+                  {globalFilters.error && !globalFilterPending && <div role="alert" style={{ padding: '6px 10px', background: 'var(--surface-141414)', color: 'var(--ink-94a3b8)', fontSize: 12, pointerEvents: 'auto' }}>
+                    筛选结果更新失败：{globalFilters.error} <button type="button" onClick={globalFilters.retry}>重试筛选</button>
+                  </div>}
                 </React.Suspense>
               </div>}
             </div>
@@ -3476,7 +3593,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
               isViewerMode={isPreloaded}
               hideViewerUser={isNativeZhihuView(loadedExport)}
               localReplyEditor={zhihuData ? renderSendControls => <DeferredWorkbench label="知乎本地整理" blocksDrawing><ZhihuReplyEditor data={zhihuData} sourceUnits={sourceUnits} targetUnits={targetUnits} draftUnits={draftUnits}
-                nativeDocument={!!nativeZhihuData} buildRelation={nativeZhihuData ? input => sendNativeZhihuRelation(nativeZhihuData, input) : undefined}
+                nativeDocument={!!nativeZhihuData} buildRelation={nativeZhihuData ? input => sendPagedZhihuRelation(nativeZhihuData, input) : undefined}
                 relationType={localRelationType} renderSendControls={renderSendControls} onBusyChange={setLocalSending}
                 correctionMode={secondaryRelationType === 'width-adjustment' ? 'width-adjustment' : 'text-correction'}
                 onCorrectionModeChange={setSecondaryRelationType}
@@ -3491,7 +3608,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                   } else handleNavigateToMessage(messageId);
                 }}
                 onSent={handleCanvasBlankClick}
-                onSave={next => persistPreloadedExport({ ...(nativeZhihuData ? nativeZhihuDocument(next) : next), view: {
+                onSave={next => persistPreloadedExport({ ...(nativeZhihuData ? next === zhihuData ? nativeZhihuData : nativeZhihuDocument(next) : next), view: {
                   username: displayUser?.username ?? null, mode: viewMode,
                   messageFilter: { ...msgFilter }, homeFilter: homeFilterMode,
                   cleanFilters: cleanFilters.map(rule => ({ ...rule })), classificationId: currentClassifyRelMsgId,
@@ -3509,7 +3626,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                   setViewerUser(null);
                 }
               }}
-              onExitViewer={() => navigate('/')}
+              onExitViewer={() => { saveViewerPosition(); navigate('/'); }}
               draftUnits={draftUnits}
               draftGroups={draftGroups}
               activeTextSelectId={activeTextSelectId}
@@ -3540,8 +3657,8 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
               onNavigateToMessage={messageId => {if(traceEntries.length)jumpWithinTrace(messageId);else handleNavigateToMessage(messageId,{select:false});}}
               currentTraceIds={currentTraceIds}
               viewCacheOwner={browsingHistoryKey}
-              messages={zhihuData ? messages.filter(message => !localInactiveRelationIds.has(message.id)) : messages}
-              edges={zhihuData ? edges.filter(edge => !localInactiveRelationIds.has(edge.relationMessageId) && !localInactiveRelationIds.has(edge.from.messageId) && !localInactiveRelationIds.has(edge.to.messageId)) : edges}
+              messages={localPanelData.messages}
+              edges={localPanelData.edges}
               user={user}
               relationType={relationType}
               secondaryRelationType={secondaryRelationType}
@@ -3652,6 +3769,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       />
 
       <LeaderboardController ref={leaderboardRef}
+        catalogVersion={catalogVersion} useCatalogRows={catalogComputationsCurrent}
         catalog={catalog} globalReady={!onDemand || isPreloaded || catalogReady} globalRows={onDemand && !isPreloaded ? globalRows : undefined}
         onRefresh={refreshLeaderboard}
         messages={messages}
@@ -3701,3 +3819,4 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
 }
 
 import {bindViewedReference} from '../utils/bodyVersions';
+import { restoreViewState } from './workbench/restoreViewState';

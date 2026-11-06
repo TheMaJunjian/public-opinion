@@ -2,14 +2,17 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createRef } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import LeaderboardController, { type LeaderboardHandle } from '../components/LeaderboardController';
+import type { CatalogClient } from '../data/catalogClient';
+import type { LeaderboardModalProps } from '../components/LeaderboardModal';
 
-const modal = vi.hoisted(() => ({ attempted: vi.fn(), suspended: false, wait: Promise.resolve(), fail: false }));
+const modal = vi.hoisted(() => ({ attempted: vi.fn(), received: vi.fn(), suspended: false, wait: Promise.resolve(), fail: false }));
 vi.mock('../components/LeaderboardModal', () => ({
-  default: ({ open, onClose }: { open: boolean; onClose: () => void }) => {
+  default: ({ open, onClose, globalRows }: LeaderboardModalProps) => {
     if (!open) return null;
     modal.attempted();
     if (modal.fail) throw new Error('测试加载失败');
     if (modal.suspended) throw modal.wait;
+    modal.received(globalRows);
     return <div role="dialog" aria-label="排行榜"><button onClick={onClose}>关闭</button></div>;
   },
 }));
@@ -20,7 +23,7 @@ beforeEach(() => {
   let next = 0;
   vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => { frames.set(++next, callback); return next; }));
   vi.stubGlobal('cancelAnimationFrame', vi.fn((id: number) => frames.delete(id)));
-  modal.attempted.mockClear(); modal.suspended = false; modal.fail = false;
+  modal.attempted.mockClear(); modal.received.mockClear(); modal.suspended = false; modal.fail = false;
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
@@ -122,4 +125,54 @@ it('准备失败会结束等待并显示失败提示，可以关闭后再次打�
     view.open(); paint(); paint();
     await screen.findByRole('dialog', { name: '排行榜' });
   } finally { window.removeEventListener('error', expectedError); }
+});
+
+it('only requests global rows on opening, keeps them during synchronization and ignores superseded replies', async () => {
+  type Rows = NonNullable<LeaderboardModalProps['globalRows']>;
+  const requests: ((rows: Rows) => void)[] = [];
+  const leaderboard = vi.fn(() => new Promise<Rows>(resolve => { requests.push(resolve); }));
+  const catalog = { leaderboard, prioritize: vi.fn() } as unknown as CatalogClient;
+  const ref = createRef<LeaderboardHandle>();
+  const renderBoard = (version: number) => <LeaderboardController ref={ref} catalog={catalog} catalogVersion={version}
+    messages={[]} edges={[]} relations={[]} users={[]} stakeCounts={{}} messageBettorCounts={{}} onRefresh={vi.fn()} />;
+  const view = render(renderBoard(1));
+  expect(leaderboard).not.toHaveBeenCalled();
+  act(() => ref.current!.open()); paint(); paint();
+  expect(leaderboard).toHaveBeenCalledOnce();
+  expect(screen.queryByRole('dialog', { name: '排行榜' })).toBeNull();
+  const first: Rows = { userRows: [], messageRows: [] };
+  await act(async () => requests[0](first));
+  await screen.findByRole('dialog', { name: '排行榜' });
+  expect(modal.received).toHaveBeenLastCalledWith(first);
+  view.rerender(renderBoard(2));
+  expect(leaderboard).toHaveBeenCalledTimes(2);
+  expect(modal.received).toHaveBeenLastCalledWith(first);
+  view.rerender(renderBoard(3));
+  const latest: Rows = { userRows: [], messageRows: [] };
+  await act(async () => requests[2](latest));
+  await act(async () => requests[1]({ userRows: [], messageRows: [] }));
+  expect(modal.received.mock.lastCall![0]).toBe(latest);
+  fireEvent.click(screen.getByRole('button', { name: '关闭' }));
+  view.rerender(renderBoard(4));
+  expect(leaderboard).toHaveBeenCalledTimes(3);
+});
+
+it('ignores an unfinished statistics reply after cancellation and retries a failed request on reopen', async () => {
+  let finish!: (rows: NonNullable<LeaderboardModalProps['globalRows']>) => void;
+  const leaderboard = vi.fn(() => new Promise<NonNullable<LeaderboardModalProps['globalRows']>>(resolve => { finish = resolve; }));
+  const catalog = { leaderboard, prioritize: vi.fn() } as unknown as CatalogClient;
+  const ref = createRef<LeaderboardHandle>();
+  render(<LeaderboardController ref={ref} catalog={catalog} messages={[]} edges={[]} relations={[]} users={[]}
+    stakeCounts={{}} messageBettorCounts={{}} onRefresh={vi.fn()} />);
+  act(() => ref.current!.open()); paint(); paint();
+  fireEvent.click(screen.getByRole('button', { name: '取消' }));
+  await act(async () => finish({ userRows: [], messageRows: [] }));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  leaderboard.mockRejectedValueOnce(new Error('worker unavailable'));
+  act(() => ref.current!.open()); paint(); paint();
+  await screen.findByRole('dialog', { name: '排行榜打开失败' });
+  fireEvent.click(screen.getByRole('button', { name: '关闭' }));
+  act(() => ref.current!.open()); paint(); paint();
+  await act(async () => finish({ userRows: [], messageRows: [] }));
+  await screen.findByRole('dialog', { name: '排行榜' });
 });

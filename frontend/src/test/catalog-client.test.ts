@@ -40,6 +40,11 @@ it('correlates concurrent results, reports failures, and rejects pending request
   const refreshId = worker.postMessage.mock.lastCall![0].id;
   const filters = client.filters({ user: null, home: null, rules: [] });
   const filterId = worker.postMessage.mock.lastCall![0].id;
+  const leaderboard = client.leaderboard();
+  const leaderboardId = worker.postMessage.mock.lastCall![0].id;
+  expect(worker.postMessage.mock.lastCall![0].type).toBe('leaderboard');
+  worker.emit({ type: 'result', id: leaderboardId, result: { userRows: [], messageRows: [] } });
+  await expect(leaderboard).resolves.toEqual({ userRows: [], messageRows: [] });
   worker.emit({ type: 'result', id: filterId, result: { clean: null, home: null } });
   await expect(filters).resolves.toEqual({ clean: null, home: null });
   worker.emit({ type: 'result', id: refreshId, result: false });

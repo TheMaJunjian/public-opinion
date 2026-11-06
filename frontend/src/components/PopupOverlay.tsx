@@ -2,7 +2,7 @@ import { createPortal } from 'react-dom';
 import { Z_INDEX } from '../constants/zIndex';
 import { useContext, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent, ReactNode, RefObject } from 'react';
-import { getMessageJumpRegions } from '../utils/messageJumpDisplay';
+import { getMessageJumpAnchor, getMessageJumpRegions } from '../utils/messageJumpDisplay';
 import {useWorkbenchPortalTarget} from '../context/WorkbenchPortalContext';
 import { AutoAuthEntryContext } from '../context/AutoAuthEntryContext';
 
@@ -51,7 +51,8 @@ export function MessageJumpOverlay({
       const scaleY = bounds.height > 0 ? bounds.height / geometryRef.current.height : 1;
       const localRect = (rect: DOMRect) => new DOMRect((rect.left - bounds.left) / scaleX,
         (rect.top - bounds.top) / scaleY, rect.width / scaleX, rect.height / scaleY);
-      const card = localRect(targetElement.getBoundingClientRect());
+      const anchor=getMessageJumpAnchor(targetElement,messageId??targetElement.dataset.msgid??'');
+      const card = localRect(anchor.getBoundingClientRect());
       const viewport = window.visualViewport;
       const visible = localRect(new DOMRect(viewport?.offsetLeft ?? 0, viewport?.offsetTop ?? 0,
         viewport?.width ?? width, viewport?.height ?? height));
@@ -86,6 +87,7 @@ export function MessageJumpOverlay({
     update();
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
     observer?.observe(targetElement);
+    observer?.observe(getMessageJumpAnchor(targetElement,messageId??targetElement.dataset.msgid??''));
     observer?.observe(layer);
     if (viewportElement) observer?.observe(viewportElement);
     const canvas = targetElement.closest('[data-jump-canvas]');

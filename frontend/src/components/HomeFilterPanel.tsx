@@ -16,11 +16,11 @@ export default function HomeFilterPanel({mode,onChange}:{mode:HomeFilterMode|nul
   const update=(change:Partial<HomeFilterSelection>)=>{
     const next={...selected,...change};onChange(next.scope==='all'&&next.status==='all'?null:next);
   };
-  return <div ref={ref} style={{position:'relative',flexShrink:0}}>
-    <button type="button" aria-expanded={open} onClick={()=>setOpen(value=>!value)}
+  return <div ref={ref} data-home-filter="true" style={{position:'relative',flexShrink:0}}>
+    <button type="button" className="workbench-toolbar-action" data-filter-active={active || undefined} aria-expanded={open} onClick={()=>setOpen(value=>!value)}
       title={active?'主页过滤中':'主页：按消息范围和查看状态筛选'}
       style={{padding:'3px 9px',borderRadius:4,border:`1px solid ${active?'var(--line-22d3ee)':'var(--line-666)'}`,background:active?'var(--surface-087f8c)':'var(--surface-333)',color:'var(--ink-fff)',fontSize:12,cursor:'pointer'}}>主页</button>
-    {open&&<div style={{...dialogStyles.panel,position:'absolute',top:'100%',right:0,marginTop:4,width:280,padding:12,zIndex:100,fontSize:12}}>
+    {open&&<div role="dialog" aria-label="主页过滤" style={{...dialogStyles.panel,position:'absolute',top:'100%',right:0,marginTop:4,width:280,padding:12,zIndex:100,fontSize:12}}>
       <fieldset style={{border:0,padding:0,margin:0}}><legend style={{marginBottom:8,color:'var(--ink-94a3b8)'}}>消息范围</legend>
         <div style={{display:'flex',flexWrap:'wrap',gap:10}}>{scopes.map(([value,label])=><label key={value} style={{cursor:'pointer'}}>
           <input type="radio" name="home-scope" checked={selected.scope===value} onChange={()=>update({scope:value})} /> {label}
@@ -33,6 +33,7 @@ export default function HomeFilterPanel({mode,onChange}:{mode:HomeFilterMode|nul
       </fieldset>
       <div style={{marginTop:12,paddingTop:8,borderTop:'1px solid var(--line-334155)',color:'var(--ink-94a3b8)',fontSize:11,lineHeight:1.6}}>
         待阅包括尚未确认的正文或具体影响。<br/>已确认表示当前正文及需确认的影响均已处理。
+        {selected.status==='pending'&&<><br/>本轮已阅消息：与待阅消息有关联时置灰，其余隐藏；保持其他消息的位置，重新筛选后整理。</>}
       </div>
     </div>}
   </div>;

@@ -2,7 +2,7 @@ import type { DemoMessage, DemoEdge } from './modelBridge';
 import { isContentKind } from './modelBridge';
 import { getPresentationSpec } from '../types';
 import type { PresentationKind } from '../types';
-import { CARD_W, GRID_LEFT, FRAME_PAD, MERGE_CARD_H } from './layout';
+import { CARD_W, GRID_LEFT, FRAME_PAD, MERGE_CARD_H, ORGANIZATION_CARD_W } from './layout';
 import type { LayoutBox, Rect } from './layout';
 type RelationBounds = { rect: LayoutBox; cardIds: Set<string> };
 
@@ -131,7 +131,7 @@ export function getGroupHeaderRect(frameRect: Rect, height = GROUP_HEADER_HEIGHT
   };
 }
 
-export function getMergeCardHeaderRect(frameRect: Rect, cardWidth = CARD_W): Rect {
+export function getMergeCardHeaderRect(frameRect: Rect, cardWidth = ORGANIZATION_CARD_W): Rect {
   return {
     x: frameRect.x + MERGE_CARD_HEADER_X_OFFSET,
     y: frameRect.y + MERGE_CARD_HEADER_Y_OFFSET,

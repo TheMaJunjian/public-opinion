@@ -25,6 +25,7 @@ interface DeriveSingleButtonLabelInput {
   hasTextContent: boolean;
   isNotifyType: boolean;
   hasAttentionNotifyTarget: boolean;
+  notifyRecipientLabel?: string;
   isGovernanceOrOpsType: boolean;
   secondaryRelationType: string;
   msgMap: Map<string, DemoMessage>;
@@ -82,9 +83,10 @@ export function deriveSingleButtonLabel(input: DeriveSingleButtonLabelInput): st
       : '删除选中的原始内容片段';
   }
   if (isNotifyType) {
-    if (!hasAttentionNotifyTarget) return '请选择已有关注与会者的目标消息';
+    if (input.notifyRecipientLabel && !hasAttentionNotifyTarget) return input.notifyRecipientLabel;
+    if (!hasAttentionNotifyTarget) return '请选择有其他作者或关注者的目标消息';
     if (sourceUnits.length === 0 && newMessageContent.trim().length === 0) return '请输入通知内容或选择来源消息';
-    return `发送通知（通知目标消息的关注与会者）`;
+    return input.notifyRecipientLabel ?? '发送通知（通知目标作者及关注者）';
   }
   if (isGovernanceOrOpsType) {
     const govTypeLabel = relationType === "proposal" ? "提案" : relationType === "code_change" ? "代码" : "运营";

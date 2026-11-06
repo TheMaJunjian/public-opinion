@@ -45,15 +45,11 @@ export default function OrganizationFrameHeader({ message, messageId, kind, dept
   const identity = <div className="organization-frame-identity" data-card-header="true" style={{fontSize:10,color:'var(--ink-9ca3af)',textAlign:'right'}}><span className="organization-frame-identity-content" data-card-header-content="true" style={{display:'inline-flex',whiteSpace:'nowrap',width:'max-content'}}><StakeTierBadge counts={counts} /><span className="organization-frame-id" title={messageId}><bdi dir="ltr">{messageId}</bdi></span><MessageDisplayMarker messageId={messageId} /></span></div>;
   if(hasFrameCard)return <><SkinOrnament />
     <CardWidthHandle messageId={messageId}/>
-    {activeText&&<div style={{fontSize:11,color:'var(--ink-0b84ff)',marginBottom:4}}>拖选文字即可选择片段，或点击已有高亮片段</div>}
-    <div data-organization-card-header="true" style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:8,marginBottom:4}}>
+    <div data-organization-card-header="true" data-card-header="true" data-card-header-content="true" style={{display:'flex',width:'max-content',minWidth:'100%',alignItems:'flex-start',justifyContent:'space-between',gap:8,marginBottom:4}}>
       <span className="organization-frame-type-group" style={{display:'inline-flex',alignItems:'center',gap:6}}>{depthBadge}{typeBadge}<HomeFilterBadge label={homeLabel} reason={homeReason}/>{message&&<MessageCardSelfStake message={message}/>}</span>
       <div style={{marginLeft:'auto',display:'flex',flexDirection:'column',alignItems:'flex-end',gap:2}}>{identity}
         <MessageSettlementActions messageId={messageId} counts={counts} openMessageId={openMessageId} openType={openType} onTruth={onTruth} onValue={onValue}/>
       </div>
-    </div>
-    <div className="skin-frame-title organization-frame-title" style={{fontSize:12,fontWeight:600,color:'var(--ink-f3f4f6)',minWidth:0,whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>
-      {message?<MessageTextPart message={message} displayedText={content} activeText={activeText} onMouseUp={onTextMouseUp}/>:content}
     </div>
     {correctionRecords}
     <div className="organization-frame-members" style={{marginTop:4,display:'flex',flexWrap:'wrap',alignItems:'center',gap:8}}>{joinBadges}

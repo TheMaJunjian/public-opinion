@@ -5,7 +5,7 @@ import { DEFAULT_VIEW_CACHE_LIMIT, useViewCacheSettings } from '../context/ViewC
 
 export const RECENT_WORKBENCH_VIEW_LIMIT = DEFAULT_VIEW_CACHE_LIMIT;
 type ScrollPosition = { element: HTMLElement; top: number; left: number };
-type Entry = { key: string; host: HTMLDivElement; overlays: HTMLDivElement; content: ReactNode; scroll: { positions: ScrollPosition[] } };
+type Entry = { key: string; exclusiveGroup?: string; retainOnLeave?: boolean; host: HTMLDivElement; overlays: HTMLDivElement; content: ReactNode; scroll: { positions: ScrollPosition[] } };
 
 /** Suspension retains component state and disconnects layout effects while parked. */
 function RetainedView({ active, children }: { active: boolean; children: ReactNode }) {
@@ -15,9 +15,11 @@ function RetainedView({ active, children }: { active: boolean; children: ReactNo
 }
 
 /** Only the active portal is attached, so navigation never measures a cached scene. */
-export default function RecentWorkbenchViews({ viewKey, children, limit, ownerKey, deferParking = false, preserveScroll = false }: {
-  viewKey: string; children: ReactNode; limit?: number; ownerKey?:unknown; deferParking?: boolean; preserveScroll?: boolean;
+export default function RecentWorkbenchViews({ viewKey: requestedKey, children, limit, ownerKey, exclusiveGroup, retainOnLeave = true, deferParking = false, preserveScroll = false, pending = false }: {
+  viewKey: string; children: ReactNode; limit?: number; ownerKey?:unknown; exclusiveGroup?: string; retainOnLeave?: boolean; deferParking?: boolean; preserveScroll?: boolean; pending?: boolean;
 }) {
+  const attached = useRef<Entry>();
+  const viewKey = pending && attached.current ? attached.current.key : requestedKey;
   const [previousKey, setPreviousKey] = useState(viewKey);
   // Router transitions must commit before parking the old view. Suspending it
   // during the transition would make React wait forever for the parked promise.
@@ -28,10 +30,14 @@ export default function RecentWorkbenchViews({ viewKey, children, limit, ownerKe
   const capacity = limit ?? settings.limit;
   const committed = useRef(new Map<string, Entry>());
   const owner = useRef(ownerKey);
-  const attached = useRef<Entry>();
   const entries = new Map(owner.current===ownerKey?committed.current:[]);
+  // One imported document can already occupy hundreds of MB. Reopening a
+  // viewer replaces its old instance; browser history retains the durable ref.
+  for (const [key, entry] of entries) {
+    if (key !== viewKey && (entry.retainOnLeave === false || exclusiveGroup && entry.exclusiveGroup === exclusiveGroup)) entries.delete(key);
+  }
   const active = entries.get(viewKey) ?? { key: viewKey, host: document.createElement('div'), overlays: document.createElement('div'), content: children, scroll: { positions: [] } };
-  const current = { ...active, content: children };
+  const current = { ...active, exclusiveGroup, retainOnLeave, content: pending && entries.has(viewKey) ? active.content : children };
   current.host.style.display = 'contents';
   current.overlays.style.display = 'contents';
   entries.delete(viewKey);

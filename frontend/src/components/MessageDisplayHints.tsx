@@ -26,7 +26,7 @@ import MessageAuthors from './MessageAuthors';
 import MessageTime from './MessageTime';
 import {CurrentBodyComparison} from './CorrectionComparisonPopup';
 import {ComparisonReadingContext} from './ComparisonReadingContext';
-import {createComparisonBasis,isComparisonRead} from '../pages/workbench/model/comparisonReading';
+import {comparisonCorrectionInfluences,createComparisonBasis,isComparisonRead} from '../pages/workbench/model/comparisonReading';
 import {displayChoiceBasis} from '../pages/workbench/model/displayChoiceBasis';
 import {useWorkbenchPortalTarget} from '../context/WorkbenchPortalContext';
 
@@ -153,7 +153,8 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
   const memberContainerType=context.input.personalEffect.msgMap.get(messageId)?.relationType;
   const hasMembers=scope==='message'&&isContainerType(memberContainerType);
   const memberCount=hint.displayed.memberIds.length;
-  const memberReading=hasMembers?(hint.unreadMemberCount?`${hint.unreadMemberCount} 条成员消息待阅`:memberCount?'成员消息暂无待阅':'当前无有效成员消息'):'';
+  const memberReading=hasMembers?(context.input.unloadedContainers?.has(messageId)?'进入后查看成员阅览状态'
+    :hint.unreadMemberCount?`${hint.unreadMemberCount} 条成员消息待阅`:memberCount?'成员消息暂无待阅':'当前无有效成员消息'):'';
   const memberContainerLabel=memberContainerType?relationTypeName(memberContainerType):'容器';
   const match=viewTag?correctionRecordHint(context.input,context.data,messageId)??hint:hint;
   const personallyActive=hint.personalActive;
@@ -212,31 +213,36 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
     return hasText(record)||[record.sourceMessageId,...(record.sourceRefs??[]).map(ref=>ref.messageId)]
       .some(sourceId=>!!sourceId&&hasText(messages.get(sourceId)));
   };
-  const sectionOpen=(section:string)=>{
+  const sectionOpen=(section:string,initiallyOpen=false)=>{
     if(!openWindow?.toggledSections?.includes(section)){
-      if(section.startsWith('influence-category:'))return false;
+      if(section.startsWith('influence-category:'))return initiallyOpen;
+      if(section==='unadopted-members-read')return false;
       if(section==='automatic')return automaticGroups.length>0||originatingVisits.length>0;
     }
     return !openWindow?.collapsedSections?.includes(section);
   };
-  const sectionHeading=(section:string,label:string,color:string)=>
-    <button type="button" aria-label={`${sectionOpen(section)?'收起':'展开'}${label}`} aria-expanded={sectionOpen(section)}
-      onClick={()=>{rememberScroll();windowState?.toggleSection(key,section,sectionOpen(section));}}
+  const sectionHeading=(section:string,label:string,color:string,initiallyOpen=false)=>{
+    const open=sectionOpen(section,initiallyOpen);
+    return <button type="button" aria-label={`${open?'收起':'展开'}${label}`} aria-expanded={open}
+      onClick={()=>{rememberScroll();windowState?.toggleSection(key,section,open);}}
       style={{border:0,padding:0,background:'transparent',color,fontSize:11,fontWeight:600,textAlign:'left',cursor:'pointer'}}>
-      <span aria-hidden="true">{sectionOpen(section)?'▾':'▸'} </span>{label}
+      <span aria-hidden="true">{open?'▾':'▸'} </span>{label}
     </button>;
+  };
   const renderInfluence=(group:ReadingInfluenceGroup,unread:boolean)=>{
     const id=group.items[0].messageId,message=context.input.personalEffect.msgMap.get(id),label=readingInfluenceLabel(message,group.items[0].type);
     const influenceStatus=unread?'影响待阅':'影响已阅';
-    if(group.grouped){
-      const category=`influence-category:${unread?'unread':'read'}:${group.key}`;
-      const ids=[...new Set(group.items.map(item=>item.messageId))],causes=[...new Set(group.items.flatMap(item=>item.causes??[]))];
-      return <section key={group.key} aria-label={`${group.label}影响`} data-influence-category={group.items[0].type} style={{padding:'6px 0',borderBottom:'1px solid var(--line-334155)'}}>
+    const category=`influence-category:${unread?'unread':'read'}:${group.key}`;
+    // Keep previously visible detailed records open when adding their category heading.
+    const initiallyOpen=!group.grouped,open=sectionOpen(category,initiallyOpen);
+    const ids=[...new Set(group.items.map(item=>item.messageId))],causes=[...new Set(group.items.flatMap(item=>item.causes??[]))];
+    return <section key={group.key} aria-label={`${group.label}影响`} data-influence-category={group.items[0].type} style={{padding:'6px 0',borderBottom:'1px solid var(--line-334155)'}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}}>
-          {sectionHeading(category,`${group.label}（${ids.length} 条）`,unread?'var(--ink-7dd3fc-2)':'var(--ink-94a3b8-2)')}
-          {unread&&!sectionOpen(category)&&<span style={{color:'var(--ink-7dd3fc)',fontSize:10,flexShrink:0}}>影响待阅</span>}
+          {sectionHeading(category,`${group.label}（${group.items.length} 条）`,unread?'var(--ink-7dd3fc-2)':'var(--ink-94a3b8-2)',initiallyOpen)}
+          {unread&&!open&&<span style={{color:'var(--ink-7dd3fc)',fontSize:10,flexShrink:0}}>影响待阅</span>}
         </div>
-        <div hidden={!sectionOpen(category)} style={{paddingLeft:8}}>
+        <div hidden={!open} style={{paddingLeft:8}}>
+          {group.grouped?<>
           {ids.filter(id=>id!==messageId).map(id=><div key={id} data-influence-message-id={id} style={influenceRowStyle}>
             <div style={{display:'flex',alignItems:'center',gap:6,flex:1,minWidth:0}}>
               <button type="button" title={`查看${label} ${id}`} style={{...influenceLinkStyle,flex:'0 1 auto'}}
@@ -248,23 +254,24 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
           {causes.map(id=><div key={`cause:${id}`} data-influence-message-id={id} style={influenceRowStyle}>
             <button type="button" style={influenceLinkStyle} onClick={event=>{openPinned();rememberScroll();context.onView(id,event,true,messageId);}}>原因 · {id}</button>
           </div>)}
+          </>:group.items.map(item=>{
+            const id=item.messageId,message=context.input.personalEffect.msgMap.get(id),label=readingInfluenceLabel(message,item.type);
+            const containerId=message?.joinInfo?.containerId;
+            const currentContainers=context.currentContainers(messageId),currentMessageContainer=currentContainers.has(id);
+            const currentContainer=currentMessageContainer||!!containerId&&currentContainers.has(containerId);
+            const containerType=containerId?context.input.personalEffect.msgMap.get(containerId)?.relationType:undefined;
+            const containerLabel=containerType?relationTypeName(containerType):'容器';
+            const description=<>{label} · {id}{currentMessageContainer&&'（当前）'}
+              {containerId&&<span style={{display:'block',color:'var(--ink-94a3b8)'}}>{containerLabel}：{containerId}{currentContainer&&'（当前）'}</span>}</>;
+            return <div key={influenceIdentity(item)} data-influence-message-id={id} style={influenceRowStyle}>
+              {currentContainer?<span style={{flex:1,minWidth:0,color:'var(--ink-cbd5e1)',overflowWrap:'anywhere'}}>{description}</span>
+                :<button type="button" title={`查看${label} ${id}`} onClick={event=>{openPinned();rememberScroll();context.onView(id,event,true,messageId);}}
+                  style={influenceLinkStyle}>{description}</button>}
+              <span style={{color:unread?'var(--ink-7dd3fc)':'var(--ink-86efac)',fontSize:10,flexShrink:0}}>{influenceStatus}</span>
+            </div>;
+          })}
         </div>
       </section>;
-    }
-    const containerId=message?.joinInfo?.containerId;
-    const currentContainers=context.currentContainers(messageId),currentMessageContainer=currentContainers.has(id);
-    const currentContainer=currentMessageContainer||!!containerId&&currentContainers.has(containerId);
-    const containerType=containerId?context.input.personalEffect.msgMap.get(containerId)?.relationType:undefined;
-    const containerLabel=containerType?relationTypeName(containerType):'容器';
-    const description=<>{label} · {id}{currentMessageContainer&&'（当前）'}
-      {containerId&&<span style={{display:'block',color:'var(--ink-94a3b8)'}}>{containerLabel}：{containerId}{currentContainer&&'（当前）'}</span>}</>;
-    const row=<div key={group.key} style={influenceRowStyle}>
-      {currentContainer?<span style={{flex:1,minWidth:0,color:'var(--ink-cbd5e1)',overflowWrap:'anywhere'}}>{description}</span>
-        :<button type="button" title={`查看${label} ${id}`} onClick={event=>{openPinned();rememberScroll();context.onView(id,event,true,messageId);}}
-          style={influenceLinkStyle}>{description}</button>}
-      <span style={{color:unread?'var(--ink-7dd3fc)':'var(--ink-86efac)',fontSize:10,flexShrink:0}}>{influenceStatus}</span>
-    </div>;
-    return row;
   };
   const renderJoinEntry=(entry:JoinRecordEntry)=> <div key={entry.id} data-reading-join-record={entry.id} style={{display:'grid',gap:3,padding:'4px 0'}}>
     {entry.targets.map(target=>{
@@ -290,36 +297,48 @@ export function MessageDisplayMarker({messageId,viewTag=false,scope='message',co
   };
   const renderReceivedGroups=()=>{
     if(!hasMembers)return null;
-    const groups=[{key:'adopted',label:'当前采用',entries:receivedGroups.adopted},{key:'unadopted',label:'未采用',entries:receivedGroups.unadopted}];
-    const count=groups.reduce((sum,group)=>sum+group.entries.length,0);
-    const classify=memberContainerType?.toLowerCase()==='classify',memberIds=new Set(hint.displayed.memberIds);
+    type TargetRow={key:string;id:string;entry?:JoinRecordEntry};
+    const memberIds=new Set(hint.displayed.memberIds);
     const placements=new Map<string,JoinRecordEntry>();
     for(const entry of receivedGroups.adopted)for(const target of entry.targets)if(target.adopted&&memberIds.has(target.id))placements.set(target.id,{...entry,targets:[target]});
-    const readGroups=[{key:'read',label:'已阅无新影响',color:'var(--ink-94a3b8)',ids:[] as string[]},
-      {key:'new',label:'已阅有新影响',color:'var(--ink-7dd3fc)',ids:[] as string[]},{key:'unread',label:'未阅',color:'var(--ink-7dd3fc)',ids:[] as string[]}];
-    for(const id of memberIds){
-      const memberHint=context.data.hints.get(id),index=!memberHint||memberHint.unread?2:memberHint.pendingInfluences.length||memberHint.selectionChanged?1:0;
-      readGroups[index].ids.push(id);
-    }
+    const groups=[{key:'adopted',label:'当前采用',entries:receivedGroups.adopted},{key:'unadopted',label:'未采用',entries:receivedGroups.unadopted}].map(group=>{
+      const rows:TargetRow[]=group.key==='adopted'?[...memberIds].map(id=>({key:`member:${id}`,id,entry:placements.get(id)})):[];
+      for(const entry of group.entries)for(const target of entry.targets){
+        if(group.key==='adopted'&&target.adopted&&memberIds.has(target.id))continue;
+        rows.push({key:JSON.stringify([entry.id,target.id]),id:target.id,entry:{...entry,targets:[target]}});
+      }
+      const readGroups=[{key:'read',label:'已阅无新影响',color:'var(--ink-94a3b8)',rows:[] as TargetRow[]},
+        {key:'new',label:'已阅有新影响',color:'var(--ink-7dd3fc)',rows:[] as TargetRow[]},{key:'unread',label:'未阅',color:'var(--ink-7dd3fc)',rows:[] as TargetRow[]}];
+      for(const row of rows){
+        const targetHint=context.data.hints.get(row.id),index=!targetHint||targetHint.unread?2:targetHint.pendingInfluences.length||targetHint.selectionChanged?1:0;
+        readGroups[index].rows.push(row);
+      }
+      return {...group,rows,readGroups};
+    });
+    const count=groups.reduce((sum,group)=>sum+group.entries.length,0);
     return <div data-reading-received-joins style={{borderTop:'1px solid var(--line-334155)',paddingTop:5,display:'grid',gap:5}}>
       {count>0&&<><div style={{color:'var(--ink-7dd3fc)'}}>被加入的目标消息</div>
       <div style={{fontSize:10,color:'var(--ink-94a3b8)'}}>前往目标消息查看加入的影响，并分别确认阅读进度。</div></>}
       {groups.filter(group=>count>0||group.key==='adopted').map(group=><section key={group.key} aria-label={`${group.label}的被加入目标`} data-reading-join-group={group.key}>
-        {sectionHeading(group.key,`${group.label}${count>0?`（${group.entries.length} 条）`:''}`,group.key==='adopted'?'var(--ink-a7f3d0-2)':'var(--ink-cbd5e1-2)')}
+        {sectionHeading(group.key,`${group.label}（${group.rows.length} 条目标${count>0?` · ${group.entries.length} 条加入记录`:''}）`,group.key==='adopted'?'var(--ink-a7f3d0-2)':'var(--ink-cbd5e1-2)')}
         <div hidden={!sectionOpen(group.key)}>
-        {group.key==='adopted'&&<div data-display-hint-members style={{color:'var(--ink-7dd3fc)',margin:'3px 0'}}>
+        <div data-display-hint-members={group.key==='adopted'?true:undefined} style={{color:'var(--ink-7dd3fc)',margin:'3px 0'}}>
+          {group.key==='adopted'&&<>
           <div>成员消息：共 {memberCount} 条 · {memberReading}</div>
           {hint.unreadMemberCount>0&&<div style={{color:'var(--ink-94a3b8)',fontSize:10}}>成员消息需逐个已阅。{memberContainerType?.toLowerCase()==='classify'?`双击进入${memberContainerLabel}查看。`:''}</div>}
-          {classify?readGroups.filter(group=>group.ids.length>0).map(group=><section key={group.key} aria-label={`${group.label}的成员消息`} data-member-reading-group={group.key}
-            style={{borderTop:'1px solid var(--line-334155)',paddingTop:5,marginTop:5,display:'grid',gap:3}}>
-            {sectionHeading(`members-${group.key}`,`${group.label}（${group.ids.length} 条）`,group.color)}
-            <div hidden={!sectionOpen(`members-${group.key}`)} style={{display:sectionOpen(`members-${group.key}`)?'grid':undefined,gap:3}}>
-              {group.ids.map(id=><div key={id} data-member-reading-id={id}>{placements.has(id)?renderJoinEntry(placements.get(id)!):renderMember(id)}</div>)}
-            </div>
-          </section>):hint.displayed.memberIds.filter(id=>!receivedGroups.adopted.some(entry=>entry.targets.some(target=>target.id===id))).map(renderMember)}
-        </div>}
-        {group.entries.length?group.entries.map(entry=>classify&&group.key==='adopted'?{...entry,targets:entry.targets.filter(target=>!target.adopted||!memberIds.has(target.id))}:entry)
-          .filter(entry=>entry.targets.length>0).map(renderJoinEntry):count>0?<div style={{fontSize:10,color:'var(--ink-94a3b8)'}}>暂无记录。</div>:null}
+          </>}
+          {group.readGroups.filter(readGroup=>readGroup.rows.length>0).map(readGroup=>{
+            const section=`${group.key==='adopted'?'':'unadopted-'}members-${readGroup.key}`,open=sectionOpen(section);
+            return <section key={readGroup.key} aria-label={`${readGroup.label}的${group.key==='adopted'?'成员消息':'未采用目标'}`} data-member-reading-group={readGroup.key}
+              style={{borderTop:'1px solid var(--line-334155)',paddingTop:5,marginTop:5,display:'grid',gap:3}}>
+              {sectionHeading(section,`${readGroup.label}（${readGroup.rows.length} 条）`,readGroup.color)}
+              <div hidden={!open} style={{display:open?'grid':undefined,gap:3}}>
+                {readGroup.rows.map(row=><div key={row.key} data-member-reading-id={row.id}>{row.entry?renderJoinEntry(row.entry):renderMember(row.id)}</div>)}
+              </div>
+            </section>;
+          })}
+          {!group.rows.length&&count>0&&<div style={{fontSize:10,color:'var(--ink-94a3b8)'}}>暂无记录。</div>}
+        </div>
         </div>
       </section>)}
     </div>;
@@ -498,7 +517,7 @@ export function MessageDisplayHintsProvider({input:sourceInput,onView,onMarkRead
   const rememberInfluenceVisit=useCallback((recordId:string,targetId:string,items:ReadingInfluence[])=>{
     if(recordId!==targetId&&items.length)setInfluenceVisits(previous=>[...previous.filter(visit=>visit.recordId!==recordId||visit.targetId!==targetId),{recordId,targetId,items}]);
   },[setInfluenceVisits]);
-  const startPositioning=useWorkbenchDrawingTask('positioning'),cancelPosition=useRef(()=>{});
+  const startPositioning=useWorkbenchDrawingTask('positioning',true),cancelPosition=useRef(()=>{});
   useEffect(()=>()=>cancelPosition.current(),[versionHistory,windowScope]);
   const versions=useSyncExternalStore(versionHistory.subscribe,versionHistory.getSnapshot);
   const recommendedCorrections=useMemo(()=>sourceInput.recommendedCorrections??computeCorrectionVersions(sourceInput.messages,sourceInput.edges,computeGloballySuppressedRelIds(sourceInput.edges,sourceInput.messages)),[sourceInput.recommendedCorrections,sourceInput.messages,sourceInput.edges]);
@@ -582,7 +601,10 @@ export function MessageDisplayHintsProvider({input:sourceInput,onView,onMarkRead
   const context=useMemo(()=>({data,input,onView:viewInfluence,onMarkRead:onMarkRead?confirmRead:undefined,onReadNavigate:onReadNavigate?readNavigate:undefined,onReadVisit:onReadNavigate,influenceVisits,setInfluenceVisits,readingError,windowState,windowScope,currentContainerId,currentContainers,versionHistory,readingInput,knownBodyVersions,navigateVersion,versionContent,versionIdentity}),[data,input,viewInfluence,onMarkRead,confirmRead,onReadNavigate,readNavigate,influenceVisits,setInfluenceVisits,readingError,windowState,windowScope,currentContainerId,currentContainers,versionHistory,versions,readingInput,knownBodyVersions,navigateVersion,versionContent,versionIdentity]);
   const [versionError,setVersionError]=useState<string|null>(null);
   const comparisonBasis=useMemo(()=>createComparisonBasis(input),[input]);
-  const comparisonReading=useMemo(()=>({marks:input.readingMarks??[],onMarkRead:context.onMarkRead,basisFor:comparisonBasis}),[input.readingMarks,context.onMarkRead,comparisonBasis]);
+  const comparisonReading=useMemo(()=>({marks:input.readingMarks??[],onMarkRead:context.onMarkRead,basisFor:comparisonBasis,
+    influencesFor:(version:BodyVersion)=>influenceReadingMarks(version.messageId,comparisonCorrectionInfluences(version,
+      data.reading.pendingInfluences.get(version.messageId)??[],input.personalEffect.msgMap,input.edges)),
+  }),[input.readingMarks,input.personalEffect.msgMap,input.edges,context.onMarkRead,comparisonBasis,data.reading]);
   return <DisplayHintsContext.Provider value={context}><ComparisonReadingContext.Provider value={comparisonReading}>
     {versionError&&<div role="alert">上下文待补齐：{versionError}</div>}{children}
   </ComparisonReadingContext.Provider></DisplayHintsContext.Provider>;

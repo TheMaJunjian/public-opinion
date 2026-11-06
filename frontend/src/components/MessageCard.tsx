@@ -32,6 +32,8 @@ export interface MessageCardContext {
   settlementTargetId?: string | undefined;
   lastClickedMsgId?: string | null;
   readStatus?: 'READ' | 'UNREAD';
+  preserveReadingLayout?: boolean;
+  showReadStamp?: boolean;
   homeMatch?: boolean;
   homeReason?: string;
   homeContextRole?: 'source' | 'target' | 'source-target';
@@ -98,6 +100,7 @@ export default function MessageCard({
     settlementTargetId,
     lastClickedMsgId,
     readStatus,
+    preserveReadingLayout,
     homeMatch,
     homeReason,
     homeContextRole,
@@ -110,6 +113,7 @@ export default function MessageCard({
   const govColor = governanceColor ?? (bk === 'GOVERNANCE' ? 'var(--ink-f59e0b)' : bk === 'CODE' ? 'var(--ink-3b82f6-2)' : 'var(--ink-10b981)');
   const organizationBackground = isSummary ? 'var(--surface-14352a)' : isMerge ? 'var(--surface-1e293b)' : 'var(--surface-1f1f1f)';
   const relationType = relType ?? msg.relationType ?? 'relation';
+  const isStructuralOrganization = relationType === 'merge' || relationType === 'arrange';
   const baseRelationLabel = relationType.toLowerCase() === 'proposal' ? '提案' : getPresentationSpec(relationType).label;
   const messageTypeLabel = isRelationRecord && msg.kind === 'relation'
     ? baseRelationLabel
@@ -117,7 +121,7 @@ export default function MessageCard({
       ? getRelationMessageLabel(msg) ?? baseRelationLabel
       : getMessageTypeLabel(msg);
   const typeBadgeLabel = isClassification ? '分类' : isSummary ? '总结' : isMerge ? '归并' : messageTypeLabel;
-  const inlineRelationContent = isRelationRecord && !isOrganizationMessage && children != null;
+  const inlineRelationContent = !isStructuralOrganization && isRelationRecord && !isOrganizationMessage && children != null;
   const defaultHeaderLabel = msg.id;
 
   const cardBorder = isWholeSelected ? '2px solid var(--line-fbbf24)'
@@ -134,6 +138,7 @@ export default function MessageCard({
       data-message-kind={msg.kind} data-skin-type={msg.relationType ?? msg.kind} data-skin-carrier={isOrganizationMessage ? "organization" : isRelationRecord ? "record" : "content"} data-active-text={isActiveText || undefined}
       data-whole-selected={isWholeSelected || undefined}
       data-relation-record={isRelationRecord || undefined}
+      data-structural-card={isStructuralOrganization || undefined}
       role="group"
       tabIndex={0}
       aria-label={`消息 ${msg.id}，${isWholeSelected ? '已选中' : '未选中'}`}
@@ -194,7 +199,8 @@ export default function MessageCard({
           </span>
           <span className="message-card-identity">
           <span className="message-card-id" title={msg.id}><bdi dir="ltr">{headerLabel ?? defaultHeaderLabel}</bdi></span>
-          {readStatus === 'READ' && <span className="message-read-stamp">已阅</span>}
+          {ctx.showReadStamp !== false && (readStatus === 'READ' || preserveReadingLayout) && <span className="message-read-stamp" aria-hidden={readStatus === 'READ' ? undefined : true}
+            style={{ visibility: readStatus === 'READ' ? undefined : 'hidden' }}>已阅</span>}
           {headerLeading === undefined && <MessageDisplayMarker messageId={msg.id} />}
           </span>
           {headerBetweenIdAuthor && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 6, verticalAlign: 'middle', maxWidth: '100%', flexWrap: 'wrap' }}>{headerBetweenIdAuthor}</span>}
@@ -211,7 +217,7 @@ export default function MessageCard({
       </div>
 
       {!isRelationRecord && badges}
-      {(isOrganizationMessage || ['classify', 'summary', 'merge', 'arrange'].includes(msg.relationType ?? '')) && (
+      {!isStructuralOrganization && (isOrganizationMessage || ['classify', 'summary'].includes(msg.relationType ?? '')) && (
         <div className="message-card-content-row" style={{
           display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
           gap: 8, marginBottom: 6,
@@ -237,20 +243,20 @@ export default function MessageCard({
       )}
 
       {/* Text selection mode indicator */}
-      {isActiveText && (isContentKind(msg.kind) || isOrganizationMessage) && (
+      {!isStructuralOrganization && isActiveText && (isContentKind(msg.kind) || isOrganizationMessage) && (
         <div style={{ fontSize: 11, color: 'var(--ink-0b84ff)', marginBottom: 4 }}>
           拖选文字即可选择片段，或点击已有高亮片段
         </div>
       )}
 
       {/* Content */}
-      {!isOrganizationMessage && !inlineRelationContent && msg.kind !== 'round' && msg.kind !== 'round_result' && !(children != null && (msg.kind === 'relation' || msg.kind === 'join')) && msg.parts?.some(part => part.type === 'text' || part.type === 'code' || part.type === 'web') ? (
+      {!isStructuralOrganization && !isOrganizationMessage && !inlineRelationContent && msg.kind !== 'round' && msg.kind !== 'round_result' && !(children != null && (msg.kind === 'relation' || msg.kind === 'join')) && msg.parts?.some(part => part.type === 'text' || part.type === 'code' || part.type === 'web') ? (
         <div style={{ display: 'grid', gap: 8 }}>
           {msg.parts.filter(part => part.type === 'text' || part.type === 'code' || part.type === 'web').map(part => (
             <MessageTextPart key={part.id} message={msg} partId={part.id} activeText={isActiveText} onMouseUp={onContentMouseUp}>{msg.kind === 'normal' && msg.parts!.filter(item => ['text', 'code', 'web'].includes(item.type)).length === 1 ? children : undefined}</MessageTextPart>
           ))}
         </div>
-      ) : !isOrganizationMessage && !inlineRelationContent && (
+      ) : !isStructuralOrganization && !isOrganizationMessage && !inlineRelationContent && (
         <div className="message-card-body" style={{ fontSize: isRelationRecord ? 12 : prominence.cssFontSize, color: isRelationRecord ? 'var(--ink-9ca3af)' : 'var(--ink-f5f5f5)' }} onMouseUp={e => onContentMouseUp?.(e, msg.id)}>
           {children != null ? children : (
             isContentKind(msg.kind) && (msg.kind === 'round' || msg.kind === 'round_result') ? (
@@ -264,7 +270,7 @@ export default function MessageCard({
       )}
 
       {/* Organization membership */}
-      {isOrganizationMessage && (
+      {(isOrganizationMessage || isStructuralOrganization) && (
         <div className="message-card-members" style={{ fontSize: 12, color: 'var(--ink-94a3b8)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           <MessageMemberCount total={memberCount} direct={directMemberCount} />
         </div>

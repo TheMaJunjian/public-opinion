@@ -6,7 +6,8 @@ import { REVEAL_VIRTUAL_MESSAGE, useVirtualMessageMounts } from '../hooks/useVir
 import { useCardMeasurements } from '../hooks/useCardMeasurements';
 import { createWorkbenchDrawingTasks, WorkbenchDrawingContext } from '../context/WorkbenchDrawingContext';
 import type { DemoMessage, DemoEdge } from '../utils/modelBridge';
-import { useRef } from 'react';
+import { useContext, useRef } from 'react';
+import WorkbenchLoadingBoundary, { useWorkbenchLoadingProgress } from '../components/WorkbenchLoadingBoundary';
 import { useCanvasViewport } from '../hooks/useCanvasViewport';
 import { MessageJumpOverlay } from '../components/PopupOverlay';
 import { findMessageElements, scrollMsgToCenter, showMessagePulse, MESSAGE_PULSE_DURATION_MS } from '../pages/workbench/actions/scrollNavigation';
@@ -18,12 +19,15 @@ const message = (id: string): DemoMessage => ({ id, author: 'tester', content: i
 const callbacks = { onMessageClick: vi.fn(), onMessageDoubleClick: vi.fn(), onTextMouseUp: vi.fn(),
   onEdgeLabelSingleClick: vi.fn(), onEdgeLabelDoubleClick: vi.fn(), onFragmentAnchorClick: vi.fn(), isFragmentSelected: () => false };
 const frames = (count = 1) => { for (let frame = 0; frame < count; frame++) act(() => { vi.advanceTimersByTime(17); }); };
+const measuredMessages = new Set<string>();
 
 describe('viewport message rendering with measured browser geometry', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    measuredMessages.clear();
     vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
       const id = this.dataset.measureId ?? this.dataset.msgid;
+      if (id?.startsWith('m-')) measuredMessages.add(id);
       if (this.dataset.frameHeader) return parseFloat(this.style.minHeight) || 64;
       if (id === 'merge') return 36;
       if (id?.startsWith('m-')) return 100 + Number(id.slice(2)) % 7 * 20;
@@ -41,8 +45,71 @@ describe('viewport message rendering with measured browser geometry', () => {
   });
   afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
+  it.each(['graph', 'list'])('measures only the %s viewport while idle and still waits for explicit target positioning', mode => {
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return parseFloat(this.style.width) > 100 ? parseFloat(this.style.width)
+        : this.matches('[data-workbench-left-panel], [data-virtual-message-list]') ? 800 : 80;
+    });
+    vi.spyOn(SVGElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: SVGElement) {
+      return new DOMRect(Number(this.getAttribute('x')) - 30, Number(this.getAttribute('y')) - 7, 60, 14);
+    });
+    let tasks!: ReturnType<typeof createWorkbenchDrawingTasks>;
+    const messages = ids.map(message);
+    const edges: DemoEdge[] = [{ id: 'visible-reference', relationMessageId: 'visible-reference', relationType: 'reference', relationLabel: '引用',
+      from: { messageId: 'm-1', selection: { kind: 'whole' } }, to: { messageId: 'm-0', selection: { kind: 'whole' } } }];
+    messages.push({ ...message('visible-reference'), kind: 'relation', relationType: 'reference' });
+    function Scene() {
+      useWorkbenchLoadingProgress(false, null);
+      tasks = useContext(WorkbenchDrawingContext)!;
+      return <div data-workbench-left-panel style={{ overflow: 'auto', height: 500 }}>
+        {mode === 'graph'
+          ? <GraphView messages={messages} edges={edges} discussionView={{ mode: 'graph', collapsed: [] }} draftUnits={[]} activeTextSelectId={null} lastClickedMessageId={null} {...callbacks} />
+          : <VirtualMessageList ids={ids} pinned={pins}>{id => <div data-msgid={id}>{id}</div>}</VirtualMessageList>}
+      </div>;
+    }
+    const view = render(<WorkbenchLoadingBoundary><Scene /></WorkbenchLoadingBoundary>);
+    expect(view.getByRole('dialog')).toBeInTheDocument();
+    for (let index = 0; index < 12 && view.queryByRole('dialog'); index++) frames();
+    expect(view.queryByRole('dialog')).toBeNull();
+    expect(measuredMessages.size).toBeGreaterThan(0);
+    expect(measuredMessages.size).toBeLessThan(ids.length / 2);
+    if (mode === 'graph') expect(view.container.querySelector('[data-directed-edge-label="visible-reference"]')).not.toBeNull();
+    const initialMeasurements = measuredMessages.size;
+    frames(55);
+    expect(measuredMessages.size).toBe(initialMeasurements);
+    expect(view.queryByRole('dialog')).toBeNull();
+    expect(measuredMessages.has('m-599')).toBe(false);
+
+    const host = view.container.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+    const positioned = vi.fn(() => {
+      expect(measuredMessages.has('m-599')).toBe(true);
+      expect(host.querySelector('[data-msgid="m-599"]')).not.toBeNull();
+    });
+    let position!: ReturnType<typeof tasks.begin>;
+    act(() => {
+      position = tasks.begin('positioning', true);
+      host.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: ['m-599'] } }));
+      position.afterLayout(positioned);
+    });
+    frames(10);
+    expect(positioned).toHaveBeenCalledOnce();
+    expect(view.getByRole('dialog', { name: '正在定位' })).toBeInTheDocument();
+    const duringPositioning = measuredMessages.size;
+    expect(duringPositioning).toBeLessThan(ids.length / 2);
+    frames(5);
+    expect(measuredMessages.size).toBe(duringPositioning);
+    act(() => position.release());
+    frames(3);
+    expect(view.queryByRole('dialog')).toBeNull();
+    frames(55);
+    expect(measuredMessages.size).toBe(duringPositioning);
+    expect(tasks.pending).toBe(0);
+    expect(tasks.failure).toBeNull();
+  });
+
   it('finishes measuring the new scene when membership changes remove an unmounted measurement target', () => {
     const tasks = createWorkbenchDrawingTasks();
+    tasks.setBlocking(false);
     function Scene({ changed }: { changed: boolean }) {
       const canvas = useRef<HTMLDivElement>(null), cards = useRef<Record<string, HTMLDivElement | null>>({});
       const heights = useCardMeasurements(canvas, cards);
@@ -65,12 +132,36 @@ describe('viewport message rendering with measured browser geometry', () => {
     frames(8);
     expect(tasks.pending).toBe(0);
     expect(tasks.failure).toBeNull();
+    expect(view.getByText('等待测量')).toBeInTheDocument();
+    expect(view.container.querySelector('[data-msgid="destination"]')).toBeNull();
+    act(() => { view.container.querySelector('[data-workbench-left-panel]')!.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: ['destination'] } })); });
+    frames(4);
     expect(view.getByText('当前消息尺寸已就绪')).toBeInTheDocument();
     expect(view.container.querySelector('[data-msgid="old-member"]')).toBeNull();
   });
 
+  it('keeps the reading anchor stationary when previously unseen rows above it are measured', () => {
+    const view = render(<div data-workbench-left-panel style={{ overflow: 'auto', height: 500 }}>
+      <VirtualMessageList ids={ids} pinned={pins}>{id => <div data-msgid={id}>{id}</div>}</VirtualMessageList>
+    </div>);
+    frames(8);
+    const host = view.container.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+    const surface = view.container.querySelector<HTMLElement>('[data-virtual-message-list]')!;
+    const knownExtra = Number.parseFloat(surface.style.height) - (ids.length * 92 - 6);
+    host.scrollTop = 200 * 92 + knownExtra + 10;
+    fireEvent.scroll(host); frames(8);
+    const anchor = view.container.querySelector<HTMLElement>('[data-measure-id="m-200"]')!;
+    expect(anchor).not.toBeNull();
+    expect(Number.parseFloat(anchor.style.top) - host.scrollTop).toBe(-10);
+    const count = measuredMessages.size;
+    frames(60);
+    expect(measuredMessages.size).toBe(count);
+    expect(count).toBeLessThan(60);
+  });
+
   it('bounds list mounts, preserves measured scroll geometry, and reveals remote navigation targets', () => {
     const tasks = createWorkbenchDrawingTasks();
+    tasks.setBlocking(false);
     const view = render(<WorkbenchDrawingContext.Provider value={tasks}>
       <div data-workbench-left-panel style={{ overflow: 'auto', height: 500 }}>
         <VirtualMessageList ids={ids} pinned={pins}>{id => <div data-msgid={id}>{id}</div>}</VirtualMessageList>
@@ -88,27 +179,32 @@ describe('viewport message rendering with measured browser geometry', () => {
     const first = view.container.querySelector<HTMLElement>('[data-measure-id="m-0"]')!;
     const firstTop = first.style.top;
     expect(view.container.querySelector('[data-msgid="m-400"]')).toBeNull();
-    host.scrollTop = 63000; fireEvent.scroll(host); frames(4);
+    const initialMeasurements = measuredMessages.size;
+    host.scrollTop = 24000; fireEvent.scroll(host); frames(8);
     expect(view.container.querySelector('[data-msgid="m-0"]')).toBeNull();
     expect(surface.querySelectorAll('[data-measure-id]').length).toBeLessThan(20);
-    expect(surface.style.height).toBe(height);
+    expect(Number.parseFloat(surface.style.height)).toBeGreaterThan(Number.parseFloat(height));
+    expect(measuredMessages.size).toBeGreaterThan(initialMeasurements);
+    expect(measuredMessages.size).toBeLessThan(55);
     act(() => { host.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: ['m-599'] } })); });
     expect(view.container.querySelector('[data-msgid="m-599"]')).not.toBeNull();
     act(() => { host.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } })); });
     expect(view.container.querySelector('[data-msgid="m-599"]')).toBeNull();
+    const measuredHeight = surface.style.height;
     host.scrollTop = 0; fireEvent.scroll(host); frames(4);
     expect(view.container.querySelector<HTMLElement>('[data-measure-id="m-0"]')!.style.top).toBe(firstTop);
-    expect(surface.style.height).toBe(height);
+    expect(surface.style.height).toBe(measuredHeight);
     expect(tasks.pending).toBe(0);
   });
 
-  it.each([false, true])('bounds graph cards and keeps full geometry across scrolling (large merge=%s)', merge => {
+  it.each([false, true])('bounds graph cards and retains measured geometry across scrolling (large merge=%s)', merge => {
     const messages = ids.map(message);
     const edges: DemoEdge[] = merge ? ids.map(id => ({ id: `merge-${id}`, relationMessageId: 'merge', relationType: 'merge', relationLabel: '归并',
       from: { messageId: 'anon:merge', selection: { kind: 'whole' } }, to: { messageId: id, selection: { kind: 'whole' } } })) : [];
     if (merge) messages.push({ ...message('merge'), kind: 'relation', relationType: 'merge', relationPayload: { title: '大归并' } });
     const props: GraphViewProps = { messages, edges, draftUnits: [], activeTextSelectId: null, lastClickedMessageId: null, ...callbacks };
     const tasks = createWorkbenchDrawingTasks();
+    tasks.setBlocking(false);
     const view = render(<WorkbenchDrawingContext.Provider value={tasks}><div data-workbench-left-panel style={{ overflow: 'auto', height: 500 }}><GraphView {...props} /></div></WorkbenchDrawingContext.Provider>);
     let maximum = 0;
     for (let index = 0; index < 55; index++) {
@@ -122,19 +218,21 @@ describe('viewport message rendering with measured browser geometry', () => {
     const first = view.container.querySelector<HTMLElement>('[data-msgid="m-0"]')!;
     const position = [first.style.left, first.style.top];
     const mergeFrame = view.container.querySelector<HTMLElement>('[data-msgid="merge"]');
-    const mergeGeometry = mergeFrame ? [mergeFrame.style.height, mergeFrame.style.top] : null;
-    host.scrollTop = 9000; fireEvent.scroll(host); frames(4);
+    const mergeTop = mergeFrame?.style.top;
+    host.scrollTop = 9000; fireEvent.scroll(host); frames(8);
     expect(view.container.querySelector('[data-msgid="m-0"]')).toBeNull();
     expect(view.container.querySelectorAll('[data-msgid^="m-"]:not([data-rel-overlay])').length).toBeLessThan(30);
-    expect([canvas.style.height, canvas.style.width]).toEqual(geometry);
+    expect(Number.parseFloat(canvas.style.height)).toBeGreaterThan(Number.parseFloat(geometry[0]));
+    expect(canvas.style.width).toBe(geometry[1]);
     if (merge) {
       const frame = view.container.querySelector<HTMLElement>('[data-msgid="merge"]')!;
-      expect([frame.style.height, frame.style.top]).toEqual(mergeGeometry);
+      expect(frame.style.top).toBe(mergeTop);
     }
+    const measuredGeometry = [canvas.style.height, canvas.style.width];
     host.scrollTop = 0; fireEvent.scroll(host); frames(4);
     const returned = view.container.querySelector<HTMLElement>('[data-msgid="m-0"]')!;
     expect([returned.style.left, returned.style.top]).toEqual(position);
-    expect([canvas.style.height, canvas.style.width]).toEqual(geometry);
+    expect([canvas.style.height, canvas.style.width]).toEqual(measuredGeometry);
     expect(tasks.pending).toBe(0);
   });
 
@@ -269,7 +367,7 @@ describe('viewport message rendering with measured browser geometry', () => {
     expect(view.container.querySelector('[data-msgid="m-0"]')).toBeNull();
   });
 
-  it('locates an offscreen reference at its start without retaining its source card', () => {
+  it('locates an offscreen reference at its label without retaining its source card', () => {
     vi.spyOn(SVGElement.prototype,'getBoundingClientRect').mockImplementation(function(this:SVGElement){
       const host=this.closest<HTMLElement>('[data-workbench-left-panel]');
       return new DOMRect(Number(this.getAttribute('x'))-30-(host?.scrollLeft??0),
@@ -309,9 +407,9 @@ describe('viewport message rendering with measured browser geometry', () => {
     frames(8);
     expect(completed).toHaveBeenCalledExactlyOnceWith(true);
     expect(pulse.mock.calls[0][0]).toBe('remote-reference');
-    expect(pulse.mock.calls[0][1]).toBe(start);
-    expect(start.getBoundingClientRect().top).toBeGreaterThanOrEqual(0);
-    expect(start.getBoundingClientRect().bottom).toBeLessThanOrEqual(500);
+    expect(pulse.mock.calls[0][1]).toBe(label);
+    expect(label.getBoundingClientRect().top).toBeGreaterThanOrEqual(0);
+    expect(label.getBoundingClientRect().bottom).toBeLessThanOrEqual(500);
     act(() => { host.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } })); });
   });
 

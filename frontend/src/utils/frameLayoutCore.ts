@@ -326,7 +326,8 @@ export function computeFrameSceneLayout(input: SceneLayoutInput, discussionCompu
         rowX=x+child.width+COL_GAP;nextY=y+child.height+ROW_GAP;
       }
     }else if(input.discussionLayout){
-      const discussion=discussionComputer!(children.map(child=>({id:child.id,width:child.width,height:child.height,time:child.time,sequence:messages.get(child.id)?.sequence,outset:child.frame?FRAME_PAD:0})),scopeEdges.get(id)??[],{columnGap:COL_GAP,rowGap:ROW_GAP,relationCatalog:messages,textIds,regions:children.flatMap(child=>regionsByTarget.get(child.id)??[])});
+      const discussion=discussionComputer!(children.map(child=>({id:child.id,width:child.width,height:child.height,time:child.time,sequence:messages.get(child.id)?.sequence,outset:child.frame?FRAME_PAD:0,
+        topOutset:child.frame&&!child.frame.isMerge&&!child.frame.hasGroupHeader?FRAME_PAD:0})),scopeEdges.get(id)??[],{columnGap:COL_GAP,rowGap:ROW_GAP,relationCatalog:messages,textIds,regions:children.flatMap(child=>regionsByTarget.get(child.id)??[])});
       rememberDiscussion(discussion,children,id);
       for(const child of children){
         const position=discussion.positions.get(child.id);
@@ -418,7 +419,8 @@ export function computeFrameSceneLayout(input: SceneLayoutInput, discussionCompu
     item.children.forEach(child => emit(child.item, x + child.x, y + child.y, column + child.column));
   };
   if(input.discussionLayout){
-    const discussion=discussionComputer!(roots.map(root=>({id:root.id,width:root.width,height:root.height,time:root.time,sequence:messages.get(root.id)?.sequence,outset:root.frame?FRAME_PAD:0})),scopeEdges.get(undefined)??[],{columnGap:COL_GAP,rowGap:ROW_GAP,relationCatalog:messages,textIds,regions:roots.flatMap(root=>regionsByTarget.get(root.id)??[])});
+    const discussion=discussionComputer!(roots.map(root=>({id:root.id,width:root.width,height:root.height,time:root.time,sequence:messages.get(root.id)?.sequence,outset:root.frame?FRAME_PAD:0,
+      topOutset:root.frame&&!root.frame.isMerge&&!root.frame.hasGroupHeader?FRAME_PAD:0})),scopeEdges.get(undefined)??[],{columnGap:COL_GAP,rowGap:ROW_GAP,relationCatalog:messages,textIds,regions:roots.flatMap(root=>regionsByTarget.get(root.id)??[])});
     rememberDiscussion(discussion,roots);
     const rootById=new Map(roots.map(root=>[root.id,root]));
     // Outer backgrounds precede regions inside their opaque frame children.

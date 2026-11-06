@@ -481,11 +481,10 @@ interface ConfirmMessageIdNavigationDependencies {
   showAlert: (message: string) => void;
   messagesRef: React.MutableRefObject<DemoMessage[]>;
   handleNavigateToMessage: (messageId: string) => void;
-  setAutoClassifyMsgId: React.Dispatch<React.SetStateAction<string | null>>;
 }
 
 export function confirmMessageIdNavigation(dependencies: ConfirmMessageIdNavigationDependencies): void {
-  const { messageIdInput, showAlert, messagesRef, handleNavigateToMessage, setAutoClassifyMsgId } = dependencies;
+  const { messageIdInput, showAlert, messagesRef, handleNavigateToMessage } = dependencies;
   const messageId = messageIdInput.trim();
   if (!messageId) {
     showAlert('请输入消息 ID');
@@ -496,5 +495,4 @@ export function confirmMessageIdNavigation(dependencies: ConfirmMessageIdNavigat
     return;
   }
   handleNavigateToMessage(messageId);
-  setAutoClassifyMsgId(messageId);
 }

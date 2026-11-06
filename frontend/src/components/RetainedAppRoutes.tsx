@@ -22,7 +22,9 @@ export default function RetainedAppRoutes({ children }: { children: ReactNode })
     ? `viewer:${location.state?.viewerInstanceKey ?? location.key}`
     : /^\/messages(\/|$)/.test(location.pathname) ? `online:${location.pathname}` : 'page';
   return <>
-    <RecentWorkbenchViews viewKey={viewKey} ownerKey={user?.id ?? null} deferParking preserveScroll>
+    <RecentWorkbenchViews viewKey={viewKey} ownerKey={user?.id ?? null}
+      exclusiveGroup={location.pathname === '/viewer' ? 'viewer' : undefined}
+      retainOnLeave={location.pathname !== '/viewer' || location.state?.viewerRetain !== false} deferParking preserveScroll>
       {viewKey !== 'page' && <PageRoutes location={location} navigationType={navigationType}>{children}</PageRoutes>}
     </RecentWorkbenchViews>
     {viewKey === 'page' && <Routes location={location}>{children}</Routes>}

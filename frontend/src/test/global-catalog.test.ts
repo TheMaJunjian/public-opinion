@@ -35,7 +35,7 @@ it('yields before bounded pages and publishes global records only after replayin
   release();
   await vi.waitFor(() => expect(onReady).toHaveBeenCalledOnce());
   expect(load.mock.calls.map(([q]) => [q.mode, q.cursor, q.after, q.batch])).toEqual([
-    [undefined, undefined, undefined, 1], [undefined, 'second', undefined, 1],
+    [undefined, undefined, undefined, 4], [undefined, 'second', undefined, 4],
     [undefined, undefined, 10, undefined], [undefined, undefined, 15, undefined],
   ]);
   expect(load.mock.calls.slice(0, 2).every(([q]) => q.limit === 200)).toBe(true);
@@ -144,4 +144,21 @@ it('shows committed command records immediately while still replaying unrelated 
   await sync.refresh();
   expect(load.mock.calls[2][0].after).toBe(10);
   expect(onReady.mock.lastCall![0].messages.map((m: { id: string }) => m.id)).toEqual(['old', 'sent', 'unrelated-change']);
+});
+
+it('persists bounded pages instead of repeatedly copying the growing catalog, then compacts only after replay completes', async () => {
+  const cache = { ...memoryCache(), append: vi.fn(async () => {}) };
+  const load = vi.fn(async ({ cursor, after }: SnapshotQuery) => {
+    if (after !== undefined) return page(80);
+    const index = Number(cursor ?? 0);
+    return { ...page(10 + index, Array.from({ length: 800 }, (_, n) => `${index}-${n}`)), nextCursor: index < 69 ? String(index + 1) : null };
+  });
+  const { onReady, onProgress } = start(load, cache);
+  await vi.waitFor(() => expect(onReady).toHaveBeenCalledOnce());
+  expect(onReady.mock.lastCall![0].messages).toHaveLength(56000);
+  expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ count: 56000, ready: true }));
+  expect(cache.append).toHaveBeenCalledTimes(70);
+  expect(cache.save).toHaveBeenCalledOnce();
+  expect(cache.save).toHaveBeenCalledWith(expect.objectContaining({ complete: true, after: 80 }));
+  expect(cache.append.mock.calls.every((call) => (call as unknown as [unknown, WorkbenchSnapshot])[1].messages.length <= 800)).toBe(true);
 });

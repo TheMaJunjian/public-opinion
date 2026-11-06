@@ -2,7 +2,8 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ExportData } from '../api/client';
 import { validateExportForViewing,prepareExportForViewing } from '../utils/exportArchive';
-import { getExportCacheReference, inheritExportCacheReference, loadCachedExport, loadCachedNativeExport, loadLastExport, saveLastExport } from '../utils/exportViewerCache';
+import { inheritExportCacheReference, loadCachedExport, loadCachedNativeExport, loadLastExport, loadLastExportPreview, loadReferencedExport, loadExportNavigation, saveLastExport, type ExportCacheReference } from '../utils/exportViewerCache';
+import { createExportViewerState } from '../utils/exportViewerSession';
 import { isZhihuViewingData } from '../utils/zhihuArchive';
 import { canLinkZhihuDirectory, chooseZhihuDirectory, readZhihuDirectory, rememberZhihuDirectory, type LinkedDirectory } from '../utils/zhihuDirectory';
 import { mergeZhihuSourceUpdate } from '../utils/zhihuIncremental';
@@ -12,6 +13,7 @@ import { DIALOG_BACKDROP, dialogStyles } from './dialogStyles';
 import PromptModal from './PromptModal';
 import OfflineViewerStatus from './OfflineViewerStatus';
 import { conversionFailure } from '@gonglun/core';
+import { readViewerFile } from '../utils/readViewerFile';
 
 export { validateExportForViewing } from '../utils/exportArchive';
 
@@ -27,10 +29,11 @@ export default function ExportViewerModal({ open, onClose }: Props) {
   const [processing, setProcessing] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [prepared, setPrepared] = useState<ReturnType<typeof validateExportForViewing> | null>(null);
-  const [lastExport, setLastExport] = useState<ReturnType<typeof validateExportForViewing> | null>(null);
+  const [lastExport, setLastExport] = useState<{ title: string; data?: ExportData; reference?: ExportCacheReference; verification?: string | null } | null>(null);
   const [opening, setOpening] = useState(false);
   const [linkedDirectory, setLinkedDirectory] = useState<LinkedDirectory | null>(null);
   const readingGeneration = useRef(0);
+  const fileRead = useRef<AbortController | null>(null);
   const openingFrame = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -53,20 +56,26 @@ export default function ExportViewerModal({ open, onClose }: Props) {
       // Display the chooser before loading and verifying a large cached archive.
       frame = requestAnimationFrame(() => {
         frame = requestAnimationFrame(() => {
-          void loadLastExport({ sourceOnly: true }).then(async cached => {
+          void (async () => {
+            const preview = await loadLastExportPreview();
+            if (cancelled) return;
+            if (preview) { setLastExport(preview); return; }
+            // Older caches have no preview record. Keep their validation and
+            // recovery path, while new caches never prepare data for a label.
+            const cached = await loadLastExport({ sourceOnly: true });
             if (cancelled || cached===null) return;
             const prepared=await prepareExportForViewing(cached);
-            if(!cancelled)setLastExport(prepared);
-          }).catch(error=>{
+            if(!cancelled)setLastExport({ ...prepared, title: prepared.data.scope.title });
+          })().catch(error=>{
             if(!cancelled)setCacheError(`缓存 JSON 读取或转换失败\n${conversionFailure(error,'unchanged','本次处理已取消，原缓存未修改；可重新选择原 JSON 文件。').message}`);
           });
         });
       });
     }
-    return () => { cancelled = true; cancelAnimationFrame(frame); cancelAnimationFrame(openingFrame.current); readingGeneration.current += 1; };
+    return () => { cancelled = true; fileRead.current?.abort(); cancelAnimationFrame(frame); cancelAnimationFrame(openingFrame.current); readingGeneration.current += 1; };
   }, [open]);
 
-  const openData = (data: ExportData, fromCache = false) => {
+  const openData = (data: ExportData | undefined, fromCache = false, reference?: ExportCacheReference) => {
     if (opening) return;
     const generation = ++readingGeneration.current;
     setOpening(true);
@@ -77,18 +86,21 @@ export default function ExportViewerModal({ open, onClose }: Props) {
         if (generation !== readingGeneration.current) return;
         void (async () => {
           if (!fromCache) {
-            await saveLastExport(data);
+            if (!data) throw new Error('请先选择阅览文件。');
+            await saveLastExport(data, { immutable: true });
             if (linkedDirectory) await rememberZhihuDirectory(data, linkedDirectory);
             return data;
           }
-          const latest = isZhihuViewingData(data) ? await loadCachedExport(data.zhihu.archiveId, { fresh: true, sourceOnly: true }) : await loadLastExport({ sourceOnly: true, fresh: true });
+          const latest = reference ? await loadReferencedExport(reference, { sourceOnly: true, paged: true })
+            : isZhihuViewingData(data) ? await loadCachedExport(data.zhihu.archiveId, { fresh: true, sourceOnly: true })
+            : await loadLastExport({ sourceOnly: true, fresh: true, paged: true });
           if (!latest) throw new Error('上次阅览缓存已不存在，请重新选择 JSON 文件。');
           return inheritExportCacheReference((await prepareExportForViewing(latest)).data, latest);
-        })().then(openedData => {
+        })().then(async openedData => {
+          const navigation = fromCache ? await loadExportNavigation(openedData).catch(() => null) : null;
           if (generation !== readingGeneration.current) return;
           window.dispatchEvent(new Event('prepare-export-viewer'));
-          const viewerCacheRef = getExportCacheReference(openedData);
-          navigate('/viewer', { state: { exportData: openedData, ...(viewerCacheRef ? { viewerCacheRef } : {}) }, replace: true });
+          navigate('/viewer', { state: createExportViewerState(openedData, navigation), replace: true });
           onClose();
         }).catch(error => {
           if (generation !== readingGeneration.current) return;
@@ -105,29 +117,20 @@ export default function ExportViewerModal({ open, onClose }: Props) {
   };
 
   const selectFile = (file: File) => {
+    fileRead.current?.abort();
+    const controller = new AbortController(); fileRead.current = controller;
     const generation = ++readingGeneration.current;
     setError(null);
     setPrepared(null);
     setLinkedDirectory(null);
     setSelectedFile(file);
     setProcessing(true);
-    const reader = new FileReader();
-    reader.onload = async () => {
-      if (generation !== readingGeneration.current) return;
-      try {
-        const prepared=await prepareExportForViewing(JSON.parse(reader.result as string));
-        if(generation===readingGeneration.current)setPrepared(prepared);
-      } catch (error: unknown) {
-        if(generation===readingGeneration.current)setError(`JSON 文件转换或校验失败\n${conversionFailure(error,'unchanged','本次处理已取消，原 JSON 文件和缓存均未修改。').message}`);
-      } finally {
-        if(generation===readingGeneration.current)setProcessing(false);
-      }
-    };
-    reader.onerror = () => { if (generation === readingGeneration.current) {
-      setError(`JSON 文件读取失败\n${conversionFailure(reader.error??new Error('文件读取失败'),'unchanged','原 JSON 文件和缓存均未修改。').message}`);
-      setProcessing(false);
-    } };
-    reader.readAsText(file);
+    void readViewerFile(file, controller.signal).then(prepared => {
+      if (generation === readingGeneration.current) setPrepared(prepared);
+    }).catch(error => {
+      if (generation === readingGeneration.current && !controller.signal.aborted)
+        setError(`JSON 文件转换或校验失败\n${conversionFailure(error,'unchanged','本次处理已取消，原 JSON 文件和缓存均未修改。').message}`);
+    }).finally(() => { if (generation === readingGeneration.current) setProcessing(false); });
   };
 
   const selectDirectory = async () => {
@@ -141,7 +144,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
       await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
       const opened = await readZhihuDirectory(directory);
       const cached = isZhihuViewingData(opened.data) ? await loadCachedExport(opened.data.zhihu.archiveId, { fresh: true, sourceOnly: true })
-        : isNativeZhihuView(opened.data) ? await loadCachedNativeExport(opened.data) : null;
+        : isNativeZhihuView(opened.data) ? await loadCachedNativeExport(opened.data, { paged: true }) : null;
       const previous = cached ? (await prepareExportForViewing(cached)).data : null;
       const data = previous && isZhihuViewingData(previous) && isZhihuViewingData(opened.data) ? mergeZhihuSourceUpdate(previous, opened.data)
         : previous && isNativeZhihuView(previous) && isNativeZhihuView(opened.data) ? mergeNativeZhihuUpdate(previous, opened.data) : opened.data;
@@ -202,13 +205,13 @@ export default function ExportViewerModal({ open, onClose }: Props) {
           </div>
 
           {lastExport && (
-            <button onClick={() => openData(lastExport.data, true)} style={{
+            <button disabled={opening} onClick={() => openData(lastExport.data, true, lastExport.reference)} style={{
               width: '100%', padding: '12px 16px', borderRadius: 8,
               border: '1px solid var(--line-4a9eff)', background: 'var(--surface-1a2a3c)',
               color: 'var(--ink-4a9eff)', fontSize: 13, cursor: 'pointer',
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
             }}>
-              <span>📋 上次阅览：{lastExport.data.scope.title}</span>
+              <span>📋 上次阅览：{lastExport.title}</span>
               <span style={{ fontSize: 11, opacity: 0.7 }}>点击打开</span>
             </button>
           )}

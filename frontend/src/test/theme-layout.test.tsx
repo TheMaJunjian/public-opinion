@@ -5,7 +5,7 @@ import RelationToolbar,{RelationChoices} from '../pages/workbench/ui/RelationToo
 import WorkbenchViewToolbar from '../pages/workbench/ui/WorkbenchViewToolbar';
 import {ALL_RELATION_TYPES} from '../pages/workbench/model/relationComposition';
 import {relationTypeName} from '../utils/graphTextSelection';
-import {setTheme,type ThemeLayout} from '../theme/theme';
+import {setTheme,THEMES,type ThemeLayout} from '../theme/theme';
 
 const override=vi.hoisted(()=>({layout:undefined as ThemeLayout|undefined}));
 vi.mock('../theme/theme',async importOriginal=>{
@@ -20,7 +20,7 @@ const originalClipboard=Object.getOwnPropertyDescriptor(navigator,'clipboard');
 const readText=vi.fn(async()=> 'known-message');
 beforeEach(()=>{
   // The same appearance exercises all layouts, so controls cannot infer placement from its ID.
-  setTheme('gpt');readText.mockClear();
+  setTheme('gpt');readText.mockReset();readText.mockResolvedValue('known-message');
   Object.defineProperty(navigator,'clipboard',{configurable:true,value:{readText}});
 });
 afterEach(()=>{
@@ -49,37 +49,55 @@ function Controls({onJump}:{onJump:(id:string)=>void}) {
   };
   return <>
     <div data-testid="toolbar"><RelationToolbar barRef={null} leftControlsRef={{current:null}} rightControlsRef={{current:null}}
-      top={0} springWidth={0} rightOffset={16} viewer={false} messageIdInput="known-message" onMessageIdChange={vi.fn()}
-      onJump={()=>onJump('known-message')} composer={composer}/></div>
+      top={0} springWidth={0} rightOffset={16} viewer={false} knownIds={new Set(['known-message'])}
+      onJump={onJump} composer={composer}/></div>
     <WorkbenchViewToolbar {...props}/>
     <div data-testid="desk"><RelationChoices placement="desk" composer={composer}/></div>
   </>;
 }
 
-it.each<ThemeLayout>([
-  {messageJump:'inline',relationControls:'toolbar'},
-  {messageJump:'clipboard-dialog',relationControls:'desk'},
-  {messageJump:'inline',relationControls:'desk'},
-  {messageJump:'clipboard-dialog',relationControls:'toolbar'},
-])('independently places $messageJump navigation and $relationControls relations without changing their actions',async layout=>{
-  override.layout=layout;const onJump=vi.fn();render(<Controls onJump={onJump}/>);
+async function checkControls(layout:ThemeLayout) {
+  const onJump=vi.fn();render(<Controls onJump={onJump}/>);
   const chosen=within(screen.getByTestId(layout.relationControls)),other=within(screen.getByTestId(layout.relationControls==='toolbar'?'desk':'toolbar'));
   for(const type of ALL_RELATION_TYPES){
     const name=relationTypeName(type);
     expect(chosen.getAllByRole('button',{name})).toHaveLength(1);
     expect(other.queryByRole('button',{name})).toBeNull();
   }
-  if(layout.messageJump==='inline'){
-    expect(screen.getByRole('textbox',{name:'消息 ID'})).toHaveValue('known-message');
-    expect(screen.queryByRole('button',{name:'跳转'})).toBeNull();
-    fireEvent.click(screen.getByRole('button',{name:'确认'}));
-    expect(readText).not.toHaveBeenCalled();
-  }else{
-    expect(screen.queryByRole('textbox',{name:'消息 ID'})).toBeNull();
-    const jump=screen.getByRole('button',{name:'跳转'});
-    expect(screen.getByRole('button',{name:'导出'}).nextElementSibling).toBe(jump);
-    fireEvent.click(jump);
-    await waitFor(()=>expect(readText).toHaveBeenCalledOnce());
-  }
+  expect(screen.queryByRole('textbox',{name:'消息 ID'})).toBeNull();
+  const jump=screen.getByRole('button',{name:'跳转'});
+  if(layout.messageJump==='toolbar') expect(screen.getByTestId('toolbar')).toContainElement(jump);
+  else expect(screen.getByRole('button',{name:'导出'}).nextElementSibling).toBe(jump);
+  expect(readText).not.toHaveBeenCalled();
+  fireEvent.click(jump);
+  await waitFor(()=>expect(readText).toHaveBeenCalledOnce());
   await waitFor(()=>expect(onJump).toHaveBeenCalledExactlyOnceWith('known-message'));
+}
+
+it.each<ThemeLayout>([
+  {messageJump:'toolbar',relationControls:'toolbar'},
+  {messageJump:'view',relationControls:'desk'},
+  {messageJump:'toolbar',relationControls:'desk'},
+  {messageJump:'view',relationControls:'toolbar'},
+])('only changes placement for $messageJump navigation and $relationControls relations',async layout=>{
+  override.layout=layout;await checkControls(layout);
+});
+
+it.each(THEMES)('provides all relations and clipboard navigation in $id',async theme=>{
+  setTheme(theme.id);await checkControls(theme.layout);
+});
+
+it.each(THEMES)('supports manual navigation and cancellation without clipboard permission in $id',async theme=>{
+  setTheme(theme.id);readText.mockRejectedValue(new DOMException('denied','NotAllowedError'));
+  const onJump=vi.fn();render(<Controls onJump={onJump}/>);
+  const jump=screen.getByRole('button',{name:'跳转'});fireEvent.click(jump);
+  await screen.findByText('未能读取剪贴板，请粘贴或输入消息 ID。');
+  fireEvent.keyDown(screen.getByRole('textbox',{name:'消息 ID'}),{key:'Escape'});
+  expect(screen.queryByRole('dialog')).toBeNull();expect(onJump).not.toHaveBeenCalled();expect(jump).toHaveFocus();
+  fireEvent.click(jump);
+  await screen.findByText('未能读取剪贴板，请粘贴或输入消息 ID。');
+  const input=screen.getByRole('textbox',{name:'消息 ID'});
+  fireEvent.change(input,{target:{value:'remote-message'}});fireEvent.keyDown(input,{key:'Enter'});
+  expect(onJump).toHaveBeenCalledExactlyOnceWith('remote-message');
+  expect(screen.queryByRole('dialog')).toBeNull();
 });

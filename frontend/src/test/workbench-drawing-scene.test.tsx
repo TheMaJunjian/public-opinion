@@ -9,6 +9,7 @@ import { WorkbenchDrawingContext } from '../context/WorkbenchDrawingContext';
 import { computeSceneLayout } from '../utils/frameLayout';
 import type { SceneComputationRequest } from '../hooks/useSceneComputation';
 import { REVEAL_VIRTUAL_MESSAGE } from '../hooks/useVirtualMessageMounts';
+import { createSceneRequestDecoder } from '../utils/sceneComputationTransport';
 
 const observers: Array<{ callback: ResizeObserverCallback; elements: Set<Element> }> = [];
 const originalResizeObserver = window.ResizeObserver;
@@ -31,12 +32,14 @@ afterEach(() => { window.ResizeObserver = originalResizeObserver; resetWorkbench
 
 it('finishes selecting and deselecting an arrangement while its worker layout and card measurements update asynchronously', async () => {
   class SceneWorker {
+    decode = createSceneRequestDecoder();
     onmessage!: (event: MessageEvent) => void;
     terminated = false;
     postMessage(request: SceneComputationRequest) {
+      const job = this.decode(request);
       setTimeout(() => {
-        if (this.terminated || request.job.kind !== 'layout') return;
-        this.onmessage({ data: { id: request.id, result: structuredClone(computeSceneLayout(request.job.input)) } } as MessageEvent);
+        if (this.terminated || job.kind !== 'layout') return;
+        this.onmessage({ data: { id: request.id, result: structuredClone(computeSceneLayout(job.input)) } } as MessageEvent);
       }, 5);
     }
     terminate() { this.terminated = true; }
@@ -84,7 +87,8 @@ it('finishes selecting and deselecting an arrangement while its worker layout an
       fireEvent.click(screen.getByRole('button', { name: '显示排列消息卡 arrange' }));
       await finishDrawing();
       const card = screen.getByRole('group', { name: '组织消息 arrange' });
-      expect(card).toHaveTextContent('排列（1）');
+      expect(card).toHaveTextContent('排列');
+      expect(card).not.toHaveTextContent('排列（1）');
       const observer = observers.find(item => item.elements.has(card))!;
       act(() => observer.callback([resized(card, 96)], {} as ResizeObserver));
       await finishDrawing();
@@ -139,7 +143,7 @@ it('waits for real card resize measurements, relation hitboxes and auto-centerin
   act(() => { vi.advanceTimersByTime(16); });
   expect(parseFloat(canvas.style.height)).toBeGreaterThan(initialHeight);
   expect(screen.getByRole('dialog')).toBeInTheDocument();
-  expect(screen.getByRole('status')).toHaveTextContent('正在绘制');
+  expect(screen.queryByRole('status')).toBeNull();
   act(() => { vi.advanceTimersByTime(34); });
   expect(screen.queryByRole('dialog')).toBeNull();
   expect(screen.queryByText('正在绘制消息图…')).toBeNull();
@@ -167,7 +171,7 @@ it('catches errors in the actual ResizeObserver callback and restores interactio
   act(() => { vi.advanceTimersByTime(34); });
   expect(screen.queryByRole('dialog')).toBeNull();
   act(() => beginWorkbenchDrawing());
-  expect(screen.getByRole('status')).toHaveTextContent('正在绘制');
+  expect(screen.queryByRole('status')).toBeNull();
   const entry = resized(card, 320);
   Object.defineProperty(entry, 'borderBoxSize', { get() { throw new Error('尺寸读取异常'); } });
   act(() => observer.callback([entry], {} as ResizeObserver));

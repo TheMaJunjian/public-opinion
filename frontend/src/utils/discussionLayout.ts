@@ -10,6 +10,8 @@ export interface DiscussionLayoutItem {
   sequence?: number;
   /** Visible native frame controls extend beyond the frame rectangle. */
   outset?: number;
+  /** Space above the frame for controls that must also clear a region title. */
+  topOutset?: number;
 }
 export interface DiscussionPosition { x: number; y: number; column: number }
 export interface DiscussionRegionInput {
@@ -183,9 +185,12 @@ export function layoutDiscussion(items: readonly DiscussionLayoutItem[], edges: 
     const own = regionsByTarget.get(id);
     const above = measureBand(descendants?.above ?? [], own?.agree), right = measureBand(descendants?.right ?? [], own?.reply), below = measureBand(descendants?.below ?? [], own?.disagree);
     const recommended = measureBand(descendants?.recommend ?? [], own?.recommend), archived = measureBand(descendants?.archive ?? [], own?.archive);
-    const outset = Math.max(0, item.outset ?? 0);
-    const result: Measured = { width: item.width + outset * 2, height: item.height + outset * 2,
-      rootX: outset, rootY: outset, children: [], regions: [] };
+    // A region already supplies the inset around its children. Frame bounds
+    // include their own padding; do not add a second ring of empty space here.
+    const outset = ownerRegionById.has(id) ? 0 : Math.max(0, item.outset ?? 0);
+    const topOutset = Math.max(outset, item.topOutset ?? 0);
+    const result: Measured = { width: item.width + outset * 2, height: item.height + topOutset + outset,
+      rootX: outset, rootY: topOutset, children: [], regions: [] };
     // Every response advances one column. Stance changes its vertical band,
     // never moves it above/below the original card in the original column.
     let y = 0;

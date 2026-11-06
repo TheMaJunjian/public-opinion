@@ -124,6 +124,7 @@ export function renderPublicDocument(document: PublicDocument, markdown: string)
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/svg+xml" href="/gonglun.svg">
   <title>${escapeHtml(document.title)} · 公论介绍</title>
   <meta name="description" content="${escapeHtml(document.description)}">
   <link rel="stylesheet" href="/about.css">

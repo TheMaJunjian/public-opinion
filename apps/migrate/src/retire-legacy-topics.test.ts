@@ -3,13 +3,16 @@ import {validateRetirementJournal} from './validate-retirement-journal.js';
 import {migrateViewFile} from './migrate-view-file.js';
 import {migrateQueryRecords} from './migrate-query-records.js';
 import { afterEach, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import { bindRoles, replayArchive, resolveMemberships, type Membership } from '@gonglun/core';
 import { Mutation } from '../../server/src/db.js';
 import { applyOrganization, reconcileOrganizationEffects, validateJoinApproval } from '../../server/src/organizations.js';
 import { planTopicRetirement, retireLegacyTopics } from './retire-legacy-topics.js';
 import { statesFor, recordStance } from '../../server/src/projections.js';
 import { viewsFor, parentOf, snapshot } from '../../server/src/ui-projections.js';
-import { createTestStore, cleanupTestDatabases } from '../../server/src/test-database.js';
+import { createTestStore, cleanupTestDatabases, testDatabaseUrl } from '../../server/src/test-database.js';
+import { migrateNotificationMemberships } from './notification-memberships.js';
 import { convertMessagesToDemoModel } from '../../../frontend/src/utils/modelBridge.js';
 import { deriveContainerEffect } from '../../../frontend/src/pages/workbench/model/containerEffect.js';
 import { projectContainerCanvas } from '../../../frontend/src/pages/workbench/projections/containerCanvas.js';
@@ -156,4 +159,26 @@ it('rolls back the complete retirement and its history when a later step fails',
   expect(await store.db.prepare('SELECT * FROM memberships ORDER BY "memberId"').all()).toEqual(before);
   expect(await store.latestSequence()).toBe(sequence);
   expect((await statesFor(store, ['topic-a']))[0].organizationRetired).toBeUndefined();
+});
+
+it('preserves private notification data when the maintenance CLI retires Topics with tracked JOINs', async () => {
+  const { store } = await fixture();
+  await store.transaction(() => migrateNotificationMemberships(store));
+  expect(await store.db.prepare('SELECT 1 FROM notification_membership_states WHERE active').get()).toBeDefined();
+  const run = (file: string, args: string[], input?: string) => {
+    const result = spawnSync(process.execPath, [resolve('node_modules/tsx/dist/cli.mjs'), resolve(`apps/migrate/src/${file}.ts`), ...args], {
+      encoding: 'utf8', input, maxBuffer: 16 * 1024 * 1024,
+      env: { ...process.env, DATABASE_URL: testDatabaseUrl(), DATABASE_SCHEMA: store.db.schema },
+    });
+    expect(result.status, `${file}: ${result.stdout}\n${result.stderr}`).toBe(0);
+    return JSON.parse(result.stdout);
+  };
+  const before = run('topic-retirement-audit', ['capture', '-']);
+  const plan = run('retire-legacy-topics-cli', []);
+  expect(plan.topics).toBe(2);
+  run('retire-legacy-topics-cli', ['--apply', '--expect-region', plan.region]);
+  const report = run('topic-retirement-audit', ['verify', '-', '-'], JSON.stringify(before));
+  expect(report.verified).toBe(true);
+  expect(report.checks['unchanged:notifications']).toBe(true);
+  expect(report.checks['unchanged:notification_membership_states']).toBe(true);
 });

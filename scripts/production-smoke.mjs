@@ -255,7 +255,7 @@ try {
   // already imported Topic without replacing its messages or touching balances.
   const imageTool=(file,toolArgs,input)=>{
     const result=spawnSync('docker',[...args,'run','--rm','--no-deps','-T','api','node',`apps/migrate/dist/${file}.js`,...toolArgs],{encoding:'utf8',input,maxBuffer:16*1024*1024});
-    assert.equal(result.status,0,result.stderr);
+    assert.equal(result.status,0,`${file}: ${result.stdout}\n${result.stderr}`);
     return JSON.parse(result.stdout);
   };
   const retirementPlan=imageTool('retire-legacy-topics-cli',[]);

@@ -452,10 +452,10 @@ it('operates funded imported truth/value rounds without reversing historical pay
   await run('/rounds/active-TRUTH/votes',{vote:'TRUE',amount:3});
   expect((await stakesFor(app.store,['old-message']))['old-message'].pools).toMatchObject({TRUTH:{lockedPro:14},VALUE:{lockedPro:11}});
   await run('/rounds/active-TRUTH/close-and-settle');
-  expect(await app.store.account(user.id)).toMatchObject({locked:12});
+  expect(await app.store.account(user.id)).toMatchObject({locked:13});
   expect((await stakesFor(app.store,['old-message']))['old-message'].pools).toMatchObject({TRUTH:{lockedPro:0},VALUE:{lockedPro:11}});
   await run('/rounds/active-VALUE/close-and-settle');
-  expect(await app.store.account(user.id)).toMatchObject({locked:1});
+  expect(await app.store.account(user.id)).toMatchObject({locked:3});
   expect((await app.store.db.prepare(`SELECT body FROM rounds WHERE id='historical'`).get())!.body).toEqual(original);
   expect(await app.store.db.prepare(`SELECT 1 FROM ledger WHERE reason='撤回先前对赌分配'`).get()).toBeUndefined();
   const fixedContract=JSON.parse(String((await app.store.db.prepare("SELECT body FROM rounds WHERE id='active-TRUTH'").get())!.body)).target;
@@ -464,7 +464,7 @@ it('operates funded imported truth/value rounds without reversing historical pay
   expect(next).not.toHaveProperty('legacyActiveBoundary');
   expect((await stakesFor(app.store,['old-message']))['old-message'].pool.lockedPro).toBe(2);
   await run(`/rounds/${next.id}/close-and-settle`);
-  expect(await app.store.account(user.id)).toMatchObject({locked:1});
+  expect(await app.store.account(user.id)).toMatchObject({locked:4});
   const exported=(await request(app).get('/api/ui/export')).body;
   expect(replayArchive(exported).accounts.get(user.id)).toEqual(await app.store.account(user.id));
   expect((await migrateLegacy(source)).sourceDigest).toBe(report.sourceDigest);
@@ -481,7 +481,7 @@ it('preserves delegation reward and extra reserve until an explicit synthetic co
   expect(await app.store.account(user.id)).toMatchObject({available:386,locked:114});
   expect(await app.store.db.prepare(`SELECT * FROM escrows WHERE "messageId"='task'`).get()).toMatchObject({amount:100,recipientId:null});
   await executeBatch(app.store,user,{requestId:randomUUID(),commands:[{id:randomUUID(),method:'POST',path:'/rounds/completion-round/close-and-settle',body:{}}]});
-  expect(await app.store.account(user.id)).toMatchObject({locked:12});
+  expect(await app.store.account(user.id)).toMatchObject({locked:13});
   expect((await stakesFor(app.store,['task'])).task.pools.DELEGATION.lockedPro).toBe(10);
   expect(await app.store.db.prepare(`SELECT * FROM escrows WHERE "messageId"='task'`).get()).toMatchObject({amount:100,recipientId:'old-user'});
   expect((await app.store.db.prepare(`SELECT body FROM legacy_records WHERE "tableName"='BetPool' AND body->>'messageId'='task'`).get())!.body.lockedPro).toBe(110);

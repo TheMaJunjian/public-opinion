@@ -5,6 +5,9 @@ import { useWorkbenchData } from '../pages/workbench/useWorkbenchData';
 import { projectWorkbenchSnapshot } from '../utils/workbenchProjection';
 import type { CatalogData } from '../data/catalogEngine';
 import type { SnapshotQuery } from '../data/workbench';
+import { bindRoles, type Part } from '@gonglun/core';
+import { createZhihuStructuralViewer } from '../utils/zhihuStructuralViewer';
+import { onlineStructuralSource } from '../utils/onlineStructuralSource';
 
 const harness = vi.hoisted(() => ({ ready: null as null | ((data: CatalogData) => void), get: vi.fn(), catchUp: vi.fn() }));
 vi.mock('react-router-dom', () => ({ useLocation: () => ({ pathname: '/messages', key: 'normal', state: null }) }));
@@ -38,6 +41,36 @@ const publish = () => {
   const index = structureSnapshot(full);
   act(() => harness.ready!({ snapshot: index, index, projected: projectWorkbenchSnapshot({ ...index, messages: [], relations: [] }) }));
 };
+
+it('does not hydrate closed branches through unparented JOIN stances and settlement records on refresh or account changes', async () => {
+  const add = (id: string, relationType: string, relation: string, source: string | null, targets: string[]) => {
+    const part: Part = { id: 'relation', type: 'relation', relation, roles: bindRoles(relationType === 'JOIN'
+      ? { parent: [{ messageId: source! }], member: targets.map(messageId => ({ messageId })) }
+      : { target: targets.map(messageId => ({ messageId })) }) };
+    const row = { id, revision: 1, relationType, sourceMessageId: source, targetRefs: targets.map(messageId => ({ kind: 'message' as const, messageId })), createdAt: '', createdBy: user, parts: [part] };
+    full.relations.push(row);
+    full.messages.push({ ...text(id, ''), ...row, kind: relationType === 'ROUND' ? 'ROUND' : 'RELATION' });
+  };
+  for (const name of ['A', 'B']) {
+    add(`join-${name}`, 'JOIN', 'member-of', name, [`body-${name}`]);
+    add(`agree-${name}`, 'AGREE', 'agree', null, [`join-${name}`]);
+    add(`round-${name}`, 'ROUND', 'settlement', null, [`agree-${name}`]);
+    add(`result-${name}`, 'ROUND_RESULT', 'distribution', null, [`round-${name}`]);
+  }
+  // A settlement for a visible category remains available from that category.
+  add('category-round', 'ROUND', 'settlement', null, ['A']);
+  for (const username of [user.username, '另一个用户']) {
+    const index = createZhihuStructuralViewer(onlineStructuralSource(structureSnapshot(full), harness.get), username);
+    const overview = index.window({ classificationId: null });
+    expect(overview.data.messages.map(row => row.id)).toEqual(['A', 'B', 'category-round']);
+    expect(index.memberCounts('A').total).toBe(1);
+    const inside = index.window({ classificationId: 'A' });
+    expect(inside.data.messages.map(row => row.id)).toEqual(expect.arrayContaining(['body-A', 'join-A', 'agree-A']));
+    expect(inside.data.messages.some(row => row.id === 'body-B')).toBe(false);
+    const context = await index.readContext(['round-B']);
+    expect(context.messages.some(row => row.id === 'round-B')).toBe(true);
+  }
+});
 
 it('fetches only overview bodies, loads categories and cross-category context on demand, and reuses four-page projections', async () => {
   const { result } = renderHook(() => useWorkbenchData(input));

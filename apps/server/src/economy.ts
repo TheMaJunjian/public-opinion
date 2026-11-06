@@ -140,14 +140,11 @@ export async function placeWager(tx: Mutation, message: Message, amount: number,
     const resolved = await resolveExecutedStance(tx.store, stance[0]!.roles.target![0]!.reference, stance[0]!.relation === 'agree' ? 'pro' : 'con');
     await placeResolvedWager(tx, message, amount, stance[0]!.id, resolved, {allowDebt});
 }
-export async function placeValueWager(tx: Mutation, message: Message, annotation: RelationPart, amount: number, allowDebt = false, historical = false) {
-    const reference = relationTarget(annotation);
+async function valueWagerTarget(tx: Mutation, reference: Reference) {
     if (reference.revision !== undefined) await tx.store.message(reference.messageId);
     const subject = await tx.store.message(reference.messageId, reference.revision);
     const pinned = { ...reference, revision: subject.revision };
     const previous = await valueRoundFor(tx.store, pinned);
-    const requested = dataOf(message).roundId;
-    if (!historical && requested !== undefined && requested !== previous?.id) throw new DomainError('投票目标与轮次不一致', 409);
     let target = previous?.target;
     if (!target) {
         const claim = await tx.create('system', [
@@ -157,8 +154,20 @@ export async function placeValueWager(tx: Mutation, message: Message, annotation
         ]);
         target = { messageId: claim.id, revision: claim.revision, partId: 'relation' };
     }
+    return { previous, target };
+}
+export async function placeValueWager(tx: Mutation, message: Message, annotation: RelationPart, amount: number, allowDebt = false, historical = false) {
+    const { previous, target } = await valueWagerTarget(tx, relationTarget(annotation));
+    const requested = dataOf(message).roundId;
+    if (!historical && requested !== undefined && requested !== previous?.id) throw new DomainError('投票目标与轮次不一致', 409);
     await placeResolvedWager(tx, message, amount, annotation.id, { target, side: annotationValueSide(annotation) },
         {allowDebt,historical,validateRequestedRound:!historical,...(historical?{ledgerReason:'旧消息最低投入补扣'}:{})});
+}
+/** Publication value funds the message itself without becoming a truth/display stance. */
+export async function placeMessageValueWager(tx: Mutation, message: Message) {
+    if (!message.spending.recommendation) return;
+    const { target } = await valueWagerTarget(tx, { messageId: message.id, revision: message.revision, context: { kind: 'MESSAGE' } });
+    await placeResolvedWager(tx, message, message.spending.recommendation, null, { target, side: 'pro' }, { validateRequestedRound: false });
 }
 /** Fund a retained execution after the old economic epoch was cleared; do not execute its action again. */
 export async function fundHistoricalMessageContribution(tx: Mutation, message: Message, action: RelationPart) {
@@ -209,10 +218,10 @@ export async function refundHistoricalSelfWager(tx: Mutation, message: Message, 
     // Close the migration's now-empty round without affecting any prior settlement.
     if(!round.previousRoundId&&!await tx.store.db.prepare('SELECT 1 FROM bets WHERE "targetKey"=$1').get(key))await settle(tx,round,message.id);
 }
-async function placeResolvedWager(tx: Mutation, message: Message, amount: number, partId: string, resolved: { target: Reference; side: 'pro' | 'con' }, options: {historical?:boolean;allowDebt?:boolean;validateApproval?:boolean;validateRequestedRound?:boolean;reuseExecution?:boolean;ledgerReason?:string} = {}) {
+async function placeResolvedWager(tx: Mutation, message: Message, amount: number, partId: string | null, resolved: { target: Reference; side: 'pro' | 'con' }, options: {historical?:boolean;allowDebt?:boolean;validateApproval?:boolean;validateRequestedRound?:boolean;reuseExecution?:boolean;ledgerReason?:string} = {}) {
     const {historical=false,allowDebt=false,validateApproval=true,validateRequestedRound=true}=options;
     if (!historical && validateApproval) await validateJoinApproval(tx.store, resolved.target, resolved.side, message.authorId);
-    if(amount===0 && await tx.store.db.prepare('SELECT 1 FROM settlement_access WHERE "messageId"=$1').get(resolved.target.messageId)) {
+    if(partId !== null && amount===0 && await tx.store.db.prepare('SELECT 1 FROM settlement_access WHERE "messageId"=$1').get(resolved.target.messageId)) {
         const target={...resolved.target,revision:(await tx.store.message(resolved.target.messageId,resolved.target.revision)).revision};
         await tx.store.db.prepare(`INSERT INTO execution_stances("sourceId",revision,"partId",target,side) VALUES ($1,$2,$3,$4,$5)`).run(message.id,message.revision,partId,JSON.stringify(target),resolved.side);
         tx.affected.add(await recordStance(tx.store,message,{target,side:resolved.side}));
@@ -226,10 +235,12 @@ async function placeResolvedWager(tx: Mutation, message: Message, amount: number
         await tx.store.db.prepare('UPDATE settlement_access SET allowed_keys=array_append(allowed_keys,$2) WHERE "messageId"=$1 AND NOT($2=ANY(allowed_keys))')
             .run(selected.target.messageId,selected.key);
     }
-    const retained = options.reuseExecution && await tx.store.db.prepare('SELECT target,side FROM execution_stances WHERE "sourceId"=$1 AND revision=$2 AND "partId"=$3').get(message.id,message.revision,partId);
-    if (retained && (referenceKey(JSON.parse(String(retained.target))) !== selected.key || retained.side !== resolved.side)) throw new Error('历史投入与原执行依据不一致');
-    if (!retained) await tx.store.db.prepare(`INSERT INTO execution_stances("sourceId",revision,"partId",target,side) VALUES ($1,$2,$3,$4,$5)`).run(message.id, message.revision, partId, JSON.stringify(selected.target), resolved.side);
-    tx.affected.add((await recordStance(tx.store, message, { target: selected.target, side: resolved.side })));
+    if (partId !== null) {
+        const retained = options.reuseExecution && await tx.store.db.prepare('SELECT target,side FROM execution_stances WHERE "sourceId"=$1 AND revision=$2 AND "partId"=$3').get(message.id,message.revision,partId);
+        if (retained && (referenceKey(JSON.parse(String(retained.target))) !== selected.key || retained.side !== resolved.side)) throw new Error('历史投入与原执行依据不一致');
+        if (!retained) await tx.store.db.prepare(`INSERT INTO execution_stances("sourceId",revision,"partId",target,side) VALUES ($1,$2,$3,$4,$5)`).run(message.id, message.revision, partId, JSON.stringify(selected.target), resolved.side);
+        tx.affected.add((await recordStance(tx.store, message, { target: selected.target, side: resolved.side })));
+    }
     const history = await savedRounds(tx.store, selected.key);
     let round = history.find(r => r.status !== 'settled');
     if (round?.status === 'waiting' && Date.parse(round.endsAt!) <= Date.now())

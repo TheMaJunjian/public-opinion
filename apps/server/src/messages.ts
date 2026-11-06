@@ -1,7 +1,7 @@
 import { relations, replaceReference, targetInvestmentDimension, type Change, type Membership, type Message, type Part, type RelationPart, type SendResult, type User } from '@gonglun/core';
 import { DomainError, Mutation, now, Store } from './db.js';
 import { applyOrganization, reconcileOrganizationEffects, reconcileOrganizationRevision } from './organizations.js';
-import { dataOf, distributeOperations, grant, hasEffect, injectRevenue, lockDelegation, markEffect, oneTarget, openSettlement, placeValueWager, placeWager, relationTarget, settleDue, terminate } from './economy.js';
+import { dataOf, distributeOperations, grant, hasEffect, injectRevenue, lockDelegation, markEffect, oneTarget, openSettlement, placeMessageValueWager, placeValueWager, placeWager, relationTarget, settleDue, terminate } from './economy.js';
 import { parseSend, partsSchema, readReference, rulesSchema, validateReferences } from './validation.js';
 import { recordPersonal } from './personal-actions.js';
 import { notificationRecipients } from './notifications.js';
@@ -158,7 +158,8 @@ export async function send(store: Store, user: User, raw: unknown, options: {
             message.parts.push({ id: 'self-stance', type: 'relation', relation: normalized.selfStance === 'pro' ? 'agree' : 'disagree', roles: { target: [{ id: 'self', reference: { messageId: message.id,revision:message.revision,context:{kind:'MESSAGE'} } }] } });
             await tx.put(message);
         }
-        await chargeMessage(store,message,!!valueVote);
+        await chargeMessage(store,message,true);
+        if (!valueVote) await placeMessageValueWager(tx, message);
         await applyOrganization(tx, message);
         if (valueVote) await placeValueWager(tx, message, valueVote, recommendation);
         for (const part of relations(message)) {

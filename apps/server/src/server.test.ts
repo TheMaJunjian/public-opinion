@@ -26,16 +26,16 @@ async function conserved(app:App){const balances=(await app.store.db.prepare('SE
 afterEach(async ()=>{vi.restoreAllMocks();vi.unstubAllEnvs();for(const app of apps.splice(0))(await app.close());await cleanupTestDatabases();});
 
 describe('公论事务与经济',()=>{
-  it('发言必须投入，价值单独入运营池；幂等重试不重复收费，失败完全回滚',async()=>{
+  it('发言必须投入，价值锁为本金；幂等重试不重复收费，失败完全回滚',async()=>{
     const server=(await app()),user=await actor(server,'founder'),other=await actor(server,'other');
     const requestId=randomUUID(),input=[text('一个问题')];
     const first=await post(user,input,{requestId,recommendation:7});expect(first.status).toBe(201);
     const sequence=(await server.store.latestSequence());
     const duplicate=await post(user,input,{requestId,recommendation:7});expect(duplicate.body).toEqual(first.body);
     expect((await server.store.latestSequence())).toBe(sequence);
-    expect((await server.store.account(user.session.user.id))).toMatchObject({available:992,locked:0});
-    expect((await server.store.db.prepare('SELECT COUNT(*) AS n FROM rounds').get())!.n).toBe(0);
-    expect((await server.store.setting('operating'))).toBe(8);
+    expect((await server.store.account(user.session.user.id))).toMatchObject({available:992,locked:7});
+    expect((await server.store.db.prepare('SELECT COUNT(*) AS n FROM rounds').get())!.n).toBe(1);
+    expect((await server.store.setting('operating'))).toBe(1);
     expect((await post(user,[text('不同内容')],{requestId})).status).toBe(409);
     const before=(await server.store.account(other.session.user.id)),beforeSeq=(await server.store.latestSequence());
     expect((await post(other,[rel('credit'),data({amount:100})])).status).toBe(403);
@@ -58,8 +58,8 @@ describe('公论事务与经济',()=>{
     view=(await a.agent.get(`/api/messages/${claim.id}/context`)).body;
     expect(view.rounds[0]).toMatchObject({status:'settled',result:'con',pro:10,con:25});
     expect(view.rounds[0].previousRoundId).toBe(view.rounds[1].id);
-    expect((await server.store.account(a.session.user.id))).toMatchObject({available:985,locked:0});
-    expect((await server.store.account(b.session.user.id))).toMatchObject({available:1006,locked:0});
+    expect((await server.store.account(a.session.user.id))).toMatchObject({available:985,locked:2});
+    expect((await server.store.account(b.session.user.id))).toMatchObject({available:1006,locked:1});
     const reversals=(await server.store.db.prepare("SELECT COUNT(*) AS n FROM ledger WHERE reason='撤回先前对赌分配'").get())!;
     expect(reversals.n).toBeGreaterThan(0);(await conserved(server));
   });
@@ -67,12 +67,12 @@ describe('公论事务与经济',()=>{
     const server=(await app()),a=await actor(server,'alice'),b=await actor(server,'bob');
     const solo=await message(a,[text('只有一方')]);
     await message(a,[rel('agree',{messageId:solo.id})],{wager:17});await terminate(a,solo);
-    expect((await server.store.account(a.session.user.id))).toMatchObject({available:995,locked:0});
+    expect((await server.store.account(a.session.user.id))).toMatchObject({available:995,locked:2});
     expect((await a.agent.get(`/api/messages/${solo.id}/context`)).body.rounds[0].result).toBe('pro');
     const tie=await message(a,[text('平局')]);
     await message(a,[rel('agree',{messageId:tie.id})],{wager:8});await message(b,[rel('disagree',{messageId:tie.id})],{wager:8});await terminate(a,tie);
     expect((await a.agent.get(`/api/messages/${tie.id}/context`)).body.rounds[0].result).toBe('tie');
-    expect((await server.store.account(a.session.user.id))).toMatchObject({available:990,locked:0});
+    expect((await server.store.account(a.session.user.id))).toMatchObject({available:990,locked:4});
     expect((await server.store.account(b.session.user.id))).toMatchObject({available:999,locked:0});(await conserved(server));
   });
   it('低质量处罚单独入运营池，评价翻案平反，不改原消息对赌资金',async()=>{
@@ -99,28 +99,31 @@ describe('公论事务与经济',()=>{
   it('委托报酬独立锁定，完成后支付，翻案追回并恢复锁定',async()=>{
     const server=(await app()),a=await actor(server,'alice'),b=await actor(server,'bob');
     const task=await message(a,[rel('delegate'),text('完成工作'),data({reward:20})]);
-    expect((await server.store.account(a.session.user.id)).locked).toBe(20);
+    expect((await server.store.account(a.session.user.id)).locked).toBe(21);
     const work=await message(b,[rel('fulfill',{messageId:task.id}),text('工作成果')]);
     await message(a,[rel('agree',{messageId:work.id})],{wager:1});await terminate(a,work);
-    expect((await server.store.account(a.session.user.id)).locked).toBe(0);
+    expect((await server.store.account(a.session.user.id)).locked).toBe(2);
     expect((await server.store.account(b.session.user.id)).available).toBe(1018);
     await message(a,[rel('disagree',{messageId:work.id})],{wager:2});await terminate(a,work);
-    expect((await server.store.account(a.session.user.id)).locked).toBe(20);
+    expect((await server.store.account(a.session.user.id)).locked).toBe(23);
     expect((await server.store.account(b.session.user.id)).available).toBe(998);(await conserved(server));
   });
   it('运营收入只分实际可用部分，分配消息留下权重和每笔归因',async()=>{
     const server=(await app()),a=await actor(server,'alice'),b=await actor(server,'bob');
+    await server.store.transaction(async()=>{await server.store.operating(130);await server.store.set('minted',await server.store.setting<number>('minted')+130);});
     await message(a,[text('值得讨论')],{recommendation:130});
     await message(b,[text('补充证据')]);
     const proposal=await message(a,[rel('distribute')]);
     const related=(await a.agent.get(`/api/messages/${proposal.id}/context`)).body.messages as Message[];
-    const payout=related.find(m=>m.authorId==='system')!;
+    const payout=related.find(m=>m.parts.some(p=>p.type==='relation'&&p.relation==='distribution'))!;
     const value=payout.parts.find(p=>p.type==='data');
-    expect(value?.type==='data'&&value.value).toMatchObject({source:'operations',total:35,ruleVersion:1,ledgerId:'local'});
+    expect(value?.type==='data'&&value.value).toMatchObject({source:'operations',total:33,ruleVersion:1,ledgerId:'local'});
+    expect((await server.store.account(a.session.user.id)).locked).toBe(131);
     expect((await server.store.setting('operating'))).toBe(100);(await conserved(server));
   });
   it('早期表态高于未认可的重复内容，同作者拆分封顶且不同组织独立',async()=>{
     const server=(await app()),a=await actor(server,'alice'),b=await actor(server,'bob'),c=await actor(server,'carol');
+    await server.store.transaction(async()=>{await server.store.operating(180);await server.store.set('minted',await server.store.setting<number>('minted')+180);});
     const original=await message(a,[text('初始内容')],{recommendation:180});
     const early=await message(b,[rel('agree',{messageId:original.id})]);
     const duplicate=await message(c,[text('  初始内容  ')]);
@@ -129,7 +132,7 @@ describe('公论事务与经济',()=>{
     for(const group of [first,second])for(let i=0;i<6;i++)await message(a,[text(`独立分组内容 ${i}`),rel('member-of',{messageId:group.id},'parent')]);
     const operation=await message(a,[rel('distribute')]);
     const related=(await a.agent.get(`/api/messages/${operation.id}/context`)).body.messages as Message[];
-    const output=related.find(m=>m.authorId==='system')!.parts.find(p=>p.type==='data') as {value:any};
+    const output=related.find(m=>m.parts.some(p=>p.type==='relation'&&p.relation==='distribution'))!.parts.find(p=>p.type==='data') as {value:any};
     const attribution=output.value.inputs.attribution as Array<{messageId:string;userId:string;scope:string;weight:number}>;
     expect(attribution.find(item=>item.messageId===early.id)!.weight).toBeGreaterThan(attribution.find(item=>item.messageId===duplicate.id)!.weight);
     expect(attribution.find(item=>item.messageId===duplicate.id)!.weight).toBe(0);

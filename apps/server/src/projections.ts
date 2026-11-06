@@ -1,6 +1,7 @@
 import { contextKey,annotationValueSide, targetInvestmentDimension, organization, referenceKey, relations, type Message, type MessageState, type Reference, type ReferenceContext } from '@gonglun/core';
 import type { Store } from './db.js';
 import { retiredOrganizationIds } from './retired-organizations.js';
+import { valueSubjects } from './value-subjects.js';
 /** Execution-time statements survive edits to their source messages and bounded views. */
 export async function initializeProjections(store: Store): Promise<void> {
     await store.db.exec(`
@@ -66,7 +67,9 @@ export async function statesFor(store: Store, ids: string[]): Promise<MessageSta
                 suppressed: false,
                 supportCount: 0,
                 oppositionCount: 0,
-                recommendationTotal: relations(message).some(part => targetInvestmentDimension(part.relation)) ? 0 : message.spending.recommendation,
+                recommendationTotal: relations(message).some(part => targetInvestmentDimension(part.relation)
+                    && !((part.id === 'self-stance' || part.id.startsWith('minimum-self-stance-'))
+                        && ['agree','disagree'].includes(part.relation) && part.roles.target?.[0]?.reference.messageId === message.id)) ? 0 : message.spending.recommendation,
             }]));
         // A stance executes only on send. Return that original basis even when its
         // source has subsequently been edited; clients can label the older revision.
@@ -134,13 +137,12 @@ export async function statesFor(store: Store, ids: string[]): Promise<MessageSta
             state.suppressed = state.oppositionCount > state.supportCount;
         }
         const investments=await store.db.prepare('SELECT "subjectId","settlementType",side,amount,reference FROM stake_positions WHERE "subjectId"=ANY($1::text[])').all(batch);
-        const claims=new Map<string,Message>();
+        const claims=await valueSubjects(store,investments.filter(row=>row.settlementType==='VALUE'&&row.reference).map(row=>row.reference as Reference));
         for(const row of investments){
             const state=states.get(String(row.subjectId));if(!state)continue;
             let reference=row.reference as Reference|null;
             if(row.settlementType==='VALUE'&&reference){
-                let claim=claims.get(reference.messageId);if(!claim){claim=await store.message(reference.messageId,reference.revision);claims.set(reference.messageId,claim);}
-                reference=relations(claim).find(part=>part.relation==='open-value-settlement')?.roles.target?.[0]?.reference??reference;
+                reference=claims.get(referenceKey(reference))??reference;
             }
             const key=contextKey(reference?.context??{kind:'UNKNOWN'}),scopes=state.contextStakes??={};
             const total=scopes[key]??={truth:{pro:0,con:0},value:{pro:0,con:0}};

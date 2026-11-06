@@ -225,7 +225,7 @@ describe('保留操作方式的消息 API',()=>{
     const again=await good(post(user,'/commands',batch));expect(again).toEqual(result);expect((await app.store.account(user.session.user.id))).toEqual(account);expect((await app.store.latestSequence())).toBe(seq);
     const failedId=randomUUID(),failed={requestId:randomUUID(),commands:[{id:failedId,method:'POST',path:'/messages',body:{parentMessageId:classification.id,content:'不应留下'}},{id:randomUUID(),method:'POST',path:'/relations',body:{parentMessageId:classification.id,relationType:'AGREE',targetRefs:[{kind:'message',messageId:'missing'}]}}]};
     expect((await post(user,'/commands',failed)).status).toBe(404);await expect(app.store.message(failedId)).rejects.toThrow();expect((await app.store.account(user.session.user.id))).toEqual(account);expect((await app.store.latestSequence())).toBe(seq);
-    const view=await user.agent.get(`/api/ui/snapshot?parent=${classification.id}`);expect(view.status,view.text).toBe(200);expect(view.body.messages.some((m:any)=>m.id===firstId)).toBe(true);expect(view.body.stakes[firstId].counts.pro).toBe(8);
+    const view=await user.agent.get(`/api/ui/snapshot?parent=${classification.id}`);expect(view.status,view.text).toBe(200);expect(view.body.messages.some((m:any)=>m.id===firstId)).toBe(true);expect(view.body.stakes[firstId].countsByType).toMatchObject({TRUTH:{pro:8,con:0},VALUE:{pro:1,con:0}});
   });
   it('正文更正保存全文对比，原文和历史引用保持不变',async()=>{
     const app=(await make()),founder=await actor(app,'发起人'),other=await actor(app,'参与者');
@@ -258,10 +258,11 @@ describe('保留操作方式的消息 API',()=>{
   });
   it('单边结算保持操作、结算消息可评价，账本与导出可追溯',async()=>{
     const app=(await make()),user=await actor(app,'发起人'),message=await good(post(user,'/messages',{content:'一个提议'}));
-    expect((await app.store.db.prepare('SELECT COUNT(*) AS n FROM rounds').get())!.n).toBe(0);
+    expect((await app.store.db.prepare('SELECT COUNT(*) AS n FROM rounds').get())!.n).toBe(1);
     await good(post(user,'/relations',{relationType:'AGREE',targetRefs:[{kind:'message',messageId:message.id}],wager:20}));
-    const rounds=(await user.agent.get(`/api/ui/messages/${message.id}/rounds`)).body.data;expect(rounds).toHaveLength(1);expect((await app.store.message(rounds[0].id)).parts.some(p=>p.type==='relation'&&p.relation==='settlement')).toBe(true);
-    const settled=await good(post(user,`/rounds/${rounds[0].id}/close-and-settle`));expect(settled.result).toBe('TRUE');expect((await app.store.account(user.session.user.id)).locked).toBe(0);
+    const allRounds=(await user.agent.get(`/api/ui/messages/${message.id}/rounds`)).body.data;expect(allRounds).toHaveLength(2);expect(allRounds.some((round:any)=>round.settlementType==='VALUE')).toBe(true);
+    const rounds=allRounds.filter((round:any)=>round.settlementType==='TRUTH');expect(rounds).toHaveLength(1);expect((await app.store.message(rounds[0].id)).parts.some(p=>p.type==='relation'&&p.relation==='settlement')).toBe(true);
+    const settled=await good(post(user,`/rounds/${rounds[0].id}/close-and-settle`));expect(settled.result).toBe('TRUE');expect((await app.store.account(user.session.user.id)).locked).toBe(2);
     const evaluation=await good(post(user,'/relations',{relationType:'ARCHIVE',targetRefs:[{kind:'relation',relationId:rounds[0].id}],payload:{subType:'LOWVALUE'}}));expect((await app.store.message(evaluation.id)).parts.some(p=>p.type==='relation'&&p.relation==='low-quality')).toBe(true);
     for(const path of ['/points/balance','/points/transactions','/revenue/pool','/revenue/distributions','/audit-logs',`/users/${user.session.user.id}/stances`,'/export']){const response=await user.agent.get(`/api/ui${path}`);expect(response.status,response.text).toBe(200);}
     const exported=(await user.agent.get('/api/ui/export')).body;expect(exported.messages.some((m:any)=>m.id===rounds[0].id)).toBe(true);expect(replayArchive(exported).accounts.get(user.session.user.id)).toEqual((await app.store.account(user.session.user.id)));expect(exported.ruleHistory).toHaveLength(1);expect(JSON.stringify(exported)).not.toContain('a-test-password');
@@ -293,10 +294,10 @@ describe('保留操作方式的消息 API',()=>{
   });
   it('推荐进入目标价值赌池，评价反转平反且不触碰原真假赌池',async()=>{
     const app=(await make()),author=await actor(app,'发起人'),critic=await actor(app,'评价者'),message=await good(post(author,'/messages',{content:'待评价的消息'}));
-    await good(post(author,'/relations',{relationType:'RECOMMEND',targetRefs:[{kind:'message',messageId:message.id}],recommendation:3}));expect((await app.store.db.prepare('SELECT COUNT(*) AS n FROM bets').get())!.n).toBe(1);
+    await good(post(author,'/relations',{relationType:'RECOMMEND',targetRefs:[{kind:'message',messageId:message.id}],recommendation:3}));expect((await app.store.db.prepare('SELECT COUNT(*) AS n FROM bets').get())!.n).toBe(2);
     const round=await good(post(critic,`/messages/${message.id}/rounds`,{settlementType:'VALUE'}));expect(round.settlementType).toBe('VALUE');expect(round.reference.messageId).not.toBe(message.id);
-    await good(post(critic,`/rounds/${round.id}/votes`,{vote:'FALSE',amount:4}));const before=(await app.store.account(author.session.user.id)).available;await good(post(critic,`/rounds/${round.id}/close-and-settle`));expect((await app.store.account(author.session.user.id)).available).toBe(before-5);
-    const stakes=(await author.agent.get(`/api/ui/messages/${message.id}/stakes`)).body;expect(stakes.countsByType.VALUE.con).toBe(4);expect(stakes.countsByType.TRUTH.con).toBe(0);
+    await good(post(critic,`/rounds/${round.id}/votes`,{vote:'FALSE',amount:5}));const before=(await app.store.account(author.session.user.id)).available;await good(post(critic,`/rounds/${round.id}/close-and-settle`));expect((await app.store.account(author.session.user.id)).available).toBe(before-5);
+    const stakes=(await author.agent.get(`/api/ui/messages/${message.id}/stakes`)).body;expect(stakes.countsByType.VALUE.con).toBe(5);expect(stakes.countsByType.TRUTH.con).toBe(0);
     const next=await good(post(author,`/messages/${message.id}/rounds`,{settlementType:'VALUE'}));expect(next.previousRoundId).toBe(round.id);expect(next.reference).toEqual(round.reference);
     await good(post(author,`/rounds/${next.id}/votes`,{vote:'TRUE',amount:6}));await good(post(author,`/rounds/${next.id}/close-and-settle`));expect((await app.store.db.prepare("SELECT amount FROM ledger WHERE \"userId\"=$1 AND reason LIKE '低质量%'").all(author.session.user.id)).map(r=>r.amount)).toEqual([-5,5]);
   });
@@ -304,7 +305,7 @@ describe('保留操作方式的消息 API',()=>{
     const app=(await make()),user=await actor(app,'发起人'),ids:string[]=[];
     for(const content of ['规则一','规则二']){const message=await good(post(user,'/messages',{content,selfAgree:true,wager:2}));ids.push(message.id);}
     await good(post(user,'/relations',{relationType:'PROPOSAL',targetRefs:[],payload:{operationType:'TERMINATE_SETTLEMENT',targetMessageIds:ids,content:'终止这些结算'}}));
-    expect((await app.store.db.prepare("SELECT COUNT(*) AS n FROM rounds WHERE body::jsonb->>'status'='settled'").get())!.n).toBe(2);expect((await app.store.account(user.session.user.id)).locked).toBe(0);
+    expect((await app.store.db.prepare("SELECT COUNT(*) AS n FROM rounds WHERE body::jsonb->>'status'='settled'").get())!.n).toBe(2);expect((await app.store.account(user.session.user.id)).locked).toBe(1);
   });
   it('移动嵌套组织后，旧分类增量移除整个子树，原发送位置不会将成员重新拉回',async()=>{
     const app=(await make()),user=await actor(app,'发起人'),left=await good(post(user,'/relations',{relationType:'CLASSIFY',targetRefs:[],payload:{title:'分类甲'}})),right=await good(post(user,'/relations',{relationType:'CLASSIFY',targetRefs:[],payload:{title:'分类乙'}}));
@@ -330,7 +331,7 @@ describe('保留操作方式的消息 API',()=>{
     for(const batch of ['0','5','1.5','invalid']) expect((await user.agent.get(`/api/ui/snapshot?batch=${batch}`)).status).toBe(400);
     const sequence=response.body.sequence,source=commands[0]!.id;
     const before=(await app.store.account(user.session.user.id));
-    const own=await good(post(user,'/messages',{content:'显式自赞',selfAgree:true,wager:7,recommendation:2}));expect((await app.store.account(user.session.user.id))).toMatchObject({available:before.available-10,locked:before.locked+7});
+    const own=await good(post(user,'/messages',{content:'显式自赞',selfAgree:true,wager:7,recommendation:2}));expect((await app.store.account(user.session.user.id))).toMatchObject({available:before.available-10,locked:before.locked+9});
     const relation=await good(post(user,'/relations',{relationType:'REFERENCE',sourceRefs:[{messageId:source,revision:1,partId:'body',range:{start:0,end:2}}],targetRefs:[{kind:'message',messageId:own.id}]}));expect(relation.sourceRefs[0].partId).toBe('body');expect(relation.sourceRefs[0].range).toEqual({start:0,end:2});
     const delta=await user.agent.get(`/api/ui/snapshot?parent=root&after=${sequence}`);expect(delta.status,delta.text).toBe(200);expect(delta.body.sequence).toBe((await app.store.latestSequence()));expect(delta.body.messages.some((m:any)=>m.id===own.id)).toBe(true);expect(delta.body.messages.length).toBeLessThan(15);
   });

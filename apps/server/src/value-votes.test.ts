@@ -37,32 +37,32 @@ it.each([['TRUE', 'recommend', 'pro'], ['FALSE', 'archive', 'con']] as const)(
     expect(await tagCountsFor(app.store, [message.id])).toEqual({ [message.id]: { [name.toUpperCase()]: 1 } });
     expect((await personalMarks(app.store, session.user.id, [message.id]))[0]?.archived).toBe(name === 'archive');
     const detail = await roundView(app.store, round.id);
-    expect(detail.votes).toEqual([expect.objectContaining({ id: created.id, vote, amount: 5 })]);
-    expect(detail.weights[vote]).toBe(5);
+    expect(detail.votes).toEqual([expect.objectContaining({ id: message.id, vote: 'TRUE', amount: 1 }), expect.objectContaining({ id: created.id, vote, amount: 5 })]);
+    expect(detail.weights[vote]).toBe(vote === 'TRUE' ? 6 : 5);
     const history = (await agent.get(`/api/ui/users/${session.user.id}/stances`)).body;
     expect(history.stances.tags).toContainEqual(expect.objectContaining({ relationMessageId: created.id, targetMessageId: message.id, relationType: name.toUpperCase() }));
     const account = await app.store.account(session.user.id);
     expect((await post(`/rounds/${round.id}/votes`, { vote, amount: 5 }, requestId)).id).toBe(created.id);
     expect(await app.store.account(session.user.id)).toEqual(account);
-    expect((await app.store.db.prepare('SELECT COUNT(*)::int AS n FROM bets').get())?.n).toBe(1);
+    expect((await app.store.db.prepare('SELECT COUNT(*)::int AS n FROM bets').get())?.n).toBe(2);
   });
 
 it('直接发送推荐、冷藏与仲裁面板共用价值轮次，真假投票仍发送赞同、反对', async () => {
   const { app, post, message } = await setup();
   const recommend = await post('/relations', { relationType: 'RECOMMEND', targetRefs: [{ kind: 'message', messageId: message.id }], recommendation: 4 });
   const value = await post(`/messages/${message.id}/rounds`, { settlementType: 'VALUE' });
-  expect(value.votes).toEqual([expect.objectContaining({ id: recommend.id, vote: 'TRUE', amount: 4 })]);
+  expect(value.votes).toEqual([expect.objectContaining({ id: message.id, vote: 'TRUE', amount: 1 }), expect.objectContaining({ id: recommend.id, vote: 'TRUE', amount: 4 })]);
   const archive = await post('/relations', { relationType: 'ARCHIVE', targetRefs: [{ kind: 'message', messageId: message.id }], recommendation: 3 });
   const detail = await roundView(app.store, value.id);
-  expect(detail.weights).toEqual({ TRUE: 4, FALSE: 3, UNKNOWN: 0 });
-  expect(detail.votes.map((vote: { id: string }) => vote.id)).toEqual([recommend.id, archive.id]);
+  expect(detail.weights).toEqual({ TRUE: 5, FALSE: 3, UNKNOWN: 0 });
+  expect(detail.votes.map((vote: { id: string }) => vote.id)).toEqual([message.id, recommend.id, archive.id]);
   for (const created of [recommend, archive]) expect(relations(await app.store.message(created.id))).toHaveLength(1);
   const truth = await post(`/messages/${message.id}/rounds`, { settlementType: 'TRUTH' });
   for (const [vote, type] of [['TRUE', 'AGREE'], ['FALSE', 'DISAGREE']]) {
     const result = await post(`/rounds/${truth.id}/votes`, { vote, amount: 2 });
     expect(result).toMatchObject({ relationType: type, targetRefs: [{ reference: truth.reference }] });
   }
-  expect((await roundView(app.store, value.id)).weights).toEqual({ TRUE: 4, FALSE: 3, UNKNOWN: 0 });
+  expect((await roundView(app.store, value.id)).weights).toEqual({ TRUE: 5, FALSE: 3, UNKNOWN: 0 });
   expect((await roundView(app.store, truth.id)).weights).toEqual({ TRUE: 2, FALSE: 2, UNKNOWN: 0 });
 });
 
@@ -70,12 +70,12 @@ it('标注的价值投入与反对标注继续进入同一价值轮次', async (
   const { app, agent, session, post, message } = await setup();
   const recommend = await post('/relations', { relationType: 'RECOMMEND', targetRefs: [{ kind: 'message', messageId: message.id }] });
   const round = await post(`/messages/${message.id}/rounds`, { settlementType: 'VALUE' });
-  expect(round.weights).toEqual({ TRUE: 1, FALSE: 0, UNKNOWN: 0 });
+  expect(round.weights).toEqual({ TRUE: 2, FALSE: 0, UNKNOWN: 0 });
   const response = await agent.post('/api/messages').set('x-csrf-token', session.csrf).send({ requestId: randomUUID(), recommendation: 3,
     parts: [{ id: 'relation', type: 'relation', relation: 'disagree', roles: bindRoles({ target: [{ messageId: recommend.id }] }) }] });
   expect(response.status, response.text).toBe(201);
   expect(relations(response.body.message).map(part => part.relation)).toEqual(['archive']);
-  expect((await roundView(app.store, round.id)).weights).toEqual({ TRUE: 1, FALSE: 3, UNKNOWN: 0 });
+  expect((await roundView(app.store, round.id)).weights).toEqual({ TRUE: 2, FALSE: 3, UNKNOWN: 0 });
   expect((await app.store.db.prepare('SELECT COUNT(*)::int AS n FROM rounds').get())?.n).toBe(1);
 });
 
@@ -85,14 +85,15 @@ it('旧版以原消息正文为目标的价值轮次也发送标注并沿用原�
     { id: 'relation', type: 'relation', relation: 'open-settlement', roles: bindRoles({ target: [{ messageId: message.id, revision: 1, partId: 'body' }] }) },
   ] });
   expect(opened.status, opened.text).toBe(201);
-  const row = (await app.store.db.prepare('SELECT id,body FROM rounds').get())!;
+  const row = (await app.store.db.prepare(`SELECT id,body FROM rounds WHERE body::jsonb #>> '{target,messageId}'=$1 AND body::jsonb #>> '{target,partId}'='body'`).get(message.id))!;
+  const roundCount = await app.store.db.prepare('SELECT COUNT(*)::int AS n FROM rounds').get();
   const saved = { ...JSON.parse(String(row.body)), settlementType: 'VALUE', subjectId: message.id };
   await app.store.transaction(() => app.store.db.prepare('UPDATE rounds SET body=$1 WHERE id=$2').run(JSON.stringify(saved), row.id));
   const vote = await post(`/rounds/${row.id}/votes`, { vote: 'FALSE', amount: 2 });
   expect(vote).toMatchObject({ relationType: 'ARCHIVE', targetRefs: [{ reference: { messageId: message.id, revision: 1 } }] });
   expect(vote.targetRefs[0].reference.partId).toBeUndefined();
   expect((await roundView(app.store, String(row.id))).votes).toEqual([expect.objectContaining({ id: vote.id, vote: 'FALSE', amount: 2 })]);
-  expect((await app.store.db.prepare('SELECT COUNT(*)::int AS n FROM rounds').get())?.n).toBe(1);
+  expect(await app.store.db.prepare('SELECT COUNT(*)::int AS n FROM rounds').get()).toEqual(roundCount);
 });
 
 it('标注押注失败会回滚消息、价值轮次和个人标记，保持资金记录完整', async () => {
@@ -103,7 +104,7 @@ it('标注押注失败会回滚消息、价值轮次和个人标记，保持资�
   expect(response.status).toBe(400);
   expect(await app.store.account(session.user.id)).toEqual(before);
   expect(await app.store.latestSequence()).toBe(sequence);
-  expect((await app.store.db.prepare('SELECT COUNT(*)::int AS n FROM rounds').get())?.n).toBe(0);
+  expect((await app.store.db.prepare('SELECT COUNT(*)::int AS n FROM rounds').get())?.n).toBe(1);
   expect(await tagCountsFor(app.store, [message.id])).toEqual({ [message.id]: {} });
   expect((await personalMarks(app.store, session.user.id, [message.id]))[0]?.archived).toBe(false);
 });

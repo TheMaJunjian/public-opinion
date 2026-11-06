@@ -1,21 +1,28 @@
 import {afterEach,expect,it} from 'vitest';
 import request from 'supertest';
 import {randomUUID} from 'node:crypto';
-import {replayArchive,type Part} from '@gonglun/core';
+import {contextKey,replayArchive,type Part} from '@gonglun/core';
 import {cleanupTestDatabases,createTestApp} from './test-database.js';
+import {roundView,stakesFor} from './ui-projections.js';
+import {valueRoundFor} from './economy.js';
 
 afterEach(cleanupTestDatabases);
 it('拒绝文本和关系的零投入，接受真假、价值或同时投入，失败不扣费且重试不重复扣费',async()=>{
   const app=await createTestApp(),agent=request.agent(app);
   const {body:session}=await agent.post('/api/register').send({name:'投入测试',password:'password'});
   const post=(path:string,body:object)=>agent.post(path==='/native/messages'?'/api/messages':'/api/ui'+path).set('x-csrf-token',session.csrf).set('x-request-id',('requestId' in body?String(body.requestId):randomUUID())).send(body);
-  const initial=await app.store.account(session.user.id),sequence=await app.store.latestSequence();
+  const initial=await app.store.account(session.user.id),sequence=await app.store.latestSequence(),operating=await app.store.setting<number>('operating');
   expect((await post('/messages',{content:'不允许零投入',wager:0,recommendation:0})).status).toBe(400);
   expect((await post('/native/messages',{parts:[{id:'body',type:'text',text:'原生接口零投入'}],requestId:randomUUID()})).status).toBe(400);
   expect(await app.store.account(session.user.id)).toEqual(initial);
   expect(await app.store.latestSequence()).toBe(sequence);
   const value=await post('/messages',{content:'仅价值',recommendation:1});
   expect(value.status,value.text).toBe(201);
+  expect(value.body.kind).toBe('TEXT');
+  expect(value.body.executedStance).toBeUndefined();
+  const valueRound=await valueRoundFor(app.store,{messageId:value.body.id,context:{kind:'MESSAGE'}});
+  expect(valueRound).toMatchObject({settlementType:'VALUE',subjectId:value.body.id,pro:1,status:'open'});
+  expect((await roundView(app.store,valueRound!.id)).votes).toEqual([expect.objectContaining({id:value.body.id,vote:'TRUE',amount:1})]);
   for(const wager of [0,1]){
     const response=await post('/relations',{relationType:'RECOMMEND',targetRefs:[{kind:'message',messageId:value.body.id}],wager:0,recommendation:wager});
     expect(response.status,response.text).toBe(wager?201:400);
@@ -25,8 +32,15 @@ it('拒绝文本和关系的零投入，接受真假、价值或同时投入，�
   const both=await post('/native/messages',input);
   expect(both.status,both.text).toBe(201);
   expect(both.body.message.spending).toEqual({protocol:1,wager:2,recommendation:3});
+  const state=both.body.change.states.find((state:{messageId:string})=>state.messageId===both.body.message.id);
+  expect(state).toMatchObject({recommendationTotal:3,supportCount:1,executedStance:{partId:'self-stance',target:{messageId:both.body.message.id},side:'pro'}});
+  const stakes=(await stakesFor(app.store,[both.body.message.id]))[both.body.message.id]!;
+  expect(stakes.countsByType).toEqual({TRUTH:{pro:2,con:0},VALUE:{pro:3,con:0}});
+  expect(stakes.contexts![contextKey({kind:'MESSAGE'})]!.countsByType).toEqual(stakes.countsByType);
+  expect(stakes.pools).toEqual({TRUTH:{lockedPro:2,lockedCon:0},VALUE:{lockedPro:3,lockedCon:0}});
   const after=await app.store.account(session.user.id);
-  expect(after).toMatchObject({available:initial.available-10,locked:3});
+  expect(after).toMatchObject({available:initial.available-10,locked:7});
+  expect(await app.store.setting<number>('operating')).toBe(operating+3);
   expect((await post('/native/messages',input)).body).toEqual(both.body);
   expect(await app.store.account(session.user.id)).toEqual(after);
   const changes=(await app.store.db.prepare('SELECT body FROM changes ORDER BY sequence').all()).map(row=>JSON.parse(String(row.body)));
@@ -52,7 +66,8 @@ it('一条批量命令零投入时整批回滚，新建分类的加入消息也�
     .filter(message=>message.parts.some((part:any)=>part.type==='data'&&part.value?.generatedBy===container.body.id));
   expect(generated).toHaveLength(1);
   expect(generated[0].spending).toEqual({protocol:1,wager:0,recommendation:1});
-  expect(await app.store.account(session.user.id)).toMatchObject({available:before.available-6,locked:0});
+  expect(await valueRoundFor(app.store,{messageId:generated[0].id,context:{kind:'MESSAGE'}})).toMatchObject({settlementType:'VALUE',pro:1,status:'open'});
+  expect(await app.store.account(session.user.id)).toMatchObject({available:before.available-6,locked:3});
 });
 
 it.each(['root','classification'])('两条引用和一条文本只在分类中增加一条加入消息，各类按每条投入收费（%s）',async scope=>{
@@ -79,7 +94,7 @@ it.each(['root','classification'])('两条引用和一条文本只在分类中�
   expect(joins).toHaveLength(scope==='root'?0:1);
   if(joins.length)expect(joins[0].spending).toEqual({protocol:1,wager:5,recommendation:2});
   const after=await app.store.account(session.user.id);
-  expect(after).toMatchObject({available:before.available-(scope==='root'?20:28),locked:before.locked+(scope==='root'?10:15)});
+  expect(after).toMatchObject({available:before.available-(scope==='root'?20:28),locked:before.locked+(scope==='root'?17:24)});
   const retry=await post('/commands',batch);
   expect(retry.body.results).toEqual(response.body.results);
   expect(retry.body.sequence).toBe(response.body.sequence);
@@ -108,5 +123,5 @@ it('新分类的多条加入共用投入配置，但每条扣款；余额不足�
     .filter(message=>message.parts.some((part:any)=>part.type==='data'&&part.value?.generatedBy===response.body.id));
   expect(generated).toHaveLength(3);
   for(const message of generated)expect(message.spending).toEqual({protocol:1,wager:4,recommendation:0});
-  expect(await app.store.account(session.user.id)).toMatchObject({available:before.available-17,locked:before.locked+12});
+  expect(await app.store.account(session.user.id)).toMatchObject({available:before.available-17,locked:before.locked+13});
 });

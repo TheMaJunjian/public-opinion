@@ -2,7 +2,7 @@ import { isRelationView, relations, type Message, type WorkbenchSnapshot } from 
 import { z } from 'zod';
 import { DomainError, type Store } from './db.js';
 import { attentionUsers, scopeSql, scopeView, stakesFor, tagCountsFor, usersFor, viewsFor } from './ui-projections.js';
-import { displayAttachmentSql, isDependentMessageSql } from './display-dependencies.js';
+import { displayAttachmentSql, isDependentMessageSql, isSettlementRecordSql } from './display-dependencies.js';
 
 const input = z.object({
   parent: z.string().min(1).max(100).default('root'), mode: z.literal('window'),
@@ -26,7 +26,7 @@ export async function windowSnapshot(store: Store, raw: unknown): Promise<Workbe
   const params: unknown[] = [query.relatedTo ?? query.viewParent ?? parent];
   const clauses = [query.relatedTo ? `EXISTS(SELECT 1 FROM refs r WHERE (r."sourceId"=m.id AND r."targetId"=$1) OR (r."targetId"=m.id AND r."sourceId"=$1))`
     : `COALESCE((SELECT membership."parentId" FROM memberships membership WHERE membership."memberId"=m.id),'root')=$1
-      AND NOT ${isDependentMessageSql('m')}`];
+      AND NOT ${isDependentMessageSql('m')} AND NOT ${isSettlementRecordSql('m')}`];
   if (query.cursor) {
     let cursor: z.infer<typeof cursorSchema>;
     try { cursor = cursorSchema.parse(JSON.parse(Buffer.from(query.cursor, 'base64url').toString())); }

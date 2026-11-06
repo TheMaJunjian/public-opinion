@@ -14,8 +14,12 @@ afterEach(cleanupTestDatabases);
 async function setup(){
   const app=await createTestApp(),agent=request.agent(app);
   const {body:session}=await agent.post('/api/register').send({name:'历史投入',password:'test-password'});
-  const response=await agent.post('/api/messages').set('x-csrf-token',session.csrf).send({requestId:randomUUID(),recommendation:1,parts:[{id:'body',type:'text',text:'原目标'}]});
-  return {app,session,target:response.body.message};
+  // Historical ordinary messages paid value into operating funds before this migration.
+  const target=await app.store.transaction(async()=>{
+    const tx=new Mutation(app.store),message=await tx.create(session.user.id,[{id:'body',type:'text',text:'原目标'}],{protocol:1,wager:0,recommendation:1});
+    await chargeMessage(app.store,message);await tx.commit();return message;
+  });
+  return {app,session,target};
 }
 it('旧价值费用转成目标本金，同轮次多条记录不丢金额，不再自押，重复运行和重放均一致',async()=>{
   const {app,session,target}=await setup(),store=app.store,ids:string[]=[];

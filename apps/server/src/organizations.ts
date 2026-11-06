@@ -3,7 +3,7 @@ import { DomainError, Mutation, type Store } from './db.js';
 import { statesFor } from './projections.js';
 import { retiredOrganizationIds } from './retired-organizations.js';
 import {chargeMessage} from './message-spending.js';
-import {placeWager} from './economy.js';
+import {placeMessageValueWager,placeWager} from './economy.js';
 import { messageDisplayDependency } from '@gonglun/core';
 
 const whole = (ref: { revision?: number; partId?: string; memberId?: string; path?: unknown[]; range?: unknown }) =>
@@ -95,7 +95,8 @@ async function createJoin(tx: Mutation, origin: Message, memberId: string, paren
     }
     await recordJoin(tx, message, memberId, parentId);
     if(publishing){
-        await chargeMessage(tx.store,message);
+        await chargeMessage(tx.store,message,true);
+        await placeMessageValueWager(tx,message);
         if(message.spending.wager)await placeWager(tx,message,message.spending.wager);
     }
     return message;

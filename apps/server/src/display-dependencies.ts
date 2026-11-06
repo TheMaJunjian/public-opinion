@@ -25,3 +25,12 @@ export function isDependentMessageSql(alias: string) {
     OR EXISTS(SELECT 1 FROM jsonb_array_elements(${alias}.body::jsonb->'parts') part
       WHERE part->>'type'='display' AND part #>> '{target,messageId}' IS NOT NULL))`;
 }
+
+/** Settlement history is opened from its subject, never paged as overview cards. */
+export function isSettlementRecordSql(alias: string) {
+  return `(EXISTS(SELECT 1 FROM ${primary(alias)} semantic
+      WHERE semantic.value->>'relation' IN ('settlement','open-settlement','open-value-settlement','distribution'))
+    OR EXISTS(SELECT 1 FROM jsonb_array_elements(${alias}.body::jsonb->'parts') part
+      WHERE part->>'type'='data' AND (part #>> '{value,kind}' IN ('ROUND','ROUND_RESULT')
+        OR part #>> '{value,uiType}' IN ('ROUND','ROUND_RESULT'))))`;
+}

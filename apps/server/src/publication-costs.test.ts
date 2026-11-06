@@ -16,7 +16,7 @@ import type {Relation,Message as ViewMessage} from '../../../frontend/src/types'
 import {cleanupTestDatabases,createTestApp} from './test-database.js';
 import {executeBatch,executeCommand} from './ui-commands.js';
 import {relationViewType,snapshot} from './ui-projections.js';
-import {bindRoles,targetInvestmentDimension} from '@gonglun/core';
+import {bindRoles} from '@gonglun/core';
 
 vi.mock('../../../frontend/src/api',()=>({api:{getMessageStakes:vi.fn(async()=>({stakes:[]})),cancelCommandBatch:vi.fn()}}));
 let app:Awaited<ReturnType<typeof createTestApp>>,user:Awaited<ReturnType<typeof app.store.user>>;
@@ -169,8 +169,7 @@ for(const scope of ['root','inside'] as const)for(const scenario of scenarios)it
     expect(cost.messageCount).toBe(messages.length);
     if(scenario.label){const references=messages.filter(message=>relationViewType(message)==='REFERENCE');expect(references).toHaveLength(2);for(const reference of references)expect(reference.parts.find((part:any)=>part.type==='data').value.label).toBe(scenario.label);expect(cost.groups.find(group=>group.type==='REFERENCE')).toMatchObject({count:2,protocolFeeTotal:6});}
     expect(cost.total).toBe(before.available-after.available);
-    const targetValue=messages.filter(message=>message.spending.wager===0&&message.parts.some((part:any)=>part.type==='relation'&&targetInvestmentDimension(part.relation)==='VALUE')).reduce((sum,message)=>sum+message.spending.recommendation,0);
-    expect(cost.stakeTotal+targetValue+cost.delegationRewardStake).toBe(after.locked-before.locked);
+    expect(cost.stakeTotal+cost.recommendationTotal+cost.delegationRewardStake).toBe(after.locked-before.locked);
     expect(cost.protocolFeeTotal).toBe(messages.reduce((sum,message)=>sum+message.spending.protocol,0));
     expect(cost.recommendationTotal).toBe(messages.reduce((sum,message)=>sum+message.spending.recommendation,0));
     throw rollback;

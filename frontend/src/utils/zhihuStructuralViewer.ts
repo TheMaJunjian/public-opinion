@@ -7,6 +7,7 @@ import type { TraceDepths } from './traceRange';
 import { isNativeZhihuView } from './nativeZhihuView';
 import type { TargetRef } from '../types';
 import { hydratePagedArchive, pagedArchiveSource } from './pagedZhihuArchive';
+import { displayDependencyIds } from './displayDependency';
 
 type Row = ExportData['messages'][number];
 type RelationRow = ExportData['relations'][number];
@@ -132,13 +133,13 @@ export function createZhihuStructuralViewer(data: ExportData, username: string |
     for (const child of members.get(id) ?? []) hiddenPending.push(child);
   }
   const rootIds = data.messages.filter(row => {
-    if (hiddenAtRoot.has(row.id) || row.state?.organizationRetired || typeOf(row) === 'JOIN') return false;
-    const relation = relations.get(row.id);
-    if (!relation || containers.has(typeOf(relation))) return true;
-    const hosts = endpoints(relation);
-    // A new local reply or stance need not have its own membership record.
-    // Its hidden host must not make the overview hydrate the host's branch.
-    return !hosts.length || hosts.some(id => byId.has(id) && !hiddenAtRoot.has(id));
+    if (hiddenAtRoot.has(row.id) || row.state?.organizationRetired
+      || ['JOIN', 'ROUND', 'ROUND_RESULT'].includes(typeOf(row) || row.kind)) return false;
+    // Only independent cards seed the overview. A stance on a JOIN, or a
+    // settlement of that stance, has no membership of its own; seeding these
+    // records would pull every closed category's members back into the window.
+    // The adjacency/effect walk below adds records belonging to visible hosts.
+    return displayDependencyIds({ ...row, relationType: row.relationType ?? undefined, targetRefs: row.targetRefs as TargetRef[] | undefined }) === null;
   }).map(row => row.id);
 
   function layer(id: string | null): Set<string> {

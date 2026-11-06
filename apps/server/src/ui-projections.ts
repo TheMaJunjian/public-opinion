@@ -1,7 +1,8 @@
-import { organization, relations, replaceReference, textOf, type Message, type Reference, type Change, type MessageState, type UserView, type TargetRef, type NativeMessageView, type NativeMessageStakes, type ScopeView, type WorkbenchSnapshot, isRelationView } from '@gonglun/core';
+import { organization, referenceKey, relations, replaceReference, textOf, type Message, type Reference, type Change, type MessageState, type UserView, type TargetRef, type NativeMessageView, type NativeMessageStakes, type ScopeView, type WorkbenchSnapshot, isRelationView } from '@gonglun/core';
 import { DomainError, Store } from './db.js';
 import { dataOf } from './economy.js';
 import { statesFor } from './projections.js';
+import { valueSubjects } from './value-subjects.js';
 import { personalMarks } from './personal.js';
 import { messageDisplayDependency } from '@gonglun/core';
 import { displayAttachmentSql } from './display-dependencies.js';
@@ -275,11 +276,13 @@ export async function accountView(store: Store, userId: string) {
 export async function stakesFor(store: Store, ids: string[], knownUsers?: UserView[]): Promise<Record<string, NativeMessageStakes>> {
   const users=new Map((knownUsers??[]).map(user=>[user.id,user])),result:Record<string,NativeMessageStakes>={};
   const claims=new Map<string,Reference>();
-  const scopeFor=async(reference:Reference|undefined,type:string)=>{
+  const cacheClaims=async(references:Reference[])=>{
+    const missing=references.filter(reference=>!claims.has(referenceKey(reference)));
+    for(const [key,subject] of await valueSubjects(store,missing))claims.set(key,subject);
+  };
+  const scopeFor=(reference:Reference|undefined,type:string)=>{
     if(type==='VALUE'&&reference){
-      let subject=claims.get(reference.messageId);
-      if(!subject){const claim=await store.message(reference.messageId,reference.revision);subject=relations(claim).find(part=>part.relation==='open-value-settlement')?.roles.target?.[0]?.reference??reference;claims.set(reference.messageId,subject);}
-      reference=subject;
+      reference=claims.get(referenceKey(reference))??reference;
     }
     return contextKey(reference?.context??{kind:'UNKNOWN'});
   };
@@ -292,22 +295,24 @@ export async function stakesFor(store: Store, ids: string[], knownUsers?: UserVi
   for(let offset=0;offset<ids.length;offset+=200){
     const batch=ids.slice(offset,offset+200);
     const positions=await store.db.prepare('SELECT * FROM stake_positions WHERE "subjectId"=ANY($1::text[]) ORDER BY "createdAt",id').all(batch);
+    await cacheClaims(positions.filter(row=>row.settlementType==='VALUE'&&row.reference).map(row=>row.reference as Reference));
     for(const user of await usersFor(store,[...new Set(positions.map(row=>String(row.userId)).filter(id=>!users.has(id)))]))users.set(user.id,user);
     for(const row of positions){
       const value=result[row.subjectId],type=row.settlementType==='VALUE'?'VALUE':'TRUTH',side=row.side==='pro'?'pro':'con';
       value.counts[side]+=Number(row.amount);value.countsByType[type][side]+=Number(row.amount);
       value.stakes.push({id:row.id,side:side==='pro'?'PRO':'CON',amount:row.amount,createdAt:row.createdAt,roundId:row.roundId,
         settlementType:type,user:users.get(row.userId)!,...(row.reference?{reference:row.reference}:{})});
-      const scoped=scopeValue(value,await scopeFor(row.reference,type));scoped.stakes.push(value.stakes.at(-1)!);scoped.counts[side]+=Number(row.amount);scoped.countsByType![type][side]+=Number(row.amount);
+      const scoped=scopeValue(value,scopeFor(row.reference,type));scoped.stakes.push(value.stakes.at(-1)!);scoped.counts[side]+=Number(row.amount);scoped.countsByType![type][side]+=Number(row.amount);
     }
     const pools=await store.db.prepare(`SELECT COALESCE(r.body::jsonb->>'subjectId',r.body::jsonb #>> '{target,messageId}') AS subject,
       COALESCE(r.body::jsonb->>'settlementType','TRUTH') AS type,b.side,r.body::jsonb->'target' AS reference,SUM(b.amount) AS amount FROM bets b JOIN rounds r ON r.id=b."roundId"
       WHERE COALESCE(r.body::jsonb->>'subjectId',r.body::jsonb #>> '{target,messageId}')=ANY($1::text[])
       AND r.body::jsonb->>'status'<>'settled' GROUP BY subject,type,b.side,reference`).all(batch);
+    await cacheClaims(pools.filter(row=>row.type==='VALUE'&&row.reference).map(row=>row.reference as Reference));
     for(const row of pools){
       const value=result[row.subject],type=String(row.type),key=row.side==='pro'?'lockedPro':'lockedCon';
       value.pools[type]??={lockedPro:0,lockedCon:0};value.pools[type][key]+=Number(row.amount);value.pool[key]+=Number(row.amount);
-      const scoped=scopeValue(value,await scopeFor(row.reference,type));scoped.pools![type]??={lockedPro:0,lockedCon:0};scoped.pools![type][key]+=Number(row.amount);scoped.pool[key]+=Number(row.amount);
+      const scoped=scopeValue(value,scopeFor(row.reference,type));scoped.pools![type]??={lockedPro:0,lockedCon:0};scoped.pools![type][key]+=Number(row.amount);scoped.pool[key]+=Number(row.amount);
     }
     for(const row of await store.db.prepare('SELECT "messageId",amount FROM escrows WHERE "messageId"=ANY($1::text[]) AND "recipientId" IS NULL').all(batch)){
       const value=result[row.messageId];value.pools.DELEGATION??={lockedPro:0,lockedCon:0};

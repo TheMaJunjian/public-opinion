@@ -46,8 +46,8 @@ describe('PostgreSQL transactions across API instances', () => {
     const actor=identities[0], input={requestId:randomUUID(),parts:[text('并发重试')],recommendation:1};
     const responses=await Promise.all(Array.from({length:12},(_,index)=>request(index%2?first:second).post('/api/messages').set('Cookie',actor.cookie).set('x-csrf-token',actor.session.csrf).send(input)));
     for(const response of responses){expect(response.status,response.text).toBe(201);expect(response.body).toEqual(responses[0].body);}
-    expect(await second.store.account(actor.session.user.id)).toMatchObject({available:998,locked:0});
-    expect(await first.store.setting('operating')).toBe(2);
+    expect(await second.store.account(actor.session.user.id)).toMatchObject({available:998,locked:1});
+    expect(await first.store.setting('operating')).toBe(1);
     expect((await first.store.db.prepare('SELECT COUNT(*) AS n FROM requests').get())!.n).toBe(1);
   });
 
@@ -56,8 +56,8 @@ describe('PostgreSQL transactions across API instances', () => {
     const attempts=await Promise.allSettled([first,second].map(app=>send(app.store,actor.session.user,{requestId:randomUUID(),parts:[text('推荐投入')],recommendation:700})));
     expect(attempts.filter(result=>result.status==='fulfilled')).toHaveLength(1);
     expect(attempts.filter(result=>result.status==='rejected')).toHaveLength(1);
-    expect(await first.store.account(actor.session.user.id)).toMatchObject({available:299,locked:0});
-    expect(await second.store.setting('operating')).toBe(701);
+    expect(await first.store.account(actor.session.user.id)).toMatchObject({available:299,locked:700});
+    expect(await second.store.setting('operating')).toBe(1);
     expect((await first.store.db.prepare('SELECT COUNT(*) AS n FROM messages WHERE "authorId"=$1').get(actor.session.user.id))!.n).toBe(1);
   });
 
@@ -121,7 +121,7 @@ describe('PostgreSQL transactions across API instances', () => {
     await new Promise(resolve=>setTimeout(resolve,30));
     const settled=await Promise.all([processDue(first.store),processDue(second.store)]);
     expect(settled.filter(Boolean)).toHaveLength(1);
-    expect(await first.store.account(alice.session.user.id)).toMatchObject({available:1000,locked:0});
+    expect(await first.store.account(alice.session.user.id)).toMatchObject({available:1000,locked:2});
     expect(await second.store.account(bob.session.user.id)).toMatchObject({available:994,locked:0});
   });
 

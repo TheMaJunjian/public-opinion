@@ -8,6 +8,7 @@ import { notificationRecipients } from './notifications.js';
 import { normalizeAnnotationStance } from './annotation-stances.js';
 import {chargeMessage} from './message-spending.js';
 import {bindCommandContexts} from './reference-contexts.js';
+import { assertActiveAccount } from './account-access.js';
 
 const actions=new Set(['agree','disagree','terminate','authorize','delegate','distribute','credit']);
 async function authorize(tx: Mutation, message: Message, user: User) {
@@ -106,6 +107,7 @@ export async function send(store: Store, user: User, raw: unknown, options: {
 } = {}): Promise<SendResult> {
     const input = parseSend(raw), serialized = JSON.stringify(input);
     return await store.transaction(async () => {
+        await assertActiveAccount(store, user.id);
         const previous = (await store.db.prepare(`SELECT input,result FROM requests WHERE "userId"=$1 AND "requestId"=$2`).get(user.id, input.requestId)) as {
             input: string;
             result: string;

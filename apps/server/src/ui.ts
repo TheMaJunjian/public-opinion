@@ -4,6 +4,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { relations, textOf, type Message } from '@gonglun/core';
 import { z } from 'zod';
 import { currentSession, requireCsrf, requireSession, rotateSigningKey, verifyDeviceSignature } from './auth.js';
+import { assertActiveAccount } from './account-access.js';
 import { DomainError, id, Store } from './db.js';
 import { dataOf } from './economy.js';
 import { executeBatch, executeCommand, previewBatch } from './ui-commands.js';
@@ -52,28 +53,28 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
     router.post('/notifications/seen',async(req,res,next)=>{
         try {
             const session=await requireCsrf(store,req),input=notificationSeenSchema.parse(req.body);
-            await store.sessionTransaction(()=>markNotificationsSeen(store,session.user.id,input));
+            await store.sessionTransaction(async()=>{await assertActiveAccount(store,session.user.id,true);await markNotificationsSeen(store,session.user.id,input);});
             res.json({ok:true});
         } catch(error){next(error);}
     });
     router.post('/notifications/delete',async(req,res,next)=>{
         try {
             const session=await requireCsrf(store,req),input=notificationDeleteSchema.parse(req.body);
-            await store.sessionTransaction(()=>deleteNotifications(store,session.user.id,input));
+            await store.sessionTransaction(async()=>{await assertActiveAccount(store,session.user.id,true);await deleteNotifications(store,session.user.id,input);});
             res.json({ok:true});
         } catch(error){next(error);}
     });
     router.post('/notifications/mute',async(req,res,next)=>{
         try {
             const session=await requireCsrf(store,req),input=notificationMuteSchema.parse(req.body);
-            await store.sessionTransaction(()=>muteNotifications(store,session.user.id,input.targetId,input.muted));
+            await store.sessionTransaction(async()=>{await assertActiveAccount(store,session.user.id,true);await muteNotifications(store,session.user.id,input.targetId,input.muted);});
             res.json({ok:true});
         } catch(error){next(error);}
     });
     router.post('/reading-state',async(req,res,next)=>{
         try {
             const session=await requireCsrf(store,req),{marks}=readingUpdateSchema.parse(req.body);
-            const saved=await store.sessionTransaction(()=>markReading(store,session.user.id,marks));
+            const saved=await store.sessionTransaction(async()=>{await assertActiveAccount(store,session.user.id,true);return markReading(store,session.user.id,marks);});
             res.set('Cache-Control','private, no-store').json({marks:saved});
         } catch(error){next(error);}
     });

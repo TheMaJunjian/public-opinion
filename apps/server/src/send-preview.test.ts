@@ -1,3 +1,4 @@
+import { testInvitation } from './test-database.js';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
@@ -43,7 +44,7 @@ describe('unified send rehearsal',()=>{
     const {app,session,post,batch,create}=await setup();
     const target=await create('/messages',{content:'预览的目标'});
     if(relationType==='NOTIFY'){
-      const follower=request.agent(app),registration=await follower.post('/api/register').send({name:'通知预览接收者',password:'preview-password'});
+      const follower=request.agent(app),registration=await follower.post('/api/register').send({inviteCode:await testInvitation(app),name:'通知预览接收者',password:'preview-password'});
       const follow=await follower.post('/api/ui/relations').set('x-csrf-token',registration.body.csrf)
         .send({relationType:'ATTENTION',recommendation:1,targetRefs:[{kind:'message',messageId:target.id}],payload:{subType:'YES'}});
       expect(follow.status,follow.text).toBe(201);

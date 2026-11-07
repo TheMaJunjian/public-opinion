@@ -10,7 +10,7 @@
 
 - [公论介绍](/about.html)：无需登录即可阅读。
 - [消息工作台](/#/messages)：在线消息图与列表。
-- [注册](/#/register)、[登录](/#/login)：参与在线讨论。
+- [注册](/#/register)、[登录](/#/login)：新用户需使用管理员生成的一次性邀请码注册，登录后参与在线讨论。
 - [现行收费与操作规则](/docs/usage.md)：完整步骤与旧规则对照。
 - [项目仓库](https://github.com/TheMaJunjian/public-opinion)：源码与协作入口。
 

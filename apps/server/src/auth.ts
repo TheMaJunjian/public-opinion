@@ -6,6 +6,8 @@ import { z } from 'zod';
 import type { Session } from '@gonglun/core';
 import { DomainError, id, integer, Mutation, Store } from './db.js';
 import { distribution } from './economy.js';
+import { assertActiveAccount } from './account-access.js';
+import { consumeInvitation } from './access-management.js';
 
 const credentials=z.object({name:z.string().trim().min(2).max(40).regex(/^[\p{L}\p{N}_ .-]+$/u),password:z.string().min(1)}).strict();
 const derivePassword=promisify(scrypt);
@@ -26,13 +28,13 @@ async function bindKey(store:Store,userId:string,deviceId:string|undefined,publi
 export async function currentSession(store:Store,req:Request):Promise<Session|null> {
   const cookie=req.headers.cookie?.split(';').map(s=>s.trim()).find(s=>s.startsWith('gonglun_session='))?.slice(16);
   if(!cookie) return null;
-  const row=await store.db.prepare('SELECT "userId",csrf,expires,"deviceId" FROM sessions WHERE token=$1').get(hash(cookie)) as {userId:string;csrf:string;expires:number;deviceId?:string}|undefined;
+  const row=await store.db.prepare('SELECT "userId",csrf,expires,"deviceId" FROM sessions s WHERE token=$1 AND NOT EXISTS(SELECT 1 FROM disabled_accounts d WHERE d."userId"=s."userId")').get(hash(cookie)) as {userId:string;csrf:string;expires:number;deviceId?:string}|undefined;
   if(!row||row.expires<Date.now()) return null;
   const key=row.deviceId?await store.db.prepare('SELECT "publicKey" FROM signing_keys WHERE "userId"=$1 AND "deviceId"=$2').get(row.userId,row.deviceId):undefined;
   return {user:{...await store.user(row.userId),...(key?{publicKey:String(key.publicKey)}:{})},account:await store.account(row.userId),rules:await store.rules(),csrf:row.csrf};
 }
 export async function requireSession(store:Store,req:Request):Promise<Session> {
-  const session=await currentSession(store,req); if(!session) throw new DomainError('请先登录',401); return session;
+  const session=await currentSession(store,req); if(!session) throw new DomainError('请先登录',401,'SESSION_REQUIRED'); return session;
 }
 export async function requireCsrf(store:Store,req:Request):Promise<Session> {
   const session=await requireSession(store,req);
@@ -61,6 +63,7 @@ export function checkOrigin(req:Request) {
   if(origin){let host:string;try{host=new URL(origin).host;}catch{throw new DomainError('不允许跨站写入',403);}if(host!==req.get('host'))throw new DomainError('不允许跨站写入',403);}
 }
 async function createSession(store:Store,userId:string,deviceId?:string):Promise<{raw:string;session:Session}> {
+  await assertActiveAccount(store,userId,true);
   const raw=token(), csrf=token();
   await store.db.prepare('DELETE FROM sessions WHERE expires<$1').run(Date.now());
   await store.db.prepare('INSERT INTO sessions(token,"userId",csrf,expires,"deviceId") VALUES ($1,$2,$3,$4,$5)').run(hash(raw),userId,csrf,Date.now()+30*86400000,deviceId??null);
@@ -72,7 +75,7 @@ function establish(authentication:Awaited<ReturnType<typeof createSession>>,res:
   return authentication.session;
 }
 export async function register(store:Store,input:unknown,res:Response) {
-  const data=credentials.extend({founderKey:z.string().max(200).optional(),...signingFields}).parse(normalizeCredentials(input)),salt=token();
+  const data=credentials.extend({founderKey:z.string().max(200).optional(),inviteCode:z.string().trim().max(200).optional(),...signingFields}).parse(normalizeCredentials(input)),salt=token();
   const password=`${salt}:${(await derivePassword(data.password,salt,64) as Buffer).toString('hex')}`;
   const userId=id();
   const result=await store.transaction(async()=>{
@@ -83,6 +86,7 @@ export async function register(store:Store,input:unknown,res:Response) {
       if(!configured)throw new DomainError('请先配置初始发起人密钥再注册',503);
       if(!data.founderKey||!timingSafeEqual(Buffer.from(hash(data.founderKey),'hex'),Buffer.from(hash(configured),'hex')))throw new DomainError('初始发起人密钥错误',403);
     }
+    if(!founder)await consumeInvitation(store,data.inviteCode,userId);
     await store.db.prepare('INSERT INTO users(id,name,password,founder) VALUES ($1,$2,$3,$4)').run(userId,data.name,password,founder?1:0);
     await store.db.prepare('INSERT INTO accounts VALUES ($1,0,0,0,0)').run(userId);
     await bindKey(store,userId,data.deviceId,data.publicKey);

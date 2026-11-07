@@ -1,3 +1,4 @@
+import { testInvitation } from './test-database.js';
 import {afterEach,expect,it} from 'vitest';
 import request from 'supertest';
 import {randomUUID} from 'node:crypto';
@@ -60,8 +61,8 @@ it('accepts the workbench author confirmation after sending and leaves targets u
 it('records an author or another reader without requiring separate correction-body confirmations',async()=>{
   const app=await createTestApp();apps.push(app);const author=request.agent(app),other=request.agent(app),reader=request.agent(app);
   const own=(await author.post('/api/register').send({username:'正文作者',password:'test-password-123'})).body;
-  const peer=(await other.post('/api/register').send({username:'更正读者',password:'test-password-123'})).body;
-  const viewer=(await reader.post('/api/register').send({username:'未阅读者',password:'test-password-123'})).body;
+  const peer=(await other.post('/api/register').send({inviteCode:await testInvitation(app),username:'更正读者',password:'test-password-123'})).body;
+  const viewer=(await reader.post('/api/register').send({inviteCode:await testInvitation(app),username:'未阅读者',password:'test-password-123'})).body;
   const sent=await author.post('/api/ui/messages').set('x-csrf-token',own.csrf).set('x-request-id',randomUUID())
     .send(withTestCommandContributions('/messages',{content:'作者已读原文'}));
   expect(sent.status,sent.text).toBe(201);
@@ -82,7 +83,7 @@ it('stores viewing confirmations privately and durably without creating messages
   const app=await createTestApp();apps.push(app);
   const alice=request.agent(app),bob=request.agent(app);
   const first=await alice.post('/api/register').send({username:'阅读者甲',password:'test-password-123'});
-  const second=await bob.post('/api/register').send({username:'阅读者乙',password:'test-password-123'});
+  const second=await bob.post('/api/register').send({inviteCode:await testInvitation(app),username:'阅读者乙',password:'test-password-123'});
   expect(first.status,first.text).toBe(201);expect(second.status,second.text).toBe(201);
   const original=await alice.post('/api/ui/messages').set('x-csrf-token',first.body.csrf).set('x-request-id',randomUUID())
     .send(withTestCommandContributions('/messages',{content:'待阅读消息'}));

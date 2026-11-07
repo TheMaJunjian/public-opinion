@@ -1,3 +1,4 @@
+import { testInvitation } from '../../server/src/test-database.js';
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { afterEach, expect, it } from 'vitest';
@@ -14,7 +15,7 @@ afterEach(cleanupTestDatabases);
 it.each([false,true])('一次迁移删除旧加入并退回实际费用和本金，已结算=%s，重放及重复执行一致',async settled=>{
   const app=await createTestApp(),store=app.store,agent=request.agent(app);
   const session=(await agent.post('/api/register').send({name:'迁移退款',password:'test-password-123'})).body;
-  const other=(await request.agent(app).post('/api/register').send({name:'参与旧加入的用户',password:'test-password-123'})).body;
+  const other=(await request.agent(app).post('/api/register').send({inviteCode:await testInvitation(app),name:'参与旧加入的用户',password:'test-password-123'})).body;
   const post=async(path:string,body:Record<string,unknown>)=>{
     const response=await agent.post(`/api/ui${path}`).set('x-csrf-token',session.csrf).set('x-request-id',randomUUID()).send(withTestCommandContributions(path,body));
     expect(response.status,response.text).toBe(201);return response.body;

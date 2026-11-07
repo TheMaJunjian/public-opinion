@@ -3,6 +3,13 @@ import { Pool } from 'pg';
 import { createApp } from './app.js';
 import { Store } from './db.js';
 import { openMigratingStore } from '../../migrate/src/migrations.js';
+import { createInvitation } from './access-management.js';
+
+/** Existing multi-user fixtures still go through the real single-use invitation flow. */
+export async function testInvitation(app: { store: Store }): Promise<string | undefined> {
+  const founder = await app.store.db.prepare('SELECT id FROM users WHERE founder=1 LIMIT 1').get();
+  return founder ? (await createInvitation(app.store, String(founder.id), 7)).code : undefined;
+}
 
 // Never fall back to the deployment DATABASE_URL: integration tests get their
 // own namespace on an explicitly configured test server or the local dev server.

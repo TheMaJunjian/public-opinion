@@ -53,7 +53,13 @@ if (process.argv.includes('--worker')) {
     }
     const actors: { cookie: string; csrf: string; id: string }[] = [];
     for (let i = 0; i < 8; i++) {
-      const response = await fetch(`${workers[i%2]}/api/register`, {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:`load-user-${i}`,password:'synthetic-load-password'})});
+      let inviteCode: string | undefined;
+      if (i > 0) {
+        const invitation = await fetch(`${workers[0]}/api/admin/invites`, {method:'POST',headers:{'content-type':'application/json',cookie:actors[0].cookie,'x-csrf-token':actors[0].csrf},body:JSON.stringify({expiresInDays:1})});
+        assert.equal(invitation.status,200);
+        inviteCode = (await invitation.json() as {code:string}).code;
+      }
+      const response = await fetch(`${workers[i%2]}/api/register`, {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:`load-user-${i}`,password:'synthetic-load-password',inviteCode})});
       assert.equal(response.status,201); const data = await response.json() as any;
       actors.push({ cookie: response.headers.get('set-cookie')!.split(';')[0], csrf: data.csrf, id: data.user.id });
     }

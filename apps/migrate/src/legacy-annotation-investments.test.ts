@@ -1,3 +1,4 @@
+import { testInvitation } from '../../server/src/test-database.js';
 import {afterEach,expect,it,vi} from 'vitest';
 import request from 'supertest';
 import {bindRoles,replayArchive,type Message,type RelationPart} from '@gonglun/core';
@@ -14,7 +15,7 @@ const relation=(name:string,target:string):RelationPart=>({id:'relation',type:'r
 async function setup(minimumProof=true){
   const app=await createTestApp(),store=app.store;
   const actor=(await request.agent(app).post('/api/register').send({name:'赞同冷藏',password:'test-password'})).body.user;
-  const other=(await request.agent(app).post('/api/register').send({name:'推荐冷藏本身',password:'test-password'})).body.user;
+  const other=(await request.agent(app).post('/api/register').send({inviteCode:await testInvitation(app),name:'推荐冷藏本身',password:'test-password'})).body.user;
   const result=await store.transaction(async()=>{
     await initializeMigrationArchive(store);
     await store.db.exec('CREATE TABLE legacy_records("tableName" TEXT NOT NULL,position INTEGER NOT NULL,digest TEXT NOT NULL,body JSONB NOT NULL,PRIMARY KEY("tableName",position))');

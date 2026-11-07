@@ -1,3 +1,4 @@
+import { testInvitation } from './test-database.js';
 import {afterAll,beforeAll,expect,it,vi} from 'vitest';
 import request from 'supertest';
 import {randomUUID} from 'node:crypto';
@@ -26,7 +27,7 @@ beforeAll(async()=>{
   app=await createTestApp();
   const registration=await request(app).post('/api/register').send({name:'逐类计费核验',password:'local-test-password'});
   user=await app.store.user(registration.body.user.id);
-  const recipient=await request(app).post('/api/register').send({name:'通知目标作者',password:'local-test-password'});
+  const recipient=await request(app).post('/api/register').send({inviteCode:await testInvitation(app),name:'通知目标作者',password:'local-test-password'});
   notificationAuthor=await app.store.user(recipient.body.user.id);
 });
 afterAll(async()=>{await cleanupTestDatabases();vi.unstubAllGlobals();});

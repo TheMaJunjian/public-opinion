@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { updateUsageRewardMessage } from '@gonglun/core';
 import { DomainError, id, integer, Mutation, Store } from './db.js';
 import { distribution } from './economy.js';
+import { assertActiveAccount } from './account-access.js';
 
 export const usagePointsSchema = `
 CREATE TABLE IF NOT EXISTS usage_points (
@@ -83,6 +84,7 @@ async function save(store: Store, row: Progress) {
 /** Only server time accrues. A single row serializes every tab/device of an account. */
 export async function updateUsagePoints(store: Store, userId: string, input: ActivityInput, time?: number): Promise<UsagePoints> {
   return store.transaction(async () => {
+    await assertActiveAccount(store,userId);
     const at = time ?? Date.now();
     await store.db.prepare(`INSERT INTO usage_points("userId",earned,"roundId","readyAt",day,"totalEarned")
       VALUES($1,0,$2,$3,$4,0) ON CONFLICT("userId") DO NOTHING`).run(userId, randomUUID(), at + 1000, usageDay(at));
@@ -96,7 +98,10 @@ export async function updateUsagePoints(store: Store, userId: string, input: Act
       row.readyAt = integer(at + (row.earned + 1) * 1000, '等待时间');
       awarded = true;
     }
-    row.readyAt ??= at + 1000;
+    if (row.readyAt === null) {
+      row.roundId = randomUUID();
+      row.readyAt = integer(at + (row.earned + 1) * 1000, '等待时间');
+    }
     await save(store, row);
     return { earned: row.earned, roundId: row.roundId, waitSeconds: row.earned + 1,
       remainingMs: Math.max(0, row.readyAt - at), totalEarned: row.totalEarned,

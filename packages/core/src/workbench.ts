@@ -4,6 +4,8 @@ import type { Part, Reference, ExecutedStance, Json, MessageState, Message as Co
 export interface UserView {
   id: string;
   username: string;
+  /** Present on the authenticated session; never grants permission on its own. */
+  founder?: boolean;
   createdAt: string;
   /** Account-wide contributions in the current economic epoch, independent of the viewed scope. */
   usageContribution?: number;

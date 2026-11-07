@@ -1,3 +1,4 @@
+import { testInvitation } from './test-database.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
@@ -16,7 +17,7 @@ type App=Awaited<ReturnType<typeof createTestApp>>;
 type Actor={agent:ReturnType<typeof request.agent>;session:Session};
 const instances:App[]=[];
 const setup=async()=>{const app=await createTestApp();instances.push(app);return app;};
-const register=async(app:App,name:string):Promise<Actor>=>{const agent=request.agent(app);const result=await agent.post('/api/register').send({name,password:'notification-password'});expect(result.status,result.text).toBe(201);return {agent,session:result.body};};
+const register=async(app:App,name:string):Promise<Actor>=>{const agent=request.agent(app);const result=await agent.post('/api/register').send({inviteCode:await testInvitation(app),name,password:'notification-password'});expect(result.status,result.text).toBe(201);return {agent,session:result.body};};
 const text=(value:string):Part=>({id:'body',type:'text',text:value});
 const rel=(relation:string,id:string,role='target',reason:'YES'|'NO'='YES'):Part=>({id:'relation',type:'relation',relation,roles:bindRoles({[role]:[{messageId:id}]}),...(['follow','block'].includes(relation)?{reason}:{})});
 async function send(actor:Actor,parts:Part[],extra:Record<string,unknown>={}):Promise<Message>{

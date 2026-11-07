@@ -1,3 +1,4 @@
+import { testInvitation } from './test-database.js';
 import {afterEach,it,expect} from 'vitest';
 import request from 'supertest';
 import {randomUUID} from 'node:crypto';
@@ -19,7 +20,7 @@ async function setup(receivedOriginal=false){
   const post=async(path:string,body:Record<string,unknown>)=>{const result=await raw(path,withTestCommandContributions(path,body));expect(result.status,result.text).toBe(201);return result.body;};
   let m;
   if(receivedOriginal){
-    const publisher=request.agent(app),owner=(await publisher.post('/api/register').send({username:'原文发布者',password:'test-password-123'})).body;
+    const publisher=request.agent(app),owner=(await publisher.post('/api/register').send({inviteCode:await testInvitation(app),username:'原文发布者',password:'test-password-123'})).body;
     const sent=await publisher.post('/api/ui/messages').set('x-csrf-token',owner.csrf).set('x-request-id',randomUUID()).send(withTestCommandContributions('/messages',{content:'甲乙'}));
     expect(sent.status,sent.text).toBe(201);m=sent.body;
   }else m=await post('/messages',{content:'甲乙'});

@@ -36,6 +36,7 @@ import {fundResetMessageContributions} from './reset-message-contributions.js';
 import {migratePrivateNotifications} from './private-notifications.js';
 import {notificationDeletionSchema} from '../../server/src/notification-schema.js';
 import {migrateNotificationMemberships} from './notification-memberships.js';
+import {accessSchema} from '../../server/src/access-schema.js';
 
 export interface Migration { version: number; name: string; changesFinances?: boolean; up(): Promise<void> }
 
@@ -106,7 +107,8 @@ export function migrationsFor(store: Store): Migration[] {
   {version:31,name:'fund-reset-message-contributions',changesFinances:true,up:()=>fundResetMessageContributions(store).then(()=>{})},
   {version:32,name:'persistent-private-notifications',up:()=>migratePrivateNotifications(store)},
   {version:33,name:'private-notification-deletion',up:()=>store.db.exec(notificationDeletionSchema)},
-  {version:34,name:'membership-notification-state-changes',up:()=>migrateNotificationMemberships(store)}];
+  {version:34,name:'membership-notification-state-changes',up:()=>migrateNotificationMemberships(store)},
+  {version:35,name:'invitation-registration-and-account-access',up:()=>store.db.exec(accessSchema)}];
 }
 
 /** Runs under the cross-process write lock. Failed upgrades roll back together. */

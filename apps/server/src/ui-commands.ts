@@ -8,6 +8,7 @@ import { relationViewType, messageView, parentOf, primaryRelation, roundView, sn
 import { readReference, validateBodyVersion } from './validation.js';
 import {bindCommandContexts} from './reference-contexts.js';
 import { withCommandIdentities } from './command-identities.js';
+import { assertActiveAccount } from './account-access.js';
 export type Signature = {
     deviceId: string;
     publicKey: string;
@@ -222,7 +223,10 @@ export async function createRound(context: CommandContext, target: string, body:
     return { ...(await roundView(context.store, String(row.id), context.user.id)), requestMessageId: message.id };
 }
 export async function executeCommand(context: CommandContext, method: string, path: string, input: unknown): Promise<any> {
-    return context.store.transaction(()=>executeWithinTransaction(context,method,path,input));
+    return context.store.transaction(async()=>{
+        await assertActiveAccount(context.store,context.user.id);
+        return executeWithinTransaction(context,method,path,input);
+    });
 }
 async function executeWithinTransaction(context: CommandContext, method: string, path: string, input: unknown): Promise<any> {
     const body = object.parse(input ?? {}) as RecordData, store = context.store;
@@ -283,6 +287,7 @@ export async function previewBatch(store: Store, user: User, input: unknown, par
     }
     try {
         await store.transaction(async () => {
+            await assertActiveAccount(store,user.id);
             if (await store.db.prepare('SELECT 1 FROM command_requests WHERE "userId"=$1 AND "requestId"=$2').get(user.id, body.requestId))
                 throw new DomainError('该笔发送已提交，请先刷新消息', 409);
             const baseSequence = await store.latestSequence();
@@ -303,6 +308,7 @@ export async function executeBatch(store: Store, user: User, input: unknown, sig
     if (new Set(body.commands.map(c => c.id)).size !== body.commands.length)
         throw new DomainError('命令编号不可重复');
     const receipt = await store.transaction(async () => {
+        await assertActiveAccount(store,user.id);
         const before = (await store.db.prepare("SELECT input,result FROM command_requests WHERE \"userId\"=$1 AND \"requestId\"=$2").get(user.id, body.requestId));
         if (before) {
             if (before.input !== serialized)

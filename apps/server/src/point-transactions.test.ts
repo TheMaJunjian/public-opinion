@@ -1,3 +1,4 @@
+import { testInvitation } from './test-database.js';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
 import { Mutation } from './db.js';
@@ -10,7 +11,7 @@ afterEach(cleanupTestDatabases);
 it('既有逐点奖励与新的累计奖励按北京时间归并，在合并后分页，保留普通收支余额和账户隔离', async () => {
   const app = await createTestApp({ initialGrant: 0 }), agent = request.agent(app), store = app.store;
   const { body: session } = await agent.post('/api/register').send({ name: '奖励汇总', password: 'password' });
-  await request(app).post('/api/register').send({ name: '另一用户', password: 'password' });
+  await request(app).post('/api/register').send({inviteCode:await testInvitation(app), name: '另一用户', password: 'password' });
   const sourceIds: string[] = [];
   await store.transaction(async () => {
     const tx = new Mutation(store), message = await tx.create('system', [{ id: 'body', type: 'text', text: '历史奖励' }]);

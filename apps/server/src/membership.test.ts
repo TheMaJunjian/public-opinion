@@ -1,3 +1,4 @@
+import { testInvitation } from './test-database.js';
 import {withTestCommandContributions} from './test-database.js';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
@@ -253,7 +254,7 @@ it('allows discussion of JOIN text while its container is rejected without resto
 it('keeps personal JOIN approval available when another viewer opposes the container', async () => {
     const t = await setup(), member = await t.content(), container = await t.group([member.id]);
     const joining = String((await t.membership(member.id))!.sourceId);
-    const other = request.agent(t.app), session = (await other.post('/api/register').send({ name: 'other-viewer', password: 'long-test-password' })).body;
+    const other = request.agent(t.app), session = (await other.post('/api/register').send({inviteCode:await testInvitation(t.app), name: 'other-viewer', password: 'long-test-password' })).body;
     const response = await other.post('/api/ui/relations').set('x-csrf-token', session.csrf).set('x-request-id', randomUUID()).send({
         wager:1, relationType: 'DISAGREE', targetRefs: [{ kind: 'relation', relationId: container.id, part: 'decoration' }],
     });

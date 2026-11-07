@@ -1,3 +1,4 @@
+import { testInvitation } from './test-database.js';
 import {withTestCommandContributions} from './test-database.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
@@ -10,7 +11,7 @@ import * as projections from './ui-projections.js';
 const apps:Awaited<ReturnType<typeof createApp>>[]=[];
 const make=async ()=>{const app=(await createTestApp());apps.push(app);return app;};
 afterEach(async ()=>{vi.restoreAllMocks();for(const app of apps.splice(0))(await app.close());await cleanupTestDatabases();});
-async function actor(app:Awaited<ReturnType<typeof make>>,username:string,extra:Record<string,unknown>={}) {const agent=request.agent(app);const response=await agent.post('/api/register').send({username,password:'a-test-password',...extra});expect(response.status,response.text).toBe(201);return {agent,session:response.body};}
+async function actor(app:Awaited<ReturnType<typeof make>>,username:string,extra:Record<string,unknown>={}) {const agent=request.agent(app);const response=await agent.post('/api/register').send({inviteCode:await testInvitation(app),username,password:'a-test-password',...extra});expect(response.status,response.text).toBe(201);return {agent,session:response.body};}
 const post=(user:Awaited<ReturnType<typeof actor>>,path:string,body:Record<string,unknown>={})=>user.agent.post(`/api/ui${path}`).set('x-csrf-token',user.session.csrf).set('x-request-id',(body as {requestId?:string}).requestId??randomUUID()).send(withTestCommandContributions(path,body as Record<string,unknown>));
 const good=async(response:PromiseLike<request.Response>)=>{const value=await response;expect(value.status,value.text).toBe(201);return value.body;};
 

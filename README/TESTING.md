@@ -12,6 +12,8 @@ npm run build
 
 `npm test` 使用 Vitest 运行共享模型、真实 PostgreSQL 后端集成和 React 工作台测试。`npm run db:up` 启动本地 PostgreSQL；每个后端测试使用随机独立 schema，结束后只清理本轮测试创建的 schema。
 
+`access-management.test.ts` 验证邀请制注册、管理员权限与 CSRF、到期与撤销、两个 API 实例争用同一邀请码、注册失败回滚、停用后的全部会话失效及写入拒绝、恢复后重新登录与完整等待时间，以及版本 34 到 35 的无损升级。已有多用户场景通过测试辅助函数生成真实的一次性邀请码，不绕过服务端邀请校验。前端测试覆盖邀请码提交、管理面板生成与撤销、账号停用确认和恢复，以及旧响应不会覆盖已退出或重新登录的会话。
+
 使用其他测试数据库时设置 `TEST_DATABASE_URL`，账号需要创建和删除 schema 的权限。测试不会读取生产用的 `DATABASE_URL`。默认测试地址与本地开发 PostgreSQL 相同，但测试 schema 与应用数据隔离。
 
 开发时可以指定文件或项目缩小范围：

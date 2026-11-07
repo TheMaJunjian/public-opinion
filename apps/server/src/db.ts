@@ -11,7 +11,7 @@ class DatabaseUpgradeRequired extends Error {}
 
 export const id = commandIdentity;
 export const now = () => new Date().toISOString();
-export class DomainError extends Error { constructor(message: string, public status = 400) { super(message); } }
+export class DomainError extends Error { constructor(message: string, public status = 400, public code?: string) { super(message); } }
 export function integer(value: number, label = '金额'): number {
   if (!Number.isSafeInteger(value)) throw new DomainError(`${label}超出安全整数范围`);
   return value;

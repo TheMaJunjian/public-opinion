@@ -9,6 +9,7 @@ import { createUiRouter } from './ui.js';
 import { journalManifest } from './export-response.js';
 import { RollbackUnconfirmedError } from './postgres.js';
 import { refreshUsagePoints } from './usage-points.js';
+import { createAccessRouter } from './access-routes.js';
 const query = z.object({ parent: z.string().max(100).optional(), cursor: z.string().max(1000).optional(), limit: z.coerce.number().int().min(1).max(100).optional(), q: z.string().max(200).optional(), relation: z.string().max(80).optional(), author: z.string().max(100).optional() }).strict();
 const personalQuery = query.extend({ filter: z.enum(['normal', 'follow', 'read', 'unread', 'block', 'archive']).optional(), after: z.coerce.number().int().nonnegative().optional() });
 export async function createApp(options: {
@@ -140,7 +141,7 @@ export async function createApp(options: {
     catch (error) {
         next(error);
     } });
-    get('/api/setup', async (_req, res,next) => {try { const initialized = !!(await store.db.prepare("SELECT 1 FROM users LIMIT 1").get()); res.json({ initialized, founderKeyRequired: !initialized && process.env.NODE_ENV === 'production' }); }catch(error){next(error);}});
+    get('/api/setup', async (_req, res,next) => {try { const initialized = !!(await store.db.prepare("SELECT 1 FROM users LIMIT 1").get()); res.json({ initialized, founderKeyRequired: !initialized && process.env.NODE_ENV === 'production', inviteRequired: initialized }); }catch(error){next(error);}});
     app.post('/api/register', async (req, res, next) => { try {
         res.status(201).json((await register(store, req.body, res)).session);
         await publish().catch(error=>console.error('发布消息变更失败',error));
@@ -161,6 +162,7 @@ export async function createApp(options: {
     catch (error) {
         next(error);
     } });
+    app.use('/api/admin', createAccessRouter(store));
     app.use('/api/ui', createUiRouter(store, publish));
     get('/api/messages', async (req, res, next) => { try {
         res.json((await listMessages(store, query.parse(req.query))));
@@ -297,7 +299,7 @@ export async function createApp(options: {
             return;
         }
         if (error instanceof DomainError) {
-            res.status(error.status).json({ error: error.message });
+            res.status(error.status).json({ error: error.message, ...(error.code ? {code:error.code} : {}) });
             return;
         }
         if (error instanceof SyntaxError) {

@@ -1,3 +1,4 @@
+import { testInvitation } from './test-database.js';
 import {withTestContribution} from './test-database.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
@@ -16,7 +17,7 @@ const app=async ()=>{const value=(await createTestApp());apps.push(value);return
 const text=(value:string):Part=>({id:'text',type:'text',text:value});
 const rel=(name:string,target?:Reference,role='target'):Part=>({id:'relation',type:'relation',relation:name,roles:bindRoles(target?{[role]:[target]}:{})});
 const data=(value:Record<string,any>):Part=>({id:'data',type:'data',value});
-async function actor(app:App,name:string):Promise<Actor>{const agent=request.agent(app);const response=await agent.post('/api/register').send({name,password:'a-good-password'});expect(response.status,response.text).toBe(201);return {agent,session:response.body};}
+async function actor(app:App,name:string):Promise<Actor>{const agent=request.agent(app);const response=await agent.post('/api/register').send({inviteCode:await testInvitation(app),name,password:'a-good-password'});expect(response.status,response.text).toBe(201);return {agent,session:response.body};}
 async function post(user:Actor,parts:Part[],spending:{wager?:number;recommendation?:number;requestId?:string}={}){
   return user.agent.post('/api/messages').set('x-csrf-token',user.session.csrf).send(withTestContribution({requestId:randomUUID(),parts,...spending}));
 }
@@ -154,11 +155,11 @@ describe('身份、组织和消息版本',()=>{
     expect(exported).toMatchObject({format:'gonglun-2',ledgerId:'local'});expect(exported).not.toHaveProperty('sessions');expect(exported).not.toHaveProperty('users');
     const cookie=(await a.agent.get('/api/session')).body;expect(cookie.user.id).toBe(a.session.user.id);
     vi.stubEnv('NODE_ENV','production');vi.stubEnv('GONGLUN_FOUNDER_KEY','secret-bootstrap');
-    const production=(await app());expect((await request(production).get('/api/setup')).body).toEqual({initialized:false,founderKeyRequired:true});
+    const production=(await app());expect((await request(production).get('/api/setup')).body).toEqual({initialized:false,founderKeyRequired:true,inviteRequired:false});
     expect((await request(production).post('/api/register').send({name:'attacker',password:'long-password'})).status).toBe(403);
     const first=await request(production).post('/api/register').send({name:'founder',password:'long-password',founderKey:'secret-bootstrap'});
     expect(first.status).toBe(201);expect(first.body.user.founder).toBe(true);
-    expect((await request(production).post('/api/register').send({name:'member',password:'long-password'})).body.user.founder).toBe(false);
+    expect((await request(production).post('/api/register').send({inviteCode:await testInvitation(production),name:'member',password:'long-password'})).body.user.founder).toBe(false);
   });
   it('组织保持单父树，拒绝循环，分组继承父，修改需要授权和正确版本',async()=>{
     const server=(await app()),a=await actor(server,'alice'),b=await actor(server,'bob');

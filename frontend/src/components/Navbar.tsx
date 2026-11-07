@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom';
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Z_INDEX } from '../constants/zIndex';
 import ThemeSwitcher from '../theme/ThemeSwitcher';
@@ -7,6 +7,7 @@ import PointsBadge from './PointsBadge';
 import NotificationBell from './NotificationBell';
 import AboutLink from './AboutLink';
 import { useInterfaceZoom } from '../context/InterfaceZoomContext';
+const AccessManagementModal = lazy(() => import('./AccessManagementModal'));
 
 interface NavbarProps {
   onOpenViewer?: () => void;
@@ -25,6 +26,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
   const leftControlsRef = useRef<HTMLDivElement>(null);
   const rightControlsRef = useRef<HTMLDivElement>(null);
   const [rightControlsRightOffset, setRightControlsRightOffset] = useState(16);
+  const [accessOpen, setAccessOpen] = useState(false);
 
   useEffect(() => {
     const nav = navRef.current;
@@ -112,6 +114,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
             </button>
             <PointsBadge />
             <NotificationBell key={user.id} userId={user.id} />
+            {user.founder && <button type="button" className="text-sm font-medium hover:opacity-80" onClick={() => setAccessOpen(true)}>管理</button>}
             <span className="text-[color:var(--ink-c7d2fe)] text-sm">
               {user.username}
             </span>
@@ -143,6 +146,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
           </>
         )}
       </div>
+      {user?.founder && accessOpen && <Suspense fallback={<span role="status">正在加载管理面板…</span>}><AccessManagementModal onClose={() => setAccessOpen(false)} /></Suspense>}
     </nav>
   );
 }

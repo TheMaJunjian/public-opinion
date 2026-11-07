@@ -7,6 +7,7 @@ import { beginRequestOperation, clearWriteRequestIdentity, fetchJsonWithDeadline
 const CORE_URL = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
 const BASE_URL = `${CORE_URL}/ui`;
 let csrf = '';
+let sessionVersion = 0;
 // Recover a stale catalog once per account; a repeated failure remains visible.
 const readingRecoveryOwners = new Set<string>();
 const PRIVATE_KEY_PREFIX = 'privateKey:';
@@ -120,7 +121,7 @@ export async function markReading(marks:ReadingMark[]) {
 async function requestCore<T>(path: string, options: RequestInit, owner = requestOwner()): Promise<T> {
   const rehearsal = path === '/commands/preview';
   options.signal?.throwIfAborted();
-  const core = ['/setup', '/session', '/login', '/register', '/logout'].includes(path);
+  const core = ['/setup', '/session', '/login', '/register', '/logout'].includes(path) || path.startsWith('/admin/');
   const url = `${core ? CORE_URL : BASE_URL}${path}`;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -130,7 +131,7 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
   const isAuthBootstrap = ['/login', '/register', '/logout', '/auth/signing-key'].includes(path);
   const privateReading=path==='/reading-state';
   const privateActivity=path==='/points/activity';
-  const privateNotifications=path.startsWith('/notifications');
+  const privateNotifications=path.startsWith('/notifications') || path.startsWith('/admin/');
   const readOnlySnapshot = ['/snapshot/query','/body-versions/resolve'].includes(path.split('?')[0]);
   let identityKey: string | undefined;
   const checkOwner = () => { if (requestOwner() !== owner) throw new DOMException('账户已切换，请重新操作', 'AbortError'); };
@@ -161,6 +162,7 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
     }
   }
   // Both attempts consume the body within the deadline and reuse the exact signature.
+  const requestSessionVersion = sessionVersion;
   let received!: { response: Response; data: unknown };
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt === 0) { options.signal?.throwIfAborted(); if (identityKey||privateReading||rehearsal) checkOwner(); }
@@ -178,6 +180,11 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
   if (rehearsal||privateActivity||privateNotifications) checkOwner();
   if (!res.ok) {
     const err = (data ?? {}) as { error?: string; message?: string; code?: string; details?: unknown };
+    if ((err.code === 'SESSION_REQUIRED' || err.code === 'ACCOUNT_DISABLED') && requestOwner() === owner && requestSessionVersion === sessionVersion && !['/login','/register'].includes(path)) {
+      sessionVersion++;
+      csrf = '';
+      window.dispatchEvent(new Event('gonglun:session-expired'));
+    }
     const details = Array.isArray(err.details)
       ? err.details
           .map((d: { field?: string; message?: string }) => (d.field ? `${d.field}: ${d.message}` : d.message))
@@ -185,7 +192,8 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
           .join('；')
       : '';
     const message = err.error && details ? `${err.error}（${details}）` : err.error || details || err.message || res.statusText;
-    const error = new ApiError(err.code ? `${message} [${err.code}]` : message, {
+    const displayCode = err.code && !['SESSION_REQUIRED','ACCOUNT_DISABLED'].includes(err.code);
+    const error = new ApiError(displayCode ? `${message} [${err.code}]` : message, {
       status: res.status,
       code: err.code,
       path,
@@ -200,12 +208,32 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
 
 type UiSession = Session & { user: Session['user'] & import('../types').User & { publicKey?: string | null } };
 export async function getSession(): Promise<UiSession | null> {
+  const version = sessionVersion, owner = requestOwner();
   const session = await request<UiSession | null>('/session');
+  if (version !== sessionVersion || owner !== requestOwner()) throw new DOMException('会话已变更，请重新操作', 'AbortError');
   csrf = session?.csrf ?? '';
   return session;
 }
 export function getSetup() {
-  return request<{ initialized: boolean; founderKeyRequired: boolean }>('/setup');
+  return request<{ initialized: boolean; founderKeyRequired: boolean; inviteRequired: boolean }>('/setup');
+}
+
+export function getAdminInvites(before?: string, signal?: AbortSignal) {
+  return request<import('@gonglun/core').AccessPage<import('@gonglun/core').RegistrationInvite>>(`/admin/invites${before ? `?before=${encodeURIComponent(before)}` : ''}`, {signal});
+}
+export function createAdminInvite(expiresInDays: number) {
+  return request<{code:string;invite:import('@gonglun/core').RegistrationInvite}>('/admin/invites', {method:'POST',body:JSON.stringify({expiresInDays})});
+}
+export function revokeAdminInvite(id: string) {
+  return request<{ok:true}>(`/admin/invites/${encodeURIComponent(id)}/revoke`, {method:'POST',body:'{}'});
+}
+export function getAdminAccounts(query = '', before?: string, signal?: AbortSignal) {
+  const params = new URLSearchParams({q:query});
+  if (before) params.set('before',before);
+  return request<import('@gonglun/core').AccessPage<import('@gonglun/core').ManagedAccount>>(`/admin/accounts?${params}`, {signal});
+}
+export function setAdminAccountDisabled(id: string, disabled: boolean) {
+  return request<{ok:true}>(`/admin/accounts/${encodeURIComponent(id)}/status`, {method:'POST',body:JSON.stringify({disabled})});
 }
 
 export function getNotifications(query: import('@gonglun/core').NotificationQuery = {}, signal?: AbortSignal) {
@@ -217,11 +245,12 @@ export const markNotificationsSeen = (input: import('@gonglun/core').Notificatio
 export const deleteNotifications = (input: import('@gonglun/core').NotificationDeleteInput) => request<{ok:true}>('/notifications/delete', {method:'POST',body:JSON.stringify(input)});
 export const muteNotifications = (targetId:string,muted:boolean) => request<{ok:true}>('/notifications/mute', {method:'POST',body:JSON.stringify({targetId,muted})});
 export const getNotificationRecipients = (ids:string[],signal?:AbortSignal) => request<{users:Array<{id:string;username:string}>}>(`/notifications/recipients?ids=${encodeURIComponent(ids.join(','))}`, {signal});
-export async function register(data: { username: string; password: string; publicKey?: string | null; founderKey?: string }) {
+export async function register(data: { username: string; password: string; publicKey?: string | null; founderKey?: string; inviteCode?: string }) {
   const session = await request<UiSession>('/register', {
     method: 'POST',
     body: JSON.stringify({ ...data, deviceId: getDeviceId() }),
   });
+  sessionVersion++;
   csrf = session.csrf;
   return { message: '注册成功', user: session.user };
 }
@@ -231,6 +260,7 @@ export async function login(data: { username: string; password: string; publicKe
     method: 'POST',
     body: JSON.stringify({ ...data, deviceId: getDeviceId() }),
   });
+  sessionVersion++;
   csrf = session.csrf;
   return { message: '登录成功', token: 'session', user: session.user };
 }
@@ -240,12 +270,13 @@ export async function rotateSigningKey(data: { password: string; publicKey: stri
     method: 'POST',
     body: JSON.stringify({ ...data, deviceId: getDeviceId() }),
   });
+  sessionVersion++;
   csrf = result.session.csrf;
   return { ...result, token: 'session' };
 }
 
 export function logout() {
-  return request<{ message: string }>('/logout', { method: 'POST' }).finally(() => { csrf = ''; });
+  return request<{ message: string }>('/logout', { method: 'POST' }).finally(() => { sessionVersion++; csrf = ''; });
 }
 
 export { cancelCommandBatch };

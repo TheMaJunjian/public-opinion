@@ -11,4 +11,5 @@ export * from './conversion-failure.js';
 export * from './display-dependency.js';
 export * from './body-versions.js';
 export * from './notifications.js';
+export * from './access.js';
 export { structureSnapshot } from './structure-snapshot.js';

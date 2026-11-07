@@ -17,6 +17,63 @@ beforeEach(async () => {
 });
 afterEach(() => { resetRequestOperations(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
+it('sends administrator actions to the private API with CSRF and no message signature', async () => {
+  localStorage.removeItem('privateKey:device:alice');
+  vi.mocked(signPayloadWithPrivateJwk).mockClear();
+  const fetcher = vi.fn(async () => new Response(JSON.stringify({code:'one-use',invite:{id:'invite'}})));
+  vi.stubGlobal('fetch',fetcher);
+  await api.createAdminInvite(7);
+  const [url,options] = fetcher.mock.calls[0] as unknown as [string,RequestInit];
+  expect(url).toBe('/api/admin/invites');
+  expect(options.headers).toMatchObject({'X-CSRF-Token':'csrf'});
+  expect(JSON.parse(String(options.body))).toEqual({expiresInDays:7});
+  expect(signPayloadWithPrivateJwk).not.toHaveBeenCalled();
+});
+
+it('announces a revoked session without treating an incorrect login password as an expired session', async () => {
+  const expired = vi.fn(); window.addEventListener('gonglun:session-expired',expired);
+  try {
+    vi.stubGlobal('fetch',vi.fn(async () => new Response(JSON.stringify({error:'请先登录',code:'SESSION_REQUIRED'}),{status:401})));
+    await expect(api.getReadingState()).rejects.toMatchObject({status:401,code:'SESSION_REQUIRED'});
+    expect(expired).toHaveBeenCalledOnce();
+    vi.stubGlobal('fetch',vi.fn(async () => new Response(JSON.stringify({error:'用户名或密码错误'}),{status:401})));
+    await expect(api.login({username:'alice',password:'wrong'})).rejects.toMatchObject({status:401});
+    expect(expired).toHaveBeenCalledOnce();
+  } finally { window.removeEventListener('gonglun:session-expired',expired); }
+});
+
+it('keeps a fresh login when a revoked-session response arrives late for the same account', async () => {
+  const expired = vi.fn(); window.addEventListener('gonglun:session-expired',expired);
+  let finish!: (response: Response) => void;
+  const fetcher = vi.fn((url: string) => url.endsWith('/reading-state')
+    ? new Promise<Response>(resolve => {finish = resolve;})
+    : Promise.resolve(new Response(JSON.stringify({csrf:'fresh-csrf',user:{id:'u',username:'alice'}}))));
+  vi.stubGlobal('fetch',fetcher);
+  try {
+    const pending = api.getReadingState().catch(error => error);
+    await api.login({username:'alice',password:'password'});
+    finish(new Response(JSON.stringify({error:'请先登录',code:'SESSION_REQUIRED'}),{status:401}));
+    expect(await pending).toMatchObject({status:401});
+    expect(expired).not.toHaveBeenCalled();
+    await api.createAdminInvite(7);
+    expect(fetcher.mock.calls.at(-1)).toEqual(['/api/admin/invites',expect.objectContaining({headers:expect.objectContaining({'X-CSRF-Token':'fresh-csrf'})})]);
+  } finally { window.removeEventListener('gonglun:session-expired',expired); }
+});
+
+it('does not overwrite a fresh login with an older session lookup', async () => {
+  let finish!: (response: Response) => void;
+  const fetcher = vi.fn((url: string) => url.endsWith('/session')
+    ? new Promise<Response>(resolve => {finish = resolve;})
+    : Promise.resolve(new Response(JSON.stringify({csrf:'fresh-csrf',user:{id:'u',username:'alice'}}))));
+  vi.stubGlobal('fetch',fetcher);
+  const pending = api.getSession().catch(error => error);
+  await api.login({username:'alice',password:'password'});
+  finish(new Response(JSON.stringify({csrf:'revoked-csrf',user:{id:'u',username:'alice'}})));
+  expect(await pending).toMatchObject({name:'AbortError'});
+  await api.createAdminInvite(7);
+  expect(fetcher.mock.calls.at(-1)).toEqual(['/api/admin/invites',expect.objectContaining({headers:expect.objectContaining({'X-CSRF-Token':'fresh-csrf'})})]);
+});
+
 it('计时操作使用会话校验，独立于消息批次和前台进度，不需要设备签名',async()=>{
   localStorage.removeItem('privateKey:device:alice');vi.mocked(signPayloadWithPrivateJwk).mockClear();
   const progress={earned:1,totalEarned:1,roundId:'next',waitSeconds:2,remainingMs:2000,refreshInMs:10000,awarded:true};

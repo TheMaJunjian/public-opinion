@@ -34,4 +34,5 @@ export const DATABASE_MIGRATIONS = [
   'persistent-private-notifications',
   'private-notification-deletion',
   'membership-notification-state-changes',
+  'invitation-registration-and-account-access',
 ] as const;

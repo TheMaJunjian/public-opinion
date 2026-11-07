@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import type { User } from '../types';
 import { api } from '../api';
 import { getDeviceId, getPrivateKeyForCurrentUser, getPrivateKeyForUser, storePrivateKeyForUser } from '../api/client';
@@ -9,7 +9,7 @@ interface AuthContextValue {
   token: string | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string, publicKey?: string | null, founderKey?: string) => Promise<void>;
+  register: (username: string, password: string, publicKey?: string | null, founderKey?: string, inviteCode?: string) => Promise<void>;
   logout: () => Promise<void>;
   /** Sign a payload with the stored private key, returns base64 signature or null */
   signPayload: (payload: string) => Promise<string | null>;
@@ -21,11 +21,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const authVersion = useRef(0);
 
   useEffect(() => {
     let active = true;
+    const version = authVersion.current;
+    const current = () => active && version === authVersion.current;
+    const expired = () => {
+      authVersion.current++;
+      localStorage.removeItem('user');
+      localStorage.removeItem('token');
+      setUser(null);
+      setToken(null);
+      setLoading(false);
+    };
+    window.addEventListener('gonglun:session-expired', expired);
     api.getSession().then(session => {
-      if (!active) return;
+      if (!current()) return;
       if (session) {
         localStorage.setItem('user', JSON.stringify(session.user));
         setUser(session.user);
@@ -35,9 +47,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.removeItem('token');
       }
     }).catch(() => {
-      if (active) { setUser(null); setToken(null); }
-    }).finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
+      if (current()) { setUser(null); setToken(null); }
+    }).finally(() => { if (current()) setLoading(false); });
+    return () => { active = false; window.removeEventListener('gonglun:session-expired', expired); };
   }, []);
 
   async function login(username: string, password: string) {
@@ -67,22 +79,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     storePrivateKeyForUser(username, privateJwk);
     localStorage.setItem('token', res.token);
     localStorage.setItem('user', JSON.stringify(res.user));
+    authVersion.current++;
     setToken(res.token);
     setUser(res.user);
+    setLoading(false);
   }
 
-  async function register(username: string, password: string, publicKey?: string | null, founderKey?: string) {
-    await api.register({ username, password, publicKey: publicKey ?? null, founderKey });
+  async function register(username: string, password: string, publicKey?: string | null, founderKey?: string, inviteCode?: string) {
+    await api.register({ username, password, publicKey: publicKey ?? null, founderKey, inviteCode });
     await login(username, password);
   }
 
   async function logout() {
-    await api.logout();
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    if (user) localStorage.removeItem(`privateKey:${getDeviceId()}:${user.username}`);
-    setToken(null);
-    setUser(null);
+    try { await api.logout(); }
+    finally {
+      authVersion.current++;
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      if (user) localStorage.removeItem(`privateKey:${getDeviceId()}:${user.username}`);
+      setToken(null);
+      setUser(null);
+      setLoading(false);
+    }
   }
 
   async function signPayload(payload: string): Promise<string | null> {

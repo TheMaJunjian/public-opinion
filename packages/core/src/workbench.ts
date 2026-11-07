@@ -151,6 +151,8 @@ export interface RelationView {
 
 export interface StakeItem {
   id: string;
+  /** Originating message, when preserved by the ledger projection. */
+  sourceMessageId?: string;
   side: 'PRO' | 'CON';
   amount: number;
   createdAt: string;

@@ -2,6 +2,7 @@ import { createRef, type ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import WorkbenchPanel from '../components/WorkbenchPanel';
+import GuideOverlay from '../components/GuideOverlay';
 import ZhihuReplyEditor from '../components/ZhihuReplyEditor';
 import WorkbenchLoadingBoundary, { useWorkbenchLoadingProgress } from '../components/WorkbenchLoadingBoundary';
 import * as zhihuArchive from '../utils/zhihuArchive';
@@ -70,6 +71,28 @@ function ReadyDocument() { useWorkbenchLoadingProgress(false, null); return null
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('shared workbench controls in the local document panel', () => {
+  it.each(['text', 'relation'] as const)('blocks sending while reviewing %s consumption, then allows the send step', mode => {
+    const props = { ...baseProps(fixture()), isViewerMode: false,
+      totalConsumption: { total: 3, messageCount: 1, protocolFeeTotal: 1, stakeTotal: 2, recommendationTotal: 0, delegationRewardStake: 0 } };
+    render(<><WorkbenchPanel {...props} /><GuideOverlay open onClose={vi.fn()} /></>);
+    if (mode === 'text') {
+      fireEvent.input(document.querySelector('[data-guide-message-input="true"]')!, { target: { value: '引导测试' } });
+      fireEvent.click(screen.getByRole('button', { name: '下一步' }));
+    } else act(() => window.dispatchEvent(new Event('guide-stance-selected')));
+    fireEvent.click(screen.getByRole('button', { name: '下一步' }));
+    const summary = document.querySelector('[data-guide-contribution-consumption="true"]')!;
+    expect(summary).toContainElement(screen.getByLabelText('费用明细'));
+    const send = screen.getByRole('button', { name: '发送' });
+    expect(summary).not.toContainElement(send);
+    fireEvent.pointerDown(send);
+    fireEvent.click(send);
+    expect(props.handleQuickSendAndRelateFromDraftTargets).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent('当前步骤目标区域外有操作限制');
+    fireEvent.click(screen.getByRole('button', { name: '下一步' }));
+    fireEvent.click(send);
+    expect(props.handleQuickSendAndRelateFromDraftTargets).toHaveBeenCalledOnce();
+  });
+
   it('shows sending and disables the local submit button before processing the document, then waits for saving',async()=>{
     vi.useFakeTimers();
     const process=vi.spyOn(zhihuArchive,'sendZhihuLocalRelation');

@@ -419,6 +419,7 @@ describe('SettlementPanel voting', () => {
     mockApi.closeAndSettle.mockResolvedValue({
       result: 'TRUE',
       weights: { TRUE: 2, FALSE: 0 },
+      resultMessage: { id: 'distribution-1', createdAt: '2026-11-07T00:00:00Z' },
     });
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
     render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
@@ -431,6 +432,9 @@ describe('SettlementPanel voting', () => {
     expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({
       type: 'stakes-refresh',
       detail: { messageId: 'message-1' },
+    }));
+    expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'guide-settlement-confirmed', detail: { roundId: 'round-1', resultMessageId: 'distribution-1' },
     }));
     dispatchSpy.mockRestore();
   });

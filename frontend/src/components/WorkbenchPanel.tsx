@@ -302,7 +302,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
         <span style={{flexShrink:0}}>协议费 {p.stakeFeeAmountRef.current} 点/条</span>
         <span>每条消息的真假、价值至少一项大于 0</span>
       </div>}
-      <div className="desk-send-controls" data-guide-contribution-consumption={!local && p.totalConsumption ? 'true' : undefined} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+      <div className="desk-send-controls" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         {!local && showContributionControls && <>
           {p.contributionGroups.map(group=><div key={group.type} data-contribution-type={group.type} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 6px',border:'1px solid var(--line-444)',borderRadius:4}}>
             <span style={{fontSize:11}}>{group.label}消息 × {group.count}</span>
@@ -316,6 +316,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
             </label>)}
             <span style={{fontSize:11,color:'var(--ink-94a3b8)'}}>每条同额，小计 {group.total} 点</span>
           </div>)}
+          <div className="desk-consumption-summary" data-guide-contribution-consumption={p.totalConsumption ? 'true' : undefined} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span className="desk-legacy-fees" style={{ fontSize: 11, color: 'var(--ink-94a3b8)' }}>可用 {p.availablePoints} 点</span>
           {p.totalConsumption && <span className="desk-legacy-fees" style={{ fontSize: 11, color: p.totalConsumption.total > p.availablePoints ? 'var(--ink-f87171)' : 'var(--ink-f59e0b)' }}>
             本次 {p.totalConsumption.messageCount} 条消息，预计 {p.totalConsumption.total} 点（协议费 {p.totalConsumption.protocolFeeTotal} + 真假 {p.totalConsumption.stakeTotal} + 价值 {p.totalConsumption.recommendationTotal}{p.totalConsumption.delegationRewardStake > 0 ? ` + 委托报酬 ${p.totalConsumption.delegationRewardStake}` : ''}）
@@ -327,6 +328,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
             {p.totalConsumption.delegationRewardStake > 0 && <div><dt>委托报酬</dt><dd>{p.totalConsumption.delegationRewardStake} 点</dd></div>}
             <div data-over-budget={p.totalConsumption.total > p.availablePoints || undefined}><dt>合计 · {p.totalConsumption.messageCount} 条消息</dt><dd>{p.totalConsumption.total} 点</dd></div>
           </dl>}
+          </div>
         </>}
         <div className="desk-submit-bar">
         {!local && p.sendPreview?.active && <div className="desk-send-preview-status" data-send-preview="true" role="status">

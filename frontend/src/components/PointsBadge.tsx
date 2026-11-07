@@ -5,9 +5,10 @@ import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
 import {dialogStyles} from './dialogStyles';
 import ThemeIcon from '../theme/ThemeIcon';
-import type { PointsBalance, PointTransaction } from '../types';
+import type { PointsBalance, PointTransaction, PointTransactionMessage } from '../types';
 import { useUsagePoints } from './useUsagePoints';
 import UsagePointsProgress from './UsagePointsProgress';
+import MessageReferenceControl from './MessageReferenceControl';
 
 /**
  * PointsBadge — 导航栏贡献点显示组件。
@@ -84,6 +85,7 @@ export default function PointsBadge() {
   useEffect(() => {
     if (!open) return;
     const onClick = (e: MouseEvent) => {
+      if (e.target instanceof Element && e.target.closest('[data-guide-overlay="true"]')) return;
       if (popRef.current && !popRef.current.contains(e.target as Node)) {
         setOpen(false);
       }
@@ -116,6 +118,25 @@ export default function PointsBadge() {
     setTransactions([]);
     setPage(next);
     if (panelRef.current) panelRef.current.scrollTop = 0;
+  }
+
+  function navigateToMessage(tx: PointTransaction, reference: PointTransactionMessage) {
+    const { messageId, scopeMessageId, roundId } = reference;
+    const targetPath = messageScopePath(scopeMessageId);
+    if (location.pathname.replace(/\/+$/, '') === targetPath) {
+      window.dispatchEvent(new CustomEvent('points-navigate', {
+        detail: { messageId, scopeMessageId, roundId: roundId ?? null, txType: tx.type, txData: tx.data, username: user?.username },
+      }));
+    } else {
+      const params = new URLSearchParams({ msg: messageId });
+      // Match in-place navigation: native ledger entries point at the source message.
+      if (roundId && ['STAKE_LOCK', 'VOTE_LOCK', 'SETTLEMENT_GAIN', 'SETTLEMENT_LOSS', 'CLAWBACK'].includes(tx.type)) {
+        params.set('settlement', messageId);
+        params.set('highlightRound', roundId);
+      }
+      navigate(`${targetPath}?${params.toString()}`);
+    }
+    setOpen(false);
   }
 
   if (!user) return null;
@@ -201,48 +222,25 @@ export default function PointsBadge() {
             <ul className="divide-y divide-[color:var(--dialog-border)]">
               {transactions.map((tx) => {
                 const txData = tx.data as Record<string, unknown> | null;
-                const hasMessage = !!(txData?.messageId);
-                const canNavigate = !!txData?.messageId;
+                const references: PointTransactionMessage[] = tx.messages ?? (typeof txData?.messageId === 'string' ? [{
+                  messageId: txData.messageId, messageType: typeof txData.messageType === 'string' ? txData.messageType : '消息',
+                  scopeMessageId: typeof txData.scopeMessageId === 'string' ? txData.scopeMessageId : 'root',
+                  roundId: typeof txData.roundId === 'string' ? txData.roundId : undefined,
+                }] : []);
+                const canNavigate = references.length === 1;
                 return (
                 <li
                   key={tx.id}
                   data-guide-points-record={txData?.roundId ? String(txData.roundId) : undefined}
-                  className={`px-3 py-2 text-xs flex justify-between items-center select-none ${hasMessage ? 'cursor-pointer hover:bg-[color:var(--surface-hover)]' : ''}`}
+                  data-guide-points-message={txData?.messageId ? String(txData.messageId) : undefined}
+                  className={`px-3 py-2 text-xs select-none ${canNavigate ? 'cursor-pointer hover:bg-[color:var(--surface-hover)]' : ''}`}
                   onDoubleClick={canNavigate ? (e) => {
                     e.preventDefault();
-                    const msgId = txData!.messageId as string;
-                    const tId = txData!.scopeMessageId as string;
-                    const roundId = txData?.roundId as string | undefined;
-
-                    // Check if we're already on the same view page
-                    const currentPath = location.pathname;
-                    const targetPath = messageScopePath(tId);
-                    if (currentPath === targetPath || currentPath.startsWith(targetPath + '/')) {
-                      // Same view — dispatch event for in-place navigation
-                      window.dispatchEvent(new CustomEvent('points-navigate', {
-                        detail: {
-                          messageId: msgId,
-                          scopeMessageId: tId,
-                          roundId: roundId ?? null,
-                          txType: tx.type,
-                          txData: txData,  // pass full tx data for settlement highlighting
-                          username: user.username,
-                        },
-                      }));
-                      setOpen(false);
-                    } else {
-                      // Different view — full navigation with URL params
-                      const params = new URLSearchParams();
-                      params.set('msg', msgId);
-                      if (roundId) {
-                        params.set('settlement', msgId);
-                        params.set('highlightRound', roundId);
-                      }
-                      navigate(`${targetPath}?${params.toString()}`);
-                    }
+                    navigateToMessage(tx, references[0]);
                   } : undefined}
-                  title={canNavigate ? '双击跳转到相关消息并展开结算记录' : hasMessage ? '关联消息（无法跳转）' : undefined}
+                  title={canNavigate ? '双击跳转到相关消息' : undefined}
                 >
+                  <div className="flex justify-between items-center gap-2">
                   <div>
                     <span className="font-medium text-[color:var(--text-primary)]">
                       {typeLabel(tx.type)}
@@ -250,9 +248,6 @@ export default function PointsBadge() {
                     <span className="ml-1 text-[color:var(--text-muted)]">
                       {txDetail(tx)}
                     </span>
-                    {hasMessage && !canNavigate && (
-                      <span className="ml-1 text-[color:var(--ink-d1d5db)] text-xs">📎</span>
-                    )}
                   </div>
                   <div className="text-right">
                     <span className={tx.amount >= 0 ? 'text-[color:var(--ink-4ade80)]' : 'text-[color:var(--ink-ef4444)]'}>
@@ -263,6 +258,16 @@ export default function PointsBadge() {
                     </span>}
                     {canNavigate && <span className="ml-1 text-[color:var(--ink-818cf8-3)]" title="双击跳转到相关消息">↗</span>}
                   </div>
+                  </div>
+                  {references.length > 0 && <details className="mt-2" onDoubleClick={event => event.stopPropagation()}>
+                    <summary className="cursor-pointer text-[color:var(--text-secondary)]">关联消息{references.length > 1 ? ` · ${references.length} 条` : ''}</summary>
+                    <ul className="mt-1 space-y-1" style={{ overflowWrap: 'anywhere' }}>
+                      {references.map(reference => <li key={`${reference.messageId}:${reference.messageRevision ?? ''}`}>
+                        <MessageReferenceControl messageId={reference.messageId} type={reference.messageType} summary={reference.summary}
+                          wholeMessage={false} onNavigate={() => navigateToMessage(tx, reference)} navigateLabel={`定位消息 ${reference.messageId}`} />
+                      </li>)}
+                    </ul>
+                  </details>}
                 </li>
                 );
               })}

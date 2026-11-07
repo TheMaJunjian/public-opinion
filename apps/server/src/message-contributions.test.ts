@@ -5,6 +5,7 @@ import {contextKey,replayArchive,type Part} from '@gonglun/core';
 import {cleanupTestDatabases,createTestApp} from './test-database.js';
 import {roundView,stakesFor} from './ui-projections.js';
 import {valueRoundFor} from './economy.js';
+import {messageAuthorInvestment} from '../../../frontend/src/utils/messageAuthorship';
 
 afterEach(cleanupTestDatabases);
 it('拒绝文本和关系的零投入，接受真假、价值或同时投入，失败不扣费且重试不重复扣费',async()=>{
@@ -38,6 +39,12 @@ it('拒绝文本和关系的零投入，接受真假、价值或同时投入，�
   expect(stakes.countsByType).toEqual({TRUTH:{pro:2,con:0},VALUE:{pro:3,con:0}});
   expect(stakes.contexts![contextKey({kind:'MESSAGE'})]!.countsByType).toEqual(stakes.countsByType);
   expect(stakes.pools).toEqual({TRUTH:{lockedPro:2,lockedCon:0},VALUE:{lockedPro:3,lockedCon:0}});
+  expect(stakes.stakes).toEqual(expect.arrayContaining([
+    expect.objectContaining({settlementType:'TRUTH',sourceMessageId:both.body.message.id,amount:2}),
+    expect.objectContaining({settlementType:'VALUE',sourceMessageId:both.body.message.id,amount:3}),
+  ]));
+  expect(messageAuthorInvestment({id:both.body.message.id,author:session.user.name,authorId:session.user.id,kind:'normal',content:'两项同时投入',
+    createdAt:both.body.message.createdAt,spending:both.body.message.spending},stakes)).toEqual({total:{truth:2,value:3},initial:{truth:2,value:3},additional:{truth:0,value:0}});
   const after=await app.store.account(session.user.id);
   expect(after).toMatchObject({available:initial.available-10,locked:7});
   expect(await app.store.setting<number>('operating')).toBe(operating+3);

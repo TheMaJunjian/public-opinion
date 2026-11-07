@@ -570,7 +570,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
         // A confirmed result is not permission to invent an authoritative record.
         window.dispatchEvent(new Event('gonglun:catch-up'));
       }
-      window.dispatchEvent(new CustomEvent('guide-settlement-confirmed', { detail: { roundId: localRound.id } }));
+      window.dispatchEvent(new CustomEvent('guide-settlement-confirmed', { detail: { roundId: localRound.id, resultMessageId: resultMsgId } }));
       onSettled(localRound.id);
       window.dispatchEvent(new Event('points-refresh'));
       window.dispatchEvent(new CustomEvent('stakes-refresh', { detail: { messageId } }));

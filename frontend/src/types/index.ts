@@ -250,12 +250,22 @@ export interface UsagePointProgress {
   awarded: boolean;
 }
 
+export interface PointTransactionMessage {
+  messageId: string;
+  messageRevision?: number;
+  messageType: string;
+  summary?: string;
+  scopeMessageId: string;
+  roundId?: string;
+}
+
 export interface PointTransaction {
   id: string;
   type: string; // MINT | UNLOCK | LOCK | SPEND | TRANSFER
   amount: number;
   balanceAfter: number;
   createdAt: string;
+  messages?: PointTransactionMessage[];
   data?: Record<string, unknown> | null;
 }
 

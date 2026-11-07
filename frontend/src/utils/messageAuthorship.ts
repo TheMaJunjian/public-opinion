@@ -14,7 +14,9 @@ export function messageAuthorInvestment(message:DemoMessage,stakes?:MessageStake
   const own=message.authorId?stakes?.stakes.filter(stake=>stake.user.id===message.authorId)??[]:[];
   const truth=own.filter(stake=>stake.settlementType!=='VALUE').reduce((sum,stake)=>sum+amount(stake.amount),0);
   const value=own.filter(stake=>stake.settlementType==='VALUE').reduce((sum,stake)=>sum+amount(stake.amount),0);
-  const total={truth:Math.max(initial?.truth??0,stakes?truth:amount(fallbackTruth)),value:(initial?.value??0)+value};
+  const recordedInitialValue=own.filter(stake=>stake.settlementType==='VALUE'&&stake.sourceMessageId===message.id)
+    .reduce((sum,stake)=>sum+amount(stake.amount),0);
+  const total={truth:Math.max(initial?.truth??0,stakes?truth:amount(fallbackTruth)),value:value+Math.max(0,(initial?.value??0)-recordedInitialValue)};
   return {total,...(initial?{initial,additional:{truth:Math.max(0,total.truth-initial.truth),value:Math.max(0,total.value-initial.value)}}:{})};
 }
 

@@ -100,6 +100,16 @@ describe('current body authors and sender investments',()=>{
     ]));
     expect(investment).toEqual({total:{truth:12,value:9},initial:{truth:3,value:5},additional:{truth:9,value:4}});
   });
+  it('counts the initial value position once, while retaining later author investments in either direction',()=>{
+    const source:DemoMessage={...message('termination'),kind:'operations',relationType:'operations',spending:{protocol:1,wager:0,recommendation:1}};
+    const initial={...position('initial-value',1,'VALUE'),sourceMessageId:source.id};
+    expect(messageAuthorInvestment(source,stakes([initial]))).toEqual({total:{truth:0,value:1},initial:{truth:0,value:1},additional:{truth:0,value:0}});
+    expect(messageAuthorInvestment(source,stakes([
+      initial,{...position('later',4,'VALUE'),sourceMessageId:'recommendation'},
+      {...position('opposition',2,'VALUE','甲','CON'),sourceMessageId:'opposition'},
+      {...position('foreign',50,'VALUE','乙'),sourceMessageId:'foreign'},
+    ]))).toEqual({total:{truth:0,value:7},initial:{truth:0,value:1},additional:{truth:0,value:6}});
+  });
   it('matches author investments by ID after a rename and excludes a different account with the old name',()=>{
     const renamed={...position('own',7),user:{id:'甲',username:'新名字',createdAt:''}};
     const sameName={...position('other',100),user:{id:'其他账户',username:'甲',createdAt:''}};

@@ -101,7 +101,7 @@ export async function scopeView(store: Store, messageId: string): Promise<ScopeV
     const message = (await store.message(messageId));
     return { messageId, title: organizationTitle(message) || '消息' };
 }
-async function contentView(store: Store, message: Message, context?: ViewContext): Promise<string> {
+export async function contentView(store: Store, message: Message, context?: ViewContext): Promise<string> {
     const content = textOf(message);
     if (content)
         return content;
@@ -294,14 +294,15 @@ export async function stakesFor(store: Store, ids: string[], knownUsers?: UserVi
     stakes:[],counts:{pro:0,con:0},countsByType:{TRUTH:{pro:0,con:0},VALUE:{pro:0,con:0}}};
   for(let offset=0;offset<ids.length;offset+=200){
     const batch=ids.slice(offset,offset+200);
-    const positions=await store.db.prepare('SELECT * FROM stake_positions WHERE "subjectId"=ANY($1::text[]) ORDER BY "createdAt",id').all(batch);
+    const positions=await store.db.prepare(`SELECT p.*,b."messageId" AS "sourceMessageId" FROM stake_positions p LEFT JOIN bets b ON b.id=p.id
+      WHERE p."subjectId"=ANY($1::text[]) ORDER BY p."createdAt",p.id`).all(batch);
     await cacheClaims(positions.filter(row=>row.settlementType==='VALUE'&&row.reference).map(row=>row.reference as Reference));
     for(const user of await usersFor(store,[...new Set(positions.map(row=>String(row.userId)).filter(id=>!users.has(id)))]))users.set(user.id,user);
     for(const row of positions){
       const value=result[row.subjectId],type=row.settlementType==='VALUE'?'VALUE':'TRUTH',side=row.side==='pro'?'pro':'con';
       value.counts[side]+=Number(row.amount);value.countsByType[type][side]+=Number(row.amount);
       value.stakes.push({id:row.id,side:side==='pro'?'PRO':'CON',amount:row.amount,createdAt:row.createdAt,roundId:row.roundId,
-        settlementType:type,user:users.get(row.userId)!,...(row.reference?{reference:row.reference}:{})});
+        settlementType:type,user:users.get(row.userId)!,...(row.sourceMessageId?{sourceMessageId:String(row.sourceMessageId)}:{}),...(row.reference?{reference:row.reference}:{})});
       const scoped=scopeValue(value,scopeFor(row.reference,type));scoped.stakes.push(value.stakes.at(-1)!);scoped.counts[side]+=Number(row.amount);scoped.countsByType![type][side]+=Number(row.amount);
     }
     const pools=await store.db.prepare(`SELECT COALESCE(r.body::jsonb->>'subjectId',r.body::jsonb #>> '{target,messageId}') AS subject,

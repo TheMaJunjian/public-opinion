@@ -42,6 +42,15 @@ const GUIDE_COPY: Record<GuideStage, GuideCopy> = {
   'points-record': { title: '查看贡献点变化', operation: '查看展开面板中的对应记录', prompt: '在展开的贡献点记录面板中，查看本轮结算对应的贡献点变化。', description: '请查看对应记录，确认本轮结算后自己的贡献点变化情况。', reminder: '提醒：查看对应记录后，点击完成。' },
 };
 const BUBBLE_MAX_WIDTH = 460;
+function getPointsRecordTarget(roundId: string | null, resultMessageId: string | null) {
+  const panel = document.querySelector<HTMLElement>('[data-guide-points-panel="true"]');
+  if (!panel) return null;
+  const selector = resultMessageId
+    ? `[data-guide-points-message="${CSS.escape(resultMessageId)}"]`
+    : `[data-guide-points-record="${CSS.escape(roundId ?? '')}"]`;
+  return panel.querySelector<HTMLElement>(selector) ?? panel;
+}
+
 function getBubblePosition(rect: DOMRect, height = 340): BubblePosition {
   const width = Math.min(BUBBLE_MAX_WIDTH, window.innerWidth - 32);
   const gap = 24;
@@ -119,6 +128,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
   const [guideStage, setGuideStage] = useState<GuideStage>('message');
   const guideStageRef = useRef<GuideStage>('message');
   const settlementRoundIdRef = useRef<string | null>(null);
+  const settlementResultIdRef = useRef<string | null>(null);
   guideStageRef.current = guideStage;
   const [guideMaskRect, setGuideMaskRect] = useState<GuideMaskRect | null>(null);
   const [bubblePosition, setBubblePosition] = useState<BubblePosition | null>(null);
@@ -131,6 +141,8 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
   useEffect(() => {
     if (!open) return;
     setCompleted(false);
+    settlementRoundIdRef.current = null;
+    settlementResultIdRef.current = null;
     setGuideStage('message-compose');
     const onGuideTextMessageSent = (event: Event) => {
       if (guideStageRef.current !== 'message-send') return;
@@ -164,7 +176,9 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
     };
     const onGuideSettlementConfirmed = (event: Event) => {
       if (guideStageRef.current !== 'settlement-confirm-action') return;
-      settlementRoundIdRef.current = (event as CustomEvent<{ roundId?: string }>).detail?.roundId ?? null;
+      const detail = (event as CustomEvent<{ roundId?: string; resultMessageId?: string }>).detail;
+      settlementRoundIdRef.current = detail?.roundId ?? null;
+      settlementResultIdRef.current = detail?.resultMessageId ?? null;
       setBubblePosition(null);
       setGuideStage('settlement-history');
       window.dispatchEvent(new Event('guide-clear-visuals'));
@@ -245,7 +259,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
       if (guideStage === 'settlement-confirm-action') return '[data-guide-settlement-confirm="true"]';
       if (guideStage === 'settlement-history' && settlementRoundIdRef.current) return `[data-guide-settlement-history="${CSS.escape(settlementRoundIdRef.current)}"]`;
       if (guideStage === 'points-entry') return '[data-guide-points="true"]';
-      if (guideStage === 'points-record' && settlementRoundIdRef.current) return `[data-guide-points-record="${CSS.escape(settlementRoundIdRef.current)}"]`;
+      if (guideStage === 'points-record') return '[data-guide-points-panel="true"]';
       return null;
     };
     const showInvalidAction = (event: Event) => {
@@ -333,10 +347,13 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
                         ? [document.querySelector<HTMLElement>(`[data-guide-settlement-history="${CSS.escape(settlementRoundIdRef.current ?? '')}"]`)]
                         : guideStage === 'points-entry'
                           ? [document.querySelector<HTMLElement>('[data-guide-points="true"]')]
-                          : [document.querySelector<HTMLElement>(`[data-guide-points-record="${CSS.escape(settlementRoundIdRef.current ?? '')}"]`)];
+                          : [getPointsRecordTarget(settlementRoundIdRef.current, settlementResultIdRef.current)];
     const highlightedElements = elements.filter((element): element is HTMLElement => Boolean(element));
+    let appliedElements: HTMLElement[] = [];
     const applyHighlight = () => {
-      const currentElements = (guideStage === 'message-compose' || guideStage === 'message-contribution' || guideStage === 'message-consumption' || guideStage === 'message-send' || guideStage === 'settle' || guideStage === 'settlement-confirm' || guideStage === 'settlement-confirm-action' || guideStage === 'settlement-history' || guideStage === 'points-entry' || guideStage === 'points-record')
+      const currentElements = guideStage === 'points-record'
+        ? [getPointsRecordTarget(settlementRoundIdRef.current, settlementResultIdRef.current)].filter((element): element is HTMLElement => Boolean(element))
+        : (guideStage === 'message-compose' || guideStage === 'message-contribution' || guideStage === 'message-consumption' || guideStage === 'message-send' || guideStage === 'settle' || guideStage === 'settlement-confirm' || guideStage === 'settlement-confirm-action' || guideStage === 'settlement-history' || guideStage === 'points-entry')
         ? [document.querySelector<HTMLElement>(guideStage === 'settle'
           ? '[data-guide-settle="true"]'
           : guideStage === 'message-compose'
@@ -353,10 +370,9 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
               ? '[data-guide-settlement-confirm="true"]'
               : guideStage === 'settlement-history'
                 ? `[data-guide-settlement-history="${CSS.escape(settlementRoundIdRef.current ?? '')}"]`
-                : guideStage === 'points-entry'
-                  ? '[data-guide-points="true"]'
-                  : `[data-guide-points-record="${CSS.escape(settlementRoundIdRef.current ?? '')}"]`)].filter((element): element is HTMLElement => Boolean(element))
+                : '[data-guide-points="true"]')].filter((element): element is HTMLElement => Boolean(element))
         : highlightedElements;
+      appliedElements.filter(element => !currentElements.includes(element)).forEach(element => { element.style.boxShadow = ''; });
       currentElements.forEach(element => {
         element.style.boxShadow = guideStage === 'settlement-confirm'
           ? 'inset 0 0 0 var(--guide-target-ring)'
@@ -364,8 +380,8 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
       });
       return currentElements;
     };
-    let appliedElements = applyHighlight();
-    const timer = (guideStage === 'message-compose' || guideStage === 'message-contribution' || guideStage === 'message-consumption' || guideStage === 'message-send' || guideStage === 'settle' || guideStage === 'settlement-confirm' || guideStage === 'settlement-confirm-action' || guideStage === 'settlement-history' || guideStage === 'points-entry' || guideStage === 'points-record') && appliedElements.length === 0
+    appliedElements = applyHighlight();
+    const timer = guideStage === 'points-record' || (guideStage === 'message-compose' || guideStage === 'message-contribution' || guideStage === 'message-consumption' || guideStage === 'message-send' || guideStage === 'settle' || guideStage === 'settlement-confirm' || guideStage === 'settlement-confirm-action' || guideStage === 'settlement-history' || guideStage === 'points-entry') && appliedElements.length === 0
       ? window.setInterval(() => { appliedElements = applyHighlight(); }, 100)
       : null;
     return () => {
@@ -378,6 +394,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
 
   useEffect(() => {
     if (!open || completed) return;
+    let locatedPointsRecord: HTMLElement | null = null;
     const updateHint = () => {
       const targetElement = guideStage === 'message-compose'
         ? document.querySelector<HTMLElement>('[data-guide-message-input="true"]')
@@ -419,23 +436,32 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
         : guideStage === 'points-entry'
           ? document.querySelector<HTMLElement>('[data-guide-points="true"]')
         : guideStage === 'points-record'
-          ? document.querySelector<HTMLElement>(`[data-guide-points-record="${CSS.escape(settlementRoundIdRef.current ?? '')}"]`)
+          ? getPointsRecordTarget(settlementRoundIdRef.current, settlementResultIdRef.current)
         : target?.messageId
           ? document.querySelector<HTMLElement>(`[data-msgid="${CSS.escape(target.messageId)}"]`)
           : null;
-      const rightPanel = document.querySelector<HTMLElement>('[data-guide-right-panel="true"]');
-      if (!targetElement || !rightPanel) {
+      if (!targetElement) {
         setGuideMaskRect(null);
         if (guideStage === 'settlement-history' || guideStage === 'points-entry' || guideStage === 'points-record') setBubblePosition(null);
         return;
       }
+      if (guideStage === 'points-record' && targetElement instanceof HTMLElement && !targetElement.matches('[data-guide-points-panel="true"]') && targetElement !== locatedPointsRecord) {
+        locatedPointsRecord = targetElement;
+        targetElement.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
       const targetRect = targetElement instanceof DOMRect ? targetElement : targetElement.getBoundingClientRect();
       setGuideMaskRect({ top: targetRect.top, left: targetRect.left, width: targetRect.width, height: targetRect.height });
-      setBubblePosition(current => getBubblePosition(targetRect, current?.height ?? 340));
+      setBubblePosition(current => getBubblePosition(targetRect, bubbleRef.current?.offsetHeight || current?.height || 340));
     };
     updateHint();
-    const timer = window.setInterval(updateHint, guideStage === 'settlement-history' ? 100 : 500);
-    return () => window.clearInterval(timer);
+    const timer = window.setInterval(updateHint, guideStage === 'settlement-history' || guideStage === 'points-record' ? 100 : 500);
+    window.addEventListener('resize', updateHint);
+    window.addEventListener('scroll', updateHint, true);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('resize', updateHint);
+      window.removeEventListener('scroll', updateHint, true);
+    };
   }, [open, completed, guideStage, target?.messageId]);
 
   useLayoutEffect(() => {
@@ -482,7 +508,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
         : guideStage === 'points-entry'
           ? document.querySelector<HTMLElement>('[data-guide-points="true"]')
         : guideStage === 'points-record'
-          ? document.querySelector<HTMLElement>(`[data-guide-points-record="${CSS.escape(settlementRoundIdRef.current ?? '')}"]`)
+          ? getPointsRecordTarget(settlementRoundIdRef.current, settlementResultIdRef.current)
         : target?.messageId
           ? document.querySelector<HTMLElement>(`[data-msgid="${CSS.escape(target.messageId)}"]`)
           : null;

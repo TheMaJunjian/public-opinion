@@ -19,7 +19,7 @@
 .desk-relation-group button { min-height: 28px; padding: 4px 9px !important; font-size: 12px; border: 1px solid var(--skin-border) !important; color: var(--text-primary) !important; background: var(--surface-card) !important; }
 .desk-relation-group button[aria-pressed='true'] { background: var(--button-primary-bg) !important; color: var(--button-primary-text) !important; border-color: var(--button-primary-bg) !important; }
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .workbench-composer-section textarea[data-guide-message-input] { min-height: 112px !important; padding: 12px !important; line-height: 1.8; font-family: var(--font-reading); background: var(--surface-card) !important; border-color: var(--skin-border) !important; }
-:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-send-controls { display: flex; flex-direction: column; align-items: stretch !important; }
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) :is(.desk-send-controls, .desk-consumption-summary) { display: flex; flex-direction: column; align-items: stretch !important; }
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-send-controls [data-contribution-type] { padding: 8px !important; flex-wrap: wrap; border-color: var(--skin-border) !important; background: var(--surface-card); }
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-send-controls [data-contribution-type] > span:first-child { flex-basis: 100%; color: var(--text-secondary); }
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) .desk-send-controls input { min-height: 28px; }

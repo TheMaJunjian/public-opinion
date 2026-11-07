@@ -37,7 +37,9 @@ export default function RecentWorkbenchViews({ viewKey: requestedKey, children, 
     if (key !== viewKey && (entry.retainOnLeave === false || exclusiveGroup && entry.exclusiveGroup === exclusiveGroup)) entries.delete(key);
   }
   const active = entries.get(viewKey) ?? { key: viewKey, host: document.createElement('div'), overlays: document.createElement('div'), content: children, scroll: { positions: [] } };
-  const current = { ...active, exclusiveGroup, retainOnLeave, content: pending && entries.has(viewKey) ? active.content : children };
+  // Only a different destination needs the old scene. Supplemental data loads
+  // within this view must not freeze selection and other live interaction props.
+  const current = { ...active, exclusiveGroup, retainOnLeave, content: pending && viewKey !== requestedKey ? active.content : children };
   current.host.style.display = 'contents';
   current.overlays.style.display = 'contents';
   entries.delete(viewKey);

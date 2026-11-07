@@ -147,3 +147,25 @@ it('keeps each cached scene intact while the next scope is still loading', () =>
   }
   expect(view.container.querySelector('[data-cached-view-count]')).toHaveAttribute('data-cached-view-count', '2');
 });
+
+it('updates selection in the current scene while supplemental data is pending', () => {
+  function Workbench() {
+    const [selected, setSelected] = useState(false);
+    return <>
+      <div data-testid="staging">{selected ? '消息 A' : '空'}</div>
+      <RecentWorkbenchViews viewKey="A" pending={selected}>
+        <button aria-pressed={selected} onClick={() => setSelected(value => !value)}>消息 A</button>
+      </RecentWorkbenchViews>
+    </>;
+  }
+  const view = render(<Workbench />);
+  const card = screen.getByRole('button', { name: '消息 A' });
+  fireEvent.click(card);
+  expect(screen.getByTestId('staging')).toHaveTextContent('消息 A');
+  expect(card).toHaveAttribute('aria-pressed', 'true');
+  fireEvent.click(card);
+  expect(screen.getByTestId('staging')).toHaveTextContent('空');
+  expect(card).toHaveAttribute('aria-pressed', 'false');
+  expect(screen.getByRole('button', { name: '消息 A' })).toBe(card);
+  expect(view.container.querySelector('[data-cached-view-count]')).toHaveAttribute('data-cached-view-count', '1');
+});

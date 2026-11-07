@@ -1,4 +1,5 @@
 import { act, configure, fireEvent, getConfig, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { StrictMode, useState } from 'react';
 import { afterAll, describe, beforeEach, expect, it, vi } from 'vitest';
 import MessageWorkbenchPage from '../pages/MessageWorkbenchPage';
@@ -13,7 +14,7 @@ import * as leaderboardMetrics from '../utils/leaderboardMetrics';
 import { LEADERBOARD_PREFERENCES_KEY } from '../utils/leaderboardPreferences';
 import GestureShortcutManager from '../components/GestureShortcutManager';
 import { WORKBENCH_DRAWING_TIMEOUT_MS } from '../context/WorkbenchDrawingContext';
-import {bodyVersion,messageReadingKey} from '@gonglun/core';
+import {bodyVersion,messageReadingKey,structureSnapshot} from '@gonglun/core';
 import {discussionMessages,discussionEdges} from './discussion-fixture';
 import {convertMessagesToDemoModel, type DemoEdge} from '../utils/modelBridge';
 import {deriveReadingProgress,influenceReadingMarks} from '../pages/workbench/model/readingProgress';
@@ -304,6 +305,62 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     mockApi.getRelations.mockResolvedValue({data:[relation('A','CLASSIFY',['C']),relation('C',type,joinOnly?[]:['B']),...(joinOnly?[relation('join-B','JOIN',['B'],'C')]:[]),relation('against-C','DISAGREE',['C'])]});
   }
   beforeEach(()=>{vi.clearAllMocks();HTMLElement.prototype.scrollIntoView=vi.fn();});
+  it.each(['graph', 'list'])('updates card selection immediately during online hydration in %s', async mode => {
+    const original = mockApi.getWorkbenchSnapshot.getMockImplementation()!;
+    const category: Relation = { ...makeRelation(), id: 'category', relationType: 'CLASSIFY', sourceMessageId: null,
+      targetRefs: [], payload: { title: '测试分类' }, revision: 1 };
+    const full = { regionId: 'selection-region', scope: { messageId: 'classification-1', title: '选择测试' }, sequence: 10,
+      messages: [{ ...makeMessage('text', '测试正文'), revision: 1 }, { ...makeMessage(category.id, '测试分类'), revision: 1,
+        kind: 'RELATION', relationType: category.relationType, targetRefs: category.targetRefs, relationPayload: category.payload }],
+      relations: [category], users: [makeUser()], stakes: {}, tagCounts: {}, attentionUsers: {} };
+    let hold = false;
+    const releases: Array<() => void> = [];
+    mockApi.getWorkbenchSnapshot.mockImplementation(async ({ ids }: { ids?: string[] }) => {
+      if (hold && ids) await new Promise<void>(resolve => releases.push(resolve));
+      return { ...full, windowed: true, messages: full.messages.filter(row => ids?.includes(row.id)),
+        relations: full.relations.filter(row => ids?.includes(row.id)) };
+    });
+    graphRendering.actual = true;
+    const view = render(<MessageWorkbenchPage />), pointer = userEvent.setup();
+    try {
+      await waitFor(() => expect(catalogHarness.callbacks).not.toBeNull());
+      const index = structureSnapshot(full);
+      const { projectWorkbenchSnapshot } = await import('../utils/workbenchProjection');
+      act(() => catalogHarness.callbacks.onReady({ snapshot: index, index,
+        projected: projectWorkbenchSnapshot({ ...index, messages: [], relations: [] }) }));
+      await waitForWorkbenchIdle();
+      if (mode === 'list') fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      await waitForWorkbenchIdle();
+      const card = (id: string) => view.container.querySelector<HTMLElement>(`[data-workbench-left-panel] [data-msgid="${id}"]:not([data-rel-overlay])`)!;
+      const staging = document.querySelector('[data-guide-selection-staging]')!;
+      hold = true;
+      for (const [id, content] of [['text', '测试正文'], ['category', '测试分类']]) {
+        const originalCard = card(id);
+        const requestsBefore = releases.length;
+        await pointer.click(within(originalCard).getByText(content));
+        expect(staging).toHaveTextContent(id);
+        expect(card(id)).toBe(originalCard);
+        expect(originalCard).toHaveAttribute('data-whole-selected', 'true');
+        await waitFor(() => expect(releases.length).toBeGreaterThan(requestsBefore));
+        await pointer.click(within(originalCard).getByText(content));
+        expect(staging).toHaveTextContent('当前未选择任何候选。');
+        expect(originalCard).not.toHaveAttribute('data-whole-selected');
+      }
+      await pointer.click(within(card('text')).getByText('测试正文'));
+      expect(card('text')).toHaveAttribute('data-whole-selected', 'true');
+      fireEvent.click(screen.getByRole('button', { name: '清空' }));
+      expect(card('text')).not.toHaveAttribute('data-whole-selected');
+      hold = false;
+      await act(async () => { releases.splice(0).forEach(release => release()); });
+      await waitForWorkbenchIdle();
+      expect(staging).toHaveTextContent('当前未选择任何候选。');
+      expect(card('text')).not.toHaveAttribute('data-whole-selected');
+      expect(card('category')).not.toHaveAttribute('data-whole-selected');
+    } finally {
+      view.unmount(); hold = false; releases.splice(0).forEach(release => release());
+      graphRendering.actual = false; mockApi.getWorkbenchSnapshot.mockImplementation(original); catalogHarness.callbacks = null;
+    }
+  });
   it('does not draw an incomplete raw window before its organization model is complete', async () => {
     const original = mockApi.getWorkbenchSnapshot.getMockImplementation()!;
     const snapshot = (records: Message[], nextCursor: string | null = null) => ({ windowed: true, regionId: 'region',

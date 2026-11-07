@@ -87,7 +87,9 @@ export function beginRequestOperation(label: string, quiet = false, owner = requ
       if (!entry) return;
       if (state === 'confirmed' && (!entry.long || entry.quiet)) { removeOperation(id); return; }
       operations = operations.map(operation => operation.id === id ? { ...operation, state, message } : operation); publish();
-      if (state === 'confirmed') timers.set(id, setTimeout(() => dismissOperation(id), 2500));
+      // Routine results disappear automatically; failures and uncertain writes
+      // remain available until dismissed or superseded by a retry.
+      if (state === 'confirmed' || state === 'cancelled') timers.set(id, setTimeout(() => dismissOperation(id), 2500));
     },
   };
 }

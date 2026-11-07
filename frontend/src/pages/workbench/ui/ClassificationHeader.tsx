@@ -65,7 +65,7 @@ export default function ClassificationHeader({ recordCategory, isInsideClassify,
               {question.description && question.completeness === 'unknown' && <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--ink-94a3b8)' }}>{question.locallyCorrectedBody ? question.known ? '原文件问题描述的完整性尚未确认；当前显示本地补充。' : '原文件未取得问题描述；当前显示本地补充。' : '问题描述的完整性尚未确认。'}</p>}
             </details>}
           </div>
-          <button onClick={() => {
+          <button className="workbench-scope-exit" onClick={() => {
             if (comparisonMode) {
               exitTemporaryCategory();
               return;

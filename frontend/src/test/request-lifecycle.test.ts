@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import * as api from '../api/client';
 import { signPayloadWithPrivateJwk } from '../utils/signature';
-import { fetchJsonWithDeadline, getOperations, REQUEST_TIMEOUT_MS, RequestTimeoutError, resetRequestOperations, UncertainRequestError } from '../utils/requestLifecycle';
+import { dismissOperation, fetchJsonWithDeadline, getOperations, REQUEST_TIMEOUT_MS, RequestTimeoutError, resetRequestOperations, UncertainRequestError } from '../utils/requestLifecycle';
 
 vi.mock('../utils/signature', () => ({ signPayloadWithPrivateJwk: vi.fn(async () => 'signature') }));
 
@@ -115,6 +115,10 @@ it('bounds signed retries, keeps an ambiguous write uncertain, and reuses its id
   expect(headers[1]['X-Request-Id']).toBe(headers[0]['X-Request-Id']);
   expect(headers[1]['X-Signature']).toBe(headers[0]['X-Signature']);
   expect(getOperations().at(-1)?.state).toBe('uncertain');
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(getOperations().at(-1)?.state).toBe('uncertain');
+  dismissOperation(getOperations().at(-1)!.id);
+  expect(getOperations()).toEqual([]);
   fetcher.mockImplementation(async () => new Response(JSON.stringify({ id: 'round' })));
   await api.createRound('message', { settlementType: 'TRUTH' });
   const retried = (fetcher.mock.lastCall as unknown as [string, RequestInit])[1].headers as Record<string, string>;

@@ -7,7 +7,10 @@ vi.mock('../context/AuthContext', () => ({ useOptionalAuth: () => ({ user: { id:
 beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { resetRequestOperations(); vi.useRealTimers(); });
 
-it('shows pending, long waits and results directly without collapse controls or an extra progress modal', () => {
+it.each([
+  { state: 'confirmed' as const, message: '服务器已响应', role: 'status', duration: 2500 },
+  { state: 'cancelled' as const, message: '请求已取消', role: 'status', duration: 2500 },
+])('shows $state feedback without controls and dismisses it automatically after completion', ({ state, message, role, duration }) => {
   render(<OperationFeedback />);
   let ticket!: ReturnType<typeof beginRequestOperation>;
   act(() => { ticket = beginRequestOperation('提交投票', false, 'u'); });
@@ -15,11 +18,29 @@ it('shows pending, long waits and results directly without collapse controls or 
   expect(screen.queryByRole('dialog')).toBeNull();
   act(() => vi.advanceTimersByTime(LONG_OPERATION_MS));
   expect(screen.getByRole('status')).toHaveTextContent('仍在等待服务器响应');
-  expect(screen.queryByRole('button', { name: /收起|查看进度|显示进度/ })).toBeNull();
+  expect(screen.queryByRole('button')).toBeNull();
   expect(screen.queryByRole('dialog')).toBeNull();
   expect(getOperations()[0].state).toBe('pending');
-  act(() => ticket.finish('uncertain', '结果尚未确认，请核对记录'));
-  expect(screen.getByRole('alert')).toHaveTextContent('结果尚未确认');
+  act(() => ticket.finish(state, message));
+  expect(screen.getByRole(role)).toHaveTextContent(message);
+  expect(screen.queryByRole('button')).toBeNull();
+  act(() => vi.advanceTimersByTime(duration - 1));
+  expect(screen.getByRole(role)).toHaveTextContent(message);
+  act(() => vi.advanceTimersByTime(1));
+  expect(screen.queryByRole(role)).toBeNull();
+  expect(getOperations()).toHaveLength(0);
+});
+
+it.each([
+  { state: 'failed' as const, message: '提交失败，请重试' },
+  { state: 'uncertain' as const, message: '结果尚未确认，请核对记录' },
+])('keeps $state feedback until manually dismissed', ({ state, message }) => {
+  render(<OperationFeedback />);
+  act(() => { beginRequestOperation('提交投票', false, 'u').finish(state, message); });
+  expect(screen.getByRole('alert')).toHaveTextContent(message);
+  act(() => vi.advanceTimersByTime(60_000));
+  expect(screen.getByRole('alert')).toHaveTextContent(message);
+  expect(getOperations()[0].state).toBe(state);
   fireEvent.click(screen.getByRole('button', { name: '关闭提交投票提示' }));
   expect(screen.queryByRole('alert')).toBeNull();
   expect(getOperations()).toHaveLength(0);

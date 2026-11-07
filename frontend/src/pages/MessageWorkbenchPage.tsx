@@ -3442,7 +3442,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                       {comparisonMode ? "仅列出当前视图内已有赞同或反对记录、且会改变显示效果的关系消息。" : isPreloaded ? "当前阅览范围内没有匹配的记录。可以调整筛选、退出分类或追溯；文件在本机阅览。" : isInsideClassify ? "该分类下还没有消息。你可以退出分类视图，在完整画布中发送消息。" : traceEntries.length > 0 ? "当前追溯范围内没有匹配的消息。尝试退出追溯或调整追溯距离。" : "发送消息需支付协议费，真假和价值至少一项大于 0，也可以同时投入。选中消息或正文片段后，选择关系并发送，即可继续讨论。"}
                     </div>
                     {isInsideClassify && (
-                      <button onClick={handleExitClassification} style={{ marginTop: 8, padding: "4px 16px", borderRadius: 6, border: "1px solid var(--line-555)", background: "var(--surface-333)", color: "var(--ink-ccc)", cursor: "pointer", fontSize: 13 }}>
+                      <button className="workbench-scope-exit" onClick={handleExitClassification} style={{ marginTop: 8, padding: "4px 16px", borderRadius: 6, border: "1px solid var(--line-555)", background: "var(--surface-333)", color: "var(--ink-ccc)", cursor: "pointer", fontSize: 13 }}>
                         {classifyExitLabel}
                       </button>
                     )}

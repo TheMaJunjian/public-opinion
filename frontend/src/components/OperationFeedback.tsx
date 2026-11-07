@@ -46,7 +46,7 @@ export default function OperationFeedback() {
         <strong>{operation.label}</strong>：{operation.state === 'pending' ? operation.long ? '仍在等待服务器响应…' : '正在处理…'
           : operation.message ?? (operation.state === 'confirmed' ? '服务器已响应' : '请求未完成')}
       </div>
-      {operation.state !== 'pending' && <button type="button" aria-label={`关闭${operation.label}提示`} onClick={() => dismissOperation(operation.id)}>关闭</button>}
+      {(operation.state === 'failed' || operation.state === 'uncertain') && <button type="button" aria-label={`关闭${operation.label}提示`} onClick={() => dismissOperation(operation.id)}>关闭</button>}
     </div>)}
   </div>, document.body);
 }

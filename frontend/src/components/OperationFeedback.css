@@ -1,5 +1,6 @@
 .operation-feedback { position: fixed; z-index: 3200; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); max-width: min(400px, calc(100vw - 24px)); max-height: min(55dvh, 420px); overflow: auto; padding: 12px; border: 1px solid var(--dialog-border); border-inline-start: var(--dialog-accent-border); border-radius: var(--dialog-radius); background: var(--dialog-surface); color: var(--text-primary); font-size: 13px; box-shadow: var(--dialog-shadow); overflow-wrap: anywhere; }
-.operation-feedback-entry { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.operation-feedback-entry { display: flex; align-items: baseline; gap: 8px; }
+.operation-feedback-entry + .operation-feedback-entry { margin-top: 6px; }
 .operation-feedback button { border: 1px solid var(--button-secondary-border); border-radius: var(--button-radius); min-height: var(--button-min-height); padding: 5px 10px; background: var(--button-secondary-bg); color: var(--button-secondary-text); font: inherit; cursor: pointer; flex-shrink: 0; }
 .operation-feedback button:hover { background: var(--surface-hover); }
 .operation-feedback button:focus-visible { outline: 3px solid var(--fragment-accent); outline-offset: 3px; }

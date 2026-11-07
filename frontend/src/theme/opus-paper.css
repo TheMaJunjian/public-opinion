@@ -276,14 +276,14 @@
 }
 
 /* Quiet secondary actions, one solid primary action, and visibly unavailable controls. */
-:root[data-theme='opus'][data-appearance='opus-paper'] :is(.workbench-action, .desk-relation-group button, .navbar-logout) {
+:root[data-theme='opus'][data-appearance='opus-paper'] :is(.workbench-action, .workbench-scope-exit, .desk-relation-group button, .navbar-logout) {
   min-height: 30px; padding: 4px 10px !important;
   border: 1px solid var(--button-secondary-border) !important; border-radius: 4px !important;
   background: var(--surface-card) !important; color: var(--text-secondary) !important;
   font: 400 12px/1.5 system-ui, sans-serif; box-shadow: none !important;
   transition: background-color 120ms, border-color 120ms, color 120ms;
 }
-:root[data-theme='opus'][data-appearance='opus-paper'] :is(.workbench-action, .desk-relation-group button, .navbar-logout):where(:not([data-guide-send='true'])):enabled:hover {
+:root[data-theme='opus'][data-appearance='opus-paper'] :is(.workbench-action, .workbench-scope-exit, .desk-relation-group button, .navbar-logout):where(:not([data-guide-send='true'])):enabled:hover {
   background: var(--surface-hover) !important; border-color: var(--paper-gold) !important; color: var(--text-primary) !important;
 }
 :root[data-theme='opus'][data-appearance='opus-paper'] :is(.workbench-action, .desk-relation-group button)[aria-pressed='true']:enabled {

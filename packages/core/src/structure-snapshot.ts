@@ -1,6 +1,6 @@
 import type { WorkbenchSnapshot, RelationPayload, TargetRef } from './workbench.js';
 import type { Part } from './types.js';
-import { referenceLabelPart } from './reference-label.js';
+import { relationLabelPart } from './relation-label.js';
 
 /** Presence and topology only. Bodies, quoted text and replacement bodies are fetched by ID. */
 const payload = (value: RelationPayload | null | undefined) => {
@@ -13,7 +13,7 @@ const payload = (value: RelationPayload | null | undefined) => {
 };
 const refs = (values: TargetRef[] | undefined) => values?.map(ref => ref.kind === 'text-fragment' ? { ...ref, text: '' } : ref);
 const parts = (values: Part[] | undefined): Part[] | undefined => {
-  const labelPart = referenceLabelPart(values);
+  const labelPart = relationLabelPart(values);
   return values?.map(part => {
     if (part.type === 'text') return { ...part, text: part.id !== labelPart && part.text.trim() ? 'x' : '' };
     if (part.type === 'code') return { ...part, source: '' };

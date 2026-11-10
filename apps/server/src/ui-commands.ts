@@ -197,8 +197,8 @@ export async function createRelation(context: CommandContext, parent: string, bo
         parts.push(relation('archive', { target: refs }, 'personal-archive'));
     if (['CLASSIFY', 'MERGE', 'SUMMARY', 'ARRANGE'].includes(type))
         parts.push({ id: 'display', type: 'display', relationPartId: 'relation', layout: type === 'SUMMARY' ? 'summary' : payload.targetLayout === 'single-row' ? 'row' : payload.targetLayout === 'multi-column' ? 'columns' : 'flow' });
-    // Custom reference text labels the relation; only explicit content creates a body card.
-    if (type === 'REFERENCE' && payload.label && !payload.content && !payload.title)
+    // Directed relation labels (including question/answer) do not create body cards.
+    if (['ANNOTATION', 'REFERENCE', 'REPLY', 'NOTIFY'].includes(type) && payload.label && !payload.content && !payload.title)
         parts.push({ id: 'display', type: 'display', relationPartId: 'relation', layout: 'relation' });
     parts.push({ id: 'data', type: 'data', value: data });
     // Standalone content needs placement. Ordinary relations remain visible through their endpoints.

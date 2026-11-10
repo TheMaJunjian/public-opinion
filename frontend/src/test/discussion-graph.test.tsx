@@ -6,6 +6,9 @@ import { discussionBranchKey } from '../pages/workbench/model/discussionBranches
 import { useState } from 'react';
 import { REVEAL_VIRTUAL_MESSAGE } from '../hooks/useVirtualMessageMounts';
 import { MIN_CARD_H } from '../utils/layout';
+import { convertMessagesToDemoModel } from '../utils/modelBridge';
+import { structureSnapshot } from '@gonglun/core';
+import type { Relation } from '../types';
 
 // Authored fixture text makes these branches eligible for text-region folding.
 const message = (id:string):DemoMessage => ({id,kind:'normal',author:id,content:`fixture:${id}`,createdAt:'2026-01-01T00:00:00Z'});
@@ -50,6 +53,30 @@ function expectContained(outer:{x:number;y:number;width:number;height:number},in
 }
 
 describe('discussion graph with native cards and selection',()=>{
+  it.each(['question','answer'].flatMap(label=>[false,true].map(structural=>({label,structural}))))('includes $label in the reply summary without a label card or duplicate text count (structural=$structural)',async({label,structural})=>{
+    const reply:Relation={id:'reply-label',relationType:'REPLY',sourceMessageId:'child',targetRefs:[{kind:'message',messageId:'root'}],
+      payload:{label},createdAt:'',createdBy:{id:'u',username:'甲',createdAt:''},
+      parts:[{id:'body',type:'text',text:label},{id:'relation',type:'relation',relation:'reply',roles:{}},{id:'data',type:'data',value:{uiType:'REPLY',label}}]};
+    const records=structural?structureSnapshot({scope:{messageId:null,title:'讨论'},sequence:1,messages:[],relations:[reply],users:[],stakes:{},tagCounts:{},attentionUsers:{}}).relations:[reply];
+    const converted=convertMessagesToDemoModel([],records);
+    const ui=scene(['root','child'],[],{messages:[message('root'),message('child'),...converted.messages],edges:converted.edges});
+    const control=await screen.findByRole('button',{name:'收起回复分支 root'});
+    expect(control).toHaveTextContent(/回复\s*1\s*条$/);
+    expect(control).toHaveAttribute('title',expect.stringContaining('区域内共1条文本；回复1'));
+    expect(ui.card('reply-label')).toBeNull();
+    expect(ui.card('child')).not.toBeNull();
+    expect(ui.container.querySelectorAll('[data-discussion-region]')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button',{name:'汇总回复：1'}));
+    fireEvent.click(screen.getByRole('button',{name:'显示原始回复关系 reply-label'}));
+    expect(ui.container.querySelector('[data-directed-edge-label="reply-label"]')).not.toBeNull();
+    expect(ui.container.querySelector('[data-graph-edge-layer="labels"] .graph-edge-label-text')).toHaveTextContent(label==='question'?'疑问':'回答');
+    expect(ui.card('reply-label')).toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:'关闭其他相关消息'}));
+    fireEvent.click(control);
+    await waitFor(()=>expect(ui.card('child')).toBeNull());
+    expect(ui.card('root')).not.toBeNull();
+  });
+
   it('returns a source to its reply region after endorsing its existing reply relationship',async()=>{
     const reply=connection('old-reply','reply','child','root'),refutation=connection('new-refutation','disagree','child','root');
     const approval=connection('approval','agree','anon:approval','old-reply');

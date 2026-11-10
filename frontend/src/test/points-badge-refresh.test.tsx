@@ -14,6 +14,35 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 const fundedBalance = { points: { available: 20, locked: 0 }, balance: { amount: 20, debtFrozen: false }, breakdown: { initialMinted: 0, totalEarned: 0, totalLost: 0, totalProtocolFees: 0 } };
 
+it.each([-16,16])('explains a zero asset change with available delta %s and keeps the text selectable without row navigation',async amount=>{
+  vi.mocked(api.getPointsBalance).mockResolvedValue(fundedBalance);
+  const row={id:'operation:review',operationId:'review',type:'OPERATION_GROUP',amount,lockedDelta:-amount,balanceAfter:20,createdAt:'2026-11-10T10:52:02Z',
+    messages:[{messageId:'review-record',messageType:'审核记录'},{messageId:'reviewed-text',messageRevision:1,messageType:'文本',summary:'被审核的消息'}]};
+  vi.mocked(api.getPointsTransactions).mockResolvedValue({data:[row],pagination:{page:1,limit:20,total:1,totalPages:1}});
+  const navigate=vi.fn();window.addEventListener('points-navigate',navigate);
+  try{
+    render(<MemoryRouter initialEntries={['/messages']}><PointsBadge/></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button',{name:/贡献点：可用 20/}));
+    const panel=await screen.findByRole('dialog',{name:'贡献点记录'});
+    expect(panel).toHaveStyle({userSelect:'text'});
+    const total=await screen.findByText('总资产 0');
+    fireEvent.doubleClick(total);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(screen.getByText('（总额不变）')).toBeVisible();
+    fireEvent.click(screen.getByText('关联消息 · 2 条'));
+    expect(screen.getByText('【审核记录】')).toBeVisible();
+    expect(screen.getByText('【文本】')).toBeVisible();
+    expect(screen.getByRole('button',{name:'定位消息 reviewed-text'})).toHaveTextContent('reviewed-text');
+    fireEvent.click(screen.getByRole('button',{name:'查看收支详情 operation:review'}));
+    const dialog=await screen.findByRole('dialog',{name:'贡献点详情'}),detail=within(dialog);
+    expect(dialog).toHaveStyle({userSelect:'text'});
+    expect(await detail.findByLabelText('资产变化说明')).toHaveTextContent(`本次可用净变化 ${amount>0?'+':''}${amount} 点，锁定净变化 ${amount<0?'+':''}${-amount} 点。两者相抵，总资产不变。`);
+    expect(detail.getByText('总资产净变化').parentElement).toHaveTextContent('0 点（总额不变）');
+    fireEvent.click(detail.getByRole('button',{name:'定位消息 reviewed-text'}));
+    expect(navigate).toHaveBeenCalledWith(expect.objectContaining({detail:expect.objectContaining({messageId:'reviewed-text'})}));
+  }finally{window.removeEventListener('points-navigate',navigate);}
+});
+
 it.each(['native-source','restricted-reference'])('keeps related-message navigation after moderation removes %s metadata',async shape=>{
   vi.mocked(api.getPointsBalance).mockResolvedValue(fundedBalance);
   vi.mocked(api.getPointsTransactions).mockResolvedValue({data:[{id:'private-entry',type:'TRANSFER',amount:21,balanceAfter:20,createdAt:'',
@@ -76,7 +105,7 @@ it.each([
   render(<MemoryRouter><PointsBadge/></MemoryRouter>);
   fireEvent.click(await screen.findByRole('button',{name:/贡献点：可用 20/}));
   expect(await screen.findByText(result)).toBeVisible();
-  expect(screen.getByText(`资产 ${net>=0?'+':''}${net}`)).toBeVisible();
+  expect(screen.getByText(`总资产 ${net>0?'+':''}${net}`)).toBeVisible();
   expect(screen.getByText(`可用 +${payout}`)).toBeVisible();
   expect(screen.getByText(`锁定减少 ${principal} 点`)).toBeVisible();
   fireEvent.click(screen.getByRole('button',{name:'查看收支详情 operation:settlement'}));
@@ -84,7 +113,7 @@ it.each([
   expect(await detail.findByRole('group',{name:'对赌结算结果'})).toHaveTextContent(result);
   expect(detail.getByRole('group',{name:'对赌结算结果'})).toHaveTextContent(`结算本金 ${principal} 点 · 结算到账 ${payout} 点`);
   const totals=detail.getByLabelText('本次操作收支合计');
-  expect(within(totals).getByText('资产净变化').parentElement).toHaveTextContent(`${net>=0?'+':''}${net} 点`);
+  expect(within(totals).getByText('总资产净变化').parentElement).toHaveTextContent(`${net>0?'+':''}${net} 点`);
   expect(detail.getByRole('columnheader',{name:'可用增减'})).toBeVisible();
   expect(detail.queryByText('结束对赌锁定')).toBeNull();
   expect(detail.getAllByText('对赌本金结算').length).toBeGreaterThan(0);

@@ -145,4 +145,6 @@ export const RELATION_LABELS: Record<string, string> = {
   follow: '关注', unfollow: '取消关注', block: '屏蔽', unblock: '取消屏蔽',
   read: '已读', unread: '未读', archive: '冷藏', notify: '通知',
   distribute: '分配运营收入', credit: '发放贡献点', recharge: '充值申请', release: '版本发布',
+  review: '审核', 'review-appeal': '复核申请', 'review-settle': '审核结算', 'review-finalize': '审核资金划转',
+  'review-record': '审核记录', 'review-enrollment': '纳入审核', 'reviewer-authorize': '审核资格授权',
 };

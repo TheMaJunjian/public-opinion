@@ -158,8 +158,7 @@ export async function processModerationAction(tx:Mutation,message:Message,review
     }
     return true;
   }
-  if(c.authorId===message.authorId)throw new DomainError('作者不能结算自己的内容',403);
-  if(!reviewer)throw new DomainError('仅本轮审核参与者或有效任务接收者可以结算',403,'REVIEW_NOT_PARTICIPATED');
+  if(!reviewer&&c.authorId!==message.authorId)throw new DomainError('仅作者、本轮审核参与者或有效任务接收者可以结算',403,'REVIEW_NOT_PARTICIPATED');
   const votes=await reviewVotes(store,c.id),deposits=await reviewDeposits(store,c.id),summary=summarizeReview(c,votes,deposits);
   if(part.relation==='review-settle'){
     if(c.settlement)throw new DomainError('本轮已结算；需要改变结论时请发起复核',409);

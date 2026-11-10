@@ -123,7 +123,7 @@ import { useCleanView } from '../hooks/useCleanView';
 import { useViewedMessageHighlight,type ReadingNavigationMarkers } from '../hooks/useViewedMessageHighlight';
 import { useNotificationNavigation } from '../hooks/useNotificationNavigation';
 import { useMessageLinkNavigation } from '../hooks/useMessageLinkNavigation';
-import { categoryMessageUrl } from '../utils/messageLink';
+import { messageNavigationUrl } from '../utils/messageLink';
 import { useNotificationRecipients } from '../hooks/useNotificationRecipients';
 import { useCatalogFilters } from '../hooks/useCatalogFilters';
 import {useReadingState} from '../hooks/useReadingState';
@@ -2246,7 +2246,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   }
 
   function enterClassification(relMsgId: string, recordHistory = true): void {
-    if (recordHistory) recordBrowsingNavigation(categoryMessageUrl(window.location.href, relMsgId));
+    if (recordHistory) recordBrowsingNavigation(messageNavigationUrl(window.location.href, relMsgId));
     cancelViewNavigation();
     if (viewMode === 'graph') beginWorkbenchDrawing();
     runEnterClassification({ captureSnapshot, cancelScrollRafs, scrollRequestIdRef, leftPanelRef, classifyStackRef, setClassifyRelMsgId, setClassifyKey }, relMsgId);
@@ -2272,7 +2272,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   }
 
   function exitClassification(_options?: { restoreSnapshot?: boolean; clearSelectionOnRootExit?: boolean; preserveViewMode?: ViewMode }): void {
-    if (_options?.restoreSnapshot !== false) recordBrowsingNavigation(categoryMessageUrl(window.location.href, classifyStackRef.current.at(-2)?.relMsgId ?? null));
+    if (_options?.restoreSnapshot !== false) recordBrowsingNavigation(messageNavigationUrl(window.location.href, classifyStackRef.current.at(-2)?.relMsgId ?? null));
     if (viewMode === 'graph') beginWorkbenchDrawing();
     return runExitClassification({ classifyStackRef, setClassifyRelMsgId, setClassifyKey, setPreviewClassifyId, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setLastClickedMessageId, restoreSnapshot, setViewMode }, _options);
   }
@@ -2923,6 +2923,13 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
 
   /** Navigate to a message: switch canvas if needed, scroll, select (clear + add to candidates) */
   const handleNavigateToMessage = useCallback((messageId: string, options?: { select?: boolean; preserveScope?: boolean; recordHistory?: boolean; enterCategory?: boolean; onComplete?: ScrollMessageOptions['onComplete'] }) => {
+    const recordLocation = () => {
+      if (!options?.preserveScope && options?.recordHistory !== false) {
+        // A jump locates the card; refreshing a container ID must not enter it.
+        // Notifications locate without selecting and retain their enclosing route.
+        recordBrowsingNavigation(options?.select === false ? undefined : messageNavigationUrl(window.location.href, messageId, true));
+      }
+    };
     const settlement = messagesRef.current.find(message=>message.id===messageId);
     if(isSettlementRecord(settlement)){
       if(!settlement?.settlementTargetId){
@@ -2958,6 +2965,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     if (findVisibleMessageElement(leftPanelRef.current, messageId, relationsRef.current, edgesRef.current)) {
       // Locating a message already on screen must preserve the current scope,
       // reading trace, filters, expanded frames and composer selections.
+      if (options?.select !== false) recordLocation();
       pendingRemoteNavigationRef.current = null;
       pendingScrollMsgRef.current = null;
       pendingScrollDependencyIdsRef.current = [];
@@ -2999,6 +3007,9 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       options?.onComplete?.(false);
       return;
     }
+    // Wait for a remote target to exist before replacing the shareable destination.
+    // Record before changing scope or selection so Back restores the origin.
+    recordLocation();
     const joinMessage=messagesRef.current.find(message=>message.id===messageId);
     if(isReviewDiscussion(joinMessage)){
       if(!openReviewRecords(messageId,options)){showAlert('这条审核记录没有保存目标消息');options?.onComplete?.(false);}
@@ -3029,7 +3040,6 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       openCorrectionRecords(messageId,options);
       return;
     }
-    if (!options?.preserveScope && options?.recordHistory !== false) recordBrowsingNavigation();
     scrollRequestIdRef.current++;
     const wasTemporaryCategoryActive = temporaryCategoryStackRef.current.length > 0
       || joinFilterTargetId !== null;

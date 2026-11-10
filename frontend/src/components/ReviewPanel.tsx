@@ -82,7 +82,7 @@ export default function ReviewPanel({messageId,revision,onRecords}:Props){
         <div className="flex items-center justify-between">
           <span className="text-xs font-semibold text-[color:var(--ink-3730a3)]"><ThemeIcon name="review" fallback="🛡️"/> 审核仲裁</span>
           <button type="button" disabled={busy||!canSettle} onClick={()=>setConfirmSettle(true)}
-            title={summary.finalized?'资金已划转':!detail.canSettle?'本轮审核参与者或有效任务接收者可结算，作者不能结算自己的内容':'结算并立即分配资金'}
+            title={summary.finalized?'资金已划转':!detail.canSettle?'作者、本轮审核参与者或有效任务接收者可结算':'结算并立即分配资金'}
             className={`px-2 py-1 text-[color:var(--ink-fff-2)] text-xs font-medium rounded transition-colors ${busy||!canSettle?'bg-[color:var(--surface-9ca3af)] cursor-not-allowed':'bg-[color:var(--surface-f59e0b)] hover:bg-[color:var(--surface-d97706)]'}`}>
             {pendingAction==='review-settle'||pendingAction==='review-finalize'?'结算中...':summary.finalized?'已结算':'结算'}
           </button>

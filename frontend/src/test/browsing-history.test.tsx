@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useBrowsingHistory } from '../pages/workbench/useBrowsingHistory';
 import { BrowserRouter, HashRouter, useLocation } from 'react-router-dom';
 import { useMessageLinkNavigation } from '../hooks/useMessageLinkNavigation';
-import { categoryMessageUrl } from '../utils/messageLink';
+import { messageNavigationUrl } from '../utils/messageLink';
 
 function Workbench({ owner = 'online', browser = true }: { owner?: string; browser?: boolean }) {
   const [view, setView] = useState('主页');
@@ -51,7 +51,7 @@ function LinkedWorkbench({ onLink }: { onLink: (id: string) => void }) {
     setCategory(snapshot.category); setPosition(snapshot.position);
   }, { browser: true });
   useMessageLinkNavigation(true, id => { onLink(id); setCategory(id); setPosition('顶部'); }, history.handlesCurrentLocation);
-  const go = (id: string | null) => { history.record(categoryMessageUrl(window.location.href, id)); setCategory(id); setPosition('顶部'); };
+  const go = (id: string | null) => { history.record(messageNavigationUrl(window.location.href, id)); setCategory(id); setPosition('顶部'); };
   return <>
     <output aria-label="分类">{category ?? '主页'}</output><output aria-label="位置">{position}</output>
     <output aria-label="路由查询">{location.search}</output><textarea aria-label="草稿" />

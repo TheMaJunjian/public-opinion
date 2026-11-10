@@ -203,7 +203,7 @@ export default function PointsBadge() {
           aria-hidden={detailTx?true:undefined}
           data-guide-points-panel="true"
           className="absolute right-0 top-full mt-2 w-[30rem] max-w-[calc(100vw-2rem)] z-50 overflow-auto"
-          style={{...dialogStyles.panel,maxHeight:'min(44rem, calc(100dvh - 5rem))'}}
+          style={{...dialogStyles.panel,maxHeight:'min(44rem, calc(100dvh - 5rem))',userSelect:'text',WebkitUserSelect:'text'}}
           aria-busy={txLoading}
           onClick={(e) => e.stopPropagation()}
         >
@@ -233,19 +233,13 @@ export default function PointsBadge() {
                 // source ID must still offer a route to the covered message.
                 const sourceId=tx.messageId??(typeof txData?.messageId==='string'?txData.messageId:undefined);
                 const references=transactionReferences(tx);
-                const canNavigate = references.length === 1;
                 const assetChange=transactionAssetChange(tx),settlement=wagerSettlementSummary(tx);
                 return (
                 <li
                   key={tx.id}
                   data-guide-points-record={txData?.roundId ? String(txData.roundId) : undefined}
                   data-guide-points-message={[...new Set([sourceId,...references.map(reference=>reference.messageId)].filter(Boolean))].join(' ')||undefined}
-                  className={`px-3 py-2 text-xs select-none ${canNavigate ? 'cursor-pointer hover:bg-[color:var(--surface-hover)]' : ''}`}
-                  onDoubleClick={canNavigate ? (e) => {
-                    e.preventDefault();
-                    navigateToMessage(tx, references[0]);
-                  } : undefined}
-                  title={canNavigate ? '双击跳转到相关消息' : undefined}
+                  className="px-3 py-2 text-xs"
                 >
                   <div className="mb-2 space-y-1">
                     {tx.createdAt&&<div className="text-[color:var(--text-muted)]">{tx.type==='USAGE_REWARD'?'最近记录':'记录时间'} <time dateTime={tx.createdAt}>{new Date(tx.createdAt).toLocaleString('zh-CN')}</time></div>}
@@ -275,13 +269,13 @@ export default function PointsBadge() {
                   </div>
                   <div className="text-right">
                     <span className={assetChange>0?'text-[color:var(--ink-4ade80)]':assetChange<0?'text-[color:var(--ink-ef4444)]':undefined}>
-                      {tx.type==='USAGE_REWARD'?'':'资产 '}{signedPoints(assetChange)}
+                      {tx.type==='USAGE_REWARD'?'':'总资产 '}{assetChange===0?'0':signedPoints(assetChange)}
+                      {tx.type!=='USAGE_REWARD'&&assetChange===0&&<span className="ml-1 text-[color:var(--text-muted)]">（总额不变）</span>}
                     </span>
                     {tx.type !== 'USAGE_REWARD' && <div className="text-[color:var(--text-muted)]">
                       <span>可用 {signedPoints(tx.amount)}</span><span className="ml-2">
                       余额 {balanceChange(tx)}
                     </span></div>}
-                    {canNavigate && <span className="ml-1 text-[color:var(--ink-818cf8-3)]" title="双击跳转到相关消息">↗</span>}
                   </div>
                   </div>
                   <div className="flex justify-between items-center gap-2 mt-2">

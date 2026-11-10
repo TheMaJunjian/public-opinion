@@ -54,18 +54,20 @@ it.each(['TRUTH','VALUE'])('preserves the logical subject and %s round on settle
   expect(operation.messages.filter((m:{messageId:string})=>m.messageId===target.id)).toHaveLength(1);
 });
 
-it('keeps a custom reference label on its relation while preserving explicitly authored reference content', async () => {
+it.each([{type:'REFERENCE',label:'出处说明'},{type:'REPLY',label:'question'},{type:'REPLY',label:'answer'},
+  {type:'ANNOTATION',label:'注释'},{type:'NOTIFY',label:'通知'}])('keeps a $type label ($label) on its relation while preserving explicitly authored content', async ({type,label}) => {
   const app=await make(),user=await actor(app,'引用标签');
   const source=await good(post(user,'/messages',{content:'来源正文'}));
-  const target=await good(post(user,'/messages',{content:'目标正文'}));
-  const endpoints={relationType:'REFERENCE',sourceMessageId:source.id,targetRefs:[{kind:'message',messageId:target.id}]};
-  const labeled=await good(post(user,'/relations',{...endpoints,payload:{label:'出处说明'}}));
-  expect(labeled.parts).toContainEqual({id:'body',type:'text',text:'出处说明'});
+  const recipient=type==='NOTIFY'?await actor(app,'通知接收者'):user;
+  const target=await good(post(recipient,'/messages',{content:'目标正文'}));
+  const endpoints={relationType:type,sourceMessageId:source.id,targetRefs:[{kind:'message',messageId:target.id}]};
+  const labeled=await good(post(user,'/relations',{...endpoints,payload:{label}}));
+  expect(labeled.parts).toContainEqual({id:'body',type:'text',text:label});
   expect(labeled.parts).toContainEqual({id:'display',type:'display',relationPartId:'relation',layout:'relation'});
-  expect(labeled.payload.label).toBe('出处说明');
+  expect(labeled.payload.label).toBe(label);
   expect(labeled.sourceMessageId).toBe(source.id);
   expect(await app.store.db.prepare('SELECT 1 FROM memberships WHERE "memberId"=$1').get(labeled.id)).toBeUndefined();
-  const authored=await good(post(user,'/relations',{...endpoints,payload:{label:'出处说明',content:'这是单独撰写的引用说明正文'}}));
+  const authored=await good(post(user,'/relations',{...endpoints,payload:{label,content:'这是单独撰写的引用说明正文'}}));
   expect(authored.parts).toContainEqual({id:'body',type:'text',text:'这是单独撰写的引用说明正文'});
   expect(authored.parts.some((part:{type:string})=>part.type==='display')).toBe(false);
 });

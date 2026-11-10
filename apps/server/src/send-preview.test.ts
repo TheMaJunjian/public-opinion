@@ -5,6 +5,8 @@ import request from 'supertest';
 import { cleanupTestDatabases, createTestApp, withTestCommandContributions } from './test-database.js';
 import { sceneComputationKey } from '../../../frontend/src/utils/sceneComputationKey.js';
 import { projectWorkbenchSnapshot } from '../../../frontend/src/utils/workbenchProjection.js';
+import { projectGraphScene } from '../../../frontend/src/utils/graphProjection.js';
+import { projectDiscussionBranches } from '../../../frontend/src/pages/workbench/model/discussionBranches.js';
 
 afterEach(cleanupTestDatabases);
 function layoutKey(page: Parameters<typeof projectWorkbenchSnapshot>[0]) {
@@ -42,6 +44,26 @@ async function setup() {
 }
 
 describe('unified send rehearsal',()=>{
+  it.each(['question','answer'])('previews a %s reply as its source card and directed edge, with the same result after sending',async label=>{
+    const {post,create}=await setup();
+    const target=await create('/messages',{content:'讨论目标'}),sourceId=randomUUID(),relationId=randomUUID();
+    const input=withTestCommandContributions('/commands',{requestId:randomUUID(),commands:[
+      {id:sourceId,method:'POST',path:'/messages',body:{content:'疑问或回答的正文'}},
+      {id:relationId,method:'POST',path:'/relations',body:{relationType:'REPLY',sourceMessageId:sourceId,
+        targetRefs:[{kind:'message',messageId:target.id}],payload:{label}}},
+    ]});
+    const preview=await post('/commands/preview',{batch:input});expect(preview.status,preview.text).toBe(200);
+    const projected=projectWorkbenchSnapshot(preview.body.snapshots[0]);
+    const branches=projectDiscussionBranches({...projected,collapsed:[]});
+    const scene=projectGraphScene({...projected,isTraceWindow:false,traceExpandedFrameIds:new Set(),discussionTargetIds:branches.textTargetIds});
+    expect(scene.normalIds).toEqual(expect.arrayContaining([sourceId,target.id]));
+    expect(scene.normalIds).not.toContain(relationId);
+    expect(projected.edges).toContainEqual(expect.objectContaining({relationMessageId:relationId,relationType:'reply',relationLabel:label,
+      from:expect.objectContaining({messageId:sourceId}),to:expect.objectContaining({messageId:target.id})}));
+    const actual=await post('/commands',input);expect(actual.status,actual.text).toBe(201);
+    expectSamePresentation(preview.body.snapshots[0],actual.body.snapshots[0]);
+  });
+
   it.each(['REVIEW','OPERATIONS'].flatMap(relationType=>['pass','reject'].map(verdict=>({relationType,verdict}))))(
     'previews $relationType $verdict with the simulated review totals and no stored vote',async({relationType,verdict})=>{
     const {app,agent,session,post,create}=await setup();

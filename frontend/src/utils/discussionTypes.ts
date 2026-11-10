@@ -1,4 +1,5 @@
 import type { DemoMessage } from './modelBridge';
+import { relationLabelPart } from '@gonglun/core';
 
 /** Independent relation regions share folding and summary interactions. */
 export type DiscussionType = 'agree' | 'disagree' | 'recommend' | 'archive' | 'reply' | 'review-pass' | 'review-reject';
@@ -21,7 +22,10 @@ export function hasManualDiscussionOrder(message: DemoMessage | undefined, trace
 export function hasDiscussionText(message: DemoMessage | undefined): boolean {
   if (!message) return false;
   if (Array.isArray(message.parts) && message.parts.some(part => part.type === 'display' && part.layout === 'relation')) return false;
-  if (message.parts !== undefined) return Array.isArray(message.parts)
-    && message.parts.some(part => part.type === 'text' && part.text.trim().length > 0);
+  if (message.parts !== undefined) {
+    if (!Array.isArray(message.parts)) return false;
+    const labelPart = relationLabelPart(message.parts);
+    return message.parts.some(part => part.type === 'text' && part.id !== labelPart && part.text.trim().length > 0);
+  }
   return (message.kind === 'normal' || message.kind === 'code') && message.content.trim().length > 0;
 }

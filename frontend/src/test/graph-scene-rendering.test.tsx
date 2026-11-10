@@ -42,17 +42,23 @@ describe('rendered graph scene', () => {
     expect(card.querySelector('[data-message-type-detail="verdict"]')).toHaveTextContent(verdict==='pass'?/^通过$/:/^不通过$/);
     expect(card.querySelector('[data-message-part-id="reason"]')).toHaveTextContent('审核理由');
   });
-  it.each([false,true])('renders an existing custom reference only as its labeled edge, with a status entry (structural=%s)', structural => {
-    const reference:Relation={id:'custom-ref',relationType:'REFERENCE',sourceMessageId:'source',targetRefs:[{kind:'message',messageId:'target'}],
-      payload:{label:'出处说明'},createdAt:'',createdBy:{id:'u',username:'甲',createdAt:''},
-      parts:[{id:'body',type:'text',text:'出处说明'},{id:'relation',type:'relation',relation:'reference',roles:{}},{id:'data',type:'data',value:{uiType:'REFERENCE',label:'出处说明'}}]};
+  it.each([
+    {type:'reference',label:'出处说明',display:'出处说明'},
+    {type:'reply',label:'question',display:'疑问'},
+    {type:'reply',label:'answer',display:'回答'},
+    {type:'annotation',label:'注释',display:'注释'},
+    {type:'notify',label:'通知',display:'通知'},
+  ].flatMap(value=>[false,true].map(structural=>({...value,structural}))))('renders an existing $type label only as its edge (label=$label, structural=$structural)', ({type,label,display,structural}) => {
+    const reference:Relation={id:'custom-ref',relationType:type.toUpperCase(),sourceMessageId:'source',targetRefs:[{kind:'message',messageId:'target'}],
+      payload:{label},createdAt:'',createdBy:{id:'u',username:'甲',createdAt:''},
+      parts:[{id:'body',type:'text',text:label},{id:'relation',type:'relation',relation:type,roles:{}},{id:'data',type:'data',value:{uiType:type.toUpperCase(),label}}]};
     const records=structural?structureSnapshot({scope:{messageId:null,title:'讨论'},sequence:1,messages:[],relations:[reference],users:[],stakes:{},tagCounts:{},attentionUsers:{}}).relations:[reference];
     const converted=convertMessagesToDemoModel([],records);
     const messages=[message('source'),message('target'),...converted.messages];
     const view=renderScene(messages,converted.edges);
     expect(view.container.querySelector('.themed-message[data-msgid="custom-ref"]')).toBeNull();
     expect(view.container.querySelector('[data-directed-edge-label="custom-ref"] [data-edge-label-entry="custom-ref"]')).not.toBeNull();
-    expect(view.container.querySelector('.graph-edge-label-text')).toHaveTextContent('出处说明');
+    expect(view.container.querySelector('.graph-edge-label-text')).toHaveTextContent(display);
     expect(view.container.querySelectorAll('.themed-message')).toHaveLength(2);
   });
   it.each(['classify','summary'] as const)('shows entry hints next to %s counts only when double-click enters',async type=>{

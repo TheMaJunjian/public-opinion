@@ -16,4 +16,4 @@ export * from './access.js';
 export * from './moderation.js';
 export * from './review-context.js';
 export { structureSnapshot } from './structure-snapshot.js';
-export { referenceLabelPart } from './reference-label.js';
+export { relationLabelPart, relationLabelPart as referenceLabelPart } from './relation-label.js';

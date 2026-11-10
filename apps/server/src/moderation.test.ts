@@ -222,11 +222,29 @@ it('settles equal weighted stakes as UNKNOWN, refunds both principals and allows
   await conserve(t.app);
 });
 
+it('lets the author settle their own publication self stake without an assignment or extra review',async()=>{
+  const t=await setup(),m=await t.publish();
+  expect((await t.author.agent.get(`/api/moderation/messages/${m.id}`)).body).toMatchObject({canSettle:true,summary:{pass:10,reviewerCount:0}});
+  expect((await t.observer.agent.get(`/api/moderation/messages/${m.id}`)).body.canSettle).toBe(false);
+  expect((await t.action(t.observer,'review-settle',m.id)).status).toBe(403);
+  const before=await t.app.store.account(t.author.user.id);
+  const settled=await t.action(t.author,'review-settle',m.id);
+  expect(settled.status,settled.text).toBe(201);
+  await assertFinalized(t,m.id);
+  expect((await t.author.agent.get(`/api/moderation/messages/${m.id}`)).body).toMatchObject({canSettle:false,summary:{status:'approved',finalized:true,reviewerCount:0}});
+  const after=await t.app.store.account(t.author.user.id);
+  expect(after.locked-before.locked).toBe(-16);
+  expect(after.available-before.available).toBe(15); // 16 returned, minus the settlement protocol fee.
+  expect((await t.action(t.author,'review-settle',m.id)).status).toBe(409);
+  expect(await t.app.store.account(t.author.user.id)).toEqual(after);
+  await conserve(t.app);
+});
+
 it('counts publication self stakes as pass capital without a reviewer vote or reward and shares winning proceeds',async()=>{
   const t=await setup(),m=await t.publish();
   const initial=await t.author.agent.get(`/api/moderation/messages/${m.id}`);
   expect(initial.body.summary).toMatchObject({pass:10,reject:0,selfPass:10,selfReject:0,reviewerCount:0,passReviewers:0,rejectReviewers:0,rewardCount:0});
-  expect(initial.body.canReview).toBe(true);expect(initial.body.canSettle).toBe(false);expect(initial.body.reviewEligibility).toBe('eligible');
+  expect(initial.body.canReview).toBe(true);expect(initial.body.canSettle).toBe(true);expect(initial.body.reviewEligibility).toBe('eligible');
   expect(initial.body.target).toMatchObject({id:m.id,revision:1,content:expect.stringContaining('SECRET-CONTENT'),moderation:{selfPass:10}});
   expect(initial.body.stakes).toEqual([expect.objectContaining({sourceMessageId:m.id,revision:1,kind:'self',side:'PRO',amount:10,round:1,
     user:expect.objectContaining({id:t.author.user.id,username:'author'})})]);
@@ -234,7 +252,6 @@ it('counts publication self stakes as pass capital without a reviewer vote or re
   expect(observer.body).toMatchObject({canReview:true,reviewEligibility:'eligible',readableWithoutAssignment:true,target:{id:m.id,content:expect.stringContaining('SECRET-CONTENT')}});
   expect((await request(t.app).get(`/api/moderation/messages/${m.id}`)).body).toMatchObject({canReview:false,reviewEligibility:'login-required',target:{id:m.id,content:expect.stringContaining('SECRET-CONTENT')}});
   expect((await t.one.agent.get(`/api/moderation/messages/${m.id}`)).body).toMatchObject({canReview:true,reviewEligibility:'eligible'});
-  expect((await t.action(t.author,'review-settle',m.id)).status).toBe(403);
   expect((await t.action(t.one,'review',m.id,{verdict:'pass'},2)).status).toBe(201);
   expect((await t.one.agent.get(`/api/moderation/messages/${m.id}`)).body.canSettle).toBe(true);
   expect((await t.action(t.two,'review',m.id,{verdict:'pass'},2)).status).toBe(201);

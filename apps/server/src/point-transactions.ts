@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { RELATION_LABELS, type Message } from '@gonglun/core';
+import { RELATION_LABELS, REVIEW_RELATIONS, reviewContextOf, type Message } from '@gonglun/core';
 import { integer, type Store } from './db.js';
 import { dataOf } from './economy.js';
 import { contentView, parentOf, primaryRelation } from './ui-projections.js';
@@ -64,7 +64,16 @@ export async function pointTransactions(store: Store, userId: string, query: unk
   };
   const describeRelatedMessages = async (reference: TransactionRow['messages'][number]) => {
     const source = await store.message(reference.messageId, reference.revision), relation = primaryRelation(source);
+    let reviewTarget = reviewContextOf(source);
+    if (!reviewTarget && relation && REVIEW_RELATIONS.has(relation.relation)) {
+      // Native reviews of organizations can retain an unversioned target;
+      // moderation stores the selected version in canonical action metadata.
+      const target = relation.roles.target?.[0]?.reference, revision = dataOf(source).targetRevision;
+      if (relation.roles.target?.length === 1 && target && typeof revision === 'number' && Number.isSafeInteger(revision) && revision > 0)
+        reviewTarget = { messageId: target.messageId, revision };
+    }
     const targets = relation?.relation === 'distribution' ? (relation.roles.target ?? []).map(binding => binding.reference) : [];
+    if (reviewTarget) targets.push(reviewTarget);
     const subjects = await valueSubjects(store, targets);
     // Keep the ledger source first for detail queries, followed by its logical targets.
     const seen = new Set([source.id]), messages = [source];

@@ -28,7 +28,7 @@ export default function PointsTransactionDetails({transaction,onClose,onNavigate
   const settlement=summary?wagerSettlementSummary(summary,!!transactionSummaryQuery(transaction)):undefined,assetChange=summary?transactionAssetChange(summary):0;
   const references=transactionReferences(summary??transaction),day=String(summary?.data?.day??transaction.data?.day??'');
   return <PromptModal open title="贡献点详情" onConfirm={onClose} confirmText="返回记录" onClose={onClose} onCancel={onClose} hideActions
-    dialogProps={{'data-points-detail':'true',style:{width:'min(760px, 100%)'}} as React.HTMLAttributes<HTMLDivElement>}
+    dialogProps={{'data-points-detail':'true',style:{width:'min(760px, 100%)',userSelect:'text',WebkitUserSelect:'text'}} as React.HTMLAttributes<HTMLDivElement>}
     message={<div style={{whiteSpace:'normal'}}>
       <div className="flex items-center justify-between gap-3 mb-3">
         <h2 className="font-semibold">{usage?'使用贡献汇总':operation?'本次操作收支汇总':'消息收支汇总'}</h2>
@@ -46,8 +46,9 @@ export default function PointsTransactionDetails({transaction,onClose,onNavigate
             <div><dt className="text-[color:var(--text-muted)]">可用增加</dt><dd className={income>0?'text-[color:var(--ink-4ade80)]':undefined}>{signedPoints(income)} 点</dd></div>
             <div><dt className="text-[color:var(--text-muted)]">可用减少</dt><dd className={expense>0?'text-[color:var(--ink-ef4444)]':undefined}>{expense?'-':''}{expense.toLocaleString()} 点</dd></div>
             <div><dt className="text-[color:var(--text-muted)]">锁定变化</dt><dd>{signedPoints(summary.lockedDelta??0)} 点</dd></div>
-            <div><dt className="text-[color:var(--text-muted)]">资产净变化</dt><dd className={assetChange<0?'text-[color:var(--ink-ef4444)]':assetChange>0?'text-[color:var(--ink-4ade80)]':undefined}>{signedPoints(assetChange)} 点</dd></div>
+            <div><dt className="text-[color:var(--text-muted)]">总资产净变化</dt><dd className={assetChange<0?'text-[color:var(--ink-ef4444)]':assetChange>0?'text-[color:var(--ink-4ade80)]':undefined}>{assetChange===0?'0':signedPoints(assetChange)} 点{assetChange===0&&'（总额不变）'}</dd><dd className="text-xs text-[color:var(--text-muted)]">可用 + 锁定</dd></div>
           </dl>
+          <p className="mb-4 text-xs text-[color:var(--text-muted)]" aria-label="资产变化说明">本次可用净变化 {signedPoints(summary.amount)} 点，锁定净变化 {signedPoints(summary.lockedDelta??0)} 点。{assetChange===0?'两者相抵，总资产不变。':''}锁定部分仍计入总资产，但暂不可用；预留费用和押注的实际支出或盈亏以结算为准。</p>
           {settlement&&<div className="mb-4 space-y-1" role="group" aria-label="对赌结算结果">
             <div className={`font-semibold ${settlement.net<0?'text-[color:var(--ink-ef4444)]':settlement.net>0?'text-[color:var(--ink-4ade80)]':''}`}>
               {settlementResultLabel(settlement.net)}{settlement.net!==0&&` ${Math.abs(settlement.net).toLocaleString()} 点`}

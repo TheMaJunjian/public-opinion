@@ -57,7 +57,7 @@ export function createModerationRouter(store:Store){
       costs:{protocol,reviewMinimum:economy.minWager,appealFee:economy.appealFee,appealDeposit:economy.appealDeposit,appealTotal:protocol+economy.appealFee+economy.appealDeposit},
       canReview:reviewEligibility==='eligible',reviewEligibility,
       appealVerdict:c.status==='approved'?'reject':c.status==='rejected'?'pass':undefined,
-      canSettle:readable&&reviewer&&!owner&&!summary.finalized&&(summary.pass+summary.reject>0),
+      canSettle:readable&&(reviewer||owner)&&!summary.finalized&&(summary.pass+summary.reject>0),
       canAppeal:['approved','rejected','unknown'].includes(c.status)&&(owner||!!session&&c.status!=='rejected'),policy:c.policy});
   }).catch(next);});
   return router;

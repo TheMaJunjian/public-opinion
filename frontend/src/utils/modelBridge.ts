@@ -1,5 +1,5 @@
 import type { Message as BackendMessage, Relation as BackendRelation, RelationPayload, TargetRef } from '../types';
-import { bodyVersion, resolveStance, referenceLabelPart, REVIEW_RECORD_RELATIONS, type BodyVersion, type Message as CoreMessage, type Part, type Reference, type ExecutedStance, type MessageState } from '@gonglun/core';
+import { bodyVersion, resolveStance, relationLabelPart, REVIEW_RECORD_RELATIONS, type BodyVersion, type Message as CoreMessage, type Part, type Reference, type ExecutedStance, type MessageState } from '@gonglun/core';
 import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
 import type {AuthorInvestment} from './messageAuthorship';
 import {chronologicalOrder} from './discussionOrder';
@@ -63,7 +63,7 @@ export function hasReadableMessageContent(message: {relationType?:string;parts?:
   // Organization bodies belong to their scope card or frame header.
   if(type==='merge'||type==='arrange'||type==='correct'||type==='read'||type==='unread')return false;
   if(message.parts?.some(part=>part.type==='display'&&part.layout==='relation'))return false;
-  const labelPart = referenceLabelPart(message.parts);
+  const labelPart = relationLabelPart(message.parts);
   return !!message.parts?.some(part => part.type === 'text' && part.id !== labelPart && part.text.trim().length > 0 || part.type === 'code' || part.type === 'web' || part.type === 'relation' && part.relation === 'amend');
 }
 export function presentationTarget(message: {id?:string;parts?:Part[]} | undefined): string | undefined {

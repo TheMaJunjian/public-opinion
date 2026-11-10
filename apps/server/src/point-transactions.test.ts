@@ -10,6 +10,71 @@ import {enrollModeration} from './moderation.js';
 import {randomUUID} from 'node:crypto';
 
 afterEach(cleanupTestDatabases);
+it('keeps the reviewed version for native reviews of a category',async()=>{
+  const app=await createTestApp({moderation:true}),agent=request.agent(app),store=app.store;
+  const {body:owner}=await agent.post('/api/register').send({name:'分类审核者',password:'password'});
+  const post=(path:string,body:Record<string,unknown>)=>agent.post(`/api${path}`).set('x-csrf-token',owner.csrf)
+    .set('x-request-id',randomUUID()).send(body);
+  const child=await post('/ui/messages',{content:'分类成员',recommendation:1});
+  expect(child.status,child.text).toBe(201);
+  const target=await post('/ui/relations',{relationType:'CLASSIFY',targetRefs:[{kind:'message',messageId:child.body.id}],
+    payload:{title:'REVIEWED-CATEGORY-ORIGINAL'},recommendation:1});
+  expect(target.status,target.text).toBe(201);
+  const review=await post('/messages',{requestId:randomUUID(),reviewWager:2,parts:[
+    {id:'relation',type:'relation',relation:'review',roles:bindRoles({target:[{messageId:target.body.id}]})},
+    {id:'data',type:'data',value:{verdict:'pass'}},
+  ]});
+  expect(review.status,review.text).toBe(201);
+  await store.transaction(async()=>{
+    const tx=new Mutation(store),original=await store.message(target.body.id);
+    await tx.put({...original,revision:2,parts:[{id:'body',type:'text',text:'REVIEWED-CATEGORY-NEW-VERSION'}]});
+    await tx.commit();
+  });
+  const response=await agent.get('/api/ui/points/transactions').query({mode:'summary',messageId:review.body.message.id});
+  expect(response.status,response.text).toBe(200);
+  expect(response.body.data[0].messages).toContainEqual(expect.objectContaining({messageId:target.body.id,messageRevision:1,
+    messageType:'分类',summary:'REVIEWED-CATEGORY-ORIGINAL'}));
+});
+
+it.each([false,true])('includes reviewed message identities and Chinese audit types without exposing restricted content (%s)',async restricted=>{
+  const app=await createTestApp({moderation:true}),agent=request.agent(app),store=app.store;
+  const {body:owner}=await agent.post('/api/register').send({name:'审核收支查看者',password:'password'});
+  const {body:author}=await request(app).post('/api/register').send({inviteCode:await testInvitation(app),name:'被审核作者',password:'password'});
+  const kinds=[['review','审核'],['review-appeal','复核申请'],['review-settle','审核结算'],['review-finalize','审核资金划转'],
+    ['review-record','审核记录'],['review-enrollment','纳入审核'],['reviewer-authorize','审核资格授权']];
+  let targetId='';
+  const records:Array<{id:string;label:string}>=[];
+  await store.transaction(async()=>{
+    const tx=new Mutation(store),target=await tx.create(author.user.id,[{id:'body',type:'text',text:'REVIEW-TARGET-ORIGINAL'}]);
+    targetId=target.id;await enrollModeration(tx,target);
+    for(const [relation,label] of kinds){
+      const record=await tx.create('system',[{id:'body',type:'text',text:'REVIEW-AUDIT-CONTENT'},
+        {id:'relation',type:'relation',relation:relation!,roles:bindRoles({target:[{messageId:target.id,revision:1}]})}]);
+      records.push({id:record.id,label:label!});
+      await store.ledger(owner.user.id,record.id,-1,0,'协议费');await store.operating(1);
+    }
+    await tx.put({...target,revision:2,parts:[{id:'body',type:'text',text:'REVIEW-TARGET-NEW-VERSION'}]});
+    await tx.commit();
+    if(restricted)await store.db.prepare("UPDATE moderation_cases SET status='rejected' WHERE \"messageId\"=$1").run(target.id);
+  });
+  const before=await store.account(owner.user.id),history=await agent.get('/api/ui/points/transactions');
+  expect(history.status,history.text).toBe(200);
+  const operation=history.body.data.find((row:{entryCount:number})=>row.entryCount===kinds.length);
+  expect(operation).toBeDefined();
+  const detail=await agent.get('/api/ui/points/transactions').query({mode:'summary',operationId:operation.operationId});
+  expect(detail.status,detail.text).toBe(200);
+  for(const response of [history,detail]){
+    const row=response.body.data.find((entry:{operationId:string})=>entry.operationId===operation.operationId);
+    expect(row.messages.filter((message:{messageId:string})=>message.messageId===targetId)).toEqual([
+      expect.objectContaining({messageId:targetId,messageRevision:1,...restricted?{restricted:true}:{messageType:'文本',summary:'REVIEW-TARGET-ORIGINAL'}}),
+    ]);
+    for(const record of records)expect(row.messages).toContainEqual(expect.objectContaining({messageId:record.id,...restricted?{}:{messageType:record.label}}));
+    expect(response.text).not.toContain('REVIEW-TARGET-NEW-VERSION');
+    if(restricted){expect(response.text).not.toContain('REVIEW-TARGET-ORIGINAL');expect(response.text).not.toContain('REVIEW-AUDIT-CONTENT');}
+  }
+  expect(await store.account(owner.user.id)).toEqual(before);
+});
+
 it('orders message groups and their details by latest record time before pagination',async()=>{
   const app=await createTestApp(),agent=request.agent(app),store=app.store;
   const {body:owner}=await agent.post('/api/register').send({name:'倒序记录用户',password:'password'});

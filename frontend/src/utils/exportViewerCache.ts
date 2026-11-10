@@ -268,7 +268,7 @@ export async function saveLastExportPersistent(data: ExportData, expected?: Expo
   // Preserve the opened document's cache identity while that directory remains linked.
   const expectedReference = expected && sourceViewCacheIds.get(expected);
   const nativeBaseline = expected && nativeRevisions.get(expected);
-  if (expectedReference && nativeBaseline && !isZhihuViewingData(data) && (options.sourceUpdate || isNativeZhihuView(data) && isNativeZhihuView(expected))) {
+  if (expectedReference && nativeBaseline && !isZhihuViewingData(data)) {
     if (!options.sourceUpdate && expected && isNativeZhihuView(data)) {
       const before = expected.messages.filter(message => !isNativeLocalMessage(message)), after = data.messages.filter(message => !isNativeLocalMessage(message));
       if (!(before.length === after.length && before.every((row, index) => row === after[index])) && !sameZhihuValue(before, after)) throw new Error('本地整理不能替换导入的原文。');
@@ -285,7 +285,7 @@ export async function saveLastExportPersistent(data: ExportData, expected?: Expo
           if (read.result?.revision !== nativeBaseline.revision || read.result?.viewCacheId !== entry.viewCacheId) {
             failure = new ArchiveConflictError('这份档案已在其他标签页更新，请重新打开上次阅览。'); store.transaction.abort(); return;
           }
-          if (options.sourceUpdate) {
+          if (options.sourceUpdate || !isNativeZhihuView(data)) {
             if (paging && blob) {
               store.put(blob, paging.descriptor.blobKey);
               const owned = store.get(paging.descriptor.blobKey); owned.onsuccess = () => { ownedBlob = owned.result; };

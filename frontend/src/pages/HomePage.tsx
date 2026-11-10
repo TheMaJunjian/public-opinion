@@ -5,15 +5,16 @@ import { PageLoadingPrompt } from '../components/WorkbenchStartup';
 import AboutLink from '../components/AboutLink';
 import { ABOUT_HOME_STATE_KEY } from '../utils/aboutNavigation';
 
-/** Introduce Gonglun first; local file reading remains an optional visitor tool. */
+/** Online participation and local message files have independent entry points. */
 export default function HomePage() {
   const { user, loading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const explicitHome = location.state?.[ABOUT_HOME_STATE_KEY] === true;
+  const returnTo = location.pathname === '/' ? `/messages${location.search}` : `${location.pathname}${location.search}`;
   useEffect(() => {
-    if (!loading && user && !explicitHome) navigate('/messages', { replace: true });
-  }, [user, loading, navigate, explicitHome]);
+    if (!loading && user && !explicitHome) navigate(`/messages${location.search}`, { replace: true });
+  }, [user, loading, navigate, explicitHome, location.search]);
   if (user && !explicitHome) return <PageLoadingPrompt />;
   return <section aria-label="公论" className="home-page" style={{ width: '100%', maxWidth: 680, boxSizing: 'border-box', margin: '64px auto', padding: 32, color: 'var(--text-primary)' }}>
     <div className="home-background-motto" aria-hidden="true">
@@ -26,14 +27,16 @@ export default function HomePage() {
     <p style={{ lineHeight: 1.8, color: 'var(--text-secondary)' }}>公论是讨论、投票和线上文字开会的工具。</p>
     <p style={{ lineHeight: 1.8, marginTop: 12 }}>公论中有：发言投票（权），胜利的一方获得贡献点（钱），给所有人留下被认可的信息（真理）。</p>
     <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 20, marginTop: 24 }}>
-      <Link to={user ? '/messages' : '/login'} className="home-primary-action">{user ? '进入消息界面' : '登录公论'}</Link>
-      {!user && <Link to="/register" style={{ fontSize: 14, color: 'var(--ink-94a3b8)' }}>注册账号</Link>}
+      <Link to={user ? returnTo : '/login'} state={{ returnTo }} className="home-primary-action">{user ? '进入消息界面' : '登录公论'}</Link>
+      {!user && <Link to="/register" state={{ returnTo }} style={{ fontSize: 14, color: 'var(--ink-94a3b8)' }}>注册账号</Link>}
+      <button type="button" onClick={() => window.dispatchEvent(new Event('open-export-viewer'))}
+        className="home-primary-action">离线使用</button>
       <AboutLink style={{ fontSize: 14, color: 'var(--ink-94a3b8)' }}>了解公论</AboutLink>
     </div>
     <div style={{ marginTop: 36, fontSize: 12, color: 'var(--ink-64748b)' }}>
       <button type="button" onClick={() => window.dispatchEvent(new Event('open-export-viewer'))}
         style={{ padding: 0, border: 0, background: 'none', color: 'var(--ink-94a3b8)', cursor: 'pointer', font: 'inherit', textDecoration: 'underline', textUnderlineOffset: 3 }}>阅览本机文件</button>
-      <span style={{ marginLeft: 8 }}>本地辅助，无需登录</span>
+      <span style={{ marginLeft: 8 }}>无需邀请或登录；支持本地整理、保存和导出</span>
     </div>
   </section>;
 }

@@ -1,11 +1,12 @@
 import { useCallback, useContext, useEffect, useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getSetup, storePrivateKeyForUser } from '../api/client';
 import { generateSigningKeyPair } from '../utils/signature';
 import PromptModal from '../components/PromptModal';
 import { dialogStyles } from '../components/dialogStyles';
 import { AutoAuthEntryContext } from '../context/AutoAuthEntryContext';
+import { authReturnPath } from '../utils/authReturnPath';
 
 export default function RegisterPage({ onClose, onLogin, onSuccess, closeText = '返回首页' }: {
   onClose?: () => void;
@@ -17,6 +18,7 @@ export default function RegisterPage({ onClose, onLogin, onSuccess, closeText = 
   const autoAuthEntry = useContext(AutoAuthEntryContext);
   const suspended = autoAuthEntry?.suspended ?? false;
   const navigate = useNavigate();
+  const location = useLocation();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -70,7 +72,7 @@ export default function RegisterPage({ onClose, onLogin, onSuccess, closeText = 
       await register(normalizedUsername, password, publicKey, founderKeyRequired ? founderKey.trim() : undefined, inviteRequired ? inviteCode.trim() : undefined);
       localStorage.setItem('registration-guide-pending', 'true');
       if (onSuccess) onSuccess();
-      else navigate('/');
+      else navigate(authReturnPath(location.state), { replace: true });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '注册失败，请重试');
     } finally {
@@ -141,8 +143,10 @@ export default function RegisterPage({ onClose, onLogin, onSuccess, closeText = 
           已有账户？{' '}
           {onLogin
             ? <button type="button" onClick={onLogin} className="text-[color:var(--ink-60a5fa-2)] hover:underline font-medium">立即登录</button>
-            : <Link to="/login" className="text-[color:var(--ink-60a5fa-2)] hover:underline font-medium">立即登录</Link>}
+            : <Link to="/login" state={location.state} className="text-[color:var(--ink-60a5fa-2)] hover:underline font-medium">立即登录</Link>}
         </p>
+        <button type="button" onClick={() => { close(); window.dispatchEvent(new Event('open-export-viewer')); }}
+          style={{ ...dialogStyles.button, width: '100%', marginTop: 16 }}>离线使用本地消息文件</button>
         <button type="button" onClick={close} style={{ ...dialogStyles.button, width: '100%', marginTop: 16 }}>{closeText}</button>
       </div>} />
   );

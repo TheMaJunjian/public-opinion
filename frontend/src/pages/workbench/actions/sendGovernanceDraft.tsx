@@ -14,7 +14,7 @@ import { buildRelationPayload } from '../model/relationComposition';
 import { nextId } from '../model/selection';
 import type { DraftSendDependencies } from "./sendDraftTypes";
 
-export async function sendGovernanceDraft(dependencies: Pick<DraftSendDependencies, "newMessageContent" | "relationType" | "secondaryRelationType" | "setSendError" | "msgMap" | "hasTargetsAvailable" | "showAlert" | "createRel" | "scopeMessageId" | "user" | "setMessages" | "registerCreatedRelationInCurrentClassify" | "setEdges" | "relStakeRef" | "setAuthorStakes" | "mergeStakeSnapshot" | "setDraftUnits" | "setSourceUnits" | "setTargetUnits" | "setActiveTextSelectId" | "setNewMessageContent" | "setRelationType" | "setSecondaryRelationType">, { effectiveTargets }: { effectiveTargets: UnitSelection[]; }): Promise<void> {
+export async function sendGovernanceDraft(dependencies: Pick<DraftSendDependencies, "local" | "newMessageContent" | "relationType" | "secondaryRelationType" | "setSendError" | "msgMap" | "hasTargetsAvailable" | "showAlert" | "createRel" | "scopeMessageId" | "user" | "setMessages" | "registerCreatedRelationInCurrentClassify" | "setEdges" | "relStakeRef" | "setAuthorStakes" | "mergeStakeSnapshot" | "setDraftUnits" | "setSourceUnits" | "setTargetUnits" | "setActiveTextSelectId" | "setNewMessageContent" | "setRelationType" | "setSecondaryRelationType">, { effectiveTargets }: { effectiveTargets: UnitSelection[]; }): Promise<void> {
   const { newMessageContent, relationType, secondaryRelationType, setSendError, msgMap, hasTargetsAvailable, showAlert, createRel, scopeMessageId, user, setMessages, registerCreatedRelationInCurrentClassify, setEdges, relStakeRef, setAuthorStakes, mergeStakeSnapshot, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setNewMessageContent, setRelationType, setSecondaryRelationType } = dependencies;
   if (!relationType) return;
   let proposalContent = newMessageContent.trim();
@@ -146,7 +146,7 @@ export async function sendGovernanceDraft(dependencies: Pick<DraftSendDependenci
             relationLabel: "reference",
           } as DemoEdge]);
         } catch (e) {
-          api.cancelCommandBatch(e);
+          if (!dependencies.local) api.cancelCommandBatch(e);
           throw e;
         }
       }
@@ -154,10 +154,10 @@ export async function sendGovernanceDraft(dependencies: Pick<DraftSendDependenci
     // Auto-self-stake
     const selfStake = relStakeRef.current;
     setAuthorStakes(prev => ({ ...prev, [backendRel.id]: selfStake }));
-    api.getMessageStakes(backendRel.id).then(s => {
+    if (!dependencies.local) api.getMessageStakes(backendRel.id).then(s => {
       mergeStakeSnapshot(backendRel.id, s);
     }).catch(() => { });
-    if (!isCapturingPreview()) window.dispatchEvent(new Event('points-refresh'));
+    if (!dependencies.local && !isCapturingPreview()) window.dispatchEvent(new Event('points-refresh'));
   } catch (e) {
     showAlert(`建立${relationTypeName(relationType)}关系失败: ${sendErrorMessage(e)}`);
     return;

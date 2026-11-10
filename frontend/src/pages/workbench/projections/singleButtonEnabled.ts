@@ -7,6 +7,7 @@ import type {
 } from "../../../utils/modelBridge";
 
 interface DeriveSingleButtonEnabledInput {
+  local?: boolean;
   relationType: RelationType | null;
   newMessageContent: string;
   hasTextContent: boolean;
@@ -51,7 +52,7 @@ export function deriveSingleButtonEnabled(input: DeriveSingleButtonEnabledInput)
   const { relationType, newMessageContent, hasTextContent, stakeAmount, joinOnlyAction, relStakeAmount, effectiveMinStake, totalConsumption, availablePoints, draftUnits, targetUnits, hasInvalidCorrectTarget, hasInvalidContainerSource, hasInvalidJoinTarget, hasCrossLinkValidationError, hasOrphanContainerLabel, hasClassifyCycle, hasInvalidDelegationFormat, hasInvalidProposalFormat, hasCorrectionRelationTarget, isClassifyType, sourceUnits, relations, hasTargetsAvailable, isSummaryType, isMergeType, secondaryRelationType, effectiveTargetUnits, isGovernanceOrOpsType, msgMap, isTagWithInlineBadge, subType, isTagWithQuickAnnotate, isAgreeDisagreeType, isArrangeType, isNotifyType, hasAttentionNotifyTarget } = input;
   if (totalConsumption?.contributionError) return false;
   const reviewDraft=relationType==='operations'&&secondaryRelationType==='review';
-  if([...draftUnits,...targetUnits,...sourceUnits].some(unit=>{const message=msgMap.get(unit.messageId);return message?.restricted||!reviewDraft&&message?.moderation?.status==='rejected';}))return false;
+  if(!input.local&&[...draftUnits,...targetUnits,...sourceUnits].some(unit=>{const message=msgMap.get(unit.messageId);return message?.restricted||!reviewDraft&&message?.moderation?.status==='rejected';}))return false;
   if (relationType === null) return newMessageContent.trim().length > 0 && typeof stakeAmount === 'number' && stakeAmount >= 0
     && (!totalConsumption || totalConsumption.total <= availablePoints);
   // Check that relation stake meets the effective minimum (type + subType combined)

@@ -28,6 +28,7 @@ import { getZhihuDisplayFields, getZhihuInactiveRelationIds, isZhihuViewingData 
 import ZhihuDirectorySync from '../components/ZhihuDirectorySync';
 import { isNativeZhihuView } from '../utils/nativeZhihuView';
 import { nativeZhihuDocument, nativeZhihuEditingView } from '../utils/nativeZhihuEditor';
+import { LocalDiscussion } from '../utils/localDiscussion';
 import { sendPagedZhihuRelation } from '../utils/pagedZhihuEditor';
 import { getExportCacheReference, saveExportNavigation } from '../utils/exportViewerCache';
 import { structuralScopeKey } from '../utils/zhihuStructuralViewer';
@@ -49,7 +50,7 @@ import {messageAuthorInvestment} from '../utils/messageAuthorship';
 import LeaderboardController, { type LeaderboardHandle } from '../components/LeaderboardController';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
-import { ApiError } from '../api/client';
+import { ApiError, type ExportData } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import type {
   DemoEdge,
@@ -121,6 +122,8 @@ import { applyMessageFilter, type MessageFilterSettings } from '../components/Me
 import { useCleanView } from '../hooks/useCleanView';
 import { useViewedMessageHighlight,type ReadingNavigationMarkers } from '../hooks/useViewedMessageHighlight';
 import { useNotificationNavigation } from '../hooks/useNotificationNavigation';
+import { useMessageLinkNavigation } from '../hooks/useMessageLinkNavigation';
+import { categoryMessageUrl } from '../utils/messageLink';
 import { useNotificationRecipients } from '../hooks/useNotificationRecipients';
 import { useCatalogFilters } from '../hooks/useCatalogFilters';
 import {useReadingState} from '../hooks/useReadingState';
@@ -230,11 +233,13 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const relations=useMemo(()=>review.records.length?[...new Map([...loadedRelations,...review.records.filter(isRelationView)].map(relation=>[relation.id,relation])).values()]:loadedRelations,[loadedRelations,review.records]);
   const edges=useMemo(()=>review.records.length?[...new Map([...loadedEdges,...reviewRecordsModel.edges].map(edge=>[edge.id,edge])).values()]:loadedEdges,[loadedEdges,reviewRecordsModel]);
   const nativeZhihuData = isNativeZhihuView(loadedExport) ? loadedExport : null;
+  const localMessageData = isViewerRoute && loadedExport && !nativeZhihuData && !isZhihuViewingData(loadedExport) ? loadedExport : null;
   const zhihuData = useMemo(() => nativeZhihuData ? nativeZhihuEditingView(isNativeZhihuView(viewingExport) ? viewingExport : nativeZhihuData)
     : isZhihuViewingData(loadedExport) ? loadedExport : null, [loadedExport, nativeZhihuData, viewingExport]);
   const discussion = useDiscussionView(loadedExport);
   const readingTextLinks = useMemo(() => isViewerRoute && zhihuData ? { linksForMessage: createZhihuReadingLinks(zhihuData) } : false, [isViewerRoute, zhihuData]);
   const [localRelationType, setLocalRelationType] = useState<LocalRelationType | null>('reply');
+  const localDraftRef = useRef<LocalDiscussion | null>(null);
   const [localSending, setLocalSending] = useState(false);
   const localRelationMode = zhihuData ? { relationType: localRelationType, onChange: (type: LocalRelationType | null) => {
     if (type === 'correct' && localRelationType !== 'correct') setSecondaryRelationType('text-correction');
@@ -265,13 +270,9 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   useEffect(() => {
     const targetMsgId = searchParams.get('msg');
     const settlementMsgId = searchParams.get('settlement');
-    if (targetMsgId || settlementMsgId) {
+    if (!loading && !loadError && settlementMsgId) {
       const msgId = targetMsgId || settlementMsgId!;
-      pendingScrollMsgRef.current = msgId;
-      setAutoClassifyMsgId(msgId); // try auto-enter classify
-      // Clear all selections and select the target message
-      setDraftUnits([{ messageId: msgId, selection: { kind: "whole" } }]);
-      setActiveTextSelectId(null);
+      navigateToMessageRef.current?.(msgId);
       if (settlementMsgId) {
         const settlementTypeParam = searchParams.get('settlementType');
         const settlementType = settlementTypeParam === 'VALUE' ? 'VALUE' : 'TRUTH';
@@ -302,11 +303,8 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       }
       searchParams.delete('msg');
       setSearchParams(searchParams, { replace: true });
-      setScrollKey(k => k + 1);
-      // Trigger scroll directly (also needed for same-scope nav where messages don't change)
-      scheduleViewNavigation(msgId, 150);
     }
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, loading, loadError]);
   useEffect(() => {
     const selectPart = (event: Event) => {
       const { reference, label } = (event as CustomEvent<PartSelectionDetail>).detail;
@@ -727,10 +725,17 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const relStakeRef = useRef<number>(0);
   stakeAmountRef.current = typeof stakeAmount === 'number' ? stakeAmount : 0;
   relStakeRef.current = typeof relStakeAmount === 'number' ? relStakeAmount : 0;
-  const [availablePoints, setAvailablePoints] = useState(100); // Phase 2: balance cap
-  const [sendError, setSendError] = useState<string | null>(null);
+  const [onlineAvailablePoints, setAvailablePoints] = useState(100);
+  const availablePoints = localMessageData ? Number.MAX_SAFE_INTEGER : onlineAvailablePoints; // Phase 2: balance cap
+  const [sendError, setSendErrorState] = useState<string | null>(null);
+  const setSendError = useCallback<React.Dispatch<React.SetStateAction<string | null>>>(error => {
+    // Composer actions can report validation errors after staging a text message.
+    // A failed relation must also prevent that text from being saved on its own.
+    if (typeof error === 'string' && error) localDraftRef.current?.cancel(new Error(error));
+    setSendErrorState(error);
+  }, []);
   const [sendInFlight, setSendInFlight] = useState(false);
-  const sendingProgress = useWorkbenchSendingProgress(sendInFlight);
+  const sendingProgress = useWorkbenchSendingProgress(sendInFlight, localMessageData ? 'local' : 'server');
   const sendInFlightRef = useRef(false);
   const sentMessageTargetsRef = useRef<string[]>([]);
   const sentMessageRelatedViewsRef = useRef(new Set<string>());
@@ -906,7 +911,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const [confirmStandaloneSend, setConfirmStandaloneSend] = useState(false);
 
   const showAlert = useCallback((message: string) => {
-    if (sendInFlightRef.current) api.cancelCommandBatch(new Error(message));
+    if (sendInFlightRef.current) { if (localDraftRef.current) localDraftRef.current.cancel(new Error(message)); else api.cancelCommandBatch(new Error(message)); }
     setAlertMessage(message);
   }, []);
 
@@ -955,6 +960,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   }, [setMessages]);
 
   async function blockCorrectionForSecondBettor(messageId: string): Promise<boolean> {
+    if (localMessageData) return false;
     return runBlockCorrectionForSecondBettor({ mergeStakeSnapshot, showAlert }, messageId);
   }
 
@@ -1131,7 +1137,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
 
   const costContext=useMemo(()=>contributionContext({relationType,draftUnits,targetUnits,sourceUnits,relations,containerEffect,joinOnlyAction}),
     [relationType,draftUnits,targetUnits,sourceUnits,relations,containerEffect,joinOnlyAction]);
-  const { effectiveMinStake, totalConsumption, stakeFeeAmountRef,setProtocolFee,setReviewPolicy,reviewMinimum } = useStakeCalculation({
+  const { effectiveMinStake, totalConsumption: onlineConsumption, stakeFeeAmountRef,setProtocolFee,setReviewPolicy,reviewMinimum } = useStakeCalculation({
     relationType, secondaryRelationType, subType, ...costContext, sourceUnits, newMessageContent: joinOnlyAction ? '' : newMessageContent,
     stakeAmount, relStakeAmount, recommendationAmount, relationStakeMap, subTypeStakeMap,
     contributions:composer.contributions,scopeParentId:compositionParentId,
@@ -1141,6 +1147,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     onRelStakeChange: (min) => { setMinSelfStake(min); setRelStakeAmount(min); },
     stakeDefaultLoaded,
   });
+  const totalConsumption = localMessageData && onlineConsumption ? { ...onlineConsumption, contributionError: null, total: 0 } : onlineConsumption;
   reviewMinimumRef.current=reviewMinimum;
 
   useEffect(() => {
@@ -1202,7 +1209,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     const handler = (e: Event) => {
       const messageId = (e as CustomEvent<{ messageId?: string }>).detail?.messageId;
       if(!messageId)return;
-      api.getMessageStakes(messageId).then(s => {
+      if (!isPreloaded) api.getMessageStakes(messageId).then(s => {
         mergeStakeSnapshot(messageId, s);
       }).catch(() => { });
     };
@@ -1283,20 +1290,20 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     // Re-fetch stakeCounts from backend (authoritative, avoids client-side sync issues)
     const allIds = [backendRel.id, ...targetMsgIds];
     for (const mid of allIds) {
-      api.getMessageStakes(mid).then(s => {
+      if (!isPreloaded) api.getMessageStakes(mid).then(s => {
         mergeStakeSnapshot(mid, s);
       }).catch(() => { });
     }
-    window.dispatchEvent(new Event('points-refresh'));
+    if (!isPreloaded) window.dispatchEvent(new Event('points-refresh'));
     // Notify SettlementPanel to reload stakes for target messages
     for (const mid of targetMsgIds) {
       window.dispatchEvent(new CustomEvent('stakes-refresh', { detail: { messageId: mid } }));
     }
     return Promise.resolve(null);
-  }, [scopeMessageId, mergeStakeSnapshot]);
+  }, [scopeMessageId, mergeStakeSnapshot, isPreloaded]);
 
   const createRel = useCallback(async (scopeMessageId: string, data: Parameters<typeof api.createRelation>[1]) => {
-    if (isViewerRoute || preloadedData) throw new Error('阅览文件只能在本地调整关系');
+    if ((isViewerRoute || preloadedData) && !localMessageData) throw new Error('阅览文件只能在本地调整关系');
     const type = data.relationType.toLowerCase();
     const join=contributionRef.current('JOIN');
     const currentMessages = new Map(messagesRef.current.map(message => [message.id, message]));
@@ -1321,6 +1328,11 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       const error = target && annotationStanceError(target, ref.reference!);
       if (error) throw new Error(error);
     }
+    if (localMessageData) {
+      const relation = await localWrite(draft => draft.createRelation(classifyRelMsgIdRef.current ?? scopeMessageId, { ...data, sourceRefs, targetRefs }));
+      if (sendInFlightRef.current && type !== 'join') recordSentMessage(relation.id);
+      return relation;
+    }
     try {
       const relation = await api.createRelation(activeReviewContext?compositionParentId:classifyRelMsgIdRef.current ?? scopeMessageId, {
         ...data, targetRefs, sourceRefs, stakeAmount: 0,
@@ -1343,7 +1355,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       }
       throw e;
     }
-  }, [logout, navigate, isViewerRoute, preloadedData,activeReviewContext,compositionParentId]);
+  }, [logout, navigate, isViewerRoute, preloadedData,activeReviewContext,compositionParentId,localMessageData,viewerUser?.username]);
 
   // Vote results include truth stances and value annotations.
   useEffect(() => {
@@ -1636,6 +1648,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
 
   // Check auth before sending: redirect to login if not logged in
   function requireAuth(): boolean {
+    if (localMessageData) { if (viewerUser?.username.trim()) return true; setSendError('请先输入本地发言人'); return false; }
     if (isViewerRoute || preloadedData) return false;
     return runRequireAuth({ user, logout, navigate });
   }
@@ -1745,7 +1758,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const browsingHistoryKey = useMemo(() => ({ scopeMessageId, loadedExport, username: displayUser?.username }),
     [scopeMessageId, loadedExport, displayUser?.username]);
   const browsingHistory = useBrowsingHistory(browsingHistoryKey, captureBrowsingSnapshot, restoreBrowsingSnapshot, { browser: true, routeState });
-  function recordBrowsingNavigation(): void { if (!loading) browsingHistory.record(); }
+  function recordBrowsingNavigation(url?: string): void { if (!loading) browsingHistory.record(url); }
   const readingHistory = useBrowsingHistory(browsingHistoryKey, captureSnapshot, restoreBrowsingSnapshot);
   function recordReadingNavigation():void {if(!loading&&traceEntries.length&&readingFocusId)readingHistory.record();}
   const historyReadingIds=(snapshot:TraceSnapshot|undefined)=>snapshot?.readingMessageIds??(snapshot?.readingFocusId?[snapshot.readingFocusId]:[]);
@@ -2107,7 +2120,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
 
   async function handleSendMessageOnly(overrideContent?: string): Promise<DemoMessage | null> {
     const text=contributionRef.current('TEXT'),join=contributionRef.current('JOIN');
-    return runHandleSendMessageOnly({ requireAuth, newMessageContent, scopeMessageId:activeReviewContext?'root':scopeMessageId, stakeAmount:text.truth, setSendError, selectedRelationRef, recommendationRef:textRecommendationRef, stakeFeeAmountRef, isInsideClassify:activeReviewContext?compositionParentId!=='root':isInsideClassify, availablePoints, currentClassifyRelMsgId:activeReviewContext?(compositionParentId==='root'?null:compositionParentId):currentClassifyRelMsgId, setMessages, mergeStakeSnapshot, setAuthorStakes, setStakeAmount, minSelfStake, setNewMessageContent, scrollMsgToCenter, setClassifyKey, handleAuthError,
+    return runHandleSendMessageOnly({ local: !!localMessageData, createMessage: localMessageData ? (parent, input) => localWrite(draft => draft.createMessage(parent, input)) : undefined, requireAuth, newMessageContent, scopeMessageId:activeReviewContext?'root':scopeMessageId, stakeAmount:text.truth, setSendError, selectedRelationRef, recommendationRef:textRecommendationRef, stakeFeeAmountRef, isInsideClassify:activeReviewContext?compositionParentId!=='root':isInsideClassify, availablePoints, currentClassifyRelMsgId:activeReviewContext?(compositionParentId==='root'?null:compositionParentId):currentClassifyRelMsgId, setMessages, mergeStakeSnapshot, setAuthorStakes, setStakeAmount, minSelfStake, setNewMessageContent, scrollMsgToCenter, setClassifyKey, handleAuthError,
       joinContribution:{wager:Number(join.truth)||0,recommendation:Number(join.value)||0},
       onCreated: messageId => { if (sendInFlightRef.current) recordSentMessage(messageId); else scrollMsgToCenter(messageId); },
     }, overrideContent);
@@ -2233,7 +2246,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   }
 
   function enterClassification(relMsgId: string, recordHistory = true): void {
-    if (recordHistory) recordBrowsingNavigation();
+    if (recordHistory) recordBrowsingNavigation(categoryMessageUrl(window.location.href, relMsgId));
     cancelViewNavigation();
     if (viewMode === 'graph') beginWorkbenchDrawing();
     runEnterClassification({ captureSnapshot, cancelScrollRafs, scrollRequestIdRef, leftPanelRef, classifyStackRef, setClassifyRelMsgId, setClassifyKey }, relMsgId);
@@ -2259,7 +2272,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   }
 
   function exitClassification(_options?: { restoreSnapshot?: boolean; clearSelectionOnRootExit?: boolean; preserveViewMode?: ViewMode }): void {
-    if (_options?.restoreSnapshot !== false) recordBrowsingNavigation();
+    if (_options?.restoreSnapshot !== false) recordBrowsingNavigation(categoryMessageUrl(window.location.href, classifyStackRef.current.at(-2)?.relMsgId ?? null));
     if (viewMode === 'graph') beginWorkbenchDrawing();
     return runExitClassification({ classifyStackRef, setClassifyRelMsgId, setClassifyKey, setPreviewClassifyId, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setLastClickedMessageId, restoreSnapshot, setViewMode }, _options);
   }
@@ -2313,7 +2326,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   async function handleQuickSendAndRelateFromDraftTargets(): Promise<void> {
     const correction = { current: null as typeof comparisonPopup };
     const captureCorrection: typeof setComparisonPopup = value => { correction.current = typeof value === 'function' ? value(correction.current) : value; };
-    await runHandleQuickSendAndRelateFromDraftTargets({ requireAuth, singleButtonEnabled, newMessageContent, savedTextOnTypeSwitchRef, draftUnits, targetUnits, setSendError, sourceUnits, resolveEffectiveTargetUnits, relationType, hasTextContent, stakeAmount, containerRelationTypes, appendContainerType, relStakeAmount, effectiveMinStake, subType, subTypeCustomLabel, subTypeStakeMap, relationStakeMap, totalConsumption, availablePoints, handleSendMessageOnly, guideTargetIdRef, setNewMessageContent, getContainerMembershipTargetError, joinOnlyAction, getContainerCycleError, showAlert, relationsRef, getJoinContainerCycleError, createJoinRelationsForContainer, setEdges, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setSubType, setRelationType, setSecondaryRelationType, relationLabel, handleCreateRelationWithSourcesAndTargets, secondaryRelationType, correctionWidth: composer.correctionWidth, msgMap, createRel, scopeMessageId, registerCreatedRelationInCurrentClassify, edgesRef, sendTagRelation, subTypeCustomBufferRef, setSubTypeCustomLabel, setComparisonPopup: isCapturingPreview() ? captureCorrection : setComparisonPopup, correctionVersions, blockCorrectionForSecondBettor, edges, relationById, organizationTargetRef, getGroupedTargetTextMessageIds, relationTypeByRelMsgId, hasCrossNonReferenceTextLinkForClassifyTargets, getClassifyTargetRefs, isInsideClassify, currentClassifyRelMsgId, classifyStackRef, appendCreatedRelation, setTraceKey, isGovernanceOrOpsType, relations, setRelations, hasTargetsAvailable, user, setMessages, relStakeRef, setAuthorStakes, mergeStakeSnapshot });
+    await runHandleQuickSendAndRelateFromDraftTargets({ local: !!localMessageData, requireAuth, singleButtonEnabled, newMessageContent, savedTextOnTypeSwitchRef, draftUnits, targetUnits, setSendError, sourceUnits, resolveEffectiveTargetUnits, relationType, hasTextContent, stakeAmount, containerRelationTypes, appendContainerType, relStakeAmount, effectiveMinStake, subType, subTypeCustomLabel, subTypeStakeMap, relationStakeMap, totalConsumption, availablePoints, handleSendMessageOnly, guideTargetIdRef, setNewMessageContent, getContainerMembershipTargetError, joinOnlyAction, getContainerCycleError, showAlert, relationsRef, getJoinContainerCycleError, createJoinRelationsForContainer, setEdges, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setSubType, setRelationType, setSecondaryRelationType, relationLabel, handleCreateRelationWithSourcesAndTargets, secondaryRelationType, correctionWidth: composer.correctionWidth, msgMap, createRel, scopeMessageId, registerCreatedRelationInCurrentClassify, edgesRef, sendTagRelation, subTypeCustomBufferRef, setSubTypeCustomLabel, setComparisonPopup: isCapturingPreview() ? captureCorrection : setComparisonPopup, correctionVersions, blockCorrectionForSecondBettor, edges, relationById, organizationTargetRef, getGroupedTargetTextMessageIds, relationTypeByRelMsgId, hasCrossNonReferenceTextLinkForClassifyTargets, getClassifyTargetRefs, isInsideClassify, currentClassifyRelMsgId, classifyStackRef, appendCreatedRelation, setTraceKey, isGovernanceOrOpsType, relations, setRelations, hasTargetsAvailable, user: localMessageData ? viewerUser : user, setMessages, relStakeRef, setAuthorStakes, mergeStakeSnapshot });
     if (correction.current?.reversePreview) await confirmReverseCorrection(correction.current, true);
   }
 
@@ -2351,7 +2364,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     sentMessageTargetsRef.current = [];
     sentMessageRelatedViewsRef.current.clear();
     const joinedContainerId = joinOnlyAction ? sourceUnits[0]?.messageId : undefined;
-    return runHandleSendClick({ composer, captureOptimisticRollback, sendInFlightRef, setSendInFlight, handleQuickSendAndRelateFromDraftTargets, setSendError,
+    return runHandleSendClick({ withCommandBatch: localMessageData ? runLocalBatch : undefined, composer, captureOptimisticRollback, sendInFlightRef, setSendInFlight, handleQuickSendAndRelateFromDraftTargets, setSendError,
       reviewContext:compositionReviewContext,
       prepare: () => {
         cancelScrollRafs();
@@ -2472,7 +2485,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     }
     return new Set([...followers].filter(([,users]) => users.size>0).map(([id]) => id));
   }, [attentionUsersByTarget, relations]);
-  const hasAttentionNotifyTarget = isPreloaded ? notifyTargets.length > 0 && notifyTargets.every(target => attentionTargetMessageIds.has(target.messageId))
+  const hasAttentionNotifyTarget = localMessageData ? notifyTargets.length > 0 : isPreloaded ? notifyTargets.length > 0 && notifyTargets.every(target => attentionTargetMessageIds.has(target.messageId))
     : notificationRecipients.users.length>0&&!notificationRecipients.loading;
   const notifyRecipientLabel = notificationRecipients.loading ? '正在确认通知接收者…' : notificationRecipients.error ? `接收者加载失败：${notificationRecipients.error}`
     : notificationRecipients.users.length ? `发送通知（${notificationRecipients.users.slice(0,3).map(user=>user.username).join('、')}${notificationRecipients.users.length>3?'等':''}，共 ${notificationRecipients.users.length} 人）` : undefined;
@@ -2627,9 +2640,9 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   // Note: draftUnits (候选区) is a quick substitute for targetUnits (目标集合).
   // If draftUnits is non-empty it takes precedence; otherwise targetUnits is used.
   const hasTextContent = !joinOnlyAction && newMessageContent.trim().length > 0;
-  const singleButtonEnabled = !annotationOppositionError && deriveSingleButtonEnabled({ relationType, newMessageContent, hasTextContent, stakeAmount, joinOnlyAction, relStakeAmount, effectiveMinStake, totalConsumption, availablePoints, draftUnits, targetUnits, hasInvalidCorrectTarget, hasInvalidContainerSource, hasInvalidJoinTarget, hasCrossLinkValidationError, hasOrphanContainerLabel, hasClassifyCycle, hasInvalidDelegationFormat, hasInvalidProposalFormat, hasCorrectionRelationTarget, isClassifyType, sourceUnits, relations, hasTargetsAvailable, isSummaryType, isMergeType, secondaryRelationType, effectiveTargetUnits, isGovernanceOrOpsType, msgMap, isTagWithInlineBadge, subType, subTypeCustomLabel, isTagWithQuickAnnotate, isAgreeDisagreeType, isArrangeType, isNotifyType, hasAttentionNotifyTarget });
+  const singleButtonEnabled = !annotationOppositionError && deriveSingleButtonEnabled({ local: !!localMessageData, relationType, newMessageContent, hasTextContent, stakeAmount, joinOnlyAction, relStakeAmount, effectiveMinStake, totalConsumption, availablePoints, draftUnits, targetUnits, hasInvalidCorrectTarget, hasInvalidContainerSource, hasInvalidJoinTarget, hasCrossLinkValidationError, hasOrphanContainerLabel, hasClassifyCycle, hasInvalidDelegationFormat, hasInvalidProposalFormat, hasCorrectionRelationTarget, isClassifyType, sourceUnits, relations, hasTargetsAvailable, isSummaryType, isMergeType, secondaryRelationType, effectiveTargetUnits, isGovernanceOrOpsType, msgMap, isTagWithInlineBadge, subType, subTypeCustomLabel, isTagWithQuickAnnotate, isAgreeDisagreeType, isArrangeType, isNotifyType, hasAttentionNotifyTarget });
   const canSubmitDraft = singleButtonEnabled && !sendInFlight && sentMessageTargets.length === 0
-    && !comparisonReviewed && !isPreloaded && !isPreviewMode;
+    && !comparisonReviewed && (!isPreloaded || !!localMessageData) && !isPreviewMode;
 
   // Dynamic label describing what the send button will do
   const singleButtonLabel = deriveSingleButtonLabel({ notifyRecipientLabel, relationType, newMessageContent, draftUnits, isClassifyType, sourceUnits, relations, getClassifyTargetRefs, targetUnits, joinOnlyAction, hasTargetsAvailable, isSummaryType, isMergeType, hasCorrectionRelationTarget, hasInvalidCorrectTarget, hasTextContent, isNotifyType, hasAttentionNotifyTarget, isGovernanceOrOpsType, secondaryRelationType, msgMap, isAgreeDisagreeType, isArrangeType, isTagWithInlineBadge, subType, subTypeCustomLabel, isTagWithQuickAnnotate });
@@ -2822,7 +2835,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   }
 
   async function handleComparisonVote(side: 'agree' | 'disagree' = 'agree'): Promise<void> {
-    return runHandleComparisonVote({ isPreloaded, comparisonReviewed, requireAuth, comparisonTargetId, draftUnits, scopeMessageId, relStakeAmount, recommendationAmount, protocolFee:stakeFeeAmountRef.current, effectiveMinStake, setSendError, availablePoints, createRel, msgMap, registerCreatedRelationInCurrentClassify, showAlert }, side);
+    return runHandleComparisonVote({ isPreloaded: isPreloaded && !localMessageData, comparisonReviewed, requireAuth, comparisonTargetId, draftUnits, scopeMessageId, relStakeAmount, recommendationAmount, protocolFee:stakeFeeAmountRef.current, effectiveMinStake, setSendError, availablePoints, createRel, msgMap, registerCreatedRelationInCurrentClassify, showAlert }, side);
   }
 
   function handleDecorationBodyClick(e: React.MouseEvent, messageId: string, kind: "agree" | "disagree"): void {
@@ -2909,7 +2922,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   }
 
   /** Navigate to a message: switch canvas if needed, scroll, select (clear + add to candidates) */
-  const handleNavigateToMessage = useCallback((messageId: string, options?: { select?: boolean; preserveScope?: boolean; recordHistory?: boolean; onComplete?: ScrollMessageOptions['onComplete'] }) => {
+  const handleNavigateToMessage = useCallback((messageId: string, options?: { select?: boolean; preserveScope?: boolean; recordHistory?: boolean; enterCategory?: boolean; onComplete?: ScrollMessageOptions['onComplete'] }) => {
     const settlement = messagesRef.current.find(message=>message.id===messageId);
     if(isSettlementRecord(settlement)){
       if(!settlement?.settlementTargetId){
@@ -2924,6 +2937,23 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       messageId=settlement.settlementTargetId;
       if(typeof settlement.roundPayload?.roundId==='string')sessionStorage.setItem('settlementHighlightRound',settlement.roundPayload.roundId);
       openSettlement(messageId,settlement.roundPayload?.settlementType==='VALUE'?'VALUE':'TRUTH');
+    }
+    if (options?.enterCategory && ['classify', 'summary', 'arrange', 'merge'].includes(settlement?.relationType ?? '')) {
+      pendingRemoteNavigationRef.current = null;
+      pendingScrollMsgRef.current = null;
+      pendingScrollDependencyIdsRef.current = [];
+      pendingScrollCompletionRef.current = undefined;
+      setAutoClassifyMsgId(null);
+      exitAllTemporaryCategories();
+      setTraceEntries([]); setTraceExpandedFrameIds(new Set());
+      setContainerPreviewId(null); setComparisonMode(false); setComparisonReviewed(false);
+      setCorrectionFilterTargetId(null); setHomeFilterMode(null); clearCleanView();
+      setRecordCategory(null); setPreviewClassifyId(null);
+      classifyStackRef.current = [];
+      enterClassification(messageId, options.recordHistory !== false);
+      setDraftUnits([]); setActiveTextSelectId(null); setLastClickedMessageId(messageId);
+      options.onComplete?.(true);
+      return;
     }
     if (findVisibleMessageElement(leftPanelRef.current, messageId, relationsRef.current, edgesRef.current)) {
       // Locating a message already on screen must preserve the current scope,
@@ -2942,17 +2972,31 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       scrollMsgToCenter(messageId, { onComplete: options?.onComplete });
       return;
     }
-    if ((viewerStructure || !isPreloaded && onDemand) && !messagesRef.current.some(message => message.id === messageId)) {
+    if ((viewerStructure || !isPreloaded) && !messagesRef.current.some(message => message.id === messageId)) {
       const request = { messageId, options };
       pendingRemoteNavigationRef.current = request;
       const task = beginLoading();
       task.onCancel(() => { if (pendingRemoteNavigationRef.current === request) pendingRemoteNavigationRef.current = null; });
-      void ensureMessages([messageId]).catch(error => {
+      void ensureMessages([messageId]).then(() => {
+        requestAnimationFrame(() => {
+          if (pendingRemoteNavigationRef.current === request && !messagesRef.current.some(message => message.id === messageId)) {
+            pendingRemoteNavigationRef.current = null;
+            showAlert('未找到该消息，消息可能已删除或不在当前可访问范围内');
+            options?.onComplete?.(false);
+          }
+        });
+      }).catch(error => {
         if (pendingRemoteNavigationRef.current === request) {
           pendingRemoteNavigationRef.current = null;
           showAlert(error instanceof Error ? error.message : '消息加载失败');
+          options?.onComplete?.(false);
         }
       }).finally(task.complete);
+      return;
+    }
+    if (!messagesRef.current.some(message => message.id === messageId)) {
+      showAlert('未找到该消息，消息可能已删除或不在当前可访问范围内');
+      options?.onComplete?.(false);
       return;
     }
     const joinMessage=messagesRef.current.find(message=>message.id===messageId);
@@ -3066,7 +3110,8 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   }, [cleanMode, joinFilterTargetId, joinFilterDirection, recordCategory, correctionFilterTargetId, msgFilter, clearCleanView, showAlert, hiddenInGraphView, isPreloaded, onDemand, viewerStructure, ensureMessages, openSettlement, beginLoading]);
   navigateToMessageRef.current=handleNavigateToMessage;
 
-  const pendingRemoteNavigationRef = useRef<{ messageId: string; options?: { select?: boolean; preserveScope?: boolean; recordHistory?: boolean; onComplete?: ScrollMessageOptions['onComplete'] } } | null>(null);
+  const pendingRemoteNavigationRef = useRef<{ messageId: string; options?: { select?: boolean; preserveScope?: boolean; recordHistory?: boolean; enterCategory?: boolean; onComplete?: ScrollMessageOptions['onComplete'] } } | null>(null);
+  useMessageLinkNavigation(!loading && !loadError, handleNavigateToMessage, browsingHistory.handlesCurrentLocation);
   useNotificationNavigation({ready:!loading&&!isPreloaded&&!loadError,navigate:handleNavigateToMessage,openSettlement,openReview:openReviewSummary,onError:showAlert,
     onLocated:(source,target)=>setNotificationFocusIds(target?[source,target]:[source])});
   useEffect(() => {
@@ -3075,17 +3120,45 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     pendingRemoteNavigationRef.current = null;
     handleNavigateToMessage(pending.messageId, pending.options);
   }, [messages, handleNavigateToMessage]);
-  useEffect(() => {
-    const target = searchParams.get('msg') || searchParams.get('settlement');
-    if (target && !loading && !isPreloaded && onDemand && !messagesRef.current.some(message => message.id === target)) handleNavigateToMessage(target);
-  }, [loading, isPreloaded, onDemand, searchParams, handleNavigateToMessage]);
 
   const activePageParent = recordCategory?`related:${recordCategory.targetId}`:joinFilterTargetId ? `related:${joinFilterTargetId}` : correctionFilterTargetId ? `related:${correctionFilterTargetId}` : containerPreviewId ?? currentClassifyRelMsgId ?? scopeMessageId;
 
   function confirmMessageIdNavigation(value: string): void {
     const id = value.trim();
-    if (id && (viewerStructure || !isPreloaded && onDemand) && !messagesRef.current.some(message => message.id === id)) { handleNavigateToMessage(id); return; }
+    if (id && (viewerStructure || !isPreloaded) && !messagesRef.current.some(message => message.id === id)) { handleNavigateToMessage(id); return; }
     return runConfirmMessageIdNavigation({ messageIdInput: value, showAlert, messagesRef, handleNavigateToMessage });
+  }
+
+  async function runLocalBatch(work: () => Promise<void>, onCommitted: (count: number) => void) {
+    if (!localMessageData || localDraftRef.current) throw new Error('本地文件正在保存，请稍候');
+    const draft = new LocalDiscussion(localMessageData, viewerUser?.username ?? '');
+    localDraftRef.current = draft;
+    try { await work(); onCommitted(await draft.commit(saveLocalDiscussion)); }
+    finally { localDraftRef.current = null; }
+  }
+  async function localWrite<T>(work: (draft: LocalDiscussion) => Promise<T>): Promise<T> {
+    if (localDraftRef.current) return work(localDraftRef.current);
+    let result!: T;
+    await runLocalBatch(async () => { result = await work(localDraftRef.current!); }, () => {});
+    return result;
+  }
+  async function saveLocalDiscussion(next: ExportData) {
+    await persistPreloadedExport({ ...next, view: {
+      username: next.viewerUsername ?? null, mode: viewMode,
+      messageFilter: { ...msgFilter }, homeFilter: homeFilterMode,
+      cleanFilters: cleanFilters.map(rule => ({ ...rule })), classificationId: currentClassifyRelMsgId,
+      discussion: copyDiscussionView(discussion.value),
+    } });
+  }
+
+  async function saveLocalEditingView(next: NonNullable<typeof zhihuData>) {
+    await persistPreloadedExport({ ...(nativeZhihuData ? next === zhihuData ? nativeZhihuData : nativeZhihuDocument(next)
+      : next), view: {
+      username: displayUser?.username ?? null, mode: viewMode,
+      messageFilter: { ...msgFilter }, homeFilter: homeFilterMode,
+      cleanFilters: cleanFilters.map(rule => ({ ...rule })), classificationId: currentClassifyRelMsgId,
+      discussion: copyDiscussionView(discussion.value),
+    } });
   }
 
   const handleNavigateFromCorrectionTemporaryCategory = useCallback((messageId: string, switchToList: boolean) => {
@@ -3510,7 +3583,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       <ErrorBoundary onError={reportDrawingFailure}>
         <div className="workbench-shell" style={{ flex: "1 0 auto", width: effectiveContainerWidth, minWidth: MIN_LEFT_PX + MIN_RIGHT_PX + 12, margin: 0, display: "flex", flexDirection: "column", background: "var(--surface-101010)", color: "var(--ink-eee)", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
           <DeferredWorkbench label="关系工具栏" blocksDrawing><RelationToolbar barRef={relationBarRef} leftControlsRef={relationLeftControlsRef} rightControlsRef={relationRightControlsRef}
-            top={0} springWidth={relationSpringWidth} rightOffset={relationControlsRightOffset} viewer={isPreloaded}
+            top={0} springWidth={relationSpringWidth} rightOffset={relationControlsRightOffset} viewer={isPreloaded && !localMessageData}
             localMode={localRelationMode}
             knownIds={knownMessageIds} onJump={confirmMessageIdNavigation}
             composer={{ relationType, secondaryRelationType, newMessageContent, subType, setRelationType, setSecondaryRelationType, setNewMessageContent, lastTagSecondaryRef, lastDelegationSecondaryRef, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, guideTargetIdRef }} /></DeferredWorkbench>
@@ -3528,7 +3601,9 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                 scopeMessageId={scopeMessageId} exportTitle={scope?.title ?? 'export'} showAlert={showAlert}
                 exportData={loadedExport ?? preloadedData} exportUsername={displayUser?.username ?? null}
                 discussion={discussion}
-                onLocalExport={zhihuData && !nativeZhihuData ? view => {
+                onLocalExport={localMessageData ? view => {
+                  downloadExport(new Blob([JSON.stringify({ ...localMessageData, view, exportedAt: new Date().toISOString() }, null, 2)], { type: 'application/json' }), `${localMessageData.scope.title || '本地讨论'}.json`);
+                } : zhihuData && !nativeZhihuData ? view => {
                   try {
                     const content = serializeGonglunZhihuViewingData({ ...zhihuData, view });
                     downloadExport(new Blob([content], { type: 'application/json' }), '知乎阅览.json');
@@ -3728,8 +3803,9 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                 onExit: exitContainerPreview,
               } : undefined}
               isViewerMode={isPreloaded}
+              localEditing={!!localMessageData}
               hideViewerUser={isNativeZhihuView(loadedExport)}
-              localReplyEditor={zhihuData ? renderSendControls => <DeferredWorkbench label="知乎本地整理" blocksDrawing><ZhihuReplyEditor data={zhihuData} sourceUnits={sourceUnits} targetUnits={targetUnits} draftUnits={draftUnits}
+              localReplyEditor={zhihuData ? renderSendControls => <DeferredWorkbench label="本地消息整理" blocksDrawing><ZhihuReplyEditor data={zhihuData} sourceUnits={sourceUnits} targetUnits={targetUnits} draftUnits={draftUnits}
                 nativeDocument={!!nativeZhihuData} buildRelation={nativeZhihuData ? input => sendPagedZhihuRelation(nativeZhihuData, input) : undefined}
                 relationType={localRelationType} renderSendControls={renderSendControls} onBusyChange={setLocalSending}
                 correctionMode={secondaryRelationType === 'width-adjustment' ? 'width-adjustment' : 'text-correction'}
@@ -3745,12 +3821,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                   } else handleNavigateToMessage(messageId);
                 }}
                 onSent={handleCanvasBlankClick}
-                onSave={next => persistPreloadedExport({ ...(nativeZhihuData ? next === zhihuData ? nativeZhihuData : nativeZhihuDocument(next) : next), view: {
-                  username: displayUser?.username ?? null, mode: viewMode,
-                  messageFilter: { ...msgFilter }, homeFilter: homeFilterMode,
-                  cleanFilters: cleanFilters.map(rule => ({ ...rule })), classificationId: currentClassifyRelMsgId,
-                  discussion: copyDiscussionView(discussion.value),
-                } })} /></DeferredWorkbench> : undefined}
+                onSave={saveLocalEditingView} /></DeferredWorkbench> : undefined}
               viewerUsers={viewerUsers}
               viewerUsername={viewerUser?.username}
               onViewerUsernameChange={username => {
@@ -3848,7 +3919,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
               subTypeStakeMap={subTypeStakeMap}
               relationStakeMap={relationStakeMap}
               handleQuickSendAndRelateFromDraftTargets={handleSendClick}
-              sendPreview={{ active:sendPreview.active, phase:sendPreview.phase, stale:sendPreview.stale, uncertain:sendPreview.uncertain, ready:sendPreview.ready,
+              sendPreview={localMessageData ? undefined : { active:sendPreview.active, phase:sendPreview.phase, stale:sendPreview.stale, uncertain:sendPreview.uncertain, ready:sendPreview.ready,
                 canPrepare:canSubmitDraft && containerPreviewId === null && !sendPreview.uncertain,
                 onPreview:sendPreview.prepare, onCancel:sendPreview.cancel }}
               sendError={sendError}

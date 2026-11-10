@@ -1,8 +1,10 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useState, type ReactNode } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { PageLoadingPrompt } from './WorkbenchStartup';
 import { AutoAuthEntryContext } from '../context/AutoAuthEntryContext';
+import PromptModal from './PromptModal';
+import { ABOUT_HOME_STATE_KEY } from '../utils/aboutNavigation';
 
 const LoginPage = lazy(() => import('../pages/LoginPage'));
 const RegisterPage = lazy(() => import('../pages/RegisterPage'));
@@ -40,6 +42,7 @@ function useExistingDialog(active: boolean) {
 export default function AuthEntryGate({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const [dismissed, setDismissed] = useState(false);
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const authRoute = pathname === '/login' || pathname === '/register';
@@ -50,7 +53,11 @@ export default function AuthEntryGate({ children }: { children: ReactNode }) {
   if (authRoute || localViewer || user || dismissed) return children;
   const close = () => setDismissed(true);
   return <AutoAuthEntryContext.Provider value={{ suspended }}><Suspense fallback={<PageLoadingPrompt />}>
-    {loading ? <PageLoadingPrompt /> : mode === 'login'
+    {loading ? <PromptModal open title="正在加载" message="正在确认登录状态，也可直接离线使用本地消息文件。"
+      confirmText="离线使用本地消息文件" onConfirm={() => {
+        close(); navigate('/', { state: { [ABOUT_HOME_STATE_KEY]: true } });
+        window.dispatchEvent(new Event('open-export-viewer'));
+      }} /> : mode === 'login'
       ? <LoginPage onClose={close} onSuccess={close} onRegister={() => setMode('register')} closeText="关闭并浏览" />
       : <RegisterPage onClose={close} onSuccess={close} onLogin={() => setMode('login')} closeText="关闭并浏览" />}
   </Suspense></AutoAuthEntryContext.Provider>;

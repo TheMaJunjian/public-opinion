@@ -47,7 +47,7 @@ it('supports legacy entries without operation metadata in the second dialog',asy
     const detail=await screen.findByRole('dialog',{name:'贡献点详情'});
     expect(await within(detail).findByText('同一消息共 2 笔记录 · 时间倒序')).toBeVisible();
     expect(api.getPointsTransactions).toHaveBeenCalledWith({mode:'summary',messageId:'covered-message',limit:1});
-    expect(within(detail).getByRole('table',{name:'同一消息收支明细'})).toHaveTextContent('解锁 11 点');
+    expect(within(detail).getByRole('table',{name:'同一消息收支明细'})).toHaveTextContent('锁定减少 11 点');
     expect(within(detail).getByText('319 → 340')).toBeVisible();
     expect(navigate).not.toHaveBeenCalled();
     fireEvent.click(within(detail).getByRole('button',{name:'返回记录'}));
@@ -57,6 +57,39 @@ it('supports legacy entries without operation metadata in the second dialog',asy
     fireEvent.click(within(await screen.findByRole('dialog',{name:'贡献点详情'})).getByRole('button',{name:'定位消息 covered-message'}));
     expect(navigate).toHaveBeenCalledOnce();
   }finally{window.removeEventListener('points-navigate',navigate);}
+});
+
+it.each([
+  {name:'输方',principal:6,payout:0,net:-6,result:'对赌结算净损失 6 点',stakes:[1,5]},
+  {name:'胜方',principal:10,payout:16,net:6,result:'对赌结算净收益 6 点',stakes:[10]},
+  {name:'平局',principal:6,payout:6,net:0,result:'对赌结算持平',stakes:[6]},
+])('shows $name settlement result in history and details without treating locked principal as a refund',async({principal,payout,net,result,stakes})=>{
+  vi.mocked(api.getPointsBalance).mockResolvedValue(fundedBalance);
+  const entries=stakes.map((stake,index)=>({id:`principal-${index}`,messageId:'settlement',messageRevision:1,type:'UNLOCK',reason:'结束对赌锁定',
+    amount:0,lockedDelta:-stake,balanceAfter:117,createdAt:'2026-11-10T07:54:19Z'}));
+  if(payout)entries.push({id:'payout',messageId:'settlement',messageRevision:1,type:'TRANSFER',reason:payout===principal?'平局退还本金':'胜方按出资比例分配',
+    amount:payout,lockedDelta:0,balanceAfter:117+payout,createdAt:'2026-11-10T07:54:19Z'});
+  entries.reverse();
+  const transaction={id:'operation:settlement',operationId:'settlement-op',type:'OPERATION_GROUP',amount:payout,lockedDelta:-principal,balanceAfter:117+payout,
+    createdAt:'2026-11-10T07:54:19Z',entryCount:entries.length,reasonDetails:entries,messages:[{messageId:'settlement',messageType:'结算'}]};
+  vi.mocked(api.getPointsTransactions).mockImplementation(async params=>({data:[params?.mode==='summary'?{...transaction,entries}:transaction],pagination:{page:1,limit:20,total:1,totalPages:1}}));
+  render(<MemoryRouter><PointsBadge/></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button',{name:/贡献点：可用 20/}));
+  expect(await screen.findByText(result)).toBeVisible();
+  expect(screen.getByText(`资产 ${net>=0?'+':''}${net}`)).toBeVisible();
+  expect(screen.getByText(`可用 +${payout}`)).toBeVisible();
+  expect(screen.getByText(`锁定减少 ${principal} 点`)).toBeVisible();
+  fireEvent.click(screen.getByRole('button',{name:'查看收支详情 operation:settlement'}));
+  const detail=within(await screen.findByRole('dialog',{name:'贡献点详情'}));
+  expect(await detail.findByRole('group',{name:'对赌结算结果'})).toHaveTextContent(result);
+  expect(detail.getByRole('group',{name:'对赌结算结果'})).toHaveTextContent(`结算本金 ${principal} 点 · 结算到账 ${payout} 点`);
+  const totals=detail.getByLabelText('本次操作收支合计');
+  expect(within(totals).getByText('资产净变化').parentElement).toHaveTextContent(`${net>=0?'+':''}${net} 点`);
+  expect(detail.getByRole('columnheader',{name:'可用增减'})).toBeVisible();
+  expect(detail.queryByText('结束对赌锁定')).toBeNull();
+  expect(detail.getAllByText('对赌本金结算').length).toBeGreaterThan(0);
+  expect(detail.getByRole('table')).not.toHaveTextContent('解锁');
+  for(const stake of stakes)expect(within(detail.getByRole('table')).getByText(`锁定减少 ${stake} 点`)).toBeVisible();
 });
 
 it('shows one send operation and opens every text/reference fee and stake using its operation ID',async()=>{

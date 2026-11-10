@@ -3,10 +3,10 @@ import { ABOUT_HISTORY_KEY } from '../../utils/aboutNavigation';
 
 const STATE_KEY = '__gonglunWorkbench';
 type Marker = { owner: string; id: string; index: number };
-type Entry<T> = { id: string; snapshot?: T };
+type Entry<T> = { id: string; snapshot?: T; handledUrl?: string };
 type Session<T> = {
   key: unknown; owner: string; entries: Entry<T>[]; index: number;
-  recorded: boolean; restoring: boolean; moving: boolean; branching: boolean;
+  recorded: boolean; restoring: boolean; moving: boolean; branching: boolean; branchUrl?: string; urlChanged?: boolean;
 };
 
 function marker(state: unknown): Marker | null {
@@ -15,13 +15,16 @@ function marker(state: unknown): Marker | null {
     && typeof value.index === 'number' && Number.isSafeInteger(value.index) && value.index >= 0 ? value as Marker : null;
 }
 
-function writeEntry<T>(session: Session<T>, push: boolean) {
+function writeEntry<T>(session: Session<T>, push: boolean, url?: string) {
   const value: Marker = { owner: session.owner, id: session.entries[session.index].id, index: session.index };
   // Snapshots contain restore closures. Only their IDs belong in structured browser state.
   // Retain the router key/state so offline documents and the composer stay mounted.
   const state = { ...window.history.state, [STATE_KEY]: value };
-  if (push) window.history.pushState(state, '');
-  else window.history.replaceState(state, '');
+  const before = window.location.href;
+  if (push) window.history.pushState(state, '', url);
+  else window.history.replaceState(state, '', url);
+  if (url !== undefined) session.entries[session.index].handledUrl = window.location.href;
+  if (window.location.href !== before) session.urlChanged = true;
 }
 
 function anchorEntry<T>(session: Session<T>) {
@@ -61,6 +64,7 @@ export function useBrowserBrowsingHistory<T>(key: unknown, capture: () => T, res
       }
       if (!current.restoring && !current.branching) current.entries[current.index].snapshot = callbacks.current.capture();
       current.index = destination.index;
+      current.entries[current.index].handledUrl = window.location.href;
       current.moving = false;
       current.recorded = true;
       if (current.branching) {
@@ -70,7 +74,9 @@ export function useBrowserBrowsingHistory<T>(key: unknown, capture: () => T, res
         current.entries.splice(current.index + 1);
         current.entries.push({ id: crypto.randomUUID(), snapshot: callbacks.current.capture() });
         current.index++;
-        writeEntry(current, true);
+        const url = current.branchUrl;
+        current.branchUrl = undefined;
+        writeEntry(current, true, url);
       } else {
         const snapshot = current.entries[current.index].snapshot;
         if (snapshot !== undefined) { current.restoring = true; callbacks.current.restore(snapshot); }
@@ -93,20 +99,35 @@ export function useBrowserBrowsingHistory<T>(key: unknown, capture: () => T, res
       && !window.history.state?.[ABOUT_HISTORY_KEY]) {
       current.restoring = false;
     }
+    // Notify the router only after the new category commits. A concurrent route
+    // update in the middle of drawing preparation can leave its scene suspended.
+    // Retain the route key/state, and reuse this entry instead of pushing again.
+    if (current.urlChanged) {
+      current.urlChanged = false;
+      if (active?.owner === current.owner) window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }));
+    }
   });
 
-  const record = useCallback(() => {
+  const record = useCallback((url?: string) => {
     const current = session.current;
-    if (!enabled || !current || current.recorded || window.history.state?.[ABOUT_HISTORY_KEY]) return;
+    if (!enabled || !current || window.history.state?.[ABOUT_HISTORY_KEY]) return;
+    if (current.recorded) {
+      if (url !== undefined) {
+        if (current.moving) current.branchUrl = url;
+        else { writeEntry(current, false, url); update(value => value + 1); }
+      }
+      return;
+    }
     current.recorded = true;
-    if (current.moving) { current.branching = true; update(value => value + 1); return; }
+    if (current.moving) { current.branching = true; current.branchUrl = url; update(value => value + 1); return; }
     // Router query cleanup uses replaceState and may remove our private marker.
     anchorEntry(current);
     current.entries[current.index].snapshot = callbacks.current.capture();
+    current.entries[current.index].handledUrl = window.location.href;
     current.entries.splice(current.index + 1);
     current.entries.push({ id: crypto.randomUUID() });
     current.index++;
-    writeEntry(current, true);
+    writeEntry(current, true, url);
     update(value => value + 1);
   }, [enabled]);
 
@@ -122,8 +143,14 @@ export function useBrowserBrowsingHistory<T>(key: unknown, capture: () => T, res
   }, [enabled]);
   const back = useCallback(() => move(-1), [move]);
   const forward = useCallback(() => move(1), [move]);
+  const handlesCurrentLocation = useCallback(() => {
+    const current = session.current, active = marker(window.history.state);
+    return !!enabled && !!current && active?.owner === current.owner
+      && active.id === current.entries[current.index].id
+      && current.entries[current.index].handledUrl === window.location.href;
+  }, [enabled]);
   const current = enabled ? session.current : undefined;
-  return { record, back, forward,
+  return { record, back, forward, handlesCurrentLocation,
     canGoBack: !!current && !current.moving && current.index > 0,
     canGoForward: !!current && !current.moving && current.index < current.entries.length - 1,
     backSnapshot: current?.entries[current.index - 1]?.snapshot,

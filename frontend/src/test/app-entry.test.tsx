@@ -125,6 +125,41 @@ it('本地阅览入口无需登录，也不等待在线会话确认', async () =
   expect(screen.queryByRole('dialog', { name: '登录公论' })).toBeNull();
 });
 
+it('在线会话尚未返回时也能直接选择离线使用', async () => {
+  auth.loading = true;
+  window.history.replaceState(null, '', '/messages?msg=waiting-message');
+  render(<App />);
+  fireEvent.click(screen.getByRole('button', { name: '离线使用本地消息文件' }));
+  expect(await screen.findByRole('dialog', { name: '阅览导出文本' })).toBeVisible();
+  expect(screen.queryByRole('dialog', { name: '正在加载' })).toBeNull();
+  expect(screen.getByRole('button', { name: '新建本地消息文件' })).toBeEnabled();
+});
+
+it.each(['login', 'register'])('从%s窗口直接打开本地文件入口，无需登录', async mode => {
+  render(<App />);
+  await screen.findByRole('dialog', { name: '登录公论' });
+  if (mode === 'register') fireEvent.click(screen.getByRole('button', { name: '立即注册' }));
+  fireEvent.click(await screen.findByRole('button', { name: '离线使用本地消息文件' }));
+  expect(await screen.findByRole('dialog', { name: '阅览导出文本' })).toBeVisible();
+  expect(screen.queryByRole('dialog', { name: /登录公论|注册公论/ })).toBeNull();
+  expect(login).not.toHaveBeenCalled(); expect(register).not.toHaveBeenCalled();
+});
+
+it.each(['/messages', '/'].flatMap(path => ['login', 'register'].map(entry => ({ path, entry }))))('关闭自动登录后，从 $path 的 $entry 入口仍能返回原消息查询链接', async ({ path, entry }) => {
+  window.history.replaceState(null, '', `${path}?msg=shared&locate=1`);
+  login.mockImplementation(async () => { auth.user = user; });
+  render(<App />);
+  fireEvent.click(await screen.findByRole('button', { name: '关闭并浏览' }));
+  if (entry === 'register') {
+    fireEvent.click(await screen.findByRole('link', { name: '注册账号' }));
+    fireEvent.click(await screen.findByRole('link', { name: '立即登录' }));
+  } else fireEvent.click(await screen.findByRole('link', { name: '登录公论' }));
+  fireEvent.change(await screen.findByLabelText('与会者名'), { target: { value: '与会者' } });
+  fireEvent.change(screen.getByLabelText('密码'), { target: { value: 'password' } });
+  fireEvent.click(screen.getByRole('button', { name: '登录' }));
+  expect(await screen.findByTestId('workbench-route')).toHaveTextContent('/messages?msg=shared&locate=1');
+});
+
 it.each(['cmsrg29ky000h1hcqfec26kva', 'cmv4ln3s000k7md14vijeu209'])('旧话题哈希链接%s显示作废提示，可刷新或回首页', async id => {
   vi.stubEnv('PROD', true);auth.user = user;
   window.history.replaceState(null, '', `/#/topics/${id}`);

@@ -11,6 +11,8 @@ import type {
 } from "../../../utils/modelBridge";
 
 interface HandleSendMessageOnlyDependencies {
+  local?: boolean;
+  createMessage?: typeof api.createMessage;
   requireAuth: () => boolean;
   newMessageContent: string;
   scopeMessageId: string;
@@ -47,7 +49,7 @@ export async function handleSendMessageOnly(dependencies: HandleSendMessageOnlyD
     return null;
   }
   const recommendation = recommendationRef.current;
-  if (pts === 0 && recommendation === 0) {
+  if (!dependencies.local && pts === 0 && recommendation === 0) {
     setSendError('真假和价值至少一项须大于 0');
     return null;
   }
@@ -64,7 +66,7 @@ export async function handleSendMessageOnly(dependencies: HandleSendMessageOnlyD
   }
   setSendError(null);
   try {
-    const backendMsg = await api.createMessage(currentClassifyRelMsgId ?? scopeMessageId, { content: text, contentType: 'TEXT', stakeAmount: 0, wager: pts, selfAgree: pts > 0, recommendation,...(inContainer?{joinContribution:join}:{}) });
+    const backendMsg = await (dependencies.createMessage ?? api.createMessage)(currentClassifyRelMsgId ?? scopeMessageId, { content: text, contentType: 'TEXT', stakeAmount: 0, wager: pts, selfAgree: pts > 0, recommendation,...(inContainer?{joinContribution:join}:{}) });
     operationLog('发送消息', `message=${backendMsg.id} length=${text.length} stake=${pts}`);
     const msg: DemoMessage = {
       id: backendMsg.id,
@@ -82,7 +84,7 @@ export async function handleSendMessageOnly(dependencies: HandleSendMessageOnlyD
     };
     setMessages(prev => [...prev, msg]);
     // Fetch real stake counts from backend (not optimistic)
-    api.getMessageStakes(msg.id).then(s => {
+    if (!dependencies.local) api.getMessageStakes(msg.id).then(s => {
       mergeStakeSnapshot(msg.id, s);
       setAuthorStakes(prev => ({ ...prev, [msg.id]: s.stakes.find(st => st.side === 'PRO' && st.user.username === msg.author)?.amount ?? 0 }));
     }).catch(() => { });
@@ -91,13 +93,13 @@ export async function handleSendMessageOnly(dependencies: HandleSendMessageOnlyD
     if (!overrideContent) setNewMessageContent("");
     if (dependencies.onCreated) dependencies.onCreated(msg.id);
     else scrollMsgToCenter(msg.id);
-    if (!isCapturingPreview()) window.dispatchEvent(new Event('points-refresh'));
+    if (!dependencies.local && !isCapturingPreview()) window.dispatchEvent(new Event('points-refresh'));
     // The committed message/placement updates the existing canvas. Remounting
     // here briefly collapses its scroll range before final positioning.
     if (isInsideClassify && !dependencies.onCreated) setClassifyKey(key => key + 1);
     return msg;
   } catch (e) {
-    api.cancelCommandBatch(e);
+    if (!dependencies.local) api.cancelCommandBatch(e);
     if (await handleAuthError(e)) return null;
     const detail = e instanceof ApiError
       ? `${e.message}（HTTP ${e.status}，接口 ${e.path}${e.code ? `，错误码 ${e.code}` : ''}）`

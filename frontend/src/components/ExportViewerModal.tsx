@@ -14,6 +14,7 @@ import PromptModal from './PromptModal';
 import OfflineViewerStatus from './OfflineViewerStatus';
 import { conversionFailure } from '@gonglun/core';
 import { readViewerFile } from '../utils/readViewerFile';
+import { createLocalMessageFile } from '../utils/localMessageFile';
 
 export { validateExportForViewing } from '../utils/exportArchive';
 
@@ -201,8 +202,10 @@ export default function ExportViewerModal({ open, onClose }: Props) {
 
         <div data-dialog-body="true" style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
           <div style={{ color: 'var(--ink-94a3b8)', fontSize: 13, textAlign: 'center' }}>
-            打开公论导出的 JSON 文件，在本机阅览。
+            打开本地消息 JSON 文件，或新建消息文件。无需登录，可在本机整理、保存和导出。
           </div>
+          <button type="button" disabled={opening || processing} onClick={() => openData(createLocalMessageFile())}
+            style={{ ...dialogStyles.button, width: '100%' }}>新建本地消息文件</button>
 
           {lastExport && (
             <button disabled={opening} onClick={() => openData(lastExport.data, true, lastExport.reference)} style={{

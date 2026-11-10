@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import PromptModal from '../components/PromptModal';
 import { dialogStyles } from '../components/dialogStyles';
 import { AutoAuthEntryContext } from '../context/AutoAuthEntryContext';
+import { authReturnPath } from '../utils/authReturnPath';
 
 export default function LoginPage({ onClose, onRegister, onSuccess, closeText = '返回首页' }: {
   onClose?: () => void;
@@ -37,7 +38,7 @@ export default function LoginPage({ onClose, onRegister, onSuccess, closeText = 
     try {
       await login(username.trim(), password);
       if (onSuccess) onSuccess();
-      else navigate('/');
+      else navigate(authReturnPath(location.state), { replace: true });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '登录失败，请重试');
     } finally {
@@ -100,8 +101,10 @@ export default function LoginPage({ onClose, onRegister, onSuccess, closeText = 
           还没有账户？{' '}
           {onRegister
             ? <button type="button" onClick={onRegister} className="text-[color:var(--ink-60a5fa-2)] hover:underline font-medium">立即注册</button>
-            : <Link to="/register" className="text-[color:var(--ink-60a5fa-2)] hover:underline font-medium">立即注册</Link>}
+            : <Link to="/register" state={location.state} className="text-[color:var(--ink-60a5fa-2)] hover:underline font-medium">立即注册</Link>}
         </p>
+        <button type="button" onClick={() => { close(); window.dispatchEvent(new Event('open-export-viewer')); }}
+          style={{ ...dialogStyles.button, width: '100%', marginTop: 16 }}>离线使用本地消息文件</button>
         <button type="button" onClick={close} style={{ ...dialogStyles.button, width: '100%', marginTop: 16 }}>{closeText}</button>
       </div>} />
   );

@@ -19,6 +19,25 @@ export function transactionSummaryQuery(tx:PointTransaction){
 
 export const signedPoints=(amount:number)=>`${amount>=0?'+':''}${amount.toLocaleString()}`;
 export const balanceChange=(entry:PointTransaction)=>`${(entry.balanceAfter-entry.amount).toLocaleString()} → ${entry.balanceAfter.toLocaleString()}`;
+export const transactionAssetChange=(tx:PointTransaction)=>tx.amount+(tx.lockedDelta??Number(tx.data?.lockedDelta??0));
+export const lockedChangeLabel=(delta:number)=>delta?`${delta>0?'锁定':'锁定减少'} ${Math.abs(delta).toLocaleString()} 点`:'无变化';
+
+/** Only complete groups can distinguish returned principal from settlement profit/loss. */
+export function wagerSettlementSummary(tx:PointTransaction,complete=false){
+  if(!complete&&!tx.operationId&&!tx.entries&&tx.type!=='MESSAGE_GROUP')return undefined;
+  const entries=tx.entries??tx.reasonDetails??[tx];
+  let principal=0,payout=0,adjustment=0;
+  for(const entry of entries){
+    const reason=entry.reason??('data' in entry?String(entry.data?.reason??''):'');
+    if(reason==='结束对赌锁定')principal-=entry.lockedDelta??0;
+    else if(['平局退还本金','单边胜出退还本金','胜方按出资比例分配'].includes(reason))payout+=entry.amount;
+    else if(['撤回先前对赌分配','恢复先前对赌本金'].includes(reason))adjustment+=entry.amount+(entry.lockedDelta??0);
+  }
+  return principal>0?{principal,payout,adjustment,net:payout-principal+adjustment}:undefined;
+}
+
+export const settlementResultLabel=(net:number)=>net<0?'对赌结算净损失':net>0?'对赌结算净收益':'对赌结算持平';
+export const pointsReasonLabel=(reason:string)=>reason==='结束对赌锁定'?'对赌本金结算':reason;
 
 export function transactionReasonBreakdown(tx: PointTransaction) {
   if (tx.type === 'USAGE_REWARD' || ['使用公论计时奖励','每日刷新等待补发','使用奖励汇总','使用公论计时贡献','使用贡献汇总']
@@ -51,7 +70,10 @@ export function pointsReasonExplanation(reason: string): string | undefined {
     '审核押注解除锁定': '结算时移出审核押注池；实际到账另列结算记录。',
     '审核自押解除锁定': '结算时移出审核自押；实际到账另列结算记录。',
     '审核押注结算': '按审核结论和对应投入计算的结算到账。',
-    '结束对赌锁定': '结算时解除立场投入的锁定；本金及收益另列结算记录。',
+    '结束对赌锁定': '结算时扣除锁定本金，不代表退回可用余额。胜方或平局的到账另列，输掉的本金不退回。',
+    '平局退还本金': '双方投入相同，退回本金，结算无盈亏。',
+    '单边胜出退还本金': '没有反方投入，退回本金，结算无额外收益。',
+    '胜方按出资比例分配': '结算到账包含本金和分得的反方投入；到账减去本金才是净收益。',
     '撤回先前对赌分配': '重新结算前撤回上次的结算到账。',
     '恢复先前对赌本金': '重新结算前恢复上次已结算的本金锁定。',
     '历史消息真假补扣': '为历史消息补齐当时要求的真假投入，并转入锁定。',

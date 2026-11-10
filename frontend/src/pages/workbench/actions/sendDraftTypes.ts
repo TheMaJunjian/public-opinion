@@ -11,6 +11,7 @@ import type {
 import type { ClassifyStackEntry } from '../types';
 
 export interface DraftSendDependencies {
+  local?: boolean;
   requireAuth: () => boolean;
   singleButtonEnabled: boolean;
   newMessageContent: string;

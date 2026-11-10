@@ -3,6 +3,7 @@ import { api } from '../../../api';
 import type { WorkbenchComposer } from '../useWorkbenchComposer';
 
 interface HandleSendClickDependencies {
+  withCommandBatch?: (work: () => Promise<void>, onCommitted: (count: number) => void) => Promise<unknown>;
   reviewContext?: import('@gonglun/core').ReviewContext;
   composer: Pick<WorkbenchComposer, 'capture' | 'restore' | 'setRecommendationAmount' | 'relationType'>;
   captureOptimisticRollback(): () => void;
@@ -28,7 +29,8 @@ export async function handleSendClick(dependencies: HandleSendClickDependencies)
     draft = composer.capture();
     rollback = captureOptimisticRollback();
     let committedCount = 0;
-    await api.withCommandBatch(handleQuickSendAndRelateFromDraftTargets, count => { committedCount = count; }, dependencies.reviewContext);
+    if (dependencies.withCommandBatch) await dependencies.withCommandBatch(handleQuickSendAndRelateFromDraftTargets, count => { committedCount = count; });
+    else await api.withCommandBatch(handleQuickSendAndRelateFromDraftTargets, count => { committedCount = count; }, dependencies.reviewContext);
     if (committedCount === 0) composer.restore(draft);
     else {
       if (draft.state.relationType !== 'correct') composer.setRecommendationAmount(0);
@@ -38,7 +40,7 @@ export async function handleSendClick(dependencies: HandleSendClickDependencies)
     if (draft) composer.restore(draft);
     rollback?.();
     setSendError(error instanceof Error ? error.message : '发送失败，输入与选择已保留');
-    window.dispatchEvent(new Event('gonglun:reload'));
+    if (!dependencies.withCommandBatch) window.dispatchEvent(new Event('gonglun:reload'));
   } finally {
     sendInFlightRef.current = false;
     setSendInFlight(false);

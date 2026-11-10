@@ -29,6 +29,15 @@ function Chooser() {
 beforeEach(() => { vi.mocked(loadExportNavigation).mockResolvedValue(null); vi.mocked(loadLastExportPreview).mockResolvedValue(null); vi.mocked(getExportCacheReference).mockReturnValue(null); vi.mocked(loadCachedExport).mockResolvedValue(null); vi.mocked(loadLastExport).mockResolvedValue(null); vi.mocked(saveLastExport).mockResolvedValue(); });
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.useRealTimers(); });
 
+it('creates a new local discussion without choosing a file or logging in', async () => {
+  render(<MemoryRouter><Chooser /></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: '新建本地消息文件' }));
+  await waitFor(() => expect(saveLastExport).toHaveBeenCalledTimes(1));
+  expect(vi.mocked(saveLastExport).mock.calls[0][0]).toMatchObject({ format: 'gonglun-view-3', formatVersion: 5,
+    scope: { messageId: null, title: '本地讨论' }, messages: [], relations: [] });
+  await waitFor(() => expect(JSON.parse(screen.getByTestId('location').textContent!).pathname).toBe('/viewer'));
+});
+
 it.each(['file', 'drop', 'cache'])('paints a waiting dialog before processing %s and opens exactly the saved data', async source => {
   if (source === 'cache') vi.mocked(loadLastExport).mockResolvedValue(data);
   render(<MemoryRouter initialEntries={['/messages']}><Chooser /></MemoryRouter>);

@@ -1,4 +1,4 @@
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Z_INDEX } from '../constants/zIndex';
@@ -23,6 +23,8 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
   const interfaceZoom = useInterfaceZoom();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const authState = { returnTo: location.pathname === '/' ? `/messages${location.search}` : `${location.pathname}${location.search}` };
   const navRef = useRef<HTMLElement>(null);
   const leftControlsRef = useRef<HTMLDivElement>(null);
   const rightControlsRef = useRef<HTMLDivElement>(null);
@@ -137,11 +139,12 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
             >
               阅览
             </button>
-            <Link to="/login" className="hover:text-[color:var(--ink-c7d2fe)] text-sm font-medium transition-colors">
+            <Link to="/login" state={authState} className="hover:text-[color:var(--ink-c7d2fe)] text-sm font-medium transition-colors">
               登录
             </Link>
             <Link
               to="/register"
+              state={authState}
               className="bg-[color:var(--surface-6366f1)] hover:bg-[color:var(--surface-818cf8)] px-4 py-1.5 rounded text-sm font-medium transition-colors"
             >
               注册

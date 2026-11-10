@@ -2,6 +2,9 @@ import { useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useBrowsingHistory } from '../pages/workbench/useBrowsingHistory';
+import { BrowserRouter, HashRouter, useLocation } from 'react-router-dom';
+import { useMessageLinkNavigation } from '../hooks/useMessageLinkNavigation';
+import { categoryMessageUrl } from '../utils/messageLink';
 
 function Workbench({ owner = 'online', browser = true }: { owner?: string; browser?: boolean }) {
   const [view, setView] = useState('主页');
@@ -39,6 +42,76 @@ async function traverse(delta: number) {
     await popped;
   });
 }
+
+function LinkedWorkbench({ onLink }: { onLink: (id: string) => void }) {
+  const [category, setCategory] = useState<string | null>(null);
+  const [position, setPosition] = useState('顶部');
+  const location = useLocation();
+  const history = useBrowsingHistory('linked', () => ({ category, position }), snapshot => {
+    setCategory(snapshot.category); setPosition(snapshot.position);
+  }, { browser: true });
+  useMessageLinkNavigation(true, id => { onLink(id); setCategory(id); setPosition('顶部'); }, history.handlesCurrentLocation);
+  const go = (id: string | null) => { history.record(categoryMessageUrl(window.location.href, id)); setCategory(id); setPosition('顶部'); };
+  return <>
+    <output aria-label="分类">{category ?? '主页'}</output><output aria-label="位置">{position}</output>
+    <output aria-label="路由查询">{location.search}</output><textarea aria-label="草稿" />
+    <button onClick={() => go('A')}>A</button><button onClick={() => go('B')}>B</button><button onClick={() => go('C')}>C</button>
+    <button onClick={() => go(null)}>主页</button><button onClick={() => setPosition('中间')}>滚动</button>
+    <button onClick={history.back} disabled={!history.canGoBack}>返回</button>
+    <button onClick={history.forward} disabled={!history.canGoForward}>前进</button>
+  </>;
+}
+
+it.each([false, true])('分类网址同步路由、浏览器历史和刷新入口，保留草稿与浏览位置（hash=%s）', async hash => {
+  window.history.replaceState({ key: 'linked', idx: 0 }, '', `${hash ? '/#' : ''}/messages?view=graph&locate=1`);
+  const onLink = vi.fn(), Router = hash ? HashRouter : BrowserRouter;
+  let view = render(<Router><LinkedWorkbench onLink={onLink} /></Router>);
+  const query = () => new URLSearchParams(hash ? window.location.hash.split('?')[1] : window.location.search);
+  const draft = screen.getByRole('textbox', { name: '草稿' });
+  fireEvent.change(draft, { target: { value: '未发送' } });
+  fireEvent.click(screen.getByRole('button', { name: 'A' }));
+  expect(query().get('msg')).toBe('A');
+  expect(query().get('view')).toBe('graph');
+  expect(query().has('locate')).toBe(false);
+  expect(screen.getByLabelText('路由查询')).toHaveTextContent('msg=A');
+  fireEvent.click(screen.getByRole('button', { name: '滚动' }));
+  fireEvent.click(screen.getByRole('button', { name: 'B' }));
+  await traverse(-1);
+  expect(query().get('msg')).toBe('A');
+  expect(screen.getByLabelText('分类')).toHaveTextContent('A');
+  expect(screen.getByLabelText('位置')).toHaveTextContent('中间');
+  await traverse(1);
+  expect(query().get('msg')).toBe('B');
+  expect(screen.getByLabelText('分类')).toHaveTextContent('B');
+  // A newer click wins even when the previous Back has not completed yet.
+  fireEvent.click(screen.getByRole('button', { name: '返回' }));
+  fireEvent.click(screen.getByRole('button', { name: 'C' }));
+  await waitFor(() => expect(query().get('msg')).toBe('C'));
+  await waitFor(() => expect(screen.getByRole('button', { name: '返回' })).toBeEnabled());
+  expect(screen.getByRole('button', { name: '前进' })).toBeDisabled();
+  await traverse(-1);
+  expect(query().get('msg')).toBe('A');
+  expect(screen.getByLabelText('位置')).toHaveTextContent('中间');
+  await traverse(1);
+  expect(query().get('msg')).toBe('C');
+  expect(screen.getByLabelText('分类')).toHaveTextContent('C');
+  expect(screen.getByRole('textbox', { name: '草稿' })).toBe(draft);
+  expect(draft).toHaveValue('未发送');
+  expect(onLink).not.toHaveBeenCalled();
+  view.unmount();
+  // A fresh mount has no in-memory snapshot and must follow the same URL.
+  view = render(<Router><LinkedWorkbench onLink={onLink} /></Router>);
+  expect(onLink).toHaveBeenCalledExactlyOnceWith('C');
+  expect(screen.getByLabelText('分类')).toHaveTextContent('C');
+  fireEvent.click(screen.getByRole('button', { name: '主页' }));
+  expect(query().has('msg')).toBe(false);
+  expect(query().get('view')).toBe('graph');
+  await traverse(-1);
+  expect(query().get('msg')).toBe('C');
+  expect(screen.getByLabelText('分类')).toHaveTextContent('C');
+  expect(onLink).toHaveBeenCalledTimes(1);
+  view.unmount();
+});
 
 it('浏览器和站内按钮共用分类浏览记录，保留草稿及原路由状态', async () => {
   const routeState = window.history.state;

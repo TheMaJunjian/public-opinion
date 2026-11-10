@@ -210,7 +210,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     });
   }, [viewerUser?.username, user?.username, startProjection, records.replace, scopeCacheLimit]);
   viewerEnsure.current = viewerStructure ? async ids => {
-    if (ids.some(id => !viewerIndex.current?.has(id))) throw new Error('这份阅览文件中没有该消息');
+    if (ids.some(id => !viewerIndex.current?.has(id))) throw new Error(isViewerRoute ? '这份阅览文件中没有该消息' : '未找到该消息，消息可能已删除或不在当前可访问范围内');
     await loadViewerScope({ ...viewerScope.current, extraIds: [...new Set([...viewerScope.current.extraIds ?? [], ...ids])] });
   } : null;
   useEffect(() => () => { viewerScopeGeneration.current++; cancelViewerScope.current?.(); }, []);

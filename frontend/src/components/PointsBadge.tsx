@@ -10,7 +10,7 @@ import { useUsagePoints } from './useUsagePoints';
 import UsagePointsProgress from './UsagePointsProgress';
 import MessageReferenceControl from './MessageReferenceControl';
 import PointsTransactionDetails from './PointsTransactionDetails';
-import {balanceChange,transactionReferences} from '../utils/pointTransactions';
+import {balanceChange,lockedChangeLabel,pointsReasonLabel,settlementResultLabel,signedPoints,transactionAssetChange,transactionReferences,wagerSettlementSummary} from '../utils/pointTransactions';
 
 /**
  * PointsBadge — 导航栏贡献点显示组件。
@@ -169,7 +169,7 @@ export default function PointsBadge() {
         <span className="text-[color:var(--ink-c7d2fe)]">
           <ThemeIcon name="points" fallback="🪙" /> {points.available.toLocaleString()}
         </span>
-        <span className="text-[color:var(--ink-818cf8-3)] text-xs" title={`锁定: ${points.locked}`}>
+        <span className="text-[color:var(--ink-818cf8-3)] text-xs" title={`待结算的投入和预留费用: ${points.locked} 点；已结算损失不计入锁定`}>
           <ThemeIcon name="lock" fallback="🔒" />{points.locked}
         </span>
         <span className="text-[color:var(--ink-f87171)] text-xs" title={`累计损失: ${breakdown.totalLost}`}>
@@ -220,6 +220,7 @@ export default function PointsBadge() {
             <div style={{marginTop:8}}><UsagePointsProgress completion={usage.completion} roundId={usage.progress?.roundId} unavailable={!usage.progress || usage.error} /></div>
             <div style={{marginTop:5}}>每天 00:00 重置时长 · 使用贡献按天汇总</div>
           </div>
+          <p className="px-3 py-2 text-xs text-[color:var(--text-muted)] border-b border-[color:var(--dialog-border)]">锁定是待结算的投入和预留费用。结算损失从锁定中扣除；资产变化同时计算可用和锁定。</p>
           {txLoading && transactions.length === 0 ? (
             <div className="px-3 py-4 text-sm text-[color:var(--text-muted)] text-center">加载中...</div>
           ) : transactions.length === 0 ? (
@@ -233,6 +234,7 @@ export default function PointsBadge() {
                 const sourceId=tx.messageId??(typeof txData?.messageId==='string'?txData.messageId:undefined);
                 const references=transactionReferences(tx);
                 const canNavigate = references.length === 1;
+                const assetChange=transactionAssetChange(tx),settlement=wagerSettlementSummary(tx);
                 return (
                 <li
                   key={tx.id}
@@ -265,24 +267,25 @@ export default function PointsBadge() {
                   <div className="flex justify-between items-center gap-2">
                   <div>
                     <span className="font-medium text-[color:var(--text-primary)]">
-                      {typeLabel(tx.type)}
+                      {settlement?`${settlementResultLabel(settlement.net)}${settlement.net?` ${Math.abs(settlement.net).toLocaleString()} 点`:''}`:typeLabel(tx.type)}
                     </span>
                     <span className="ml-1 text-[color:var(--text-muted)]">
                       {txDetail(tx)}
                     </span>
                   </div>
                   <div className="text-right">
-                    <span className={tx.amount >= 0 ? 'text-[color:var(--ink-4ade80)]' : 'text-[color:var(--ink-ef4444)]'}>
-                      {tx.amount >= 0 ? '+' : ''}{tx.amount.toLocaleString()}
+                    <span className={assetChange>0?'text-[color:var(--ink-4ade80)]':assetChange<0?'text-[color:var(--ink-ef4444)]':undefined}>
+                      {tx.type==='USAGE_REWARD'?'':'资产 '}{signedPoints(assetChange)}
                     </span>
-                    {tx.type !== 'USAGE_REWARD' && <span className="ml-2 text-[color:var(--text-muted)]">
+                    {tx.type !== 'USAGE_REWARD' && <div className="text-[color:var(--text-muted)]">
+                      <span>可用 {signedPoints(tx.amount)}</span><span className="ml-2">
                       余额 {balanceChange(tx)}
-                    </span>}
+                    </span></div>}
                     {canNavigate && <span className="ml-1 text-[color:var(--ink-818cf8-3)]" title="双击跳转到相关消息">↗</span>}
                   </div>
                   </div>
                   <div className="flex justify-between items-center gap-2 mt-2">
-                    <span className="text-[color:var(--text-muted)]">{!!tx.lockedDelta&&`${tx.lockedDelta>0?'锁定':'解锁'} ${Math.abs(tx.lockedDelta)} 点`}</span>
+                    <span className="text-[color:var(--text-muted)]">{!!tx.lockedDelta&&lockedChangeLabel(tx.lockedDelta)}</span>
                     <button type="button" className="text-[color:var(--ink-818cf8-3)] hover:underline" aria-label={`查看${tx.type==='USAGE_REWARD'?'使用贡献':'收支'}详情 ${tx.id}`}
                       onDoubleClick={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();setDetailTx(tx);}}>详情 ›</button>
                   </div>
@@ -311,7 +314,7 @@ function typeLabel(type: string): string {
     SETTLEMENT_GAIN: '结算收益',
     SETTLEMENT_LOSS: '结算损失',
     CLAWBACK: '推翻扣回',
-    UNLOCK: '解锁',
+    UNLOCK: '锁定减少',
     LOCK: '锁定',
     SPEND: '支出',
     TRANSFER: '转入',
@@ -364,7 +367,7 @@ function txDetail(tx: import('../types').PointTransaction): string {
   }
 
   // Mint: show reason
-  if (d.reason) return String(d.reason).replace('使用公论计时奖励','使用公论计时贡献').replace('使用奖励汇总','使用贡献汇总');
+  if (d.reason) return pointsReasonLabel(String(d.reason)).replace('使用公论计时奖励','使用公论计时贡献').replace('使用奖励汇总','使用贡献汇总');
 
   if (tx.type === 'REVENUE_DISTRIBUTION') return '按贡献点比例分配';
   if (tx.type === 'REVENUE_WITHDRAWAL') return '收入撤回';

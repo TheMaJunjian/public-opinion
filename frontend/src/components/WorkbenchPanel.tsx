@@ -97,6 +97,7 @@ interface WorkbenchPanelProps {
   previewNotice?: string;
   singleSideReview?: { title: string; kind?:'container'|'correction'|'relation'; onExit: () => void };
   isViewerMode?: boolean;
+  localEditing?: boolean;
   localReplyEditor?: (renderSend: (controls: LocalSendControls) => ReactNode) => ReactNode;
   hideViewerUser?: boolean;
   viewerUsers?: User[];
@@ -438,12 +439,12 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
         title={p.canExitTrace ? '退出全部追溯并恢复进入第一次追溯前的现场' : '退出当前查看'}>{p.singleSideReview || p.isRelatedView ? '退出查看' : '退出追溯'}</button>}
       {p.isViewerMode && <div style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <span style={{ fontWeight: 600 }}>{p.localReplyEditor ? '知乎文档阅览' : '公论文档阅览'}</span>
+          <span style={{ fontWeight: 600 }}>{p.localEditing ? '本地讨论记录' : p.localReplyEditor ? '知乎文档阅览' : '公论文档阅览'}</span>
           {!p.localReplyEditor && !p.hideViewerUser && <label style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ink-cbd5e1)", fontSize: 12 }}>
-            当前用户
+            {p.localEditing ? '本地发言人' : '当前用户'}
             <input
               list="viewer-user-options"
-              placeholder="输入用户名"
+              placeholder={p.localEditing ? "输入或选择发言人" : "输入用户名"}
               value={p.viewerUsername ?? ""}
               onChange={event => p.onViewerUsernameChange?.(event.target.value)}
               style={{ flex: 1, minWidth: 120, padding: "5px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-222)", color: "var(--ink-eee)", fontSize: 12 }}
@@ -454,6 +455,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           </label>}
         </div>
         <button className="workbench-action" onClick={p.onExitViewer} style={{ width: "100%", boxSizing: "border-box", padding: "5px 12px", borderRadius: 4, border: "1px solid var(--line-f59e0b)", background: "var(--surface-2a1a00)", color: "var(--ink-f59e0b)", fontSize: 12, cursor: "pointer" }}>退出阅览</button>
+        {p.localEditing && <p style={{ margin: 0, fontSize: 12 }}>可输入新发言人或选择已有参与者。编辑只保存在本机，下载阅览文件可保存或分享讨论记录。</p>}
       </div>}
       {renderComparisonHeader()}
       {p.isPreviewMode && !p.singleSideReview && (
@@ -520,13 +522,13 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           </ul>
         )}
 
-        {(!p.isViewerMode || p.localReplyEditor) && <div className="desk-staging-actions" style={{ marginTop: 6, display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 8 }}>
+        {(!p.isViewerMode || p.localEditing || p.localReplyEditor) && <div className="desk-staging-actions" style={{ marginTop: 6, display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 8 }}>
           <button className="workbench-action" onClick={() => p.commitDraftTo("source")} disabled={p.draftUnits.length === 0} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.draftUnits.length === 0 ? "var(--surface-333)" : "var(--surface-444)", color: p.draftUnits.length === 0 ? "var(--ink-777)" : "var(--ink-fff)", cursor: p.draftUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>加入来源集合</button>
           <button className="workbench-action" onClick={() => p.commitDraftTo("target")} disabled={p.draftUnits.length === 0} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: p.draftUnits.length === 0 ? "var(--surface-333)" : "var(--surface-444)", color: p.draftUnits.length === 0 ? "var(--ink-777)" : "var(--ink-fff)", cursor: p.draftUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>加入目标集合</button>
         </div>}
       </div>
 
-      {(!p.isViewerMode || p.localReplyEditor) && <div className="desk-endpoints" data-empty={p.sourceUnits.length === 0 && p.targetUnits.length === 0} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      {(!p.isViewerMode || p.localEditing || p.localReplyEditor) && <div className="desk-endpoints" data-empty={p.sourceUnits.length === 0 && p.targetUnits.length === 0} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <div className="desk-section-title"><span className="desk-section-number">02</span>来源 ⟶ 目标<AboutLink href="/about.html#guide-endpoints" className="workbench-help-link" aria-label="来源与目标帮助" title="来源与目标帮助">?</AboutLink></div>
         <div style={{ flex: 1, border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, minWidth: 0 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600, marginBottom: 4 }}>
@@ -564,13 +566,13 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
         </div>
       </div>}
       {p.isViewerMode && p.localReplyEditor && <>{p.relationChoices}{p.localReplyEditor(renderLocalComposer)}</>}
-      {!p.isViewerMode && p.draftUnits.length > 0 && p.targetUnits.length > 0 && (
+      {(!p.isViewerMode || p.localEditing) && p.draftUnits.length > 0 && p.targetUnits.length > 0 && (
         <div style={{ border: "1px solid var(--line-b45309)", borderRadius: 4, padding: "6px 8px", background: "var(--surface-3b2708)", color: "var(--ink-fbbf24)", fontSize: 12 }}>
           候选区和目标集合同时有内容。发送前请将候选区移入目标集合，或清空其中一方。
         </div>
       )}
 
-      {!p.isViewerMode && <>
+      {(!p.isViewerMode || p.localEditing) && <>
         {p.relationChoices}
         <ComposerSection>
           {p.hasSecondaryRelationSelector && (() => {
@@ -665,7 +667,11 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                 readOnly={textAreaDisabled} onContentChange={p.setNewMessageContent} />
             );
           })()}
-          {renderSendControls()}
+          {renderSendControls(p.localEditing ? {
+            enabled: p.singleButtonEnabled, onSend: p.handleQuickSendAndRelateFromDraftTargets,
+            hint: '以当前发言人记录到本机，无需登录。',
+            feedback: (p.sendError || p.sendValidationLabel) ? <div role="alert">{p.sendError || p.sendValidationLabel}</div> : undefined,
+          } : undefined)}
           </div>
         </ComposerSection>
       </>}

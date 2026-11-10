@@ -67,8 +67,7 @@ function SecondaryRelationChoices({ options, value, onChange, label }: {
 }) {
   return <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, flexWrap: 'wrap' }}>
     <span style={{ opacity: 0.85 }}>附加关系：</span>
-    {options.map(type => <button className="workbench-action" key={type} aria-pressed={value === type} onClick={() => onChange(type)}
-      style={{ padding: '2px 8px', borderRadius: 4, border: '1px solid var(--line-666)', background: value === type ? 'var(--surface-0b84ff)' : 'var(--surface-222)', color: value === type ? 'var(--ink-fff)' : 'var(--ink-rgba-255-255-255-0-7)', cursor: 'pointer' }}>{label(type)}</button>)}
+    {options.map(type => <button type="button" className="workbench-action workbench-choice" key={type} aria-pressed={value === type} onClick={() => onChange(type)}>{label(type)}</button>)}
   </div>;
 }
 
@@ -304,10 +303,11 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
       </div>}
       <div className="desk-send-controls" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         {!local && showContributionControls && <>
+          {[...p.draftUnits,...p.targetUnits,...p.sourceUnits].some(unit=>{const message=messageMap.get(unit.messageId);return message?.restricted||message?.moderation?.status==='rejected'&&!(p.relationType==='operations'&&p.secondaryRelationType==='review');})&&<p role="status">受限消息不能作为来源或目标。请移除选择；作者可从审核入口申请复核。</p>}
           {p.contributionGroups.map(group=><div key={group.type} data-contribution-type={group.type} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 6px',border:'1px solid var(--line-444)',borderRadius:4}}>
             <span style={{fontSize:11}}>{group.label}消息 × {group.count}</span>
-            {(['truth','value'] as const).map(field=><label key={field} style={{fontSize:11}}>{field==='truth'?'真假':'价值'}
-              <input aria-label={`${group.type==='TEXT'?'':group.label}${field==='truth'?'真假':'价值'}投入`} type="number" min={0} max={Math.max(0,p.availablePoints)} value={group[field]}
+            {(group.type==='REVIEW'?['truth'] as const:['truth','value'] as const).map(field=><label key={field} style={{fontSize:11}}>{group.type==='REVIEW'?'审核押注':field==='truth'?'真假':'价值'}
+              <input aria-label={group.type==='REVIEW'?'审核押注投入':`${group.type==='TEXT'?'':group.label}${field==='truth'?'真假':'价值'}投入`} type="number" min={0} max={Math.max(0,p.availablePoints)} value={group[field]}
                 disabled={targetInvestmentDimension(group.type)===(field==='truth'?'VALUE':'TRUTH')}
                 title={targetInvestmentDimension(group.type)===(field==='truth'?'VALUE':'TRUTH')?'此项固定为 0，投入计入目标消息的另一维度':undefined}
                 data-guide-contribution-stake={field==='truth'?'true':undefined}
@@ -319,12 +319,14 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           <div className="desk-consumption-summary" data-guide-contribution-consumption={p.totalConsumption ? 'true' : undefined} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span className="desk-legacy-fees" style={{ fontSize: 11, color: 'var(--ink-94a3b8)' }}>可用 {p.availablePoints} 点</span>
           {p.totalConsumption && <span className="desk-legacy-fees" style={{ fontSize: 11, color: p.totalConsumption.total > p.availablePoints ? 'var(--ink-f87171)' : 'var(--ink-f59e0b)' }}>
-            本次 {p.totalConsumption.messageCount} 条消息，预计 {p.totalConsumption.total} 点（协议费 {p.totalConsumption.protocolFeeTotal} + 真假 {p.totalConsumption.stakeTotal} + 价值 {p.totalConsumption.recommendationTotal}{p.totalConsumption.delegationRewardStake > 0 ? ` + 委托报酬 ${p.totalConsumption.delegationRewardStake}` : ''}）
+            本次 {p.totalConsumption.messageCount} 条消息，预计 {p.totalConsumption.total} 点（协议费 {p.totalConsumption.protocolFeeTotal} + 真假 {p.totalConsumption.stakeTotal} + 价值 {p.totalConsumption.recommendationTotal}{p.totalConsumption.reviewWagerTotal?` + 审核押注 ${p.totalConsumption.reviewWagerTotal}`:''}{p.totalConsumption.reviewFeeTotal?` + 审核费 ${p.totalConsumption.reviewFeeTotal} + 审核自押 ${p.totalConsumption.reviewDepositTotal}`:''}{p.totalConsumption.delegationRewardStake > 0 ? ` + 委托报酬 ${p.totalConsumption.delegationRewardStake}` : ''}）
           </span>}
           {p.totalConsumption && <dl className="desk-fee-breakdown" aria-label="费用明细">
             <div><dt>协议费</dt><dd>{p.totalConsumption.protocolFeeTotal} 点</dd></div>
             <div><dt>真假投入</dt><dd>{p.totalConsumption.stakeTotal} 点</dd></div>
             <div><dt>价值投入</dt><dd>{p.totalConsumption.recommendationTotal} 点</dd></div>
+            {!!p.totalConsumption.reviewWagerTotal&&<div><dt>审核押注</dt><dd>{p.totalConsumption.reviewWagerTotal} 点</dd></div>}
+            {!!(p.totalConsumption.reviewFeeTotal||p.totalConsumption.reviewDepositTotal)&&<><div><dt>审核费</dt><dd>{p.totalConsumption.reviewFeeTotal} 点</dd></div><div><dt>审核自押</dt><dd>{p.totalConsumption.reviewDepositTotal} 点（押通过，参与盈亏，不计审核票）</dd></div></>}
             {p.totalConsumption.delegationRewardStake > 0 && <div><dt>委托报酬</dt><dd>{p.totalConsumption.delegationRewardStake} 点</dd></div>}
             <div data-over-budget={p.totalConsumption.total > p.availablePoints || undefined}><dt>合计 · {p.totalConsumption.messageCount} 条消息</dt><dd>{p.totalConsumption.total} 点</dd></div>
           </dl>}
@@ -338,16 +340,21 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
         {!local && <span className="desk-send-balance">预计 {p.totalConsumption?.total ?? '—'} 点 · 可用 {p.availablePoints} 点</span>}
         {!local && p.sendPreview && (p.sendPreview.active || p.sendPreview.phase !== 'idle') && <button className="workbench-action" type="button" disabled={p.sendPreview.phase === 'sending'} onClick={p.sendPreview.onCancel}
           style={{padding:'4px 12px',borderRadius:4,border:'1px solid var(--line-666)',background:'var(--surface-333)',color:'var(--ink-eee)'}}>退出预览</button>}
-        {!local && p.sendPreview && <button className="workbench-action" type="button" disabled={!p.sendPreview.canPrepare || p.sendPreview.phase !== 'idle'}
-          onClick={() => void p.sendPreview?.onPreview()} style={{padding:'4px 12px',borderRadius:4,border:'1px solid var(--line-666)',background:'var(--surface-333)',color:'var(--ink-eee)'}}>
-          {p.sendPreview.active ? '更新预览' : '预览'}
-        </button>}
         <DrawingReady>{drawingReady=>{
-          const enabled=local ? local.enabled && !p.isPreviewMode : !p.isPreviewMode && (!p.sendPreview || p.sendPreview.phase === 'idle') && (p.sendPreview?.active ? p.sendPreview.ready && drawingReady : p.singleButtonEnabled);
-          return <button className="workbench-action" data-guide-send="true" data-guide-text-message-send="true" onClick={() => { if (local) { local.onSend(); return; } window.dispatchEvent(new Event('guide-send-selected')); p.handleQuickSendAndRelateFromDraftTargets(); }} disabled={!enabled}
-          style={{ padding: "4px 14px", borderRadius: 4, border: "1px solid var(--line-666)", background: enabled ? "var(--surface-0b84ff)" : "var(--surface-333)", color: enabled ? "var(--ink-fff)" : "var(--ink-777)", cursor: enabled ? "pointer" : "default", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
-          {!local && p.sendPreview?.active ? '确认发送' : '发送'}
-        </button>;}}</DrawingReady>
+          const canSubmitDraft = p.singleButtonEnabled && !p.isPreviewMode && (!p.sendPreview || p.sendPreview.phase === 'idle');
+          const enabled=local ? local.enabled && !p.isPreviewMode : p.sendPreview?.active
+            ? !p.isPreviewMode && p.sendPreview.phase === 'idle' && p.sendPreview.ready && drawingReady : canSubmitDraft;
+          return <>
+            {!local && p.sendPreview && <button className="workbench-action" type="button" disabled={!canSubmitDraft || !p.sendPreview.canPrepare || !drawingReady}
+              onClick={() => void p.sendPreview?.onPreview()} style={{padding:'4px 12px',borderRadius:4,border:'1px solid var(--line-666)',background:'var(--surface-333)',color:'var(--ink-eee)'}}>
+              {p.sendPreview.active ? '更新预览' : '预览'}
+            </button>}
+            <button className="workbench-action" data-guide-send="true" data-guide-text-message-send="true" onClick={() => { if (local) { local.onSend(); return; } window.dispatchEvent(new Event('guide-send-selected')); p.handleQuickSendAndRelateFromDraftTargets(); }} disabled={!enabled}
+              style={{ padding: "4px 14px", borderRadius: 4, border: "1px solid var(--line-666)", background: enabled ? "var(--surface-0b84ff)" : "var(--surface-333)", color: enabled ? "var(--ink-fff)" : "var(--ink-777)", cursor: enabled ? "pointer" : "default", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
+              {!local && p.sendPreview?.active ? '确认发送' : '发送'}
+            </button>
+          </>;
+        }}</DrawingReady>
         <span className="desk-send-hint" data-duplicates-validation={!local && p.singleButtonLabel === p.sendValidationLabel || undefined} style={{ fontSize: 11, color: "var(--ink-fff)" }}>{local ? local.hint : p.singleButtonLabel}</span>
         </div>
       </div>
@@ -577,14 +584,20 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                     ? ["none", "evidence", "delegation", "custom"]
                       : p.relationType === "proposal"
                         ? p.proposalSecondaryOptions
+                      : p.relationType === "operations"
+                        ? ["none", "review"]
                       : p.relationType === "delegation"
                         ? ["create", "fulfill"]
                       : p.correctSecondaryOptions;
             return (
-              <SecondaryRelationChoices options={opts} value={p.secondaryRelationType} label={p.secondaryRelationLabel}
+              <SecondaryRelationChoices options={opts} value={p.secondaryRelationType} label={type=>p.relationType==='operations'&&type==='none'?'公告':p.secondaryRelationLabel(type)}
                 onChange={type => p.setSecondaryRelationType(previous => p.relationType === 'correct' ? type : (previous === type && type !== 'none') ? 'none' : type)} />
             );
           })()}
+          {p.relationType==='operations'&&p.secondaryRelationType==='review'&&<div role="group" aria-label="审核判断" style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',fontSize:12}}>
+            <span>审核判断：</span>{(['pass','reject'] as const).map(verdict=><button key={verdict} type="button" className="workbench-action workbench-choice" aria-pressed={p.subType===verdict} onClick={()=>p.setSubType(verdict)}>{verdict==='pass'?'审核通过':'审核不通过'}</button>)}
+            <span>选择一条完整目标消息，理由可留空。</span>
+          </div>}
           {p.relationType === 'correct' && p.secondaryRelationType === 'width-adjustment' && <CardWidthEditor
             width={p.correctionWidth ?? 320} onChange={width => p.setCorrectionWidth?.(width)} />}
           {p.relationType === 'correct' && <div style={{ fontSize: 11, color: 'var(--ink-9ca3af)' }}>
@@ -634,7 +647,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                 || (p.isMergeType && p.hasTargetsAvailable)
                 || (p.isGovernanceOrOpsType && p.relationType === "proposal" && (p.secondaryRelationType === '分配收入' || p.secondaryRelationType === '终止结算'))
               );
-            const placeholderText = p.joinOnlyAction ? "加入已有容器消息，此处不可输入"
+            const placeholderText = p.relationType==='operations'&&p.secondaryRelationType==='review'?'填写审核理由（可选，保存在审核关系消息中）':p.joinOnlyAction ? "加入已有容器消息，此处不可输入"
               : isTagWithoutSecondary ? "请先在上方选择推荐或冷藏"
               : textAreaDisabled
               ? (p.draftHasRelationTarget && p.relationType === "correct" ? "关系消息不能作为更正目标，请选择普通文本消息" : p.isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : p.isMergeType ? "归并关系为与会者-消息关系，此处不应输入内容" : p.isGovernanceOrOpsType && p.relationType === "proposal"

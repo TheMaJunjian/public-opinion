@@ -45,6 +45,7 @@ export function deriveSingleButtonLabel(input: DeriveSingleButtonLabelInput): st
   }
   const typeName = relationTypeName(relationType);
   const usingDraft = draftUnits.length > 0;
+  if(relationType==='operations'&&secondaryRelationType==='review')return !['pass','reject'].includes(subType)?'请选择审核通过或不通过':`发送审核${subType==='pass'?'通过':'不通过'}判断（依赖所选目标消息）`;
   if (joinOnlyAction) return hasTargetsAvailable
     ? `将${usingDraft ? '候选区' : '目标集合'}中的 ${getClassifyTargetRefs(usingDraft ? draftUnits : targetUnits).length} 个消息加入已有${typeName}`
     : `请选择要加入已有${typeName}的目标消息`;

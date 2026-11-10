@@ -6,7 +6,8 @@ import { EdgeLabelSkin, EdgeSkin } from '../../theme/GraphSkin';
 export function directedEdgeColor(type: string): string {
   return ({ annotation: 'var(--graph-label-annotation)', reference: 'var(--ink-rgba-80-180-255-0-92)',
     reply: 'var(--ink-rgba-160-255-140-0-72)', agree: 'var(--ink-rgba-2-170-90-0-92)',
-    disagree: 'var(--ink-rgba-210-50-50-0-92)', recommend: 'var(--ink-fbbf24)', archive: 'var(--ink-94a3b8)' } as Record<string, string>)[type]
+    disagree: 'var(--ink-rgba-210-50-50-0-92)', recommend: 'var(--ink-fbbf24)', archive: 'var(--ink-94a3b8)',
+    'review-pass': 'var(--ink-rgba-2-170-90-0-92)', 'review-reject': 'var(--ink-rgba-210-50-50-0-92)' } as Record<string, string>)[type]
     ?? 'var(--ink-rgba-120-120-120-0-72)';
 }
 

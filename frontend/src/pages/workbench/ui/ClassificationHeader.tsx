@@ -4,6 +4,7 @@ import { MessageDisplayMarker } from '../../../components/LazyMessageDisplayHint
 interface Props {
   zhihuQuestion?: { description: string; known: boolean; completeness: 'complete' | 'partial' | 'unknown'; createdAt?: string | null; createdAtText?: string | null; locallyCorrectedBody?: boolean; locallyCorrectedTitle?: boolean };
   recordCategory?:{targetId:string;label:string;recordIds:string[]}|null;
+  reviewFolder?:boolean;
   isTemporaryFrameCategory?: boolean;
   isInsideClassify: boolean; isRouteScope?: boolean; isTemporaryJoinCategory: boolean; correctionFilterTargetId: string | null; comparisonMode: boolean;
   comparisonTargetCount: number; correctionCount: number; temporaryJoinCount: number; classificationTitle: string; classifyKindLabel: string;
@@ -12,7 +13,7 @@ interface Props {
   correctionRecords?:ReactNode;
   classifyTargetCount: number; classifyExitLabel: string; onExitTemporary: () => void; onExitClassify: () => void;
 }
-export default function ClassificationHeader({ recordCategory, isInsideClassify, isRouteScope = false, isTemporaryFrameCategory = false, isTemporaryJoinCategory, correctionFilterTargetId, comparisonMode,
+export default function ClassificationHeader({ recordCategory, reviewFolder=false, isInsideClassify, isRouteScope = false, isTemporaryFrameCategory = false, isTemporaryJoinCategory, correctionFilterTargetId, comparisonMode,
   comparisonTargetCount, correctionCount, temporaryJoinCount, classificationTitle, classifyKindLabel, comparisonTargetId, joinFilterTargetId, joinFilterDirection = 'incoming', currentClassifyRelMsg,
   classifyTargetCount, classifyExitLabel, correctionRecords, zhihuQuestion, onExitTemporary: exitTemporaryCategory, onExitClassify: handleExitClassification }: Props) {
   const question = !recordCategory && !comparisonMode && correctionFilterTargetId === null && !isTemporaryJoinCategory ? zhihuQuestion : undefined;
@@ -27,7 +28,7 @@ export default function ClassificationHeader({ recordCategory, isInsideClassify,
           <div style={{ minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
               <div style={{ fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {recordCategory?`${recordCategory.label}记录临时分类（${recordCategory.recordIds.length}）`:comparisonMode
+                {reviewFolder?`${classificationTitle||classifyKindLabel} · 审核临时分类`:recordCategory?(recordCategory.label==='审核'?`审核临时分类（1 条被审核消息 · ${recordCategory.recordIds.length} 条记录）`:`${recordCategory.label}记录临时分类（${recordCategory.recordIds.length}）`):comparisonMode
                   ? `选择对比消息（${comparisonTargetCount}）`
                   : correctionFilterTargetId !== null
                     ? `更正记录临时分类（${correctionCount}）`
@@ -41,7 +42,7 @@ export default function ClassificationHeader({ recordCategory, isInsideClassify,
               )}
             </div>
             <div style={{ fontSize: 12, color: "var(--ink-94a3b8)", display: "flex", gap: 12, flexWrap: "wrap" }}>
-              {recordCategory?<span>目标消息 {recordCategory.targetId} 的{recordCategory.label}消息</span>:comparisonMode ? (
+              {recordCategory?<span>{recordCategory.label==='审核'?`被审核消息 ${recordCategory.targetId} 及其审核记录`:`目标消息 ${recordCategory.targetId} 的${recordCategory.label}消息`}</span>:comparisonMode ? (
                 <span>{comparisonTargetId ? `正在审阅目标消息 ${comparisonTargetId}` : '选择消息，查看赞同后与反对后的显示效果'}</span>
               ) : correctionFilterTargetId !== null ? (
                 <span>目标消息 {correctionFilterTargetId} 的全部更正消息</span>
@@ -66,6 +67,7 @@ export default function ClassificationHeader({ recordCategory, isInsideClassify,
             </details>}
           </div>
           <button className="workbench-scope-exit" onClick={() => {
+            if(reviewFolder){handleExitClassification();return;}
             if (comparisonMode) {
               exitTemporaryCategory();
               return;
@@ -76,7 +78,7 @@ export default function ClassificationHeader({ recordCategory, isInsideClassify,
             }
             handleExitClassification();
           }} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid var(--line-475569)", background: "var(--surface-1e293b)", color: "var(--ink-e2e8f0)", cursor: "pointer", flexShrink: 0 }}>
-            {comparisonMode ? "退出对比" : recordCategory || isTemporaryFrameCategory || correctionFilterTargetId !== null || isTemporaryJoinCategory
+            {reviewFolder?"返回审核临时分类":comparisonMode ? "退出对比" : recordCategory || isTemporaryFrameCategory || correctionFilterTargetId !== null || isTemporaryJoinCategory
               ? "退出临时分类"
               : classifyExitLabel}
           </button>

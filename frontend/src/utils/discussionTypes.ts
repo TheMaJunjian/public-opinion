@@ -1,12 +1,14 @@
 import type { DemoMessage } from './modelBridge';
 
-/** Four independent stance relations; replies keep their existing neutral lane. */
-export type DiscussionType = 'agree' | 'disagree' | 'recommend' | 'archive' | 'reply';
-export const discussionTypes: readonly DiscussionType[] = ['agree', 'disagree', 'recommend', 'archive', 'reply'];
+/** Independent relation regions share folding and summary interactions. */
+export type DiscussionType = 'agree' | 'disagree' | 'recommend' | 'archive' | 'reply' | 'review-pass' | 'review-reject';
+export const discussionTypes: readonly DiscussionType[] = ['agree', 'disagree', 'recommend', 'archive', 'reply', 'review-pass', 'review-reject'];
 export const discussionLabels: Record<DiscussionType, string> = {
   agree: '支持', disagree: '反驳', recommend: '推荐', archive: '冷藏', reply: '回复',
+  'review-pass': '审核通过', 'review-reject': '审核不通过',
 };
 export const isDiscussionType = (value: string): value is DiscussionType => discussionTypes.includes(value as DiscussionType);
+export const isReviewDiscussionType = (value: string | undefined) => value === 'review-pass' || value === 'review-reject';
 
 /** An expanded classification is trace context, so discussion lanes arrange
  * its contents. Explicit arrangements still retain their member order. */

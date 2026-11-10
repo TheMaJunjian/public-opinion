@@ -62,6 +62,8 @@ export interface GraphOverlayInput {
   finalFrameRects: Record<string, Box>;
   /** Header boxes, shared by the visible frame controls and their annotations. */
   frameDecorationAnchors?: Readonly<Record<string, Rect>>;
+  /** Visible container headers and discussion controls, including virtual ones. */
+  labelObstacles?: readonly Rect[];
   traceExpandedFrameIds: Set<string>;
   edgesByRelMsg: Map<string, DemoEdge[]>;
   labelBboxes: Record<string, LabelBbox>;
@@ -141,6 +143,7 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
         globalForbiddenRects.push(toCanvasRect(ref));
     }
     const cardObstacleCount = globalForbiddenRects.length;
+    globalForbiddenRects.push(...(input.labelObstacles ?? []));
 
     function getMessageRects(messageId: string): Rect[] {
       const cached = input.anchorCache?.get(messageId), box = layout[messageId];

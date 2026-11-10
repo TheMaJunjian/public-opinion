@@ -193,6 +193,15 @@ export default function PopupOverlay({
     const panel = contentRef.current;
     const previousPanelMarker = panel?.getAttribute('data-dialog-panel');
     panel?.setAttribute('data-dialog-panel', 'true');
+    // The paper theme animates this marker. Keep it for the panel's lifetime,
+    // so progress updates and geometry measurements cannot restart the fade.
+    return () => {
+      if (previousPanelMarker === null) panel?.removeAttribute('data-dialog-panel');
+      else if (previousPanelMarker !== undefined) panel?.setAttribute('data-dialog-panel', previousPanelMarker);
+    };
+  }, [contentRef]);
+
+  useLayoutEffect(() => {
     const updateGeometry = () => {
       const overlay = overlayRef.current;
       const content = contentRef.current;
@@ -227,8 +236,6 @@ export default function PopupOverlay({
     window.visualViewport?.addEventListener('resize', updateGeometry);
     window.visualViewport?.addEventListener('scroll', updateGeometry);
     return () => {
-      if (previousPanelMarker === null) panel?.removeAttribute('data-dialog-panel');
-      else if (previousPanelMarker !== undefined) panel?.setAttribute('data-dialog-panel', previousPanelMarker);
       observer?.disconnect();
       window.removeEventListener('resize', updateGeometry);
       window.visualViewport?.removeEventListener('resize', updateGeometry);

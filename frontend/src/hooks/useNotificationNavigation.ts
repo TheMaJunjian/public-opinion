@@ -7,6 +7,7 @@ interface Options {
   ready:boolean;
   navigate:(id:string,options:{select:false;onComplete:(located:boolean,cancelled?:boolean)=>void})=>void;
   openSettlement:(id:string,type:'TRUTH'|'VALUE')=>void;
+  openReview?:(id:string,revision:number)=>void;
   onError:(message:string)=>void;
   onLocated?:(sourceId:string,targetId:string|null)=>void;
 }
@@ -16,6 +17,7 @@ export function useNotificationNavigation(options:Options) {
   const request=params.get('notification'),source=params.get('notificationSource'),round=params.get('notificationRound');
   const target=params.get('notificationTarget'),type=params.get('notificationSettlement');
   const nonce=params.get('notificationRequest');
+  const reviewRevision=Number(params.get('notificationReviewRevision'));
   useEffect(()=>{
     const id=Number(request),key=JSON.stringify([request,source,nonce]);
     if(!request||!source){active.current=null;return;}
@@ -25,6 +27,7 @@ export function useNotificationNavigation(options:Options) {
       if(active.current!==key||cancelled)return;
       if(!located){current.current.onError('尚未定位到通知消息，通知保留未查看状态，可重新打开重试');return;}
       current.current.onLocated?.(source,target);
+      if(target&&Number.isSafeInteger(reviewRevision)&&reviewRevision>0)current.current.openReview?.(target,reviewRevision);
       if(round&&target){sessionStorage.setItem('settlementHighlightRound',round);current.current.openSettlement(target,type==='VALUE'?'VALUE':'TRUTH');}
       void markNotificationsSeen({through:id,ids:[id]}).then(refreshNotifications).catch(error=>current.current.onError(error instanceof Error?error.message:'通知查看状态保存失败，请在通知面板重试'));
       setParams(previous=>{
@@ -34,6 +37,6 @@ export function useNotificationNavigation(options:Options) {
         return next;
       },{replace:true});
     }});
-  },[request,source,target,round,type,nonce,options.ready,setParams]);
+  },[request,source,target,round,type,nonce,reviewRevision,options.ready,setParams]);
   useEffect(()=>()=>{active.current=null;},[]);
 }

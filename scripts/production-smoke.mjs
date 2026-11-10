@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import { hash } from 'bcryptjs';
 import { DATABASE_MIGRATIONS } from '../apps/server/src/database-version.ts';
+import { decodeWorkbenchSnapshot } from '../packages/core/src/snapshot-transport.ts';
 
 // Own Compose project and volumes; never reads deployment credentials.
 const directory = mkdtempSync(join(tmpdir(), 'gonglun-release-'));
@@ -131,8 +132,16 @@ try {
     assert.equal(usage.status,200);assert.equal(usage.body.awarded,true);
   }
   assert.equal((await request('/api/messages','POST',{requestId:randomUUID(),parts:[{id:'text',type:'text',text:'blocked'}]},{cookie})).status,403);
+  // Fund the isolated founder through the real public grant action; publication
+  // now also freezes a review budget and self stake beyond its normal investment.
+  const funded=await request('/api/messages','POST',{requestId:randomUUID(),recommendation:1,parts:[
+    {id:'grant',type:'relation',relation:'credit',roles:{}},{id:'data',type:'data',value:{amount:100}},
+  ]},headers);
+  assert.equal(funded.status,201,JSON.stringify(funded.body));
   const created=await request('/api/messages','POST',{requestId:randomUUID(),recommendation:1,parts:[{id:'text',type:'text',text:'production smoke persistence'}]},headers);
-  assert.equal(created.status,201);
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  const publicationCost=registered.body.rules.protocolFee+1+registered.body.rules.moderation.fee+registered.body.rules.moderation.deposit;
+  assert.equal(created.body.account.available,funded.body.account.available-publicationCost);
   compose('restart','api');
   for(let attempt=0;;attempt++) {
     try { assert.equal((await request('/api/health')).status,200); break; }
@@ -180,7 +189,15 @@ try {
     catch(error){if(attempt>=40)throw error;await new Promise(r=>setTimeout(r,500));}
   }
   const oldLogin=await request('/api/login','POST',{name:'legacy-user',password:'old'});
-  assert.equal(oldLogin.status,200);assert.equal(oldLogin.body.account.available,297);
+  assert.equal(oldLogin.status,200);
+  const reviewCheck=new Pool({connectionString:databaseUrl});
+  try{
+    const review=(await reviewCheck.query(`SELECT status,fee,deposit FROM migrated_fixture.moderation_cases WHERE "messageId"='legacy-message' AND revision=1`)).rows[0];
+    assert.deepEqual(review,{status:'pending',fee:'6',deposit:'10'});
+    const reserved=Number((await reviewCheck.query('SELECT COALESCE(SUM(fee+deposit),0) AS amount FROM migrated_fixture.moderation_cases')).rows[0].amount);
+    assert.equal(oldLogin.body.account.available,297-reserved);
+    assert.equal((await reviewCheck.query('SELECT COUNT(*) AS n FROM migrated_fixture.moderation_assignments')).rows[0].n,'0');
+  }finally{await reviewCheck.end();}
   const legacyView=await request('/api/ui/snapshot?parent=legacy-topic');
   assert.equal(legacyView.status,200);
   assert.ok(legacyView.body.messages.some(message=>message.id==='legacy-message'&&message.content==='Legacy message preserved'));
@@ -189,9 +206,12 @@ try {
   assert.equal(compact.body.snapshotEncoding,'relations-v1');
   assert.ok(compact.body.messages.some(message=>message.id==='legacy-message'&&message.content==='Legacy message preserved'));
   assert.ok(compact.body.relationRecords.length>0);
-  assert.ok(compact.body.relationRecords.every(index=>Number.isInteger(index)&&compact.body.messages[index]));
+  const plain=await request('/api/ui/snapshot?parent=root&batch=4');
+  assert.equal(plain.status,200);
+  assert.deepEqual(decodeWorkbenchSnapshot(compact.body),plain.body);
   const migratedWrite=await request('/api/messages','POST',{requestId:randomUUID(),recommendation:1,parts:[{id:'body',type:'text',text:'Migrated production write'}]},{cookie:oldLogin.headers['set-cookie'][0].split(';')[0],'x-csrf-token':oldLogin.body.csrf});
-  assert.equal(migratedWrite.status,201);assert.equal(migratedWrite.body.account.available,295);
+  assert.equal(migratedWrite.status,201,JSON.stringify(migratedWrite.body));
+  assert.equal(migratedWrite.body.account.available,oldLogin.body.account.available-publicationCost);
   // The packaged server launches its separate migrator automatically on restart.
   const upgradePool=new Pool({connectionString:databaseUrl});
   try{

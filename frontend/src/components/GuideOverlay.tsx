@@ -46,7 +46,7 @@ function getPointsRecordTarget(roundId: string | null, resultMessageId: string |
   const panel = document.querySelector<HTMLElement>('[data-guide-points-panel="true"]');
   if (!panel) return null;
   const selector = resultMessageId
-    ? `[data-guide-points-message="${CSS.escape(resultMessageId)}"]`
+    ? `[data-guide-points-message~="${CSS.escape(resultMessageId)}"]`
     : `[data-guide-points-record="${CSS.escape(roundId ?? '')}"]`;
   return panel.querySelector<HTMLElement>(selector) ?? panel;
 }

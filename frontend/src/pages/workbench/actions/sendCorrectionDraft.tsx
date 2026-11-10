@@ -7,7 +7,7 @@ import { isWholeMessageSelection } from '../../../utils/messageElementSelection'
 import { generateCorrectionContent } from '../model/correction';
 import { messageTextField } from '../../../utils/messageTextField';
 import { getRelationTitle } from '../../../types';
-import { resolveReference, type Message as CoreMessage } from '@gonglun/core';
+import { isReviewAudit, resolveReference, type Message as CoreMessage } from '@gonglun/core';
 import type { DraftSendDependencies } from "./sendDraftTypes";
 
 export async function prepareAddressedCorrection(dependencies: Pick<DraftSendDependencies, "msgMap" | "correctionVersions" | "newMessageContent" | "setComparisonPopup" | "setSendError" | "secondaryRelationType">, { effectiveTargets }: { effectiveTargets: UnitSelection[]; }): Promise<void> {
@@ -23,6 +23,11 @@ export async function prepareAddressedCorrection(dependencies: Pick<DraftSendDep
         path: field.path ?? [field.part.type === 'code' ? 'source' : field.part.type === 'web' ? 'excerpt' : 'text'] } };
     }
     let replacement = newMessageContent;
+    if (isReviewAudit(message)) {
+      const part=message.parts?.find(part=>part.id===target.reference?.partId);
+      if(part?.type!=='text'||target.reference?.memberId||target.reference?.path?.some(key=>key!=='text'))
+        throw new Error('审核只能更正理由文字；改变判断请新增审核消息');
+    }
     const current = dependencies.correctionVersions.get(message.id)?.current;
     if (target.reference?.range) {
       const selectedPart = message.parts?.find(part => part.id === target.reference?.partId);

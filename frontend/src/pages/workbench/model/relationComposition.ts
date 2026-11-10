@@ -13,6 +13,7 @@ export const MAX_TAG_LABEL_DISPLAY_LENGTH = 20;
 export const CLASSIFY_TARGET_HINT = '文本消息、排列关系消息、分类消息或归并关系消息';
 
 export function secondaryRelationLabel(t: string): string {
+  if (t === 'review') return '审核';
   if (t === 'none') return '无';
   if (t === 'question') return '疑问';
   if (t === 'answer') return '回答';
@@ -161,6 +162,8 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
     content = `${displayLabel}${countSuffix}\n目标：${targetSummary}`;
   } else if (relType === 'agree' || relType === 'disagree') {
     content = `目标：${targetSummary}`;
+  } else if(relType.startsWith('review')) {
+    content=relation.parts?.filter(part=>part.type==='text').map(part=>part.type==='text'?part.text:'').join('\n')??'';
   } else if (relation.sourceMessageId) {
     content = `${typeName}  ${relation.sourceMessageId} → ${targetSummary}`;
   } else {
@@ -174,6 +177,7 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
     executedStance: relation.executedStance,
     state: relation.state,
     spending: relation.spending,
+    moderation:relation.moderation,restricted:relation.restricted,
     sourceMessageId: relation.sourceMessageId,
     sourceRefs: relation.sourceRefs,
     targetRefs: relation.targetRefs,
@@ -182,7 +186,7 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
     createdAt: relation.createdAt,
     kind: isContainerAddRecord
       ? 'join'
-      : relType === 'proposal' ? 'governance' : relType === 'code_change' ? 'code' : relType === 'operations' ? 'operations' : 'relation',
+      : relType === 'review' ? 'normal' : relType === 'proposal' ? 'governance' : relType === 'code_change' ? 'code' : relType === 'operations' ? 'operations' : 'relation',
     relationType: relType as RelationType,
     relationPayload: relation.payload,
     content,

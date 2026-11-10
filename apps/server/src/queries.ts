@@ -2,6 +2,7 @@ import type { Context, Membership, Message, Page, User } from '@gonglun/core';
 import { DomainError, Store } from './db.js';
 import { roundsFor } from './economy.js';
 import { statesFor } from './projections.js';
+import { moderationReadSql } from './moderation-visibility.js';
 const decode = (row: Record<string, unknown>) => JSON.parse(row.body as string) as Message;
 function cursorValue(cursor: string | undefined): {
     sequence: number;
@@ -51,6 +52,7 @@ export async function listMessages(store: Store, options: {
         clauses.push(`(sequence<${sequence} OR (sequence=${sequence} AND id<${id}))`);
     }
     if (options.q) {
+        clauses.push(await moderationReadSql(store,'messages'));
         const query = `%${options.q.replace(/[\\%_]/g, '\\$&')}%`;
         const search=parameter(query);
         clauses.push(`EXISTS (SELECT 1 FROM jsonb_array_elements(messages.body::jsonb -> 'parts') p WHERE p.value->>'text' ILIKE ${search} ESCAPE '\\' OR p.value->>'source' ILIKE ${search} ESCAPE '\\' OR p.value->>'excerpt' ILIKE ${search} ESCAPE '\\')`);

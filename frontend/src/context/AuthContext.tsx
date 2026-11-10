@@ -3,6 +3,7 @@ import type { User } from '../types';
 import { api } from '../api';
 import { getDeviceId, getPrivateKeyForCurrentUser, getPrivateKeyForUser, storePrivateKeyForUser } from '../api/client';
 import { generateSigningKeyPair, privateKeyMatchesPublicKey, publicKeyFromPrivateKey, signPayloadWithPrivateJwk } from '../utils/signature';
+import { useReviewPresence } from '../hooks/useReviewPresence';
 
 interface AuthContextValue {
   user: User | null;
@@ -22,6 +23,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const authVersion = useRef(0);
+  useReviewPresence(user?.id);
 
   useEffect(() => {
     let active = true;

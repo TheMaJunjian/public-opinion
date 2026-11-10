@@ -12,6 +12,7 @@ import { prepareAddressedCorrection, prepareCorrectionChain, prepareTextCorrecti
 import { sendDelegationDraft } from './sendDelegationDraft';
 import type { DraftSendDependencies } from './sendDraftTypes';
 import { sendGovernanceDraft } from './sendGovernanceDraft';
+import { sendReviewDraft } from './sendReviewDraft';
 import { sendMergeDraft } from './sendMergeDraft';
 import { sendOrganizationJoin } from './sendOrganizationJoin';
 import { sendStanceDraft } from './sendStanceDraft';
@@ -249,6 +250,9 @@ export async function handleQuickSendAndRelateFromDraftTargets(dependencies: Dra
   }
 
   // PROPOSAL / CODE_CHANGE / OPERATIONS: governance & operational messages.
+  if(relationType==='operations'&&secondaryRelationType==='review'){
+    await sendReviewDraft(dependencies,effectiveTargets);return;
+  }
   if (relationType === "proposal" || relationType === "code_change" || relationType === "operations") {
     await sendGovernanceDraft(dependencies, { effectiveTargets });
     return;

@@ -56,3 +56,16 @@ it.each([true, false])('avoids an unmounted third card using its complete scene 
   expect(after.drawId).toBe(before.drawId);
   expect(JSON.stringify({ messages: withObstacle.messages, edges: withObstacle.edges, layout: withObstacle.layout })).toBe(sourceSnapshot);
 });
+
+it('keeps labels and their hint controls clear of measured container headers and region controls', () => {
+  const original = input(false), before = measureGraphOverlays(original)!.positionedEdges[0];
+  const header = { x: before.labelX - 150, y: before.labelY - 45, width: 300, height: 90 };
+  const footer = { x: header.x - 50, y: header.y + header.height, width: 400, height: 24 };
+  const withHeaders = { ...original, labelObstacles: [header, footer] };
+  const measured = measureGraphOverlays(withHeaders)!;
+  for (const obstacle of [header, footer]) expect(rectsIntersect(labelFootprint(measured.positionedEdges[0]), obstacle)).toBe(false);
+  expect(measured.positionedEdges[0].start).toEqual(before.start);
+  expect(measured.positionedEdges[0].end).toEqual(before.end);
+  // Summary labels consume the same protected geometry as ordinary labels.
+  expect(measured.decorationObstacles).toEqual(expect.arrayContaining([header, footer]));
+});

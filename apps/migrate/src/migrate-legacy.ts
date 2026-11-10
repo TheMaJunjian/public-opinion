@@ -14,6 +14,7 @@ import {migrateQueryRecords} from './migrate-query-records.js';
 import {repairValueVoteMessages} from './repair-value-vote-messages.js';
 import {repairAnnotationStanceMessages} from './repair-annotation-stance-messages.js';
 import {backfillMinimumContributions} from './backfill-minimum-contributions.js';
+import {migrateModeration} from './moderation.js';
 
 type Row = Record<string, any>;
 type Snapshot = Record<string, Row[]>;
@@ -353,6 +354,13 @@ export async function migrateLegacy(options: MigrationOptions): Promise<Migratio
       }
       report.minimumContributionBackfill=await backfillMinimumContributions(store);
       if(report.minimumContributionBackfill)report.notes.push(`为 ${report.minimumContributionBackfill} 条未投入的用户消息各补扣 1 点真假自赞，允许余额为负数。`);
+      // The empty target has already reached the latest schema before import.
+      // Startup imports enroll after their point reset, so review escrows survive it.
+      if(!options.nativeImport){
+        await migrateModeration(store);
+        const reviewCount=(await store.db.prepare('SELECT COUNT(*)::integer AS n FROM moderation_cases').get())!.n;
+        if(reviewCount)report.notes.push(`为 ${reviewCount} 个历史内容版本登记审核，按当前规则冻结审核费和自押；未生成历史审核任务或通知。`);
+      }
       const archiveCount=(await store.db.prepare('SELECT COUNT(*)::integer AS n FROM legacy_records').get())!.n;
       if(archiveCount!==Object.values(snapshot).reduce((total,rows)=>total+rows.length,0)) throw new Error('旧原文归档数量不一致');
       report.applied=true;

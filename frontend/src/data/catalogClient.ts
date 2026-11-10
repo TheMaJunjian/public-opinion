@@ -8,8 +8,8 @@ export function createCatalogClient(userId: string, parent: string, callbacks: {
   onProgress(progress: CatalogProgress): void;
 }, regionId?: string) {
   const baseUrl = new URL((import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, ''), location.href).href;
-  // Rebuild earlier catalogs once so unchanged accounts also receive contribution totals.
-  const options: CatalogOptions = { baseUrl, parent, deviceId: getDeviceId(), regionId, structural: true, key: JSON.stringify(['structure-v1', baseUrl, userId, parent]) };
+  // Rebuild earlier catalogs that counted reference labels as independent text cards.
+  const options: CatalogOptions = { baseUrl, parent, deviceId: getDeviceId(), regionId, structural: true, key: JSON.stringify(['structure-v4', baseUrl, userId, parent]) };
   let stopped = false, priority = false, nextId = 0;
   let failure: Error | undefined;
   let progress: CatalogProgress = { ready: false, count: 0, syncing: true };

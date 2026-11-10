@@ -245,6 +245,29 @@ describe('native list content and navigation regressions', () => {
     expect(within(row).getByRole('button', { name: targetId })).toBeVisible();
   });
 
+  it.each(['grant','operations','delegation','penalty','reversal'])('shows a non-settlement %s distribution as its own readable record',source=>{
+    const content='2026-11-09 使用贡献：累计 282 贡献点。';
+    const converted=convertMessagesToDemoModel([{id:'usage-distribution',kind:'ROUND_RESULT',contentType:'TEXT',content,
+      createdAt:'',createdBy:{id:'system',username:'公论规则',createdAt:''},relationType:'ROUND_RESULT',
+      relationPayload:{source,inputs:{reason:'usage-daily-summary'}} as RelationPayload,
+      parts:[{id:'body',type:'text',text:content},{id:'allocation',type:'data',value:{source,inputs:{reason:'usage-daily-summary'}}}],
+    }],[]);
+    expect(converted.messages[0]).toMatchObject({kind:'normal',relationType:'distribution',content});
+    expect(converted.messages[0].settlementTargetId).toBeUndefined();
+    const view=renderList(converted.messages),row=view.container.querySelector<HTMLElement>('[data-msgid="usage-distribution"]')!;
+    expect(row).toHaveTextContent(content);expect(row.querySelector('[data-skin-type-label]')).toHaveTextContent('结算');
+    expect(row).not.toHaveTextContent('目标未记录');
+  });
+
+  it('keeps a wager reversal attached to its original settlement',()=>{
+    const converted=convertMessagesToDemoModel([{id:'reversal',kind:'ROUND_RESULT',contentType:'TEXT',content:'分配调整',
+      createdAt:'',createdBy:{id:'system',username:'公论规则',createdAt:''},
+      relationPayload:{source:'reversal',subjectId:'target',inputs:{roundId:'round'}} as RelationPayload,
+    }],[]);
+    expect(converted.messages[0]).toMatchObject({kind:'round_result',settlementTargetId:'target'});
+    expect(renderList(converted.messages).container.querySelector('[data-msgid="reversal"]')).toBeNull();
+  });
+
   it.each([
     ['ROUND', 'TRUTH'], ['ROUND', 'VALUE'], ['ROUND_RESULT', 'TRUTH'], ['ROUND_RESULT', 'VALUE'],
   ] as const)('keeps %s %s records out of the list while preserving their settlement entry metadata', (kind, settlementType) => {
@@ -286,14 +309,48 @@ describe('native list content and navigation regressions', () => {
     ['recommend', { subType: 'IMPORTANT' }, '推荐', '重要'],
     ['archive', { subType: 'CUSTOM', customLabel: '需要保留完整内容的较长附加关系说明，不能再截断' }, '冷藏', '需要保留完整内容的较长附加关系说明，不能再截断'],
     ['tag', { label: '标签内容' }, '标注', '标签内容'],
-  ] as const)('moves the %s secondary label into content without repeating it in the type badge', (relationType, relationPayload, type, content) => {
+  ] as const)('shows the %s action and reason as header metadata, without a generated body row', (relationType, relationPayload, type, content) => {
     const record = message('labeled-record', { kind: 'relation', relationType, relationPayload,
-      content: '目标：target-id', targetRefs: [{ kind: 'message', messageId: 'target-id' }] });
+      content: '目标：target-id', targetRefs: [{ kind: 'message', messageId: 'target-id' }],
+      ...(relationType==='tag'?{parts:[{id:'body',type:'text',text:content}]}:{}) });
     const view = renderList([record]);
     const row = view.container.querySelector<HTMLElement>('[data-msgid="labeled-record"]')!;
+    expect(row.querySelector('[data-skin-type-label]')).toHaveTextContent('标注');
     expect(within(row).getByText(type, { exact: true })).toBeVisible();
+    expect(row.querySelector(`[data-message-type-detail="${relationType==='tag'?'label':'reason'}"]`)).toHaveTextContent(content);
+    expect(row.querySelector('.message-card-header')).toHaveTextContent(content);
+    expect(row.querySelector('[data-message-part-id]')).toBeNull();
+    expect(within(row).getByRole('button',{name:'target-id'})).toBeVisible();
     expect(row.textContent!.split(content)).toHaveLength(2);
     expect(row).not.toHaveTextContent(`${type} ·`);
+  });
+
+  it.each(['pass','reject'] as const)('separates the operations type, review subtype and %s judgment', verdict => {
+    const vote=message('review',{kind:'normal',relationType:'review',relationPayload:{verdict},content:'这是审核理由',parts:[{id:'reason',type:'text',text:'这是审核理由'}]});
+    const notice=message('notice',{kind:'operations',backendKind:'OPERATIONS',content:'运营公告正文'});
+    const view=renderList([vote,notice]);
+    const row=view.container.querySelector('[data-msgid="review"]')!;
+    expect(row.querySelector('[data-skin-type-label]')).toHaveTextContent('运营');
+    expect(row.querySelector('[data-message-type-detail="subtype"]')).toHaveTextContent('审核');
+    expect(row.querySelector('[data-message-type-detail="verdict"]')).toHaveTextContent(verdict==='pass'?'通过':'不通过');
+    expect(row.querySelector('[data-message-part-id="reason"]')).toHaveTextContent('这是审核理由');
+    const announcement=view.container.querySelector('[data-msgid="notice"]')!;
+    expect(announcement.querySelector('[data-skin-type-label]')).toHaveTextContent('运营');
+    expect(announcement.querySelector('[data-message-type-detail="subtype"]')).toHaveTextContent('公告');
+  });
+
+  it.each([['来源说明','来源说明'],['custom source','custom source'],['evidence','证据'],['EVIDENCE','证据']])('shows reference label %s as %s beside its type only once', (label,display) => {
+    const record=message('custom-reference',{kind:'relation',relationType:'reference',content:label,
+      sourceMessageId:'source',targetRefs:[{kind:'message',messageId:'target'}],relationPayload:{label},
+      parts:[{id:'body',type:'text',text:label},{id:'relation',type:'relation',relation:'reference',roles:{}},{id:'data',type:'data',value:{uiType:'REFERENCE',label}}]});
+    const view=renderList([record]);
+    const row=view.container.querySelector('[data-msgid="custom-reference"]')!;
+    expect(row).toHaveAttribute('data-relation-record','true');
+    expect(row.querySelector('[data-skin-type-label]')).toHaveTextContent('引用');
+    expect(row.querySelector('[data-message-type-detail="label"]')?.textContent).toBe(display);
+    expect(row.textContent!.split(display)).toHaveLength(2);
+    if(label!==display)expect(row.textContent).not.toContain(label);
+    expect(row.querySelector('[data-message-part-id="body"]')).toBeNull();
   });
 
   it('shows the correction subtype only in its existing content', () => {

@@ -3,6 +3,7 @@ import { api } from '../../../api';
 import type { WorkbenchComposer } from '../useWorkbenchComposer';
 
 interface HandleSendClickDependencies {
+  reviewContext?: import('@gonglun/core').ReviewContext;
   composer: Pick<WorkbenchComposer, 'capture' | 'restore' | 'setRecommendationAmount' | 'relationType'>;
   captureOptimisticRollback(): () => void;
   sendInFlightRef: React.MutableRefObject<boolean>;
@@ -27,7 +28,7 @@ export async function handleSendClick(dependencies: HandleSendClickDependencies)
     draft = composer.capture();
     rollback = captureOptimisticRollback();
     let committedCount = 0;
-    await api.withCommandBatch(handleQuickSendAndRelateFromDraftTargets, count => { committedCount = count; });
+    await api.withCommandBatch(handleQuickSendAndRelateFromDraftTargets, count => { committedCount = count; }, dependencies.reviewContext);
     if (committedCount === 0) composer.restore(draft);
     else {
       if (draft.state.relationType !== 'correct') composer.setRecommendationAmount(0);

@@ -1,4 +1,4 @@
-import type { WorkbenchSnapshot } from '@gonglun/core';
+import { isReviewAudit, type WorkbenchSnapshot } from '@gonglun/core';
 export type { WorkbenchSnapshot } from '@gonglun/core';
 import type { Message, Relation, ScopeView, User, MessageStakes } from '../types';
 import type { WorkbenchCache } from './workbenchCache';
@@ -49,8 +49,13 @@ export class WorkbenchStore {
       const current = this.messages.get(message.id);
       if (page.sequence < (this.versions.get(message.id) ?? 0) || (current?.revision ?? 0) > (message.revision ?? 0)) { rejected.add(message.id); continue; }
       this.messages.set(message.id, message); this.versions.set(message.id, page.sequence);
+      if(message.restricted){this.relations.delete(message.id);delete this.stakes[message.id];delete this.tagCounts[message.id];}
     }
     for (const relation of page.relations) {
+      // Restricted review records retain a sanitized target address for ledger
+      // navigation. Never restore an earlier, readable cached projection.
+      if(rejected.has(relation.id))continue;
+      if(this.messages.get(relation.id)?.restricted&&(!relation.restricted||!isReviewAudit(relation)))continue;
       const current = this.relations.get(relation.id);
       if (page.sequence < (this.versions.get(relation.id) ?? 0) || (current?.revision ?? 0) > (relation.revision ?? 0)) continue;
       this.relations.set(relation.id, relation);

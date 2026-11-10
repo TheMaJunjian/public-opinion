@@ -396,7 +396,8 @@ export async function lockDelegation(tx: Mutation, message: Message) {
 }
 export async function distributeOperations(tx: Mutation, message: Message) {
     const rules = await tx.store.rules();
-    const available = Math.max(0, (await tx.store.setting<number>('operating')) - rules.operatingReserve);
+    const reserved=Number((await tx.store.db.prepare("SELECT value FROM settings WHERE key='moderation-fund'").get())?.value??0);
+    const available = Math.max(0, (await tx.store.setting<number>('operating')) - rules.operatingReserve - reserved);
     const requested = dataOf(message).amount;
     const total = requested === undefined ? available : requested;
     if (typeof total !== 'number' || !Number.isSafeInteger(total) || total < 0 || total > available)

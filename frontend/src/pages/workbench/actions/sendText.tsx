@@ -72,6 +72,7 @@ export async function handleSendMessageOnly(dependencies: HandleSendMessageOnlyD
       parts: backendMsg.parts,
       executedStance: backendMsg.executedStance,
       spending: backendMsg.spending,
+      moderation:backendMsg.moderation,restricted:backendMsg.restricted,
       state: backendMsg.state,
       author: backendMsg.createdBy.username,
       authorId: backendMsg.createdBy.id,

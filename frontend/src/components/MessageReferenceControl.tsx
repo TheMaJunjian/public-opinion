@@ -1,9 +1,9 @@
 import {Suspense,useEffect,useLayoutEffect,useRef,useState,type CSSProperties,type MouseEvent} from 'react';
 import {MessageDisplayMarker} from './LazyMessageDisplayHints';
 
-/** Used only by staged selections and trace reading references. */
-export default function MessageReferenceControl({messageId,type,summary,onNavigate,ariaLabel,navigateLabel,status,disabled=false,style,wholeMessage=true,initialView='id',copyMode='id'}:{
-  messageId:string;type:string;summary?:string;onNavigate?:(id:string)=>void;ariaLabel?:string;navigateLabel?:string;status?:string;disabled?:boolean;style?:CSSProperties;wholeMessage?:boolean;initialView?:'id'|'summary';copyMode?:'id'|'displayed';
+/** Shared message identity, summary, navigation and copy interactions. */
+export default function MessageReferenceControl({messageId,type,summary,onNavigate,ariaLabel,navigateLabel,status,disabled=false,style,wholeMessage=true,initialView='id',copyMode='id',truncateSummary=true}:{
+  messageId:string;type:string;summary?:string;onNavigate?:(id:string)=>void;ariaLabel?:string;navigateLabel?:string;status?:string;disabled?:boolean;style?:CSSProperties;wholeMessage?:boolean;initialView?:'id'|'summary';copyMode?:'id'|'displayed';truncateSummary?:boolean;
 }){
   const [showSummary,setShowSummary]=useState(initialView==='summary'),[copyStatus,setCopyStatus]=useState('');
   const pending=useRef<ReturnType<typeof setTimeout>|null>(null);
@@ -27,7 +27,7 @@ export default function MessageReferenceControl({messageId,type,summary,onNaviga
   const copyText=copyMode==='displayed'&&showSummary;
   const copyHint=copyText?'双击复制完整文本':'双击复制消息 ID';
   const content=summary?.replace(/\s+/g,' ').trim()||'（暂无摘要）';
-  const preview=content.length>64?`${content.slice(0,64)}…`:content;
+  const preview=truncateSummary&&content.length>64?`${content.slice(0,64)}…`:content;
   const label=ariaLabel??`消息 ${messageId}`;
   const button:CSSProperties={border:0,padding:0,background:'transparent',color:'inherit',font:'inherit',cursor:disabled?'default':'pointer',overflowWrap:'anywhere',textAlign:'left'};
   return <span role="group" aria-label={label} data-message-reference={messageId} style={{display:'inline',overflowWrap:'anywhere',...style}}>

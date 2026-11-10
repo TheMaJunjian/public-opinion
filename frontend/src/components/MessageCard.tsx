@@ -4,12 +4,14 @@ import HomeFilterBadge from './HomeFilterBadge';
 import { getPresentationSpec } from '../types';
 import { getRelationMessageLabel } from '../utils/attachedRelationLabels';
 import MessageTextPart from './MessageTextPart';
+import MessageBody from './MessageBody';
 import SettlementMessageContent from './SettlementMessageContent';
 import MessageElement from './MessageElement';
 import MessageCardSelfStake from './MessageCardSelfStake';
+import MessageTypeDetails from './MessageTypeDetails';
 import MessageMemberCount from './MessageMemberCount';
 import { MessageDisplayMarker } from './MessageDisplayHints';
-import { getMessageProminence, getMessageTypeLabel } from '../utils/messageDisplay';
+import { getMessageProminence, getMessageTypeLabel, getMessageTypeDetails, hasMetadataOnlyContent } from '../utils/messageDisplay';
 import { activateMessageFromKeyboard } from '../utils/messageKeyboard';
 import { stakeAppearanceAttributes, type StakeAmounts } from '../utils/stakeAppearance';
 import StakeTierBadge, { SkinOrnament } from '../theme/StakeTierBadge';
@@ -115,7 +117,10 @@ export default function MessageCard({
   const relationType = relType ?? msg.relationType ?? 'relation';
   const isStructuralOrganization = relationType === 'merge' || relationType === 'arrange';
   const baseRelationLabel = relationType.toLowerCase() === 'proposal' ? '提案' : getPresentationSpec(relationType).label;
-  const messageTypeLabel = isRelationRecord && msg.kind === 'relation'
+  const typeDetails = getMessageTypeDetails(msg);
+  const messageTypeLabel = typeDetails.length || msg.relationType === 'reference' || msg.relationType === 'tag'
+    ? getMessageTypeLabel(msg)
+    : isRelationRecord && msg.kind === 'relation'
     ? baseRelationLabel
     : relType != null && msg.kind === 'relation'
       ? getRelationMessageLabel(msg) ?? baseRelationLabel
@@ -193,6 +198,7 @@ export default function MessageCard({
           <MessageElement data-skin-type-label="true" label={typeBadgeLabel} style={{ marginRight: 6, padding: '2px 6px', borderRadius: 4, background: isWholeSelected ? 'var(--surface-fbbf24)' : 'var(--surface-rgba-148-163-184-0-16)', color: isWholeSelected ? 'var(--ink-111827)' : 'var(--ink-cbd5e1)', border: isWholeSelected ? '1px solid var(--line-fbbf24)' : '1px solid var(--line-rgba-148-163-184-0-35)', fontWeight: 700, opacity: 1 }}>
             <ThemeLabel text={typeBadgeLabel} />
           </MessageElement>
+          <MessageTypeDetails message={msg} />
           {' '}
           <HomeFilterBadge label={homeMatch?'命中':homeContextRole==='source'?'来源':homeContextRole==='target'?'目标':homeContextRole==='source-target'?'来源/目标':homeReason?'上下文':null} reason={homeReason}/>
           <MessageCardSelfStake message={msg} />
@@ -205,7 +211,7 @@ export default function MessageCard({
           </span>
           {headerBetweenIdAuthor && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 6, verticalAlign: 'middle', maxWidth: '100%', flexWrap: 'wrap' }}>{headerBetweenIdAuthor}</span>}
         </span>
-        {inlineRelationContent && <div style={{ display: 'contents' }} onMouseUp={e => onContentMouseUp?.(e, msg.id)}>{children}</div>}
+        {inlineRelationContent && <MessageBody message={msg}><div style={{ display: 'contents' }} onMouseUp={e => onContentMouseUp?.(e, msg.id)}>{children}</div></MessageBody>}
         {isRelationRecord && badges}
         <span className="message-card-meta" style={{ textAlign: 'right', marginLeft: 'auto', maxWidth: '100%', ...(isRelationRecord ? { order: 2 } : {}) }}>
           <div className="message-card-actions" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' }}>
@@ -250,13 +256,14 @@ export default function MessageCard({
       )}
 
       {/* Content */}
-      {!isStructuralOrganization && !isOrganizationMessage && !inlineRelationContent && msg.kind !== 'round' && msg.kind !== 'round_result' && !(children != null && (msg.kind === 'relation' || msg.kind === 'join')) && msg.parts?.some(part => part.type === 'text' || part.type === 'code' || part.type === 'web') ? (
+      {!isOrganizationMessage&&!isStructuralOrganization&&!inlineRelationContent&&<MessageBody message={msg}>
+      {!hasMetadataOnlyContent(msg) && !isStructuralOrganization && !isOrganizationMessage && !inlineRelationContent && msg.kind !== 'round' && msg.kind !== 'round_result' && !(children != null && (msg.kind === 'relation' || msg.kind === 'join')) && msg.parts?.some(part => part.type === 'text' || part.type === 'code' || part.type === 'web') ? (
         <div style={{ display: 'grid', gap: 8 }}>
           {msg.parts.filter(part => part.type === 'text' || part.type === 'code' || part.type === 'web').map(part => (
             <MessageTextPart key={part.id} message={msg} partId={part.id} activeText={isActiveText} onMouseUp={onContentMouseUp}>{msg.kind === 'normal' && msg.parts!.filter(item => ['text', 'code', 'web'].includes(item.type)).length === 1 ? children : undefined}</MessageTextPart>
           ))}
         </div>
-      ) : !isStructuralOrganization && !isOrganizationMessage && !inlineRelationContent && (
+      ) : !hasMetadataOnlyContent(msg) && !isStructuralOrganization && !isOrganizationMessage && !inlineRelationContent && (
         <div className="message-card-body" style={{ fontSize: isRelationRecord ? 12 : prominence.cssFontSize, color: isRelationRecord ? 'var(--ink-9ca3af)' : 'var(--ink-f5f5f5)' }} onMouseUp={e => onContentMouseUp?.(e, msg.id)}>
           {children != null ? children : (
             isContentKind(msg.kind) && (msg.kind === 'round' || msg.kind === 'round_result') ? (
@@ -269,6 +276,7 @@ export default function MessageCard({
         </div>
       )}
 
+      </MessageBody>}
       {/* Organization membership */}
       {(isOrganizationMessage || isStructuralOrganization) && (
         <div className="message-card-members" style={{ fontSize: 12, color: 'var(--ink-94a3b8)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>

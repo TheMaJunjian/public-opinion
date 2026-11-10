@@ -1,5 +1,5 @@
 import type { Message as BackendMessage, Relation as BackendRelation, RelationPayload, TargetRef } from '../types';
-import { bodyVersion, resolveStance, type BodyVersion, type Message as CoreMessage, type Part, type Reference, type ExecutedStance, type MessageState } from '@gonglun/core';
+import { bodyVersion, resolveStance, referenceLabelPart, REVIEW_RECORD_RELATIONS, type BodyVersion, type Message as CoreMessage, type Part, type Reference, type ExecutedStance, type MessageState } from '@gonglun/core';
 import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
 import type {AuthorInvestment} from './messageAuthorship';
 import {chronologicalOrder} from './discussionOrder';
@@ -11,10 +11,21 @@ export function isSettlementRecord(message: { kind: string } | undefined): boole
   return message?.kind === 'round' || message?.kind === 'round_result';
 }
 
+const REVIEW_RECORD_TYPES = new Set([...REVIEW_RECORD_RELATIONS, 'review_record']);
+/** Review records belong to their target's review category, not the main feed. */
+export function isReviewRecord(message: { relationType?: string | null; parts?: Part[] } | undefined): boolean {
+  return REVIEW_RECORD_TYPES.has(message?.relationType?.toLowerCase() ?? '')
+    || !!message?.parts?.some(part => part.type === 'relation' && REVIEW_RECORD_TYPES.has(part.relation));
+}
+export function isReviewDiscussion(message: {relationType?:string|null;parts?:Part[]} | undefined): boolean {
+  return isReviewRecord(message) || !!message?.parts?.some(part=>part.type==='relation'&&part.relation==='review-context');
+}
+
 /** All content-like kinds (display as cards, participate in graph layout) */
 export const CONTENT_KINDS: MessageKind[] = ["normal", "join", "round", "round_result", "governance", "code", "operations"];
 export const READABLE_RELATION_TYPES = new Set([
   'summary', 'classify', 'proposal', 'delegation', 'code_change', 'operations',
+  ...REVIEW_RECORD_TYPES,
 ]);
 
 /** Native amendment parts use the authorization workflow; correction parts use voting. */
@@ -52,7 +63,8 @@ export function hasReadableMessageContent(message: {relationType?:string;parts?:
   // Organization bodies belong to their scope card or frame header.
   if(type==='merge'||type==='arrange'||type==='correct'||type==='read'||type==='unread')return false;
   if(message.parts?.some(part=>part.type==='display'&&part.layout==='relation'))return false;
-  return !!message.parts?.some(part => part.type === 'text' && part.text.trim().length > 0 || part.type === 'code' || part.type === 'web' || part.type === 'relation' && part.relation === 'amend');
+  const labelPart = referenceLabelPart(message.parts);
+  return !!message.parts?.some(part => part.type === 'text' && part.id !== labelPart && part.text.trim().length > 0 || part.type === 'code' || part.type === 'web' || part.type === 'relation' && part.relation === 'amend');
 }
 export function presentationTarget(message: {id?:string;parts?:Part[]} | undefined): string | undefined {
   const display=message?.parts?.find(part=>part.type==='display'&&part.target&&part.target.messageId!==message.id);
@@ -74,6 +86,9 @@ export function isTraceTextLikeMessage(message: { kind: MessageKind; relationTyp
   return isCardMessage(message);
 }
 export type RelationType =
+  // Review verdicts split into independent view-only summary regions.
+  | "review-pass" | "review-reject"
+  | "review" | "review-appeal" | "review-settle" | "review-finalize" | "review_record" | "reviewer-authorize" | "review-enrollment"
   | "annotation"
   | "reference"
   | "reply"
@@ -96,6 +111,7 @@ export type RelationType =
   | "delegation"
   | "code_change"
   | "operations"
+  | "distribution"
   | "authorize";
 export type SecondaryRelationType = "none" | "question" | "answer";
 
@@ -113,6 +129,8 @@ export type UnitSelection = {
 };
 
 export type DemoMessage = {
+  moderation?: import('@gonglun/core').ModerationSummary;
+  restricted?: boolean;
   id: string;
   sequence?: number;
   bodyVersion?: BodyVersion;
@@ -324,14 +342,29 @@ export function convertMessagesToDemoModel(
   const relationById = new Map(relations.map(relation => [relation.id, relation]));
 
   const demoMessages: DemoMessage[] = messages.filter(m => (m as any).kind !== 'RELATION').map(m => {
-    const bk = (m as any).kind ?? 'TEXT';
+    let bk = (m as any).kind ?? 'TEXT';
     const persistedRelation = relationById.get(m.id);
+    const payload = (m.relationPayload ?? persistedRelation?.payload) as (RelationPayload & Record<string,unknown>)|undefined;
+    // Earlier snapshots classified the settlement button's close request as an
+    // operation. Keep those cached records behind the same settlement entry.
+    const settlementTermination = bk === 'OPERATIONS' && typeof payload?.roundId === 'string'
+      && m.parts?.some(part => part.type === 'relation' && part.relation === 'terminate');
+    if (settlementTermination) bk = 'ROUND';
+    const allocationPart=m.parts?.find(part=>part.type==='data'&&part.value&&typeof part.value==='object'&&!Array.isArray(part.value)&&typeof part.value.source==='string');
+    const allocation=allocationPart?.type==='data'?allocationPart.value as Record<string,unknown>:payload;
+    const inputs=allocation?.inputs as Record<string,unknown>|undefined;
+    // The API and old archives also use ROUND_RESULT for grants and other
+    // distributions. Those are readable records, without a settlement target.
+    const standaloneDistribution=bk==='ROUND_RESULT'
+      &&['grant','operations','delegation','penalty','reversal'].includes(String(allocation?.source??payload?.source))
+      &&!inputs?.roundId&&!payload?.roundId;
+    if(standaloneDistribution)bk='TEXT';
     // Extract settlement target from ROUND/ROUND_RESULT targetRefs
     let settlementTargetId: string | undefined;
     let roundPayload: Record<string,unknown> | undefined;
     if (bk === 'ROUND' || bk === 'ROUND_RESULT') {
       const ref = m.targetRefs?.[0];
-      roundPayload = (m as any).relationPayload as Record<string,unknown> | undefined;
+      roundPayload = payload;
       settlementTargetId = typeof roundPayload?.subjectId === 'string' ? roundPayload.subjectId
         : ref?.reference?.messageId ?? (ref?.kind === 'relation' ? ref.relationId : ref?.messageId)
           ?? (typeof roundPayload?.targetMessageId === 'string' ? roundPayload.targetMessageId : undefined);
@@ -345,6 +378,7 @@ export function convertMessagesToDemoModel(
     executedStance: m.executedStance,
     state: m.state,
     spending: m.spending,
+    moderation:m.moderation,restricted:m.restricted,
     author: m.createdBy.username,
     authorId: m.createdBy.id,
     createdAt: m.createdAt,
@@ -355,7 +389,7 @@ export function convertMessagesToDemoModel(
     sourceRefs: persistedRelation?.sourceRefs,
     settlementTargetId,
     roundPayload,
-      relationType: ((m as any).relationType ?? persistedRelation?.relationType)?.toLowerCase() as RelationType | undefined,
+      relationType: (settlementTermination?'round':standaloneDistribution?'distribution':((m as any).relationType ?? persistedRelation?.relationType)?.toLowerCase()) as RelationType | undefined,
       relationPayload: (m as any).relationPayload ?? persistedRelation?.payload ?? undefined,
       targetRefs: (m as any).targetRefs ?? persistedRelation?.targetRefs ?? undefined,
       declaredTargetRefs:m.declaredTargetRefs??persistedRelation?.declaredTargetRefs,
@@ -365,6 +399,7 @@ export function convertMessagesToDemoModel(
   const seenRelMsgIds = new Set<string>();
 
   for (const rel of relations) {
+    if(!rel.relationType||rel.restricted&&!isReviewRecord(rel))continue;
     // Relation messages use their plain backend ID — no synthetic prefix needed.
     const relMsgId = rel.id;
     const relType: string = rel.relationType.toLowerCase();
@@ -407,6 +442,9 @@ export function convertMessagesToDemoModel(
         content = persistedMessage?.content ?? rel.parts?.filter(part => part.type === 'text').map(part => part.text).join('\n') ?? `总结：${summaryTitle}`;
       } else if (['proposal', 'delegation', 'code_change', 'operations'].includes(relType) && rel.payload?.content) {
         content = rel.payload.content;
+      } else if (relType.startsWith('review')) {
+        content=rel.parts?.filter(part=>part.type==='text').map(part=>part.text).join('\n')??persistedMessage?.content??'';
+        if(relType==='review')msgKind='normal';
       } else if (relType === 'tag' && tagLabel) {
         content = `标签「${tagLabel}」\n目标：${targetRefsSummary(rel.targetRefs)}`;
       } else if (relType === 'agree' || relType === 'disagree') {
@@ -424,6 +462,7 @@ export function convertMessagesToDemoModel(
         executedStance: rel.executedStance,
         state: rel.state,
         spending: rel.spending,
+        moderation:rel.moderation,restricted:rel.restricted,
         author: rel.createdBy.username,
         authorId: rel.createdBy.id,
         createdAt: rel.createdAt,
@@ -438,6 +477,10 @@ export function convertMessagesToDemoModel(
         joinInfo,
       });
     }
+
+    // Retain redacted review identities for ledger/notification navigation,
+    // without restoring their reasons or drawing private discussion edges.
+    if(rel.restricted)continue;
 
     // For pure-stance relations (no source message), we still create edges
     // from a virtual "anonymous" origin that points to the target.

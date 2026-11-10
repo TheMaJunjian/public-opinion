@@ -20,7 +20,11 @@ it('升级旧账本时只补充历史余额缓存，保留账户和每笔旧流�
     expect(await financialFingerprint(upgraded.db)).toBe(before);
     expect(await upgraded.account(session.user.id)).toEqual(account);
     expect(await upgraded.db.prepare('SELECT "balanceAfter" FROM ledger ORDER BY position').all()).toEqual([{ balanceAfter: 1 }, { balanceAfter: 2 }, { balanceAfter: 3 }]);
-    expect(await upgraded.latestSequence()).toBe(sequence);
+    // v40 appends its public review-policy announcement; the historical ledger stays untouched.
+    expect(await upgraded.latestSequence()).toBe(sequence+1);
     expect(await upgraded.db.prepare('SELECT * FROM usage_reward_days').all()).toEqual([]);
   } finally { await upgraded.close(); }
+  const reopened=await Store.open(testDatabaseUrl(),{schema:store.db.schema});
+  try{expect(await reopened.latestSequence()).toBe(sequence+1);expect(await financialFingerprint(reopened.db)).toBe(before);}
+  finally{await reopened.close();}
 });

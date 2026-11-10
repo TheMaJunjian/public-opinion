@@ -19,9 +19,12 @@ it('persists width corrections of text and every organization as voted display r
   };
   const original = await post('/messages', { content: '原始正文保留' });
   const targets = [original];
-  for (const relationType of ['MERGE', 'ARRANGE', 'CLASSIFY', 'SUMMARY']) targets.push(await post('/relations', {
-    relationType, targetRefs: [{ kind: 'message', messageId: original.id }], payload: { title: relationType, content: relationType },
-  }));
+  for (const relationType of ['MERGE', 'ARRANGE', 'CLASSIFY', 'SUMMARY']) {
+    const member = await post('/messages', { content: `${relationType} 的独立成员` });
+    targets.push(await post('/relations', {
+      relationType, targetRefs: [{ kind: 'message', messageId: member.id }], payload: { title: relationType, content: relationType },
+    }));
+  }
   const corrections: Array<{ id: string }> = [];
   for (const target of targets) {
     const width = await post('/relations', { relationType: 'CORRECT', targetRefs: [{ kind: 'message', messageId: target.id }],

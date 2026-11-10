@@ -2,7 +2,7 @@ import React from "react";
 import SettlementMessageContent from '../../../components/SettlementMessageContent';
 import { buildAnnoTree, extractTextTargetsForMessage, renderAnnoNodes } from '../../../utils/graphTextSelection';
 import { getPresentationSpec } from '../../../types';
-import { getMessageTypeLabel, getMessageProminence } from '../../../utils/messageDisplay';
+import { getMessageTypeLabel, getMessageProminence, getMessageTypeDetails, hasMetadataOnlyContent } from '../../../utils/messageDisplay';
 import { getRelationRecordContentLabel } from '../../../utils/attachedRelationLabels';
 import {
   isCardMessage,
@@ -97,7 +97,7 @@ export function renderSettlementContentWithTarget({ handleNavigateToMessage }: R
 export function renderRelationContentWithTargets(dependencies: RenderRelationContentWithTargetsDependencies, message: DemoMessage): React.JSX.Element {
   const { handleNavigateToMessage } = dependencies;
   const targetRefs = message.targetRefs ?? [];
-  if (isCardMessage(message)) {
+  if (isCardMessage(message) && !hasMetadataOnlyContent(message)) {
     const parts = readableParts(message);
     const nativeContent = parts.length ? <div>{parts.map(part => <pre key={part.id}
       data-message-part-id={part.id} data-message-revision={message.revision ?? 1}
@@ -149,6 +149,7 @@ export function renderRelationContentWithTargets(dependencies: RenderRelationCon
   }
   const contentLabel = getRelationRecordContentLabel(message);
   if (contentLabel) addMetadata(contentLabel);
+  if (message.relationType === 'reference' && message.relationPayload?.label) addMetadata(message.relationPayload.label);
   const readable = readableParts(message);
   // Hide only complete generated descriptions; never truncate an authored part at “目标：”.
   const parts = readable.filter(part => part.type !== 'text' || !part.text.split('\n').every(line => !normalize(line) || metadata.has(normalize(line))));
@@ -171,7 +172,7 @@ export function renderRelationContentWithTargets(dependencies: RenderRelationCon
   );
   return (
     <div style={{ display: 'contents' }}>
-      {contentLabel && <div style={{ flexBasis: '100%', minWidth: 0, order: 3, fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{contentLabel}</div>}
+      {contentLabel && !getMessageTypeDetails(message).length && <div style={{ flexBasis: '100%', minWidth: 0, order: 3, fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{contentLabel}</div>}
       {nativeContent}
       {legacyContent && <div style={{ flexBasis: '100%', minWidth: 0, order: 3, fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{legacyContent}</div>}
       {renderReferences(sourceIds, '来源')}

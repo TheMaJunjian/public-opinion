@@ -113,7 +113,7 @@ it('disables every session, blocks queued writes and new logins, and restores ac
 
 it('upgrades a version 34 database without changing existing users, sessions or balances', async () => {
   const t = await setup(), before = await t.app.store.account(t.session.user.id);
-  await t.app.store.db.exec('DROP TABLE registration_invites,disabled_accounts,access_admin_actions; DELETE FROM schema_migrations WHERE version=35;');
+  await t.app.store.db.exec('DROP TABLE registration_invites,disabled_accounts,access_admin_actions; DELETE FROM schema_migrations WHERE version>=35;');
   const upgraded = await openMigratingStore(testDatabaseUrl(),{schema:t.schema});
   try {
     expect(await upgraded.account(t.session.user.id)).toEqual(before);

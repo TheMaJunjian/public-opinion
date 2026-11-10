@@ -41,7 +41,7 @@ export function useWorkbenchRecords() {
   const current = useRef(state); current.current = state;
   const liveSequence = useRef(0);
   const transient = useRef<Records | null>(null);
-  const [preview, setPreview] = useState<Records | null>(null);
+  const [preview, setPreview] = useState<{ records: Records; pages: WorkbenchSnapshot[]; ids: string[] } | null>(null);
   const generation = useRef(0);
   const actions = useMemo(() => {
     const field = <K extends keyof Records>(key: K): Dispatch<SetStateAction<Records[K]>> => value =>
@@ -66,8 +66,8 @@ export function useWorkbenchRecords() {
         transient.current = current.current;
         try { await work(); } finally { transient.current = null; }
       },
-      showSendPreview(pages: WorkbenchSnapshot[]) {
-        setPreview(applyPreviewPages(current.current, pages));
+      showSendPreview(pages: WorkbenchSnapshot[], ids: string[] = []) {
+        setPreview({ records: applyPreviewPages(current.current, pages), pages, ids });
       },
       clearSendPreview() { setPreview(null); },
       confirmSendPreview(pages: WorkbenchSnapshot[]) {
@@ -89,5 +89,6 @@ export function useWorkbenchRecords() {
       },
     };
   }, []);
-  return { ...(preview ?? state), liveMessages:state.messages, liveRelations:state.relations, liveSequence: liveSequence.current, ...actions };
+  return { ...(preview?.records ?? state), sendPreviewPages: preview?.pages, sendPreviewMessageIds: preview?.ids,
+    liveMessages:state.messages, liveRelations:state.relations, liveSequence: liveSequence.current, ...actions };
 }

@@ -6,6 +6,7 @@ import { operationLog } from '../utils/debugLog';
 import PromptModal from './PromptModal';
 import { useViewedBodyReference } from './MessageDisplayHints';
 import ThemeIcon, { ThemeLabel } from '../theme/ThemeIcon';
+import ArbitrationVoteForm from './ArbitrationVoteForm';
 
 interface Props {
   messageId: string;
@@ -666,35 +667,10 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
       )}
 
       {/* Vote Form */}
-      <div className="flex items-center gap-2">
-        <select
-          aria-label="投票方向"
-          value={voteDirection}
-          onChange={(e) => setVoteDirection(e.target.value as 'TRUE' | 'FALSE')}
-          className="text-xs border border-[color:var(--line-d1d5db)] rounded px-2 py-1.5 flex-1 bg-[color:var(--surface-card)] text-[color:var(--text-primary)]"
-        >
-          <option value="TRUE">{trueLabel}（PRO）</option>
-          <option value="FALSE">{falseLabel}（CON）</option>
-        </select>
-        <input
-          aria-label="投票投入点数"
-          type="number"
-          min={1}
-          value={voteAmount}
-          onChange={(e) => {
-            const raw = e.target.value;
-            setVoteAmount(raw === '' ? '' : Number(raw));
-          }}
-          className="w-16 text-xs border border-[color:var(--line-d1d5db)] rounded px-2 py-1.5 text-center bg-[color:var(--surface-card)] text-[color:var(--text-primary)]"
-        />
-        <button
-          onClick={handleVote}
-          disabled={voting || settling}
-          className="record-action px-3 py-1.5 bg-[color:var(--surface-4f46e5)] hover:bg-[color:var(--surface-4338ca)] disabled:bg-[color:var(--surface-a5b4fc)] text-[color:var(--ink-fff-2)] text-xs font-medium rounded transition-colors"
-        >
-          {voting ? '投票中...' : '投票'}
-        </button>
-      </div>
+      <ArbitrationVoteForm direction={voteDirection} onDirection={value=>setVoteDirection(value as 'TRUE'|'FALSE')}
+        options={[{value:'TRUE',label:`${trueLabel}（PRO）`},{value:'FALSE',label:`${falseLabel}（CON）`}]}
+        amount={voteAmount} onAmount={value=>setVoteAmount(value===''?'':Number(value))}
+        busy={voting||settling} voting={voting} onVote={()=>void handleVote()}/>
 
       {/* Round entries */}
       {entries.length > 0 && (

@@ -9,8 +9,26 @@ import { convertMessagesToDemoModel } from '../../../frontend/src/utils/modelBri
 import { deriveContainerEffect } from '../../../frontend/src/pages/workbench/model/containerEffect.js';
 import { initializeOrganizationMemberships } from '../../migrate/src/migrate-organization-memberships.js';
 import { projectWorkbenchSnapshot } from '../../../frontend/src/utils/workbenchProjection.js';
+import { Mutation } from './db.js';
+import { setMembership } from './organizations.js';
 
 afterEach(cleanupTestDatabases);
+
+it.each(['SUMMARY','MERGE','ARRANGE'])('keeps an existing %s intact under every organization operation',async protectedType=>{
+    const t=await setup();
+    for(const type of ['CLASSIFY','SUMMARY','MERGE','ARRANGE']){
+        const a=await t.content(),b=await t.content(),inner=await t.group([a.id,b.id],protectedType);
+        const before=await t.membership(a.id);
+        const split=await t.agent.post('/api/ui/relations').set('x-csrf-token',t.session.csrf).set('x-request-id',randomUUID())
+            .send({relationType:type,recommendation:1,targetRefs:[{kind:'message',messageId:a.id}]});
+        expect(split.status,split.text).toBe(409);expect(split.text).toContain('不能拆分已有');
+        expect(await t.membership(a.id)).toEqual(before);
+        const outer=await t.group([inner.id],type);
+        expect((await t.membership(inner.id))?.parentId).toBe(outer.id);
+        expect((await t.membership(a.id))?.parentId).toBe(inner.id);
+        expect((await t.membership(b.id))?.parentId).toBe(inner.id);
+    }
+},30000);
 async function setup() {
     const app = await createTestApp(), agent = request.agent(app);
     const session = (await agent.post('/api/register').send({ name: 'membership-test', password: 'long-test-password' })).body;
@@ -23,6 +41,20 @@ async function setup() {
     const join = (memberId: string, parentId: string) => post('/relations', { relationType: 'JOIN', sourceMessageId: parentId, targetRefs: [{ kind: 'message', messageId: memberId }] });
     const stance = (id: string, relationType = 'DISAGREE') => post('/relations', { relationType, targetRefs: [{ kind: 'relation', relationId: id, part: 'decoration' }] });
     const membership = (id: string) => app.store.db.prepare('SELECT * FROM memberships WHERE "memberId"=$1').get(id);
+    // Imported JOIN history may contain moves that new organization commands
+    // no longer permit. Reconstruct that history without bypassing live APIs.
+    const legacyJoin = (memberId:string,parentId:string) => app.store.transaction(async()=>{
+        const tx=new Mutation(app.store),previous=await membership(memberId);
+        const message=await tx.create(session.user.id,[{id:'relation',type:'relation',relation:'member-of',roles:{parent:[{id:'parent',reference:{messageId:parentId}}],member:[{id:'member',reference:{messageId:memberId}}]}},
+            {id:'data',type:'data',value:{uiType:'JOIN'}}]);
+        const row=await app.store.db.prepare('INSERT INTO membership_actions(id,body) VALUES($1,$2) RETURNING position').get(message.id,'{}');
+        const history={id:message.id,memberId,parentId,previousId:previous?.sourceId??null,previousParentId:previous?.parentId??null,
+            order:Number(row!.position),sourcePartId:'relation',bindingId:'member',sourceRevision:1};
+        await app.store.db.prepare('UPDATE membership_actions SET body=$2 WHERE id=$1').run(message.id,JSON.stringify(history));
+        message.parts.push({id:'membership-history',type:'data',value:{membershipHistory:history}});await tx.put(message);
+        await setMembership(tx,{memberId,parentId,sourceId:message.id,sourcePartId:'relation',bindingId:'member',sourceRevision:1});await tx.commit();
+        return message;
+    });
     async function parity() {
         const response = await agent.get('/api/ui/snapshot?limit=200'); expect(response.status).toBe(200);
         const snapshot = response.body, model = convertMessagesToDemoModel(snapshot.messages, snapshot.relations);
@@ -44,7 +76,7 @@ async function setup() {
         }
         return { snapshot, effect };
     }
-    return { app, agent, session, post, content, group, join, stance, membership, parity };
+    return { app, agent, session, post, content, group, join, legacyJoin, stance, membership, parity };
 }
 
 it.each(['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE'])('%s creates independently removable JOINs atomically and restores them', async type => {
@@ -283,6 +315,7 @@ const threeContainerCases = ['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE'].flatMap<
 
 it.each(threeContainerCases)('$type / $name: recovering A and B before opposing the latest JOIN preserves its recorded fallback', async scenario => {
     const t = await setup(), member = await t.content();
+    const join=scenario.type==='CLASSIFY'?t.join:t.legacyJoin;
     const containers = new Map<string, string>();
     for (const name of ['A', 'B', 'C']) containers.set(name, (await t.group([], scenario.type)).id);
     const joins = new Map<string, string>();
@@ -294,17 +327,17 @@ it.each(threeContainerCases)('$type / $name: recovering A and B before opposing 
         expect([...containers].filter(([, id]) => effect.ownership.direct(id).textIds.has(member.id)).map(([name]) => name)).toEqual(owner ? [owner] : []);
         for (const [name, id] of joins) expect(effect.context.joinStatusByMessage.get(id) === 'valid').toBe(name === owner);
     }
-    joins.set('A', (await t.join(member.id, containers.get('A')!)).id);
+    joins.set('A', (await join(member.id, containers.get('A')!)).id);
     await check('A');
     for (const name of scenario.beforeB) { await t.stance(containers.get(name)!); await check(null); }
-    joins.set('B', (await t.join(member.id, containers.get('B')!)).id);
+    joins.set('B', (await join(member.id, containers.get('B')!)).id);
     await check('B');
     for (const name of scenario.beforeC) {
         await t.stance(containers.get(name)!);
         await check(name === 'A' ? 'B' : scenario.beforeB.includes('A') || scenario.beforeC.includes('A') ? null : 'A');
     }
     if (scenario.rejectJoinB) { await t.stance(joins.get('B')!); await check('A'); }
-    joins.set('C', (await t.join(member.id, containers.get('C')!)).id);
+    joins.set('C', (await join(member.id, containers.get('C')!)).id);
     const action = await t.app.store.db.prepare('SELECT body FROM membership_actions WHERE id=$1').get(joins.get('C')!);
     expect(action!.body.previousId).toBe(scenario.previousC ? joins.get(scenario.previousC) : null);
     await check('C');

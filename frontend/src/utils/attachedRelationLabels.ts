@@ -16,6 +16,12 @@ function replyAdditionalDisplayLabel(value: string): string {
   return '回复';
 }
 
+/** Built-in reference labels are stored as codes; custom labels stay as authored. */
+export function referenceDisplayLabel(value: string): string {
+  const label = value.trim();
+  return ({ evidence: '证据', delegation: '完成委托', reference: '引用', ref: '引用' } as Record<string, string>)[label.toLowerCase()] ?? label;
+}
+
 export const MAX_CUSTOM_LABEL_LENGTH = 20;
 
 export function truncateCustomLabel(value: string, maxLength = MAX_CUSTOM_LABEL_LENGTH): string {
@@ -35,6 +41,7 @@ function getReasonLabel(payload: RelationPayload | undefined): string | undefine
 export function getRelationRecordContentLabel(message: DemoMessage): string | undefined {
   const type = message.relationType;
   const payload = message.relationPayload;
+  if(type==='review')return payload?.verdict==='pass'?'通过':payload?.verdict==='reject'?'不通过':undefined;
   if (type === 'correct') return payload?.correctionKind === 'WIDTH' ? `${payload.correctionWidth} px` : undefined;
   if (type === 'recommend' || type === 'archive') {
     return payload?.subType === 'CUSTOM' ? payload.customLabel?.trim() || '自定义' : getReasonLabel(payload);
@@ -45,7 +52,7 @@ export function getRelationRecordContentLabel(message: DemoMessage): string | un
   }
   const label = payload?.label?.trim();
   if (!label) return undefined;
-  const display = type === 'reply' ? replyAdditionalDisplayLabel(label) : label;
+  const display = type === 'reply' ? replyAdditionalDisplayLabel(label) : type === 'reference' ? referenceDisplayLabel(label) : label;
   return display === getPresentationSpec(type ?? 'relation').label ? undefined : display;
 }
 
@@ -63,6 +70,7 @@ const OPERATION_LABELS: Record<string, string> = {
 export function getRelationMessageLabel(message: DemoMessage): string | undefined {
   const relationType = String(message.relationType ?? '').toLowerCase();
   const payload = message.relationPayload;
+  if(relationType==='review')return payload?.verdict==='pass'?'审核 · 通过':payload?.verdict==='reject'?'审核 · 不通过':'审核';
   if (relationType === 'correct') return `更正 · ${payload?.correctionKind === 'WIDTH' ? '宽度调整' : '修正文字'}`;
   if (message.kind !== 'relation' && message.backendKind !== 'GOVERNANCE') return undefined;
   if (relationType === 'delegation') {
@@ -78,7 +86,7 @@ export function getRelationMessageLabel(message: DemoMessage): string | undefine
     const reason = getReasonLabel(payload);
     return reason ? `${base} · ${reason}` : base;
   }
-  if (payload?.label?.trim()) return payload.label.trim();
+  if (payload?.label?.trim()) return relationType === 'reference' ? referenceDisplayLabel(payload.label) : payload.label.trim();
   return undefined;
 }
 

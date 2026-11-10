@@ -14,7 +14,7 @@ import * as leaderboardMetrics from '../utils/leaderboardMetrics';
 import { LEADERBOARD_PREFERENCES_KEY } from '../utils/leaderboardPreferences';
 import GestureShortcutManager from '../components/GestureShortcutManager';
 import { WORKBENCH_DRAWING_TIMEOUT_MS } from '../context/WorkbenchDrawingContext';
-import {bodyVersion,messageReadingKey,structureSnapshot} from '@gonglun/core';
+import {bodyVersion,messageReadingKey,structureSnapshot,DEFAULT_MODERATION_POLICY,reviewContextPart,type NativeMessageView} from '@gonglun/core';
 import {discussionMessages,discussionEdges} from './discussion-fixture';
 import {convertMessagesToDemoModel, type DemoEdge} from '../utils/modelBridge';
 import {deriveReadingProgress,influenceReadingMarks} from '../pages/workbench/model/readingProgress';
@@ -61,11 +61,13 @@ const { mockApi, mockNavigate, mockGraphView, graphRendering, viewerRoute } = vi
     getMessageStakes: vi.fn().mockResolvedValue({ messageId: '', pool: { lockedPro: 0, lockedCon: 0 }, stakes: [], counts: { pro: 0, con: 0 } }),
     getMessageRounds: vi.fn().mockResolvedValue({ data: [] }),
     getRoundDetail: vi.fn().mockResolvedValue(null),
-    getCurrentRules: vi.fn().mockResolvedValue({ parameters: { selfStakeOnCreate: 10, minStake: 1, stakeFeeAmount: 1 } }),
+    // These established composer scenarios isolate truth/value costs; moderation has its own cases.
+    getCurrentRules: vi.fn().mockResolvedValue({ parameters: { selfStakeOnCreate: 10, minStake: 1, stakeFeeAmount: 1,moderation:{enabled:false,fee:3,deposit:10,minReviewers:2,appealDelayMs:86400000} } }),
     createRound: vi.fn(),
     castVote: vi.fn(),
     closeAndSettle: vi.fn(),
     getMessageTagCounts: vi.fn().mockResolvedValue({ counts: {} }),
+    getReview:vi.fn(),
   };
   mockApi.withCommandBatch.mockImplementation(async (work, onCommitted) => {
     const before = mockApi.createMessage.mock.calls.length + mockApi.createRelation.mock.calls.length;
@@ -118,6 +120,7 @@ const { mockApi, mockNavigate, mockGraphView, graphRendering, viewerRoute } = vi
     navigation: null as import('../utils/exportViewerCache').ExportNavigation | null } };
 });
 
+const defaultCommandBatch = mockApi.withCommandBatch.getMockImplementation()!;
 const catalogHarness = vi.hoisted(() => ({ callbacks: null as any, data: null as any,
   progress: { ready: false, count: 0, syncing: true }, prioritize: vi.fn(), filters: vi.fn(), leaderboard: vi.fn() }));
 vi.mock('../data/catalogClient', async () => {
@@ -142,6 +145,7 @@ vi.mock('../data/catalogClient', async () => {
 
 vi.mock('../api', () => ({ api: mockApi }));
 vi.mock('../context/AuthContext', () => ({
+  useOptionalAuth:()=>({user:{id:'user-1',username:'tester',createdAt:'2024-01-01T00:00:00.000Z'}}),
   useAuth: () => ({
     user: { id: 'user-1', username: 'tester', createdAt: '2024-01-01T00:00:00.000Z' },
     logout: vi.fn(),
@@ -360,6 +364,345 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       view.unmount(); hold = false; releases.splice(0).forEach(release => release());
       graphRendering.actual = false; mockApi.getWorkbenchSnapshot.mockImplementation(original); catalogHarness.callbacks = null;
     }
+  });
+  it('opens a review target outside the loaded scope through the queue event even without audit records',async()=>{
+    mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'审核测试'});
+    const target=makeMessage('review-target','待审正文');
+    mockApi.getMessages.mockResolvedValue({data:[makeMessage('unrelated','其他消息')]});mockApi.getRelations.mockResolvedValue({data:[]});
+    mockApi.getReview.mockResolvedValue({summary:{caseId:'case',messageId:'review-target',revision:1,status:'pending',fee:3,deposit:10,pass:10,reject:0,selfPass:10,selfReject:0,reviewerCount:0,releaseAt:null,finalized:false},target,records:[],canReview:true,reviewEligibility:'eligible',canAppeal:true,canSettle:false,policy:{enabled:true,fee:3,deposit:10,minReviewers:2,appealDelayMs:86400000}});
+    render(<MessageWorkbenchPage/>);await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+    act(()=>window.dispatchEvent(new CustomEvent('gonglun:open-review',{detail:{messageId:'review-target'}})));
+    expect(await screen.findByText('审核临时分类（1 条被审核消息 · 0 条记录）')).toBeInTheDocument();
+    expect(screen.queryByRole('region',{name:'审核理由汇总'})).not.toBeInTheDocument();
+    expect(screen.getByRole('button',{name:'切换为消息表'})).toBeVisible();
+    await waitFor(()=>expect(latest().messages).toEqual([expect.objectContaining({id:target.id,content:target.content})]));
+    fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));await waitForWorkbenchIdle();
+    expect(screen.getByText(target.content)).toBeVisible();
+    fireEvent.click(screen.getByRole('button',{name:/审核仲裁：/}));
+    await waitFor(()=>expect(screen.getByRole('region',{name:'审核仲裁'})).toHaveTextContent('资金与奖励：审核费 3'));
+    expect(mockApi.getReview).toHaveBeenCalled();
+  });
+  it('opens the covered review target from a restricted ledger source',async()=>{
+    mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'审核测试'});
+    const summary={caseId:'case',messageId:'review-target',revision:1,status:'rejected' as const,fee:6,deposit:10,pass:10,reject:11,reviewerCount:1,releaseAt:'2026-11-09T00:00:00Z',finalized:true};
+    const target={...makeMessage('review-target',''),revision:1,restricted:true,moderation:summary};
+    const record={...makeMessage('review-payout',''),kind:'RELATION',restricted:true,relationType:'REVIEW_RECORD',payload:{},sourceMessageId:null,
+      targetRefs:[{kind:'message' as const,messageId:target.id,reference:{messageId:target.id,revision:1}}],
+      parts:[{id:'review-attachment',type:'relation' as const,relation:'review-record',roles:{target:[{id:'target',reference:{messageId:target.id,revision:1}}]}}]};
+    mockApi.getMessages.mockResolvedValue({data:[target,record]});mockApi.getRelations.mockResolvedValue({data:[record]});
+    mockApi.getReview.mockResolvedValue({summary,target,records:[record],stakes:[],canReview:false,canAppeal:false,canSettle:false,policy:DEFAULT_MODERATION_POLICY});
+    render(<MessageWorkbenchPage/>);await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+    act(()=>window.dispatchEvent(new CustomEvent('points-navigate',{detail:{messageId:record.id,scopeMessageId:'root',txType:'TRANSFER',roundId:null}})));
+    expect(await screen.findByText('审核临时分类（1 条被审核消息 · 0 条记录）')).toBeInTheDocument();
+    await waitFor(()=>expect(latest().messages).toContainEqual(expect.objectContaining({id:target.id,restricted:true,content:''})));
+  });
+  it.each(['graph','list'])('keeps the review target mounted as delayed records arrive in a windowed %s view',async mode=>{
+    const original=mockApi.getWorkbenchSnapshot.getMockImplementation()!;
+    const summary={caseId:'delayed-case',messageId:'review-target',revision:1,status:'pending' as const,fee:6,deposit:10,pass:10,reject:0,reviewerCount:0,releaseAt:null,finalized:false};
+    const target={...receivedMessage(summary.messageId,'审核期间始终显示的原消息'),revision:1,moderation:summary};
+    const record:NativeMessageView={...target,moderation:undefined,id:'delayed-record',sequence:11,kind:'RELATION',content:'延迟到达的审核记录',relationType:'REVIEW',sourceMessageId:null,
+      sourceRefs:[],targetRefs:[{kind:'message',messageId:target.id}],payload:{caseId:summary.caseId,verdict:'pass'},
+      updatedAt:target.createdAt,spending:{protocol:1,wager:0,recommendation:0,reviewWager:2},
+      state:{messageId:'delayed-record',revision:1,suppressed:false,supportCount:0,oppositionCount:0,recommendationTotal:0},
+      parts:[{id:'body',type:'text',text:'延迟到达的审核记录'},
+        {id:'review',type:'relation',relation:'review',roles:{target:[{id:'target',reference:{messageId:target.id,revision:1}}]}},
+        {id:'data',type:'data',value:{caseId:summary.caseId,verdict:'pass'}}]};
+    const value={summary,target,records:[record],canReview:true,canAppeal:false,canSettle:false,policy:DEFAULT_MODERATION_POLICY};
+    let finish!:(result:typeof value)=>void;
+    mockApi.getReview.mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
+    const full={regionId:'region',scope:{messageId:'classification-1',title:'按需审核'},sequence:10,messages:[target],relations:[],users:[participant],stakes:{},tagCounts:{},attentionUsers:{}};
+    mockApi.getWorkbenchSnapshot.mockImplementation(async({ids}:{ids?:string[]})=>({...full,windowed:true,messages:full.messages.filter(row=>ids?.includes(row.id))}));
+    const {projectWorkbenchSnapshot}=await import('../utils/workbenchProjection');
+    graphRendering.actual=true;
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    const view=render(<MessageWorkbenchPage/>);
+    try{
+      await waitFor(()=>expect(catalogHarness.callbacks).not.toBeNull());
+      const index=structureSnapshot(full);
+      act(()=>catalogHarness.callbacks.onReady({snapshot:index,index,projected:projectWorkbenchSnapshot({...index,messages:[],relations:[]})}));
+      await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button',{name:'审核通过 10 点，查看记录'}));
+      await waitForWorkbenchIdle();
+      if(mode==='list'){fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));await waitForWorkbenchIdle();}
+      const canvas=view.container.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      const card=canvas.querySelector<HTMLElement>('[data-msgid="review-target"]')!;
+      expect(card).toHaveTextContent(target.content);
+      const host=canvas.querySelector('[data-workbench-view-cache]')!.firstElementChild;
+      expect(mockApi.getReview).toHaveBeenCalledTimes(1);
+      await act(async()=>{finish(value);});
+      mockApi.getReview.mockResolvedValue(value);
+      await waitFor(()=>expect(canvas.querySelector('[data-msgid="delayed-record"]')).not.toBeNull());
+      await waitForWorkbenchIdle();
+      expect(canvas.querySelector('[data-msgid="review-target"]')).toBe(card);
+      expect(canvas.querySelector('[data-workbench-view-cache]')!.firstElementChild).toBe(host);
+      const windowRequests=mockApi.getWorkbenchSnapshot.mock.calls.length;
+      expect(canvas.querySelector('[data-msgid="delayed-record"]')).toHaveTextContent(record.content);
+      if(mode==='graph'){
+        fireEvent.click(await screen.findByRole('button',{name:'收起审核通过分支 review-target'}));await waitForWorkbenchIdle();
+        expect(canvas.querySelector('[data-msgid="delayed-record"]')).toBeNull();
+        fireEvent.click(screen.getByRole('button',{name:'展开审核通过分支 review-target'}));await waitForWorkbenchIdle();
+        expect(canvas.querySelector('[data-msgid="delayed-record"]')).toHaveTextContent(record.content);
+      }
+      expect(canvas.querySelector('[data-msgid="review-target"]')).toBe(card);
+      expect(canvas.querySelector('[data-workbench-view-cache]')!.firstElementChild).toBe(host);
+      expect(mockApi.getWorkbenchSnapshot).toHaveBeenCalledTimes(windowRequests);
+      expect(mockApi.getReview).toHaveBeenCalledTimes(1);
+      expect(mockApi.getWorkbenchSnapshot.mock.calls.some(([query])=>query.ids?.includes(record.id))).toBe(false);
+      fireEvent.click(screen.getByRole('button',{name:/审核仲裁：/}));
+      const arbitration=await screen.findByRole('region',{name:'审核仲裁'});
+      expect(arbitration.closest('[data-settlement-panel]')).not.toBeNull();
+      expect(arbitration.closest('[aria-label="审核理由汇总"]')).toBeNull();
+      expect(mockApi.getReview).toHaveBeenCalledTimes(1);
+      fireEvent.click(within(card).getByTitle('真假仲裁'));
+      await screen.findByRole('heading',{name:/真假仲裁/});
+      expect(screen.queryByRole('region',{name:'审核仲裁'})).toBeNull();
+      expect(canvas.querySelectorAll('[data-settlement-panel]')).toHaveLength(1);
+      fireEvent.click(within(card).getByTitle('价值仲裁'));
+      await screen.findByRole('heading',{name:/价值仲裁/});
+      expect(canvas.querySelectorAll('[data-settlement-panel]')).toHaveLength(1);
+      expect(canvas.querySelector('[data-msgid="review-target"]')).toBe(card);
+    }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;mockApi.getWorkbenchSnapshot.mockImplementation(original);catalogHarness.callbacks=null;}
+  });
+  it.each((['pass','reject'] as const).flatMap(verdict=>['graph','list'].map(mode=>({verdict,mode}))))('sends an operations review $verdict as one dependent relation with an optional reason in $mode',async({verdict,mode})=>{
+    const rules=mockApi.getCurrentRules.getMockImplementation()!,createRelation=mockApi.createRelation.getMockImplementation(),token=localStorage.getItem('token');localStorage.setItem('token','test-token');
+    mockApi.getCurrentRules.mockResolvedValue({parameters:{minStake:1,stakeFeeAmount:1,moderation:DEFAULT_MODERATION_POLICY}});
+    const target={...receivedMessage('review-target','可供审核的正文'),revision:1};
+    const summary={caseId:'case',messageId:target.id,revision:1,round:1,status:'pending',fee:6,deposit:10,pass:0,reject:0,reviewerCount:0,releaseAt:null,finalized:false};
+    mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'审核测试'});
+    mockApi.getMessages.mockResolvedValue({data:[target]});mockApi.getRelations.mockResolvedValue({data:[]});
+    mockApi.getReview.mockResolvedValue({summary,records:[],canReview:true,canAppeal:false,canSettle:false,policy:DEFAULT_MODERATION_POLICY});
+    const reason=verdict==='pass'?'事实可核实':'';
+    mockApi.createRelation.mockResolvedValueOnce({...makeRelation(),id:'new-review',relationType:'REVIEW',sourceMessageId:null,targetRefs:[{kind:'message',messageId:target.id}],payload:{caseId:'case',reviewRound:1,verdict},revision:1,
+      spending:{protocol:1,wager:0,recommendation:0,reviewWager:2},parts:[
+        {id:'body',type:'text',text:reason},{id:'relation',type:'relation',relation:'review',roles:{target:[{id:'target',reference:{messageId:target.id,revision:1}}]}},
+        {id:'data',type:'data',value:{caseId:'case',reviewRound:1,verdict}},
+      ]});
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));graphRendering.actual=true;
+    const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      await act(async()=>latest().onMessageClick(event(),target.id));
+      if(mode==='list'){fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));await waitForWorkbenchIdle();}
+      fireEvent.click(screen.getByRole('button',{name:/运营$/}));
+      expect(screen.getByRole('button',{name:'公告'})).toHaveAttribute('aria-pressed','true');
+      fireEvent.click(screen.getByRole('button',{name:'审核'}));
+      fireEvent.click(screen.getByRole('button',{name:verdict==='pass'?'审核通过':'审核不通过'}));
+      fireEvent.change(screen.getByPlaceholderText('填写审核理由（可选，保存在审核关系消息中）'),{target:{value:reason}});
+      expect(screen.getByLabelText('审核押注投入')).toHaveValue(2);
+      expect(screen.getByRole('button',{name:'发送'})).toBeEnabled();
+      fireEvent.click(screen.getByRole('button',{name:'发送'}));
+      await waitFor(()=>expect(mockApi.createRelation).toHaveBeenCalledExactlyOnceWith('classification-1',expect.objectContaining({
+        relationType:'REVIEW',sourceMessageId:null,wager:0,reviewWager:2,recommendation:0,selfAgree:false,
+        targetRefs:[expect.objectContaining({messageId:target.id,reference:expect.objectContaining({messageId:target.id,revision:1})})],
+        payload:{caseId:'case',reviewRound:1,verdict,content:reason},
+      })));
+      expect(mockApi.createMessage).not.toHaveBeenCalled();
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      expect(await screen.findByText(/审核临时分类（1 条被审核消息/)).toBeVisible();
+      expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="new-review"]')).not.toBeNull();
+      expect(screen.queryByRole('region',{name:'审核理由汇总'})).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button',{name:'退出临时分类'}));await waitForWorkbenchIdle();
+      if(mode==='graph'){
+        expect(latest().messages.some((message:Message)=>message.id==='new-review')).toBe(false);
+        expect(latest().edges.some((edge:DemoEdge)=>edge.relationMessageId==='new-review')).toBe(false);
+      }else expect(screen.getByRole('button',{name:'切换为消息图'})).toBeVisible();
+      expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="new-review"]')).toBeNull();
+      expect(screen.queryByRole('region',{name:'审核理由汇总'})).not.toBeInTheDocument();
+    }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;mockApi.getCurrentRules.mockImplementation(rules);mockApi.createRelation.mockReset();if(createRelation)mockApi.createRelation.mockImplementation(createRelation);if(token===null)localStorage.removeItem('token');else localStorage.setItem('token',token);}
+  });
+  it.each([
+    {name:'回复',text:'回复审核正文'}, {name:'引用',text:'引用审核正文'}, {name:'注释',text:'注释审核正文'},
+    {name:'更正',text:'更正审核正文'}, {name:'分类',text:'审核分类'}, {name:'总结',text:'审核总结'},
+    {name:'归并',text:''}, {name:'排列',text:''}, {name:'赞同',text:''}, {name:'反对',text:''},
+  ])('offers the ordinary text $name operation for a review message in its temporary category',async({name,text})=>{
+    const summary={caseId:'operation-case',messageId:'operation-target',revision:1,status:'pending' as const,fee:6,deposit:10,pass:12,reject:0,reviewerCount:1,releaseAt:null,finalized:false};
+    const target={...receivedMessage(summary.messageId,'被审核正文'),revision:1,moderation:summary};
+    const vote:NativeMessageView={...target,id:'operation-review',kind:'RELATION',content:'完整审核正文',contentType:'TEXT',sequence:2,
+      relationType:'REVIEW',sourceMessageId:null,sourceRefs:[],targetRefs:[{kind:'message',messageId:target.id}],payload:{caseId:summary.caseId,verdict:'pass'},
+      updatedAt:'2026-11-08T00:00:00Z',spending:{protocol:1,recommendation:0,wager:0,reviewWager:2},
+      state:{messageId:'operation-review',revision:1,suppressed:false,supportCount:0,oppositionCount:0,recommendationTotal:0},moderation:undefined,
+      parts:[{id:'body',type:'text',text:'完整审核正文'},{id:'relation',type:'relation',relation:'review',roles:{target:[{id:'t',reference:{messageId:target.id,revision:1}}]}},
+        {id:'data',type:'data',value:{caseId:summary.caseId,verdict:'pass'}}]};
+    mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'审核消息操作'});
+    mockApi.getMessages.mockResolvedValue({data:[target]});mockApi.getRelations.mockResolvedValue({data:[]});
+    mockApi.getReview.mockResolvedValue({summary,target,records:[vote],canReview:true,canAppeal:false,canSettle:false,policy:DEFAULT_MODERATION_POLICY});
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    graphRendering.actual=true;const view=render(<MessageWorkbenchPage/>);
+    try{
+      await waitForWorkbenchIdle();
+      fireEvent.click(await screen.findByRole('button',{name:'审核通过 12 点，查看记录'}));await waitForWorkbenchIdle();
+      await act(async()=>latest().onMessageClick(event(),vote.id));
+      fireEvent.click(screen.getByRole('button',{name}));
+      if(text){
+        const placeholder=name==='分类'?'输入分类名称（不能为空）':name==='总结'?'输入总结内容（不能为空）':'输入一条新文本消息（支持自由换行）';
+        const input=screen.getByPlaceholderText(placeholder);expect(input).not.toHaveAttribute('readonly');
+        fireEvent.change(input,{target:{value:text}});
+      }
+      expect(screen.getByRole('button',{name:'发送'})).toBeEnabled();
+      if(name==='赞同'||name==='反对')expect(screen.getByLabelText('审核押注投入')).toHaveValue(2);
+    }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;}
+  });
+  it('loads review reason discussions and organization frames, refreshes new replies, and hides the discussion after exit',async()=>{
+    const summary={caseId:'discussion-case',messageId:'review-discussion-target',revision:1,status:'pending' as const,fee:6,deposit:10,pass:12,reject:0,reviewerCount:1,releaseAt:null,finalized:false};
+    const target={...receivedMessage(summary.messageId,'被审核的原文'),revision:1,moderation:summary};
+    const scope={messageId:target.id,revision:1};
+    const vote:NativeMessageView={...target,id:'reason-vote',kind:'RELATION',content:'审核理由原文',contentType:'TEXT',sequence:2,revision:1,
+      relationType:'REVIEW',sourceMessageId:null,sourceRefs:[],targetRefs:[{kind:'message',messageId:target.id}],payload:{caseId:summary.caseId,verdict:'pass'},
+      updatedAt:'2026-11-08T00:00:00Z',spending:{protocol:1,recommendation:0,wager:0,reviewWager:2},
+      state:{messageId:'reason-vote',revision:1,suppressed:false,supportCount:0,oppositionCount:0,recommendationTotal:0},moderation:undefined,
+      parts:[{id:'body',type:'text',text:'审核理由原文'},{id:'relation',type:'relation',relation:'review',roles:{target:[{id:'t',reference:scope}]}},
+        {id:'data',type:'data',value:{caseId:summary.caseId,verdict:'pass'}}]};
+    const reply:NativeMessageView={...vote,id:'reason-reply',kind:'TEXT',relationType:null,content:'回复审核理由',targetRefs:[],payload:{},
+      parts:[{id:'body',type:'text',text:'回复审核理由'},reviewContextPart(scope)],spending:{protocol:1,recommendation:1,wager:0}};
+    const group:NativeMessageView={...vote,id:'reason-group',relationType:'CLASSIFY',content:'审核理由分类',payload:{title:'审核理由分类'},
+      targetRefs:[{kind:'message',messageId:vote.id},{kind:'message',messageId:reply.id}],
+      parts:[{id:'body',type:'text',text:'审核理由分类'},{id:'relation',type:'relation',relation:'classify',roles:{members:[vote,reply].map((record,index)=>({id:`m${index}`,reference:{messageId:record.id}}))}},reviewContextPart(scope)]};
+    let records=[vote,reply,group];
+    mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'审核讨论操作'});
+    mockApi.getMessages.mockResolvedValue({data:[target]});mockApi.getRelations.mockResolvedValue({data:[]});
+    mockApi.getReview.mockImplementation(async()=>({summary,target,records,canReview:true,canAppeal:false,canSettle:false,policy:DEFAULT_MODERATION_POLICY}));
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    graphRendering.actual=true;const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button',{name:'审核通过 12 点，查看记录'}));await waitForWorkbenchIdle();
+      await waitFor(()=>expect(latest().messages.map((message:Message)=>message.id)).toEqual(expect.arrayContaining([target.id,vote.id,reply.id,group.id])));
+      expect(latest().messages.find((message:Message)=>message.id===vote.id)).toMatchObject({kind:'normal',content:'审核理由原文'});
+      expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="reason-reply"]')).not.toBeNull();
+      expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="reason-vote"]')).not.toBeNull();
+      const more={...reply,id:'new-reason-reply',content:'后来追加的回复',parts:[{id:'body',type:'text' as const,text:'后来追加的回复'},reviewContextPart(scope)]};
+      records=[...records,more];
+      act(()=>window.dispatchEvent(new CustomEvent('gonglun:committed',{detail:[]})));
+      await waitFor(()=>expect(latest().messages.some((message:Message)=>message.id===more.id)).toBe(true));
+      await waitForWorkbenchIdle();
+      act(()=>latest().onGroupFrameDoubleClick({stopPropagation:()=>undefined},group.id));await waitForWorkbenchIdle();
+      expect(await screen.findByRole('button',{name:'返回审核临时分类'})).toBeVisible();
+      expect(latest().messages.some((message:Message)=>message.id===target.id)).toBe(true);
+      expect(latest().messages.some((message:Message)=>message.id===more.id)).toBe(false);
+      fireEvent.click(screen.getByRole('button',{name:'返回审核临时分类'}));await waitForWorkbenchIdle();
+      expect(latest().messages.some((message:Message)=>message.id===more.id)).toBe(true);
+      fireEvent.click(screen.getByRole('button',{name:'退出临时分类'}));await waitForWorkbenchIdle();
+      for(const record of records)expect(view.container.querySelector(`[data-workbench-left-panel] [data-msgid="${record.id}"]`)).toBeNull();
+      expect(mockApi.createRelation).not.toHaveBeenCalled();
+    }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;}
+  });
+  it.each(['graph','list'])('keeps review records attached in the main %s view and opens them only in the review category',async mode=>{
+    const summary={caseId:'case',messageId:'review-target',revision:1,round:1,status:'pending' as const,fee:6,deposit:10,pass:2,reject:2,passReviewers:1,rejectReviewers:1,reviewerCount:2,releaseAt:null,finalized:false};
+    const target={...receivedMessage('review-target','被审核消息正文'),revision:1,moderation:summary};
+    const record=(id:string,verdict:'pass'|'reject',reason:string):NativeMessageView=>({
+      id,revision:1,sequence:2,kind:'RELATION',contentType:'TEXT',content:reason,relationType:'REVIEW',sourceMessageId:null,
+      sourceRefs:[],updatedAt:'2026-11-08T00:00:00Z',spending:{protocol:1,wager:0,recommendation:0,reviewWager:2},
+      state:{messageId:id,revision:1,suppressed:false,supportCount:0,oppositionCount:0,recommendationTotal:0},
+      targetRefs:[{kind:'message',messageId:target.id}],payload:{caseId:'case',reviewRound:1,verdict},createdBy:participant,createdAt:'2026-11-08T00:00:00Z',
+      parts:[{id:'body',type:'text',text:reason},{id:'relation',type:'relation',relation:'review',roles:{target:[{id:'target',reference:{messageId:target.id,revision:1}}]}},
+        {id:'data',type:'data',value:{caseId:'case',reviewRound:1,verdict}}],
+    });
+    const pass=record('review-pass','pass',''),reject=record('review-reject','reject','不通过理由');
+    reject.createdBy={...participant,id:'second-reviewer'};
+    const enrollment:NativeMessageView={...record('review-enrollment','pass','历史内容纳入审核'),relationType:'REVIEW-ENROLLMENT',payload:{},parts:[
+      {id:'body',type:'text',text:'历史内容纳入审核'},
+      {id:'record',type:'relation',relation:'review-enrollment',roles:{target:[{id:'target',reference:{messageId:target.id,revision:1}}]}},
+    ]};
+    const records=[pass,reject,enrollment];
+    const stakes=[pass,reject].map(record=>({id:`review-wager:${record.id}`,sourceMessageId:record.id,revision:1,round:1,kind:'wager',
+      side:record.id===pass.id?'PRO':'CON',amount:2,createdAt:record.createdAt,user:record.createdBy}));
+    mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'审核测试'});
+    mockApi.getMessages.mockResolvedValue({data:[target]});mockApi.getRelations.mockResolvedValue({data:[pass,reject,enrollment]});
+    mockApi.getReview.mockResolvedValue({summary,records,target,stakes,canReview:true,canAppeal:false,canSettle:false,policy:DEFAULT_MODERATION_POLICY});
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    graphRendering.actual=true;const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      if(mode==='list'){fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));await waitForWorkbenchIdle();}
+      for(const record of records)expect(view.container.querySelector(`[data-workbench-left-panel] [data-msgid="${record.id}"]`)).toBeNull();
+      expect(screen.queryByText('不通过理由')).not.toBeInTheDocument();
+      const arbitration=screen.getByRole('button',{name:/审核仲裁：/});
+      fireEvent.click(arbitration);
+      expect(await screen.findByRole('region',{name:'审核仲裁'})).toHaveClass('settlement-panel');
+      const stakeList=await screen.findByRole('list',{name:'审核押注记录'});
+      expect(within(stakeList).getAllByRole('listitem')).toHaveLength(2);
+      expect(within(stakeList).getByText('PRO 2点')).toBeVisible();expect(within(stakeList).getByText('CON 2点')).toBeVisible();
+      expect(screen.queryByRole('button',{name:'查看审核记录'})).not.toBeInTheDocument();
+      expect(screen.queryByRole('region',{name:'审核理由汇总'})).not.toBeInTheDocument();
+      fireEvent.mouseDown(arbitration);fireEvent.click(arbitration);
+      expect(screen.queryByRole('region',{name:'审核仲裁'})).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button',{name:'审核不通过 2 点，查看记录'}));
+      expect(await screen.findByText('审核临时分类（1 条被审核消息 · 2 条记录）')).toBeVisible();await waitForWorkbenchIdle();
+      expect(screen.queryByRole('region',{name:'审核理由汇总'})).not.toBeInTheDocument();
+      for(const label of ['审核通过','审核不通过'])expect(await screen.findByRole('button',{name:`汇总${label}：1`})).toBeVisible();
+      expect(latest().messages.map((message:Message)=>message.id)).toEqual(['review-target',pass.id,reject.id]);
+      expect(latest().standaloneMessageIds).toEqual(new Set(['review-target']));
+      expect(screen.queryByRole('button',{name:/汇总支持|汇总反驳/})).not.toBeInTheDocument();
+      for(const record of [pass,reject])expect(view.container.querySelector(`[data-workbench-left-panel] [data-msgid="${record.id}"]`)).not.toBeNull();
+      expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="review-enrollment"]')).toBeNull();
+      expect(screen.getAllByText(target.content)).toHaveLength(1);
+      fireEvent.click(screen.getByRole('button',{name:'收起审核不通过分支 review-target'}));await waitForWorkbenchIdle();
+      expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="review-reject"]')).toBeNull();
+      expect(screen.getByText(target.content)).toBeVisible();
+      expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="review-pass"]')).not.toBeNull();
+      fireEvent.click(screen.getByRole('button',{name:'展开审核不通过分支 review-target'}));await waitForWorkbenchIdle();
+      expect(within(view.container.querySelector('[data-workbench-left-panel] [data-msgid="review-reject"]') as HTMLElement).getByText('不通过理由')).toBeVisible();
+      expect(mockApi.createRelation).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));await waitForWorkbenchIdle();
+      for(const record of [pass,reject])expect(view.container.querySelector(`[data-workbench-left-panel] [data-msgid="${record.id}"]`)).not.toBeNull();
+      expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="review-enrollment"]')).toBeNull();
+      expect(screen.getAllByText(target.content)).toHaveLength(1);
+      fireEvent.click(screen.getByRole('button',{name:'退出临时分类'}));await waitForWorkbenchIdle();
+      expect(screen.getByRole('button',{name:mode==='graph'?'切换为消息表':'切换为消息图'})).toBeVisible();
+      expect(view.container.querySelector(`[data-workbench-left-panel] [data-msgid="${target.id}"]`)).not.toBeNull();
+      for(const record of records)expect(view.container.querySelector(`[data-workbench-left-panel] [data-msgid="${record.id}"]`)).toBeNull();
+      await jumpToMessageId('review-reject');await waitForWorkbenchIdle();
+      expect(await screen.findByRole('button',{name:'汇总审核不通过：1'})).toBeVisible();
+      expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="review-reject"]')).not.toBeNull();
+    }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;}
+  });
+  it.each([false,true])('pins the reviewed version and respects its restricted=%s placeholder instead of cached current content',async restricted=>{
+    const current={...receivedMessage('review-target','更新后的公开正文'),revision:2};
+    const content=restricted?'相关内容暂未公开':'被审核的第一版正文';
+    const summary={caseId:'old-case',messageId:current.id,revision:1,status:restricted?'rejected':'pending',fee:6,deposit:10,pass:10,reject:0,selfPass:10,selfReject:0,reviewerCount:0,releaseAt:null,finalized:false};
+    const target={...receivedMessage(current.id,content),revision:1,restricted,moderation:summary};
+    mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'审核测试'});
+    mockApi.getMessages.mockResolvedValue({data:[current]});mockApi.getRelations.mockResolvedValue({data:[]});
+    mockApi.getReview.mockResolvedValue({summary,target,records:[],canReview:false,canAppeal:false,canSettle:false,policy:DEFAULT_MODERATION_POLICY});
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    graphRendering.actual=true;const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      act(()=>window.dispatchEvent(new CustomEvent('gonglun:open-review',{detail:{messageId:current.id,revision:1}})));
+      await waitFor(()=>expect(latest().messages).toEqual([expect.objectContaining({id:current.id,revision:1,content,restricted})]));
+      expect(screen.queryByText(current.content)).not.toBeInTheDocument();
+      const expectReviewedBody=()=>{
+        if(restricted){
+          expect(screen.getByRole('button',{name:'正文已遮挡，查看审核记录'})).toBeVisible();
+          expect(screen.queryByText(content)).not.toBeInTheDocument();
+        }else expect(screen.getByText(content)).toBeVisible();
+      };
+      expectReviewedBody();
+      fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));await waitForWorkbenchIdle();
+      expectReviewedBody();expect(screen.queryByText(current.content)).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button',{name:'退出临时分类'}));await waitForWorkbenchIdle();
+      expect(screen.getByText(current.content)).toBeVisible();
+      expect(mockApi.getReview).toHaveBeenCalledWith(current.id,expect.any(AbortSignal),1);
+    }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;}
+  });
+  it('keeps a reviewed custom label as its own message card in graph and list views',async()=>{
+    const target={...makeRelation(),id:'review-label',relationType:'TAG',content:'被审核的自定义标签',payload:{label:'被审核的自定义标签'},
+      parts:[{id:'tag',type:'relation',relation:'tag',roles:{target:[{id:'target',reference:{messageId:'claim'}}]}},{id:'data',type:'data',value:{label:'被审核的自定义标签'}}]};
+    const summary={caseId:'label-case',messageId:target.id,revision:1,status:'pending',fee:6,deposit:10,pass:10,reject:0,reviewerCount:0,releaseAt:null,finalized:false};
+    mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'审核测试'});
+    mockApi.getMessages.mockResolvedValue({data:[makeMessage('claim','已有正文')]});mockApi.getRelations.mockResolvedValue({data:[]});
+    mockApi.getReview.mockResolvedValue({summary,target,records:[],canReview:true,canAppeal:false,canSettle:false,policy:DEFAULT_MODERATION_POLICY});
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    graphRendering.actual=true;const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      act(()=>window.dispatchEvent(new CustomEvent('gonglun:open-review',{detail:{messageId:target.id,revision:1}})));
+      await waitFor(()=>expect(view.container.querySelector(`[data-workbench-left-panel] [data-msgid="${target.id}"]`)).not.toBeNull());
+      expect(screen.getByText(/被审核的自定义标签/)).toBeVisible();
+      fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));await waitForWorkbenchIdle();
+      expect(view.container.querySelector(`[data-workbench-left-panel] [data-msgid="${target.id}"]`)).not.toBeNull();
+      expect(screen.getByText(/被审核的自定义标签/)).toBeVisible();
+    }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;}
   });
   it('does not draw an incomplete raw window before its organization model is complete', async () => {
     const original = mockApi.getWorkbenchSnapshot.getMockImplementation()!;
@@ -821,9 +1164,10 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();
   });
 
-  it.each(['callback','url'])('opens the existing settlement entry for an old record through %s without rendering or attaching settlement messages',async navigation=>{
+  it.each(['callback','url','points'].flatMap(navigation=>['result','close'].map(recordKind=>({navigation,recordKind}))))('opens the existing settlement entry for an old $recordKind record through $navigation without rendering or attaching settlement messages',async({navigation,recordKind})=>{
     mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'结算入口'});
-    const record:Message={...makeMessage('value-record','价值仲裁记录'),kind:'ROUND',targetRefs:[{kind:'message',messageId:'target'}],relationPayload:{settlementType:'VALUE'} as unknown as Message['relationPayload']};
+    const record:Message={...makeMessage('value-record','价值仲裁记录'),kind:'ROUND_RESULT',targetRefs:[{kind:'message',messageId:'internal-value-pool'}],relationPayload:{subjectId:'target',settlementType:'VALUE',roundId:'settled-round'} as unknown as Message['relationPayload']};
+    if(recordKind==='close')Object.assign(record,{kind:'OPERATIONS',relationType:'OPERATIONS',parts:[{id:'relation',type:'relation',relation:'terminate',roles:{target:[{id:'target',reference:{messageId:'internal-value-pool'}}]}}]});
     mockApi.getMessages.mockResolvedValue({data:[makeMessage('target','目标正文'),record]});
     mockApi.getRelations.mockResolvedValue({data:[]});
     graphRendering.actual=true;
@@ -834,12 +1178,53 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
       expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="value-record"]')).toBeNull();
       if(navigation==='callback')await act(async()=>latest().onNavigateToMessage(record.id));
+      if(navigation==='points')await act(async()=>window.dispatchEvent(new CustomEvent('points-navigate',{detail:{messageId:record.id,scopeMessageId:'root',roundId:'settled-round',txType:'TRANSFER'}})));
       await waitForWorkbenchIdle();
       expect(latest().settlementOpenMsgId).toBe('target');expect(latest().settlementOpenType).toBe('VALUE');
-      expect(await screen.findByText('价值仲裁',{exact:false})).toBeInTheDocument();
+      expect(sessionStorage.getItem('settlementHighlightRound')).toBe('settled-round');
+      expect(await screen.findByRole('heading',{name:/价值仲裁/})).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));await waitForWorkbenchIdle();
+      expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="value-record"]')).toBeNull();
+      expect(await screen.findByRole('heading',{name:/价值仲裁/})).toBeInTheDocument();
       expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();
       expect((window as any).__addSettlementMessage).toBeUndefined();
     }finally{view.unmount();viewerRoute.query='';graphRendering.actual=false;geometry.mockRestore();}
+  });
+
+  it.each(['url','points'])('opens the usage contribution record through %s without a settlement alert',async navigation=>{
+    mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'使用贡献'});
+    const record:Message={...makeMessage('usage-record','2026-11-09 使用贡献：累计 282 贡献点。'),kind:'ROUND_RESULT',relationType:'ROUND_RESULT',
+      relationPayload:{source:'grant',inputs:{reason:'usage-daily-summary'}} as Message['relationPayload']};
+    mockApi.getMessages.mockResolvedValue({data:[record]});mockApi.getRelations.mockResolvedValue({data:[]});
+    graphRendering.actual=true;
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    if(navigation==='url')viewerRoute.query='msg=usage-record';
+    const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      if(navigation==='points')await act(async()=>window.dispatchEvent(new CustomEvent('points-navigate',{detail:{messageId:record.id,scopeMessageId:'root',roundId:null,txType:'USAGE_REWARD'}})));
+      await waitForWorkbenchIdle();
+      expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="usage-record"]')).toHaveTextContent(record.content);
+      expect(latest().settlementOpenMsgId).toBeNull();
+      expect(screen.queryByText(/这条结算记录没有保存目标消息/)).toBeNull();
+    }finally{view.unmount();viewerRoute.query='';graphRendering.actual=false;geometry.mockRestore();}
+  });
+
+  it('finishes a failed settlement navigation and keeps its dismissed alert closed',async()=>{
+    mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'历史结算'});
+    const record:Message={...makeMessage('unlinked-result','历史结算'),kind:'ROUND_RESULT'};
+    mockApi.getMessages.mockResolvedValue({data:[makeMessage('other','其他消息'),record]});mockApi.getRelations.mockResolvedValue({data:[]});
+    const view=render(<MessageWorkbenchPage/>),onComplete=vi.fn();
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      await act(async()=>latest().onNavigateToMessage(record.id,{onComplete}));
+      expect(onComplete).toHaveBeenCalledExactlyOnceWith(false);
+      expect(screen.getByText(/这条结算记录没有保存目标消息/)).toBeVisible();
+      fireEvent.click(screen.getByRole('button',{name:'已阅'}));
+      view.rerender(<MessageWorkbenchPage/>);await waitForWorkbenchIdle();
+      expect(screen.queryByText(/这条结算记录没有保存目标消息/)).toBeNull();
+      expect(onComplete).toHaveBeenCalledTimes(1);
+    }finally{view.unmount();}
   });
 
   it('opens the join history when an initial URL targets a hidden join record',async()=>{
@@ -2959,10 +3344,104 @@ describe('MessageWorkbenchPage home filter container projection', () => {
 describe('MessageWorkbenchPage composer refresh', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockApi.createMessage.mockReset();
+    mockApi.createRelation.mockReset();
+    mockApi.withCommandBatch.mockReset().mockImplementation(defaultCommandBatch);
     const scope: ScopeView = { messageId: 'classification-1', title: '测试分类' };
     mockApi.getScope.mockResolvedValue(scope);
     mockApi.getMessages.mockResolvedValue({ data: [makeMessage('msg-1', '第一条'), makeMessage('msg-2', '第二条')] });
     mockApi.getRelations.mockResolvedValue({ data: [makeRelation()] });
+  });
+
+  it.each([
+    { type:'TEXT', button:'', text:'发送定位正文', target:false },
+    ...[['REFERENCE','引用'],['REPLY','回复'],['ANNOTATION','注释'],['NOTIFY','通知']].map(([type,button])=>({type,button,text:'发送定位的来源正文',target:true})),
+    ...[['AGREE','赞同'],['DISAGREE','反对']].map(([type,button])=>({type,button,text:'',target:true})),
+    { type:'TAG',button:'标注',secondary:'可靠',text:'',target:true },
+    { type:'RECOMMEND',button:'标注',secondary:'推荐',text:'',target:true },
+    { type:'ARCHIVE',button:'标注',secondary:'冷藏',text:'',target:true },
+    ...[['ATTENTION','关注'],['BLOCK','拉黑']].flatMap(([type,secondary])=>['是','否'].map(reason=>({type,button:'标注',secondary,reason,text:'',target:true}))),
+    { type:'CLASSIFY',button:'分类',text:'新的定位分类',target:true },
+    { type:'SUMMARY',button:'总结',text:'新的定位总结',target:true },
+    ...['纵','横'].map(secondary=>({type:'ARRANGE',button:'排列',secondary,text:'',target:true})),
+    { type:'MERGE',button:'归并',text:'',target:true },
+    { type:'CORRECT',button:'更正',secondary:'修正文字',text:'更正后的正文',target:true },
+    { type:'CORRECT',button:'更正',secondary:'宽度调整',text:'',target:true },
+    { type:'DELEGATION',button:'委托',secondary:'创建委托',text:'报酬数量=5；委托内容=核对来源',target:false },
+    { type:'DELEGATION',button:'委托',secondary:'完成委托',text:'完成说明=已核对来源',target:true },
+    { type:'PROPOSAL',button:'提案',text:'提案定位正文',target:false },
+    { type:'CODE_CHANGE',button:'代码',text:'代码定位正文',target:false },
+    { type:'OPERATIONS',button:'运营',text:'公告定位正文',target:false },
+  ].flatMap(scenario=>['graph','list'].map(mode=>({...scenario,mode,secondary:String('secondary' in scenario?scenario.secondary:''),reason:String('reason' in scenario?scenario.reason:'')}))))(
+    'locates committed $type $secondary $reason in $mode and releases the send lock',async({type,button,secondary,reason,text,target,mode})=>{
+    localStorage.setItem('token','test-token');
+    const original={...makeMessage('msg-1','定位目标正文'),revision:1,parts:[{id:'body',type:'text' as const,text:'定位目标正文'}]};
+    const baseRelations:Relation[]=type==='TAG'?[{...makeRelation(),id:'existing-tag',relationType:'TAG',sourceMessageId:null,
+      targetRefs:[{kind:'message',messageId:original.id}],payload:{label:'可靠'}}]:secondary==='完成委托'?[{...makeRelation(),id:'delegation-target',relationType:'DELEGATION',sourceMessageId:null,
+      targetRefs:[],payload:{delegationKind:'CREATE',content:'报酬数量=5；委托内容=核对来源',rewardAmount:5}}]:[];
+    const asMessage=(relation:Relation):Message=>({...makeMessage(relation.id,relation.payload?.content??relation.payload?.title??''),kind:'RELATION',
+      relationType:relation.relationType,relSourceId:relation.sourceMessageId,targetRefs:relation.targetRefs,relationPayload:relation.payload,parts:relation.parts,revision:relation.revision});
+    const sentMessages:Message[]=[],sentRelations:Relation[]=[],located:string[]=[];
+    mockApi.getMessages.mockResolvedValue({data:[original]});mockApi.getRelations.mockResolvedValue({data:baseRelations});
+    mockApi.createMessage.mockImplementation(async(_parent,body)=>{const message=makeMessage('sent-text',body.content);sentMessages.push(message);return message;});
+    let finishCommit!:()=>void;
+    const publishCommit=()=>window.dispatchEvent(new CustomEvent('gonglun:committed',{detail:[{scope:{messageId:'classification-1',title:'测试分类'},sequence:2,
+      messages:[original,...sentMessages,...baseRelations.map(asMessage),...sentRelations.map(asMessage)],relations:[...baseRelations,...sentRelations],users:[makeUser()],stakes:{},tagCounts:{},attentionUsers:{}}]}));
+    mockApi.createRelation.mockImplementation(async(_parent,body)=>{
+      const relation:Relation={...makeRelation(),...body,id:`sent-${body.relationType.toLowerCase()}-${sentRelations.length}`};
+      if(secondary==='修正文字')relation.payload={...body.payload,correctionBeforeContent:original.content,correctionAfterContent:text};
+      sentRelations.push(relation);
+      // The correction comparison confirms through the single-message endpoint.
+      if(secondary==='修正文字'){await new Promise<void>(resolve=>{finishCommit=resolve;});publishCommit();}
+      return relation;
+    });
+    mockApi.withCommandBatch.mockImplementationOnce(async(work,onCommitted)=>{
+      await work();if(!sentMessages.length&&!sentRelations.length)return;
+      await new Promise<void>(resolve=>{finishCommit=resolve;});publishCommit();
+      onCommitted?.(sentMessages.length+sentRelations.length);
+    });
+    const recipients=vi.spyOn(notificationApi,'getNotificationRecipients').mockResolvedValue({users:[participant]});
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    const observer=new MutationObserver(()=>{
+      const id=document.querySelector('[data-message-jump-overlay="true"]')?.getAttribute('data-message-jump-target');
+      if(id&&located.at(-1)!==id)located.push(id);
+    });
+    graphRendering.actual=true;const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      if(target){
+        if(secondary==='修正文字')act(()=>window.dispatchEvent(new CustomEvent(PART_SELECTION_EVENT,{detail:{reference:{messageId:original.id,revision:1,partId:'body'},label:'正文'}})));
+        else await act(async()=>mockGraphView.mock.lastCall![0].onMessageClick({button:0,stopPropagation:vi.fn()},secondary==='完成委托'?'delegation-target':original.id));
+      }
+      if(mode==='list'){fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));await waitForWorkbenchIdle();}
+      if(button)fireEvent.click(screen.getByRole('button',{name:['提案','委托','代码','运营'].includes(button)?new RegExp(`${button}$`):button}));
+      if(secondary){const choice=screen.getByRole('button',{name:secondary});if(choice.getAttribute('aria-pressed')!=='true')fireEvent.click(choice);}
+      if(reason)fireEvent.click(screen.getByRole('button',{name:reason}));
+      if(text)fireEvent.change(screen.getByRole('region',{name:'发言与关系操作'}).querySelector('textarea')!,{target:{value:text}});
+      await waitFor(()=>expect(screen.getByRole('button',{name:'发送'})).toBeEnabled());
+      fireEvent.click(screen.getByRole('button',{name:'发送'}));
+      if(secondary==='修正文字'){
+        const confirm=await screen.findByRole('button',{name:'确认发送更正'});await waitFor(()=>expect(confirm).toBeEnabled());fireEvent.click(confirm);
+      }
+      await waitFor(()=>expect(finishCommit).toBeDefined());
+      expect(document.querySelector('[data-message-jump-overlay="true"]')).toBeNull();
+      expect(screen.getByRole('button',{name:'预览'})).toBeDisabled();
+      observer.observe(document.body,{subtree:true,childList:true,attributes:true});
+      await act(async()=>finishCommit());
+      if(secondary==='宽度调整'){
+        await waitForWorkbenchIdle();expect(located).toEqual([]);
+        expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="msg-1"]')).not.toBeNull();
+      }else{
+        await waitFor(()=>expect(located).toEqual([...sentMessages.map(message=>message.id),...sentRelations.map(relation=>relation.id)]));
+        await waitForWorkbenchIdle();
+      }
+      expect(type==='TEXT'?sentMessages.length:sentRelations.filter(relation=>relation.relationType===type).length).toBe(1);
+      expect(screen.queryByText(/绘制超时|绘制或定位尚未完成|暂时未能完成定位/)).toBeNull();
+      expect(mockNavigate).not.toHaveBeenCalled();
+      fireEvent.change(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）'),{target:{value:'下一条草稿'}});
+      await waitFor(()=>expect(screen.getByRole('button',{name:'预览'})).toBeEnabled());
+      expect(screen.getByRole('button',{name:'发送'})).toBeEnabled();
+    }finally{observer.disconnect();view.unmount();geometry.mockRestore();recipients.mockRestore();graphRendering.actual=false;}
   });
 
   it('excludes voted text and delegation bodies from comparison and blocks a retained delegation selection', async () => {
@@ -4795,12 +5274,15 @@ describe('MessageWorkbenchPage composer refresh', () => {
     ['CLASSIFY', 'text'], ['SUMMARY', 'text'], ['CLASSIFY', 'relation'], ['SUMMARY', 'relation'],
   ])('keeps the nested %s and its parent history after sending and locating a %s', async (relationType, sentKind) => {
     localStorage.setItem('token', 'test-token');
+    // A SUMMARY keeps its existing members together. Sending an empty nested
+    // classification is legal; moving one of the summary's members is not.
+    const classifiedTargets = relationType === 'SUMMARY' ? [] : [{ kind: 'message' as const, messageId: 'msg-1' }];
     const inner: Relation = { ...makeRelation(), id: 'inner', relationType, sourceMessageId: null,
       targetRefs: ['msg-1', 'msg-2'].map(messageId => ({ kind: 'message', messageId })), payload: { title: '内层容器' } };
     const outer: Relation = { ...inner, id: 'outer', relationType: 'CLASSIFY',
       targetRefs: [{ kind: 'relation', relationId: inner.id }], payload: { title: '外层容器' } };
     const createdRelation: Relation = { ...inner, id: 'sent-inside', relationType: 'CLASSIFY',
-      targetRefs: [{ kind: 'message', messageId: 'msg-1' }], payload: { title: '在内层发送', independentMemberships: true } };
+      targetRefs: classifiedTargets, payload: { title: '在内层发送', independentMemberships: true } };
     const sent: Message = sentKind === 'text' ? makeMessage('sent-inside', '在内层发送') : {
       ...makeMessage(createdRelation.id, ''), kind: 'RELATION', relationType: createdRelation.relationType,
       relSourceId: null, targetRefs: createdRelation.targetRefs, relationPayload: createdRelation.payload,
@@ -4809,6 +5291,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       targetRefs: [{ kind: 'message', messageId: sent.id }] };
     const memberJoin: Relation = { ...join, id: 'join-member', sourceMessageId: createdRelation.id,
       targetRefs: [{ kind: 'message', messageId: 'msg-1' }], createdAt: '2026-01-01' };
+    const placement = sentKind === 'relation' && classifiedTargets.length ? [join, memberJoin] : [join];
     mockApi.getRelations.mockResolvedValue({ data: [outer, inner] });
     if (sentKind === 'text') mockApi.createMessage.mockResolvedValueOnce(sent);
     else mockApi.createRelation.mockResolvedValueOnce(createdRelation);
@@ -4816,11 +5299,11 @@ describe('MessageWorkbenchPage composer refresh', () => {
       await work();
       window.dispatchEvent(new CustomEvent('gonglun:committed', { detail: [{
         scope: { messageId: 'classification-1', title: '测试分类' }, sequence: 2,
-        messages: [sent, ...(sentKind === 'text' ? [join] : [join, memberJoin]).map(relation => ({
+        messages: [sent, ...placement.map(relation => ({
           ...makeMessage(relation.id, ''), kind: 'RELATION', relationType: relation.relationType,
           relSourceId: relation.sourceMessageId, targetRefs: relation.targetRefs,
         }))],
-        relations: sentKind === 'text' ? [join] : [createdRelation, join, memberJoin],
+        relations: sentKind === 'text' ? placement : [createdRelation, ...placement],
         users: [], stakes: {}, tagCounts: {}, attentionUsers: {},
       }] }));
       onCommitted?.(1);
@@ -4829,12 +5312,13 @@ describe('MessageWorkbenchPage composer refresh', () => {
     try {
       render(<MessageWorkbenchPage />);
       await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+      await waitForWorkbenchIdle();
       const latest = () => mockGraphView.mock.lastCall![0];
       await act(async () => latest().onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, outer.id));
       await act(async () => latest().onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, inner.id));
       fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
       if (sentKind === 'relation') {
-        await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'msg-1'));
+        if (classifiedTargets.length) await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'msg-1'));
         fireEvent.click(screen.getByRole('button', { name: '分类' }));
       }
       fireEvent.change(screen.getByPlaceholderText(sentKind === 'text' ? '输入一条新文本消息（支持自由换行）' : '输入分类名称（不能为空）'),
@@ -4847,8 +5331,8 @@ describe('MessageWorkbenchPage composer refresh', () => {
       if (sentKind === 'text') expect(mockApi.createMessage).toHaveBeenCalledWith(inner.id, expect.objectContaining({ content: sent.content }));
       else {
         expect(mockApi.createRelation).toHaveBeenCalledWith(inner.id, expect.objectContaining({ relationType: 'CLASSIFY',
-          targetRefs: [expect.objectContaining({ messageId: 'msg-1' })] }));
-        expect(document.querySelector('[data-workbench-left-panel] [data-msgid="msg-1"]')).toBeNull();
+          targetRefs: classifiedTargets.map(target => expect.objectContaining(target)) }));
+        expect(document.querySelector('[data-workbench-left-panel] [data-msgid="msg-1"]') !== null).toBe(!classifiedTargets.length);
       }
       fireEvent.click(exitInner);
       expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('外层容器');
@@ -5038,6 +5522,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       vi.useFakeTimers();
       const root = input.closest<HTMLElement>('[aria-busy]')!;
       const send = screen.getByRole('button', { name: '发送' });
+      const preview = screen.getByRole('button', { name: '预览' });
       fireEvent.change(input, { target: { value: sent[0].content } });
       fireEvent.click(send); fireEvent.click(send);
       expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
@@ -5054,6 +5539,10 @@ describe('MessageWorkbenchPage composer refresh', () => {
       // Programmatic events also must not bypass the send guard while placement is pending.
       fireEvent.change(input, { target: { value: sent[1].content } });
       expect(send).toBeDisabled();
+      expect(preview).toBeDisabled();
+      fireEvent.click(preview);
+      expect(mockApi.prepareCommandBatch).not.toHaveBeenCalled();
+      expect(mockApi.previewCommandBatch).not.toHaveBeenCalled();
       fireEvent.click(send);
       expect(mockApi.createMessage).toHaveBeenCalledOnce();
       expect(root.inert).toBe(true);
@@ -5061,6 +5550,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       expect(document.querySelector('[data-message-jump-target="slow-first"]')).not.toBeNull();
       expect(root.inert).toBe(false);
       expect(send).toBeEnabled();
+      expect(preview).toBeEnabled();
       fireEvent.click(send);
       await frames(3);
       expect(commits).toHaveLength(2);
@@ -5608,12 +6098,12 @@ describe('MessageWorkbenchPage composer refresh', () => {
   it('refreshes both the protocol fee and estimated total when the rules change with the same account balance',async()=>{
     const getRules=mockApi.getCurrentRules.getMockImplementation()!;
     try{
-      mockApi.getCurrentRules.mockResolvedValue({parameters:{minStake:1,stakeFeeAmount:1}});
+      mockApi.getCurrentRules.mockResolvedValue({parameters:{minStake:1,stakeFeeAmount:1,moderation:{enabled:false}}});
       render(<MessageWorkbenchPage/>);
       fireEvent.change(await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）'),{target:{value:'协议费刷新'}});
       expect(await screen.findByText('协议费 1 点/条')).toBeInTheDocument();
       expect(screen.getByText(/本次 2 条消息，预计 4 点/)).toBeInTheDocument();
-      mockApi.getCurrentRules.mockResolvedValue({parameters:{minStake:1,stakeFeeAmount:3}});
+      mockApi.getCurrentRules.mockResolvedValue({parameters:{minStake:1,stakeFeeAmount:3,moderation:{enabled:false}}});
       await act(async()=>{window.dispatchEvent(new Event('points-refresh'));});
       expect(await screen.findByText('协议费 3 点/条')).toBeInTheDocument();
       expect(screen.getByText(/本次 2 条消息，预计 8 点/)).toBeInTheDocument();
@@ -8189,11 +8679,123 @@ describe('unified send preview integration',()=>{
     const snapshot={scope:{messageId:'classification-1',title:'测试分类'},messages:[message],relations:[],users:[makeUser()],stakes:{},tagCounts:{},attentionUsers:{},sequence:1};
     mockApi.getScope.mockResolvedValue(snapshot.scope);mockApi.getMessages.mockResolvedValue({data:[message]});mockApi.getRelations.mockResolvedValue({data:[]});
     mockApi.getWorkbenchSnapshot.mockResolvedValue(snapshot);
-    mockApi.prepareCommandBatch.mockImplementation((work,previous)=>prepareCommandBatch(work,undefined,previous));
+    mockApi.prepareCommandBatch.mockImplementation((work,previous,reviewContext)=>prepareCommandBatch(work,{apiBase:'/api',reviewContext},previous));
     mockApi.createMessage.mockImplementation(async(parent,body)=>queueCommand('/messages',{method:'POST',body:JSON.stringify({...body,parentMessageId:parent})}));
     mockApi.createRelation.mockImplementation(async(parent,body)=>queueCommand('/relations',{method:'POST',body:JSON.stringify({...body,parentMessageId:parent})}));
     mockApi.previewCommandBatch.mockImplementation(async prepared=>({snapshots:[{...snapshot,messages:[],sequence:2}],baseSequence:1,messageIds:prepared.envelope.commands.map((command:{id:string})=>command.id)}));
     mockApi.confirmCommandPreview.mockResolvedValue({snapshots:[{...snapshot,messages:[],sequence:2}]});
+  });
+
+  it.each(['empty','zero contribution','over budget','missing review verdict','protected summary member'])(
+    'disables both send and preview for %s without preparing a command',async(reason)=>{
+    if(reason==='protected summary member'){
+      const summary:Relation={...makeRelation(),id:'protected-summary',relationType:'SUMMARY',sourceMessageId:null,
+        targetRefs:[{kind:'message',messageId:'msg-1'},{kind:'message',messageId:'msg-2'}],payload:{title:'完整总结'}};
+      mockApi.getWorkbenchSnapshot.mockResolvedValue({scope:{messageId:'classification-1',title:'测试分类'},sequence:1,
+        messages:[makeMessage('msg-1','受保护的成员'),makeMessage('msg-2','另一个成员'),{...makeMessage(summary.id,''),kind:'RELATION',relationType:'SUMMARY',targetRefs:summary.targetRefs,relationPayload:summary.payload}],
+        relations:[summary],users:[makeUser()],stakes:{},tagCounts:{},attentionUsers:{}});
+    }
+    const view=render(<MessageWorkbenchPage/>);
+    try{
+      const input=await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      if(reason==='zero contribution'||reason==='over budget'){
+        fireEvent.change(input,{target:{value:'暂不可发送的草稿'}});
+        fireEvent.change(screen.getByLabelText('真假投入'),{target:{value:reason==='zero contribution'?'0':'1000'}});
+      }else if(reason==='missing review verdict'){
+        await act(async()=>mockGraphView.mock.lastCall![0].onMessageClick({button:0,stopPropagation:vi.fn()},'msg-1'));
+        fireEvent.click(screen.getByRole('button',{name:/运营$/}));fireEvent.click(screen.getByRole('button',{name:'审核'}));
+      }else if(reason==='protected summary member'){
+        await act(async()=>mockGraphView.mock.lastCall![0].onMessageDoubleClick({button:0,stopPropagation:vi.fn()},'protected-summary'));
+        await waitForWorkbenchIdle();
+        await act(async()=>mockGraphView.mock.lastCall![0].onMessageClick({button:0,stopPropagation:vi.fn()},'msg-1'));
+        fireEvent.click(screen.getByRole('button',{name:'分类'}));
+        fireEvent.change(screen.getByPlaceholderText('输入分类名称（不能为空）'),{target:{value:'不允许拆分成员'}});
+        expect(screen.getByText(/不能拆分已有容器/)).toBeVisible();
+      }
+      expect(screen.getByRole('button',{name:'发送'})).toBeDisabled();
+      const preview=screen.getByRole('button',{name:'预览'});expect(preview).toBeDisabled();fireEvent.click(preview);
+      expect(mockApi.prepareCommandBatch).not.toHaveBeenCalled();expect(mockApi.previewCommandBatch).not.toHaveBeenCalled();
+      expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();
+    }finally{view.unmount();}
+  });
+
+  it.each(['pass','reject'].flatMap(verdict=>['graph','list'].flatMap(mode=>[false,true].map(inReview=>({verdict,mode,inReview})))))(
+    'keeps the $verdict review preview in the same discussion region after confirmation ($mode, inReview=$inReview)',async({verdict,mode,inReview})=>{
+    const summary={caseId:'preview-review-case',messageId:'msg-1',revision:1,round:1,status:'pending' as const,fee:6,deposit:10,pass:10,reject:0,reviewerCount:0,releaseAt:null,finalized:false};
+    const target={...receivedMessage('msg-1','原正文'),revision:1,parts:[{id:'body',type:'text' as const,text:'原正文'}],moderation:summary};
+    const after={...summary,pass:verdict==='pass'?12:10,reject:verdict==='reject'?2:0,reviewerCount:1};
+    const reason=verdict==='pass'?'理由':'';
+    let created:Relation|undefined,committed=false;
+    const page=(sequence:number)=>({scope:{messageId:'classification-1',title:'测试分类'},sequence,
+      messages:[{...target,moderation:created?after:summary},...created?[{...makeMessage(created.id,reason),kind:'RELATION',revision:1,parts:created.parts,relationType:'REVIEW',targetRefs:created.targetRefs,relationPayload:created.payload}]:[]],
+      relations:created?[created]:[],users:[makeUser()],stakes:{},tagCounts:{},attentionUsers:{}});
+    mockApi.getWorkbenchSnapshot.mockResolvedValue(page(1));
+    mockApi.getReview.mockImplementation(async()=>({summary:committed?after:summary,target:{...target,moderation:committed?after:summary},records:committed&&created?[created]:[],canReview:true,canAppeal:false,canSettle:false,policy:DEFAULT_MODERATION_POLICY}));
+    mockApi.previewCommandBatch.mockImplementation(async prepared=>{
+      const command=prepared.envelope.commands[0];
+      created={...makeRelation(),id:command.id,revision:1,relationType:'REVIEW',sourceMessageId:null,targetRefs:command.body.targetRefs,payload:command.body.payload,
+        parts:[...(reason?[{id:'body',type:'text' as const,text:reason}]:[]),{id:'review',type:'relation',relation:'review',roles:{target:[{id:'target',reference:{messageId:target.id,revision:1}}]}},{id:'data',type:'data',value:command.body.payload}]};
+      return {snapshots:[page(2)],baseSequence:1,messageIds:[command.id]};
+    });
+    mockApi.confirmCommandPreview.mockImplementationOnce(async()=>{
+      committed=true;const snapshots=[page(3)];
+      window.dispatchEvent(new CustomEvent('gonglun:committed',{detail:snapshots}));
+      return {snapshots};
+    });
+    graphRendering.actual=true;
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      if(inReview){
+        act(()=>window.dispatchEvent(new CustomEvent('gonglun:open-review',{detail:{messageId:target.id,revision:1}})));
+        await screen.findByText(/审核临时分类（1 条被审核消息/);await waitForWorkbenchIdle();
+      }
+      await act(async()=>mockGraphView.mock.lastCall![0].onMessageClick({button:0,stopPropagation:vi.fn()},target.id));
+      if(mode==='list'){fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));await waitForWorkbenchIdle();}
+      fireEvent.click(screen.getByRole('button',{name:/运营$/}));fireEvent.click(screen.getByRole('button',{name:'审核'}));
+      fireEvent.click(screen.getByRole('button',{name:verdict==='pass'?'审核通过':'审核不通过'}));
+      fireEvent.change(screen.getByPlaceholderText('填写审核理由（可选，保存在审核关系消息中）'),{target:{value:reason}});
+      fireEvent.click(screen.getByRole('button',{name:'预览'}));
+      await waitFor(()=>expect(screen.getByRole('button',{name:'确认发送'})).toBeEnabled());
+      await waitForWorkbenchIdle();
+      expect(mockApi.confirmCommandPreview).not.toHaveBeenCalled();
+      expect(screen.queryByRole('region',{name:'审核理由汇总'})).not.toBeInTheDocument();
+      const card=()=>view.container.querySelector<HTMLElement>(`[data-workbench-left-panel] [data-msgid="${created!.id}"]:not([data-rel-overlay])`)!;
+      await waitFor(()=>expect(card()).not.toBeNull());
+      expect(card().querySelector('[data-message-type-detail="verdict"]')).toHaveTextContent(verdict==='pass'?'通过':'不通过');
+      if(reason)expect(card()).toHaveTextContent(reason);
+      if(!inReview){
+        fireEvent.click(screen.getByRole('button',{name:'退出预览'}));await waitForWorkbenchIdle();
+        expect(screen.queryByText(/审核临时分类（1 条被审核消息/)).toBeNull();
+        expect(card()).toBeNull();
+        expect(screen.getByPlaceholderText('填写审核理由（可选，保存在审核关系消息中）')).toHaveValue(reason);
+        fireEvent.click(screen.getByRole('button',{name:'预览'}));
+        await waitFor(()=>expect(screen.getByRole('button',{name:'确认发送'})).toBeEnabled());await waitForWorkbenchIdle();
+        expect(card()).not.toBeNull();
+      }
+      const preview=mockGraphView.mock.lastCall![0];
+      if(mode==='graph'){
+        expect(preview.edges).toEqual(expect.arrayContaining([expect.objectContaining({relationMessageId:created!.id,relationType:`review-${verdict}`})]));
+        expect(preview.messages.find((message:Message)=>message.id===target.id).moderation).toEqual(after);
+      }
+      const command=mockApi.previewCommandBatch.mock.calls[0][0].envelope.commands[0];
+      expect(command.body.parentMessageId).toBe(inReview?'root':'classification-1');
+      expect(command.body.reviewContext).toEqual(inReview?{messageId:target.id,revision:1}:undefined);
+      fireEvent.click(screen.getByRole('button',{name:'确认发送'}));
+      expect(await screen.findByText(/审核临时分类（1 条被审核消息/)).toBeVisible();
+      await waitForWorkbenchIdle();expect(mockApi.confirmCommandPreview).toHaveBeenCalledOnce();
+      expect(card().querySelector('[data-message-type-detail="verdict"]')).toHaveTextContent(verdict==='pass'?'通过':'不通过');
+      if(mode==='graph'){
+        expect(mockGraphView.mock.lastCall![0].edges).toEqual(preview.edges);
+        expect(mockGraphView.mock.lastCall![0].messages.find((message:Message)=>message.id===target.id).moderation).toEqual(after);
+      }
+      else expect(screen.getByRole('button',{name:'切换为消息图'})).toBeVisible();
+      if(!inReview){
+        fireEvent.click(screen.getByRole('button',{name:'退出临时分类'}));await waitForWorkbenchIdle();
+        expect(screen.queryByText(/审核临时分类（1 条被审核消息/)).toBeNull();
+      }
+    }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;}
   });
 
   it.each(['draft', 'target'].flatMap(collection => ['whole-first', 'fragment-first'].map(order => ({ collection, order }))))(

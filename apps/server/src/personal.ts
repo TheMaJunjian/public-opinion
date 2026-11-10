@@ -1,6 +1,7 @@
 import { type Message, type Page } from '@gonglun/core';
 import { DomainError, type Store } from './db.js';
 import { pageFor } from './queries.js';
+import { moderationReadSql } from './moderation-visibility.js';
 export interface PersonalMark {
     messageId: string;
     read: boolean;
@@ -110,6 +111,7 @@ async function response(store: Store, userId: string, rows: Record<string, unkno
 }
 export async function personalMessages(store: Store, userId: string, options: PersonalQuery): Promise<PersonalPage> {
     const { clauses, values, parameter } = filters(options,userId);
+    if(options.q)clauses.push(await moderationReadSql(store,'m',userId));
     const filter = options.filter || 'normal';
     if (filter === 'normal')
         clauses.push("NOT EXISTS (SELECT 1 FROM latest WHERE \"targetId\"=m.id AND family='block' AND action='block')");
@@ -126,6 +128,7 @@ export async function personalMessages(store: Store, userId: string, options: Pe
 }
 export async function notifications(store: Store, userId: string, options: PersonalQuery): Promise<PersonalPage> {
     const { clauses, values, parameter } = filters(options,userId,true);
+    if(options.q)clauses.push(await moderationReadSql(store,'m',userId));
     const limit = Math.min(100, Math.max(1, options.limit || 30));
     const sql = `${marksCte} SELECT m.body FROM messages m WHERE
     EXISTS (SELECT 1 FROM notifications n WHERE n."sourceId"=m.id AND n."userId"=$1 AND n."deletedAt" IS NULL)

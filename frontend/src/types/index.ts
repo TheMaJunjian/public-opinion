@@ -72,6 +72,16 @@ export interface PresentationSpec {
  * To add a new relation type, add an entry here — no GraphView changes needed.
  */
 export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
+  REVIEW: {kind:'edge-label',label:'审核',color:'indigo'},
+  // Display-only verdict regions; submissions still use the native REVIEW relation.
+  'REVIEW-PASS': {kind:'edge-label',label:'审核通过',color:'green'},
+  'REVIEW-REJECT': {kind:'edge-label',label:'审核不通过',color:'red'},
+  'REVIEW-APPEAL': {kind:'edge-label',label:'复核申请',color:'indigo'},
+  'REVIEW-SETTLE': {kind:'edge-label',label:'审核结算',color:'indigo'},
+  'REVIEW-FINALIZE': {kind:'edge-label',label:'审核资金划转',color:'indigo'},
+  REVIEW_RECORD: {kind:'edge-label',label:'审核记录',color:'indigo'},
+  'REVIEW-ENROLLMENT': {kind:'edge-label',label:'纳入审核',color:'indigo'},
+  'REVIEWER-AUTHORIZE': {kind:'edge-label',label:'审核资格授权',color:'indigo'},
   ANNOTATION:  { kind: 'edge-label',        label: '注释', color: 'blue',   formsTrees: false },
   REFERENCE:   { kind: 'edge-label',        label: '引用', color: 'indigo', formsTrees: false },
   REPLY:       { kind: 'edge-label',        label: '回复', color: 'blue',   formsTrees: true  },
@@ -253,18 +263,30 @@ export interface UsagePointProgress {
 export interface PointTransactionMessage {
   messageId: string;
   messageRevision?: number;
-  messageType: string;
+  /** Content-derived metadata may be removed when the message is restricted. */
+  messageType?: string;
   summary?: string;
-  scopeMessageId: string;
+  scopeMessageId?: string;
   roundId?: string;
 }
 
 export interface PointTransaction {
   id: string;
+  /** All ledger entries committed by one operation, including multiple messages. */
+  operationId?: string;
   type: string; // MINT | UNLOCK | LOCK | SPEND | TRANSFER
   amount: number;
   balanceAfter: number;
   createdAt: string;
+  /** The native ledger identity survives content redaction. */
+  messageId?: string;
+  messageRevision?: number;
+  reason?: string;
+  lockedDelta?: number;
+  entryCount?: number;
+  entries?: PointTransaction[];
+  /** Compact economic reasons; source identity allows independent content redaction. */
+  reasonDetails?: Array<{ reason: string; amount: number; lockedDelta: number; messageId?: string; messageRevision?: number }>;
   messages?: PointTransactionMessage[];
   data?: Record<string, unknown> | null;
 }

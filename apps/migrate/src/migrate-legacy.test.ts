@@ -3,7 +3,7 @@ import { hash } from 'bcryptjs';
 import { Pool } from 'pg';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
-import { bodyVersion,messageReadingKey,replayArchive, decodeWorkbenchSnapshot } from '@gonglun/core';
+import { bodyVersion,messageReadingKey,replayArchive, decodeWorkbenchSnapshot, DEFAULT_RULES } from '@gonglun/core';
 import { WorkbenchStore, type WorkbenchSnapshot } from '../../../frontend/src/data/workbench.js';
 import { migrateLegacy } from './migrate-legacy.js';
 import {prepareStartupDatabase} from './startup.js';
@@ -15,6 +15,7 @@ import { deriveContainerEffect } from '../../../frontend/src/pages/workbench/mod
 import { projectContainerCanvas } from '../../../frontend/src/pages/workbench/projections/containerCanvas.js';
 import { cleanupTestDatabases, createTestApp, newTestSchema, testDatabaseUrl } from '../../server/src/test-database.js';
 import {Postgres} from '../../server/src/postgres.js';
+import {migrateModeration} from './moderation.js';
 
 afterEach(cleanupTestDatabases);
 const time='2026-01-01T00:00:00.000Z';
@@ -45,8 +46,26 @@ async function fixture(overrides:Data={}) {
       for(const row of rows) await pool.query(`INSERT INTO "${schema}"."${table}" VALUES (${fields.map((_,i)=>`$${i+1}`).join(',')})`,fields.map(field=>typeof row[field]==='object'&&row[field]!==null?JSON.stringify(row[field]):row[field]));
     }
   } finally {await pool.end();}
-  return {sourceUrl:testDatabaseUrl(),sourceSchema:schema,founderId:'old-user'};
+  return {sourceUrl:testDatabaseUrl(),sourceSchema:schema,founderId:'old-user',rules:{...DEFAULT_RULES,moderation:{...DEFAULT_RULES.moderation!,enabled:false}}};
 }
+
+it('enrolls imported content when moderation is enabled without inventing past review tasks or charging twice',async()=>{
+  const source=await fixture(),targetSchema=newTestSchema();
+  const report=await migrateLegacy({...source,rules:DEFAULT_RULES,targetUrl:testDatabaseUrl(),targetSchema,apply:true});
+  expect(report.applied).toBe(true);
+  const app=await createTestApp({databaseSchema:targetSchema,moderation:true});
+  const cases=await app.store.db.prepare('SELECT "messageId",revision,status,fee,deposit FROM moderation_cases ORDER BY "messageId"').all();
+  expect(cases).toEqual(['old-message','old-topic'].map(messageId=>({messageId,revision:1,status:'pending',fee:6,deposit:10})));
+  const account=await app.store.account('old-user');
+  expect(account).toMatchObject({available:466,locked:34});
+  expect(await app.store.db.prepare('SELECT 1 FROM moderation_assignments').get()).toBeUndefined();
+  expect(await app.store.db.prepare('SELECT 1 FROM moderation_votes').get()).toBeUndefined();
+  expect(await app.store.db.prepare("SELECT 1 FROM notifications WHERE category='review'").get()).toBeUndefined();
+  const sequence=await app.store.latestSequence();
+  await app.store.transaction(()=>migrateModeration(app.store));
+  expect(await app.store.account('old-user')).toEqual(account);
+  expect(await app.store.latestSequence()).toBe(sequence);
+});
 
 it('migrates an immutable source snapshot, preserves bcrypt login and reconciles checkpoint replay',async()=>{
   const source=await fixture(),targetSchema=newTestSchema();
@@ -118,7 +137,9 @@ it('automatically imports a Prisma database once under concurrent startups and r
   expect((await migrateLegacy(source)).sourceDigest).toBe(before.sourceDigest);
   const app=await createTestApp({databaseSchema:targetSchema}),agent=request.agent(app);
   expect(await app.store.setting('automatic-import-source')).toBe(source.sourceSchema);
-  expect(await app.store.account('old-user')).toMatchObject({available:-4,locked:2});
+  expect(await app.store.account('old-user')).toMatchObject({available:-36,locked:34});
+  expect(await app.store.db.prepare('SELECT COUNT(*) AS n FROM moderation_cases').get()).toEqual({n:2});
+  expect(await app.store.db.prepare('SELECT COUNT(*) AS n FROM moderation_assignments').get()).toEqual({n:0});
   expect((await app.store.db.prepare('SELECT body FROM points_archive_rows WHERE "tableName"=$1 AND body->>\'userId\'=$2').get('accounts','old-user'))!.body)
     .toMatchObject({available:498,locked:2});
   const login=await agent.post('/api/login').send({name:'旧用户',password:'short'});
@@ -172,7 +193,7 @@ it('automatically archives funded active principal before voiding old points and
   const before=await migrateLegacy({...source,preserveActiveState:true,readOnlyRehearsal:true});
   await prepareStartupDatabase(source.sourceUrl,source.sourceSchema,{targetSchema});
   const app=await createTestApp({databaseSchema:targetSchema});
-  expect(await app.store.account('old-user')).toMatchObject({available:-4,locked:2});
+  expect(await app.store.account('old-user')).toMatchObject({available:-36,locked:34});
   expect(await app.store.setting('access-mode')).toBe('read-write');
   const round=await app.store.db.prepare('SELECT body FROM rounds WHERE id=$1').get('pending');
   expect(round).toBeUndefined();

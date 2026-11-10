@@ -36,13 +36,14 @@ export function newTestSchema(): string {
   return schema;
 }
 
-export async function createTestApp(options: { settlementTickMs?: number; databaseSchema?: string; initialGrant?: number } = {}) {
+export async function createTestApp(options: { settlementTickMs?: number; databaseSchema?: string; initialGrant?: number; moderation?:boolean } = {}) {
   const databaseSchema = options.databaseSchema ?? newTestSchema();
   if (!schemas.has(databaseSchema)) throw new Error('测试只能访问本轮创建的 schema');
-  const {initialGrant = 1000, ...appOptions} = options;
+  const {initialGrant = 1000, moderation=false, ...appOptions} = options;
   const app = await createApp({ settlementTickMs: 60_000, ...appOptions, databaseSchema, databaseUrl: testDatabaseUrl() });
   // Existing economic scenarios use a funded fixture; production registration starts at zero.
-  await app.store.transaction(async () => app.store.set('rules', { ...await app.store.rules(), initialGrant }));
+  // Legacy economics tests pin the pre-review policy; moderation tests explicitly exercise the live policy.
+  await app.store.transaction(async () => app.store.set('rules', { ...await app.store.rules(), initialGrant,moderation:{...(await app.store.rules()).moderation!,enabled:moderation} }));
   resources.push(app);
   return app;
 }
@@ -50,6 +51,7 @@ export async function createTestApp(options: { settlementTickMs?: number; databa
 export async function createTestStore(schema = newTestSchema()) {
   if (!schemas.has(schema)) throw new Error('测试只能访问本轮创建的 schema');
   const store = await openMigratingStore(testDatabaseUrl(), { schema });
+  await store.transaction(async()=>store.set('rules',{...await store.rules(),moderation:{...(await store.rules()).moderation!,enabled:false}}));
   resources.push(store);
   return store;
 }

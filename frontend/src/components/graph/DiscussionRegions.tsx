@@ -3,9 +3,9 @@ import type { DiscussionRegionGeometry } from '../../utils/discussionLayout';
 import { DISCUSSION_REGION_FOOTER } from '../../utils/discussionLayout';
 import type { Box } from '../../utils/frameLayout';
 import { intersectFrameRects } from '../../utils/frameViewports';
-import { discussionLabels as labels, discussionTypes } from '../../utils/discussionTypes';
+import { discussionLabels as labels, discussionTypes, isReviewDiscussionType } from '../../utils/discussionTypes';
 
-const accents = { agree: 'var(--ink-86efac)', reply: 'var(--ink-93c5fd)', disagree: 'var(--ink-fca5a5)', recommend: 'var(--ink-fbbf24)', archive: 'var(--ink-94a3b8)' };
+const accents = { agree: 'var(--ink-86efac)', reply: 'var(--ink-93c5fd)', disagree: 'var(--ink-fca5a5)', recommend: 'var(--ink-fbbf24)', archive: 'var(--ink-94a3b8)', 'review-pass': 'var(--ink-86efac)', 'review-reject': 'var(--ink-fca5a5)' };
 const stop = (event: SyntheticEvent) => event.stopPropagation();
 
 /** Automatic view frames own their folding entry; message cards remain unchanged. */
@@ -72,12 +72,13 @@ export default function DiscussionRegions({ regions, onToggle, clipFor, summaryC
       data-discussion-text-total={counts.total} data-discussion-text-agree={counts.agree}
       data-discussion-text-reply={counts.reply} data-discussion-text-disagree={counts.disagree}
       data-discussion-text-recommend={counts.recommend ?? 0} data-discussion-text-archive={counts.archive ?? 0}
+      data-discussion-text-review-pass={counts['review-pass'] ?? 0} data-discussion-text-review-reject={counts['review-reject'] ?? 0}
       data-discussion-summary-visible={summaryCount ? String(summaryVisible) : undefined}
       role="group" aria-label={title} style={style}>
       <button type="button" data-discussion-group={region.key} data-discussion-branch-type={region.type}
         data-rel-overlay="true" aria-expanded={!region.collapsed}
         aria-label={`${region.collapsed ? '展开' : '收起'}${labels[region.type]}分支 ${region.targetId}`}
-        title={`${title}；区域内共${counts.total}条文本；${countTypes.map(type => `${labels[type]}${counts[type] ?? 0}`).join('/')}。${region.collapsed ? '展开区域内的消息及分支' : '收起区域内的消息及全部后续分支，仅保留标题和数量'}。`}
+        title={`${title}；区域内共${counts.total}条${isReviewDiscussionType(region.type)?'消息':'文本'}；${countTypes.map(type => `${labels[type]}${counts[type] ?? 0}`).join('/')}。${region.collapsed ? '展开区域内的消息及分支' : '收起区域内的消息及全部后续分支，仅保留标题和数量'}。`}
         onClick={event => { event.stopPropagation(); onToggle(region.key); }}
         onDoubleClick={stop} onMouseDown={stop} onMouseUp={stop} onPointerDown={stop} onKeyDown={stop}
         style={{ position: 'absolute', left: -1, top: -1, width: region.width, minWidth: 'max-content', height: region.headerHeight,

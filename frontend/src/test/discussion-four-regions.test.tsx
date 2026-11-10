@@ -28,7 +28,7 @@ const handlers = (): Omit<GraphViewProps, 'messages' | 'edges'> => ({ draftUnits
   onEdgeLabelDoubleClick: vi.fn(), onFragmentAnchorClick: vi.fn(), isFragmentSelected: () => false });
 
 describe('four independent lightweight stance regions', () => {
-  it.each(['reply', 'agree', 'disagree', 'recommend', 'archive'] as const)('temporarily reveals only the navigated %s record without opening a related view', async type => {
+  it.each(['reply', 'agree', 'disagree', 'recommend', 'archive', 'review-pass', 'review-reject'] as const)('temporarily reveals only the navigated %s record without opening a related view', async type => {
     const links = [relation('first', type, 'one'), relation('second', type, 'two')];
     const onRelatedRelationView = vi.fn();
     const ui = render(<div data-workbench-left-panel><GraphView {...handlers()}
@@ -89,7 +89,7 @@ describe('four independent lightweight stance regions', () => {
     expect(screen.getByRole('dialog').querySelector('[data-view-target]')).toBeNull();
   });
 
-  it.each(['reply','agree','disagree','recommend','archive'] as const)('keeps a viewed %s source in the right-hand column inside an expanded flow classification', async type => {
+  it.each(['reply','agree','disagree','recommend','archive','review-pass','review-reject'] as const)('keeps a viewed %s source in the right-hand column inside an expanded flow classification', async type => {
     const link=relation('original',type,'one');
     const topic:DemoMessage={...body('topic'),kind:'relation',relationType:'classify',parts:[
       {id:'body',type:'text',text:'分类'}, {id:'display',type:'display',relationPartId:'members',layout:'flow'},
@@ -111,7 +111,7 @@ describe('four independent lightweight stance regions', () => {
     expect(region()).toHaveAttribute('data-discussion-collapsed','true');
   });
 
-  it.each(['reply','agree','disagree','recommend','archive'] as const)('toggles an original %s edge from the related list while preserving its region and other summaries', async type => {
+  it.each(['reply','agree','disagree','recommend','archive','review-pass','review-reject'] as const)('toggles an original %s edge from the related list while preserving its region and other summaries', async type => {
     const links=[relation('first',type,'one'),relation('second',type,'two')];
     const ui=render(<GraphView {...handlers()} messages={[body('root'),body('one'),body('two'),...links.map(link=>link.record)]}
       edges={links.map(link=>link.edge)} discussionView={{mode:'discussion',collapsed:[]}} />);
@@ -251,7 +251,7 @@ describe('four independent lightweight stance regions', () => {
     check();
   });
 
-  it.each(['reply', 'agree', 'disagree', 'recommend', 'archive'] as const)('summarizes %s arrows emitted by messages inside a native arrangement', async type => {
+  it.each(['reply', 'agree', 'disagree', 'recommend', 'archive', 'review-pass', 'review-reject'] as const)('summarizes %s arrows emitted by messages inside a native arrangement', async type => {
     const arrangement: DemoMessage = { ...body('arrangement'), kind: 'relation', relationType: 'arrange', parts: [
       { id: 'members', type: 'relation', relation: 'arrange', roles: { members: ['one', 'two'].map(id => ({ id, reference: { messageId: id } })) } },
     ] };
@@ -263,6 +263,41 @@ describe('four independent lightweight stance regions', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: `汇总${discussionLabels[type]}：2` })).toBeInTheDocument());
     for (const id of ['one-link', 'two-link']) expect(ui.container.querySelector(`[data-directed-edge-label="${id}"]`)).toBeNull();
     expect(ui.container.querySelector('[data-arrange-card-toggle="arrangement"]')).not.toBeNull();
+  });
+
+  it.each(['arrange', 'merge', 'summary'] as const)('keeps both original arrows visible for a mixed %s container', async type => {
+    const container: DemoMessage = { ...body('container'), kind: 'relation', relationType: type, parts: [
+      { id: 'members', type: 'relation', relation: type, roles: { members: ['one', 'two'].map(id => ({ id, reference: { messageId: id } })) } },
+      ...(type === 'summary' ? [{ id: 'body', type: 'text' as const, text: 'Mixed viewpoints' }] : []),
+    ] };
+    const members: DemoEdge[] = ['one', 'two'].map(id => ({ id: `container:${id}`, relationMessageId: container.id, relationType: type, relationLabel: type,
+      from: { messageId: 'anon:container', selection: { kind: 'whole' } }, to: { messageId: id, selection: { kind: 'whole' } } }));
+    const links = [relation('support', 'agree', 'one'), relation('opposition', 'disagree', 'two')];
+    const ui = render(<GraphView {...handlers()} messages={[body('root'), body('one'), body('two'), container, ...links.map(link => link.record)]}
+      edges={[...members, ...links.map(link => link.edge)]} discussionView={{ mode: 'discussion', collapsed: [] }}
+      traceFrameIds={type === 'summary' ? new Set(['container']) : undefined}
+      traceExpandedFrameIds={type === 'summary' ? new Set(['container']) : undefined} />);
+    await waitFor(() => {
+      for (const id of ['support', 'opposition']) expect(ui.container.querySelector(`[data-directed-edge-label="${id}"]`)).not.toBeNull();
+      for (const id of ['one', 'two']) expect(ui.container.querySelector(`.themed-message[data-msgid="${id}"]`)).not.toBeNull();
+    });
+    expect(ui.container.querySelector('[data-discussion-region]')).toBeNull();
+    expect(ui.container.querySelector('[data-discussion-summary-edge]')).toBeNull();
+  });
+
+  it('does not infer an opaque summary stance from the sources it replaced', async () => {
+    const summary: DemoMessage = { ...body('summary'), kind: 'relation', relationType: 'summary', parts: [
+      { id: 'body', type: 'text', text: 'Summary conclusion' },
+      { id: 'members', type: 'relation', relation: 'summary', roles: { members: ['one', 'two'].map(id => ({ id, reference: { messageId: id } })) } },
+    ] };
+    const members: DemoEdge[] = ['one', 'two'].map(id => ({ id: `summary:${id}`, relationMessageId: summary.id, relationType: 'summary', relationLabel: 'summary',
+      from: { messageId: 'anon:summary', selection: { kind: 'whole' } }, to: { messageId: id, selection: { kind: 'whole' } } }));
+    const links = [relation('support', 'agree', 'one'), relation('opposition', 'disagree', 'two')];
+    const ui = render(<GraphView {...handlers()} messages={[body('root'), body('one'), body('two'), summary, ...links.map(link => link.record)]}
+      edges={[...members, ...links.map(link => link.edge)]} discussionView={{ mode: 'discussion', collapsed: [] }} />);
+    await waitFor(() => expect(ui.container.querySelector('.themed-message[data-msgid="summary"]')).not.toBeNull());
+    expect(ui.container.querySelector('[data-discussion-region]')).toBeNull();
+    for (const id of ['one', 'two']) expect(ui.container.querySelector(`.themed-message[data-msgid="${id}"]`)).toBeNull();
   });
 
   it('counts two archive bodies without counting an annotation attached to one as another archive', async () => {
@@ -287,7 +322,7 @@ describe('four independent lightweight stance regions', () => {
     expect(region()).toHaveAttribute('data-discussion-text-archive', '2');
   });
   it('renders and folds each relation independently, keeps nested regions, and exposes original hidden relationships', async () => {
-    const types = ['agree', 'disagree', 'recommend', 'archive', 'reply'] as const;
+    const types = ['agree', 'disagree', 'recommend', 'archive', 'reply', 'review-pass', 'review-reject'] as const;
     const links = types.map(type => relation(`${type}-record`, type, `${type}-body`));
     links.push(relation('nested-record', 'archive', 'nested-body', 'agree-body'));
     const reference = relation('independent-reference', 'reference', 'reference-body');
@@ -298,8 +333,8 @@ describe('four independent lightweight stance regions', () => {
       return <GraphView {...props} discussionView={view} onDiscussionViewChange={setView} />;
     }
     const ui = render(<Controlled />);
-    await waitFor(() => expect(ui.container.querySelectorAll('[data-discussion-region]')).toHaveLength(6));
-    expect(ui.container.querySelectorAll('[data-discussion-summary-edge]')).toHaveLength(6);
+    await waitFor(() => expect(ui.container.querySelectorAll('[data-discussion-region]')).toHaveLength(types.length+1));
+    expect(ui.container.querySelectorAll('[data-discussion-summary-edge]')).toHaveLength(types.length+1);
     expect(ui.container.querySelector('[data-discussion-region-type="reference"]')).toBeNull();
     expect(ui.container.querySelector('[data-directed-edge-label="independent-reference"]')).not.toBeNull();
     for (const visual of ui.container.querySelectorAll('[data-discussion-summary-edge]')) {
@@ -372,7 +407,7 @@ describe('four independent lightweight stance regions', () => {
     expect(result.summaries[0].recordIds).toEqual(['whole']); expect(JSON.stringify(links)).toBe(original);
   });
 
-  it.each(['agree', 'disagree', 'recommend', 'archive'] as const)('summarizes %s stance/expression edges pinned to the current whole message while retaining historical and part targets', type => {
+  it.each(['agree', 'disagree', 'recommend', 'archive', 'review-pass', 'review-reject'] as const)('summarizes %s stance/expression edges pinned to the current whole message while retaining historical and part targets', type => {
     const current = relation('current', type, 'current-source'), historical = relation('historical', type, 'historical-source'), part = relation('part', type, 'part-source');
     const reference = relation('reference', 'reference', 'reference-source');
     const target: NonNullable<DemoEdge['to']['reference']> = { messageId: 'root', revision: 3,

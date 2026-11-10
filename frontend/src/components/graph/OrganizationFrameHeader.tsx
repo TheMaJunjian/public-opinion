@@ -29,7 +29,7 @@ export default function OrganizationFrameHeader({ message, messageId, kind, dept
   activeText: boolean;
   counts?: MessageStakeCounts;
   openMessageId?: string | null;
-  openType?: 'TRUTH' | 'VALUE' | null;
+  openType?: 'TRUTH' | 'VALUE' | 'REVIEW' | null;
   onTruth?: (messageId: string) => void;
   onValue?: (messageId: string) => void;
   onTextMouseUp?: (event: MouseEvent<HTMLElement>, messageId: string) => void;

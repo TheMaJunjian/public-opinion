@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 import { api } from '../api';
@@ -14,10 +14,124 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 const fundedBalance = { points: { available: 20, locked: 0 }, balance: { amount: 20, debtFrozen: false }, breakdown: { initialMinted: 0, totalEarned: 0, totalLost: 0, totalProtocolFees: 0 } };
 
-it('opens related message types and full IDs, copies an ID without navigating, and locates the chosen message', async () => {
+it.each(['native-source','restricted-reference'])('keeps related-message navigation after moderation removes %s metadata',async shape=>{
+  vi.mocked(api.getPointsBalance).mockResolvedValue(fundedBalance);
+  vi.mocked(api.getPointsTransactions).mockResolvedValue({data:[{id:'private-entry',type:'TRANSFER',amount:21,balanceAfter:20,createdAt:'',
+    ...(shape==='native-source'?{messageId:'covered-message',messageRevision:1,reason:'审核押注结算'}:{messages:[{messageId:'covered-message',messageRevision:1}]}),
+  }],pagination:{page:1,limit:20,total:1,totalPages:1}});
+  const navigate=vi.fn();window.addEventListener('points-navigate',navigate);
+  try{
+    render(<MemoryRouter initialEntries={['/messages']}><PointsBadge/></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button',{name:/贡献点：可用 20/}));
+    expect(await screen.findByText('关联消息 · ID')).toBeVisible();
+    if(shape==='native-source')expect(screen.getByText('审核押注结算')).toBeVisible();
+    expect(screen.getByText('【消息】')).toBeVisible();
+    fireEvent.click(screen.getByRole('button',{name:'定位消息 covered-message'}));
+    expect(navigate).toHaveBeenCalledWith(expect.objectContaining({detail:expect.objectContaining({messageId:'covered-message',scopeMessageId:'root'})}));
+  }finally{window.removeEventListener('points-navigate',navigate);}
+});
+it('supports legacy entries without operation metadata in the second dialog',async()=>{
+  vi.mocked(api.getPointsBalance).mockResolvedValue(fundedBalance);
+  const entries=[{id:'gain',messageId:'covered-message',type:'TRANSFER',amount:21,lockedDelta:0,balanceAfter:340,createdAt:'2026-11-09T00:00:00Z',reason:'审核押注结算'},
+    {id:'unlock',messageId:'covered-message',type:'UNLOCK',amount:0,lockedDelta:-11,balanceAfter:319,createdAt:'2026-11-09T00:00:00Z',reason:'审核押注解除锁定'}];
+  vi.mocked(api.getPointsTransactions).mockImplementation(async params=>({data:params?.mode==='summary'?[{...entries[0],id:'message:covered-message',type:'MESSAGE_GROUP',lockedDelta:-11,entryCount:2,entries}]:entries,
+    pagination:{page:1,limit:20,total:params?.mode==='summary'?1:2,totalPages:1}}));
+  const navigate=vi.fn();window.addEventListener('points-navigate',navigate);
+  try{
+    render(<MemoryRouter initialEntries={['/messages']}><PointsBadge/></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button',{name:/贡献点：可用 20/}));
+    expect(await screen.findByText('余额 319 → 340')).toBeVisible();
+    expect(screen.getByText('余额 319 → 319')).toBeVisible();
+    expect(screen.queryByText('2 笔合计')).toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:'查看收支详情 gain'}));
+    const detail=await screen.findByRole('dialog',{name:'贡献点详情'});
+    expect(await within(detail).findByText('同一消息共 2 笔记录 · 时间倒序')).toBeVisible();
+    expect(api.getPointsTransactions).toHaveBeenCalledWith({mode:'summary',messageId:'covered-message',limit:1});
+    expect(within(detail).getByRole('table',{name:'同一消息收支明细'})).toHaveTextContent('解锁 11 点');
+    expect(within(detail).getByText('319 → 340')).toBeVisible();
+    expect(navigate).not.toHaveBeenCalled();
+    fireEvent.click(within(detail).getByRole('button',{name:'返回记录'}));
+    expect(screen.queryByRole('dialog',{name:'贡献点详情'})).toBeNull();
+    expect(screen.getByRole('dialog',{name:'贡献点记录'})).toBeVisible();
+    fireEvent.click(screen.getByRole('button',{name:'查看收支详情 unlock'}));
+    fireEvent.click(within(await screen.findByRole('dialog',{name:'贡献点详情'})).getByRole('button',{name:'定位消息 covered-message'}));
+    expect(navigate).toHaveBeenCalledOnce();
+  }finally{window.removeEventListener('points-navigate',navigate);}
+});
+
+it('shows one send operation and opens every text/reference fee and stake using its operation ID',async()=>{
+  vi.mocked(api.getPointsBalance).mockResolvedValue(fundedBalance);
+  const fullText='完整的关联消息内容。'.repeat(30)+'结尾内容也应显示。';
+  const messages=[{messageId:'sent-text',messageRevision:1,messageType:'文本',scopeMessageId:'root',summary:fullText},
+    {messageId:'sent-reference',messageRevision:1,messageType:'引用',scopeMessageId:'root'}];
+  let available=56;
+  const entries=messages.flatMap((message,index)=>['协议费','对赌锁定','审核费冻结','审核自押冻结'].map((reason,fee)=>{
+    const amount=[1,1,6,10][fee];available-=amount;
+    return {id:`entry-${index}-${fee}`,messageId:message.messageId,messageRevision:1,type:fee?'LOCK':'SPEND',reason,
+      amount:-amount,lockedDelta:fee?amount:0,balanceAfter:available,createdAt:'2026-11-10T00:00:00Z'};
+  })).reverse();
+  const row={id:'operation:send-1',operationId:'send-1',type:'OPERATION_GROUP',amount:-36,lockedDelta:34,balanceAfter:20,entryCount:8,
+    createdAt:'2026-11-10T00:00:00Z',messages,
+    reasonDetails:entries.map(({messageId,messageRevision,reason,amount,lockedDelta})=>({messageId,messageRevision,reason,amount,lockedDelta}))};
+  vi.mocked(api.getPointsTransactions).mockImplementation(async params=>({data:[params?.operationId?{...row,entries}:row],pagination:{page:1,limit:20,total:1,totalPages:1}}));
+  render(<MemoryRouter><PointsBadge/></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button',{name:/贡献点：可用 20/}));
+  expect(await screen.findByText('8 笔合计')).toBeVisible();
+  expect(screen.getByText('操作收支')).toBeVisible();expect(screen.getByText('余额 56 → 20')).toBeVisible();
+  expect(screen.queryByRole('group',{name:'收支原因'})).toBeNull();
+  expect(screen.queryByText('预留审核参与报酬，未使用的预算在审核结算时退还。')).toBeNull();
+  expect(screen.getAllByRole('button',{name:/查看收支详情/})).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button',{name:'查看收支详情 operation:send-1'}));
+  const detail=within(await screen.findByRole('dialog',{name:'贡献点详情'}));
+  expect(await detail.findByText('本次操作共 8 笔记录 · 时间倒序')).toBeVisible();
+  expect(api.getPointsTransactions).toHaveBeenCalledWith({mode:'summary',operationId:'send-1',limit:1});
+  const rows=within(detail.getByRole('table',{name:'本次操作收支明细'})).getAllByRole('row');expect(rows).toHaveLength(9);
+  for(const reason of ['协议费','对赌锁定','审核费冻结','审核自押冻结'])expect(within(detail.getByRole('table')).getAllByText(reason)).toHaveLength(2);
+  for(const [index,entry] of entries.entries()){
+    const row=within(rows[index+1]);
+    expect(row.getByText(entry.reason)).toBeVisible();
+    expect(row.getByText(`-${Math.abs(entry.amount)}`)).toBeVisible();
+    expect(row.getByText(`${entry.balanceAfter-entry.amount} → ${entry.balanceAfter}`)).toBeVisible();
+    expect(row.getByText(entry.lockedDelta?`锁定 ${entry.lockedDelta} 点`:'无变化')).toBeVisible();
+    expect(row.getByRole('button',{name:`定位明细消息 ${entry.messageId}`})).toHaveTextContent(entry.messageId);
+  }
+  expect(within(detail.getByRole('table')).getAllByText('预留审核参与报酬，未使用的预算在审核结算时退还。')).toHaveLength(2);
+  expect(detail.getByText('可用减少')).toBeVisible();
+  expect(within(detail.getByRole('group',{name:'收支原因'})).getByText('可用 -12 · 锁定 +12')).toBeVisible();
+  expect(detail.getByRole('button',{name:'定位消息 sent-text'})).toBeVisible();
+  expect(detail.getByRole('button',{name:'定位消息 sent-reference'})).toBeVisible();
+  const reference=detail.getAllByRole('group',{name:'消息 sent-text'}).find(group=>within(group).queryByRole('button',{name:'定位消息 sent-text'}))!;
+  fireEvent.click(within(reference).getByRole('button',{name:'切换消息 sent-text 的摘要和 ID'}));
+  expect(within(reference).getByRole('button',{name:'定位消息 sent-text'})).toHaveTextContent(fullText);
+});
+
+it('keeps daily usage contributions aggregated in both levels and retries failed detail loading',async()=>{
+  vi.mocked(api.getPointsBalance).mockResolvedValue(fundedBalance);
+  const row={id:'usage:2026-11-09',type:'USAGE_REWARD',amount:283,balanceAfter:345,createdAt:'2026-11-09T00:00:00Z',data:{day:'2026-11-09',count:283},messages:[{messageId:'usage-message',messageType:'结算'}]};
+  const response={data:[row],pagination:{page:1,limit:20,total:1,totalPages:1}};
+  vi.mocked(api.getPointsTransactions).mockResolvedValueOnce(response).mockRejectedValueOnce(new Error('离线')).mockResolvedValue(response);
+  render(<MemoryRouter initialEntries={['/messages']}><PointsBadge/></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button',{name:/贡献点：可用 20/}));
+  expect(await screen.findByText('2026-11-09 · 283 次')).toBeVisible();
+  expect(screen.queryByText(/余额/)).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'查看使用贡献详情 usage:2026-11-09'}));
+  const detail=screen.getByRole('dialog',{name:'贡献点详情'});
+  expect(await within(detail).findByRole('alert')).toHaveTextContent('详情加载失败');
+  fireEvent.click(within(detail).getByRole('button',{name:'重试'}));
+  expect(await within(detail).findByText('+283 点')).toBeVisible();
+  expect(api.getPointsTransactions).toHaveBeenCalledWith({mode:'summary',day:'2026-11-09',limit:1});
+  expect(within(detail).queryByRole('table')).toBeNull();
+  fireEvent.click(within(detail).getByRole('button',{name:'关闭贡献点详情'}));
+  expect(screen.getByRole('dialog',{name:'贡献点记录'})).toBeVisible();
+});
+
+it.each(['history','details'])('shows settlement and target types with full IDs in %s, copies an ID and locates the target', async panel => {
   vi.mocked(api.getPointsBalance).mockResolvedValue(fundedBalance);
   vi.mocked(api.getPointsTransactions).mockResolvedValue({ data: [{ id: 'distribution-entry', type: 'TRANSFER', amount: 3, balanceAfter: 20, createdAt: '',
-    messages: [{ messageId: 'distribution-message-1', messageType: '分配', summary: '对赌分配：3 贡献点；计时用户 +3。', scopeMessageId: 'root' }],
+    messages: [
+      { messageId: 'distribution-message-1', messageType: '结算', summary: '对赌分配：3 贡献点；计时用户 +3。', scopeMessageId: 'root' },
+      { messageId: 'target-message-1', messageType: '代码', summary: '目标代码', scopeMessageId: 'root' },
+    ],
     data: { messageId: 'distribution-message-1', scopeMessageId: 'root' } }], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } });
   const writeText = vi.fn().mockResolvedValue(undefined);
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
@@ -26,11 +140,15 @@ it('opens related message types and full IDs, copies an ID without navigating, a
   try {
     render(<MemoryRouter initialEntries={['/messages']}><PointsBadge /></MemoryRouter>);
     fireEvent.click(await screen.findByRole('button', { name: /贡献点：可用 20/ }));
-    fireEvent.click(await screen.findByText('关联消息'));
-    expect(screen.getByText('【分配】')).toBeVisible();
-    const reference = screen.getByRole('button', { name: '定位消息 distribution-message-1' });
+    fireEvent.click(await screen.findByText('关联消息 · 2 条'));
+    if(panel==='details')fireEvent.click(screen.getByRole('button',{name:'查看收支详情 distribution-entry'}));
+    const view=within(await screen.findByRole('dialog',{name:panel==='details'?'贡献点详情':'贡献点记录'}));
+    expect(await view.findByText('【结算】')).toBeVisible();
+    expect(view.getByText('【代码】')).toBeVisible();
+    if(panel==='details')await waitFor(()=>expect(api.getPointsTransactions).toHaveBeenCalledWith({mode:'summary',messageId:'distribution-message-1',limit:1}));
+    const reference = view.getByRole('button', { name: '定位消息 distribution-message-1' });
     expect(reference).toHaveTextContent('distribution-message-1');
-    const type = screen.getByRole('button', { name: '切换消息 distribution-message-1 的摘要和 ID' });
+    const type = view.getByRole('button', { name: '切换消息 distribution-message-1 的摘要和 ID' });
     fireEvent.click(type);
     expect(reference).toHaveTextContent('对赌分配：3 贡献点；计时用户 +3。');
     fireEvent.click(type);
@@ -38,8 +156,10 @@ it('opens related message types and full IDs, copies an ID without navigating, a
     fireEvent.doubleClick(reference);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('distribution-message-1'));
     expect(navigate).not.toHaveBeenCalled();
-    fireEvent.click(reference);
-    expect(navigate).toHaveBeenCalledWith(expect.objectContaining({ detail: expect.objectContaining({ messageId: 'distribution-message-1', scopeMessageId: 'root' }) }));
+    const target=view.getByRole('button',{name:'定位消息 target-message-1'});
+    expect(target).toHaveTextContent('target-message-1');
+    fireEvent.click(target);
+    expect(navigate).toHaveBeenCalledWith(expect.objectContaining({ detail: expect.objectContaining({ messageId: 'target-message-1', scopeMessageId: 'root' }) }));
     expect(screen.queryByRole('dialog', { name: '贡献点记录' })).not.toBeInTheDocument();
   } finally { window.removeEventListener('points-navigate', navigate); }
 });
@@ -66,12 +186,12 @@ it.each([
 it('locates a settlement distribution across scopes without opening a settlement on the distribution itself', async () => {
   vi.mocked(api.getPointsBalance).mockResolvedValue(fundedBalance);
   vi.mocked(api.getPointsTransactions).mockResolvedValue({ data: [{ id: 'distribution-entry', type: 'UNLOCK', amount: 3, balanceAfter: 20, createdAt: '',
-    messages: [{ messageId: 'distribution-message', messageType: '分配', scopeMessageId: 'source-scope', roundId: 'round-1' }],
+    messages: [{ messageId: 'distribution-message', messageType: '结算', scopeMessageId: 'source-scope', roundId: 'round-1' }],
     data: { messageId: 'distribution-message', scopeMessageId: 'source-scope', roundId: 'round-1' } }], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } });
   function Location() { const location = useLocation(); return <output>{location.pathname}{location.search}</output>; }
   render(<MemoryRouter initialEntries={['/messages']}><PointsBadge /><Location /></MemoryRouter>);
   fireEvent.click(await screen.findByRole('button', { name: /贡献点：可用 20/ }));
-  fireEvent.click(await screen.findByText('关联消息'));
+  expect(await screen.findByText('关联消息 · ID')).toBeVisible();
   fireEvent.click(screen.getByRole('button', { name: '定位消息 distribution-message' }));
   expect(screen.getByRole('status').textContent).toBe('/messages/source-scope?msg=distribution-message');
 });

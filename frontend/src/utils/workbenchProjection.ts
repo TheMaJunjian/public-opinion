@@ -18,10 +18,11 @@ export function projectWorkbenchSnapshot(snapshot: WorkbenchSnapshot, options?: 
   const byId = new Map(converted.messages.map(message => [message.id, message]));
   for(const message of converted.messages)message.authorInvestment=messageAuthorInvestment(message,snapshot.stakes[message.id]);
   for (const [id, stakes] of Object.entries(snapshot.stakes)) {
-    counts[id] = { truth: stakes.countsByType?.TRUTH ?? stakes.counts, value: stakes.countsByType?.VALUE ?? { pro: 0, con: 0 } };
+    const visibleStakes=(stakes.stakes??[]).filter(stake=>stake.user);
+    counts[id] = { truth: stakes.countsByType?.TRUTH ?? stakes.counts ?? { pro: 0, con: 0 }, value: stakes.countsByType?.VALUE ?? { pro: 0, con: 0 } };
     const authorId=byId.get(id)?.authorId;
-    authorAmounts[id] = authorId?stakes.stakes.filter(stake => stake.side === 'PRO' && stake.user.id === authorId).reduce((sum, stake) => sum + stake.amount, 0):0;
-    bettors[id] = new Set(stakes.stakes.map(stake => stake.user.id)).size;
+    authorAmounts[id] = authorId?visibleStakes.filter(stake => stake.side === 'PRO' && stake.user.id === authorId).reduce((sum, stake) => sum + stake.amount, 0):0;
+    bettors[id] = new Set(visibleStakes.map(stake => stake.user.id)).size;
   }
   return { ...converted, relations, counts, authorAmounts, bettors };
 }

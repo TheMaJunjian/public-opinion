@@ -1,3 +1,4 @@
+import { DEFAULT_MODERATION_POLICY, type ModerationPolicy } from './moderation.js';
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
 export type BodyVersion = {
@@ -43,12 +44,13 @@ export interface Message {
   programVersion: string;
   ruleVersion: number;
   parts: Part[];
-  spending: { protocol: number; recommendation: number; wager: number };
+  spending: { protocol: number; recommendation: number; wager: number; reviewFee?: number; reviewDeposit?: number; reviewWager?: number };
   sequence: number;
 }
 export interface User { id: string; name: string; username?: string; founder: boolean; createdAt?: string; publicKey?: string | null }
 export interface Account { available: number; locked: number; earned: number; spent: number }
 export interface Rules {
+  moderation?: ModerationPolicy;
   version: number;
   protocolFee: number;
   initialGrant: number;
@@ -61,6 +63,7 @@ export interface Rules {
   };
 }
 export const DEFAULT_RULES: Rules = {
+  moderation: DEFAULT_MODERATION_POLICY,
   version: 1, protocolFee: 1, initialGrant: 0, operatingReserve: 100,
   lowQualityPenalty: 5, settlementDelayMs: 0,
   contributionWeights: { content: 3, relation: 2, agreement: 1, evidence: 5, duplicate: 0, earlyBonus: 1, earlyWindow: 20, unrecognizedAuthorCap: 8 },
@@ -81,6 +84,7 @@ export interface Distribution {
   total: number; ruleVersion: number; ledgerId: string; programVersion: string; inputs: Json; allocations: Allocation[];
 }
 export interface SendInput {
+  reviewWager?: number;
   joinContribution?: { wager: number; recommendation: number };
   requestId: string;
   parts: Part[];
@@ -136,7 +140,7 @@ export const RELATION_LABELS: Record<string, string> = {
   classify: '分类', merge: '归并', summary: '总结', arrange: '排列', 'member-of': '加入', presentation: '显示方案',
   agree: '赞同', disagree: '反对', reply: '回复', reference: '引用', annotation: '注释',
   evidence: '证据', question: '疑问', answer: '回答', tag: '标注', recommend: '推荐',
-  terminate: '终止结算', distribution: '分配', amend: '修改', authorize: '授权生效',
+  terminate: '终止结算', distribution: '结算', amend: '修改', authorize: '授权生效',
   'rule-change': '规则修改', 'low-quality': '低质量评价', delegate: '委托', fulfill: '完成委托',
   follow: '关注', unfollow: '取消关注', block: '屏蔽', unblock: '取消屏蔽',
   read: '已读', unread: '未读', archive: '冷藏', notify: '通知',

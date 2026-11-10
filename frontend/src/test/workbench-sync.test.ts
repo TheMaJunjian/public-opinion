@@ -9,6 +9,26 @@ const message = (id: string, revision = 1, content = id): Message => ({ id, revi
 const page = (sequence: number, messages: Message[] = []): WorkbenchSnapshot => ({ sequence, messages, relations: [], users: [], stakes: {}, tagCounts: {}, attentionUsers: {}, scope: { messageId: null, title: '公论' } });
 
 describe('authoritative workbench records', () => {
+  it('keeps a redacted review address navigable while discarding old private projections',()=>{
+    const store=new WorkbenchStore(),target=message('target');
+    const relation:Relation={id:'payout',revision:1,relationType:'REVIEW_RECORD',sourceMessageId:null,
+      targetRefs:[{kind:'message',messageId:target.id}],createdAt:'2026-11-09',createdBy:target.createdBy,
+      payload:{content:'PRIVATE-REVIEW'},parts:[{id:'body',type:'text',text:'PRIVATE-REVIEW'},
+        {id:'review-attachment',type:'relation',relation:'review-record',roles:{target:[{id:'target',reference:{messageId:target.id,revision:1}}]}}]};
+    const original:Message={...message(relation.id,1,'PRIVATE-REVIEW'),kind:'RELATION',parts:relation.parts,relationType:relation.relationType};
+    store.apply({...page(10,[target,original]),relations:[relation]});
+    const restricted:Relation={...relation,restricted:true,payload:undefined,parts:[{id:'restricted-body',type:'text',text:''},relation.parts![1]]};
+    store.apply({...page(11,[{...original,content:'',restricted:true,parts:restricted.parts}]),relations:[restricted]});
+    const snapshot=store.snapshot(),model=convertMessagesToDemoModel(snapshot.messages,snapshot.relations);
+    expect(snapshot.relations).toEqual([restricted]);
+    expect(model.messages.find(record=>record.id===relation.id)).toMatchObject({content:'',restricted:true,targetRefs:relation.targetRefs});
+    expect(model.edges).toEqual([]);expect(JSON.stringify(snapshot)).not.toContain('PRIVATE-REVIEW');
+    store.apply({...page(10,[original]),relations:[relation]});
+    store.apply({...page(11),relations:[relation]});
+    expect(store.snapshot().relations).toEqual([restricted]);
+    store.apply(page(12,[{...original,content:'',restricted:true,parts:[]} ]));
+    expect(store.snapshot().relations).toEqual([]);
+  });
   it('updates two connected viewers on incoming corrections and applies personal choices over public statistics', async () => {
     const original: Message = { ...message('original', 1, '原文'), parts: [{ id: 'body', type: 'text', text: '原文' }] };
     const correction: Relation = { id: 'correction', revision: 1, relationType: 'CORRECT', sourceMessageId: null,

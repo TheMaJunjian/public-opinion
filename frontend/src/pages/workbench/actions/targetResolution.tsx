@@ -13,6 +13,7 @@ import { createContainerOwnership, getContainerAncestorChain } from '../model/ow
 import type { ContainerEffect } from '../model/containerEffect';
 import { mergeUnits,relationTargetUnits } from '../model/selection';
 import { displayDependencyIds, edgeDisplayDependencyIds } from '../../../utils/displayDependency';
+import { reviewContextOf, sameReviewContext, type ReviewContext } from '@gonglun/core';
 
 interface ContainerTargetDependencies {
   containerEffect?: Pick<ContainerEffect, 'ownership' | 'rejectedContainerIds' | 'joinByTarget'>;
@@ -228,6 +229,7 @@ export function organizationTargetRef(context: OrganizationTargetRefDependencies
 
 interface GetContainerMembershipTargetErrorDependencies extends ContainerTargetDependencies {
   relations: Relation[];
+  reviewContext?: ReviewContext;
 }
 
 export function getContainerMembershipTargetError(context: GetContainerMembershipTargetErrorDependencies, units: UnitSelection[]): string | null {
@@ -235,7 +237,7 @@ export function getContainerMembershipTargetError(context: GetContainerMembershi
   if (units.some(unit => !isWholeMessageSelection(unit, unit.messageId) || unit.reference?.revision !== undefined)) {
     return '组织成员需选择当前完整消息；已选元素、文本片段和历史版本可用于引用或讨论。';
   }
-  const attached = getDependentDisplayTargets({ relationById: new Map(relations.map(relation => [relation.id, relation])) }, units)[0];
+  const attached = getDependentDisplayTargets({ relationById: new Map(relations.map(relation => [relation.id, relation])),reviewContext:context.reviewContext }, units)[0];
   if (attached) return `消息 ${attached.messageId} 跟随依赖消息显示，不能作为容器的独立成员。`;
   const selectedIds = new Set(wholeMessageUnits(units).map(unit => unit.messageId));
   const blockedContainerIds = new Set(
@@ -330,6 +332,7 @@ export function getJoinContainerCycleError(context: GetJoinContainerCycleErrorDe
 
 interface GetDependentDisplayTargetsDependencies {
   relationById: Map<string, Relation>;
+  reviewContext?: ReviewContext;
 }
 
 export function getDependentDisplayTargets(input: GetDependentDisplayTargetsDependencies, units: UnitSelection[]): { messageId: string; dependencyId: string; }[] {
@@ -338,6 +341,7 @@ export function getDependentDisplayTargets(input: GetDependentDisplayTargetsDepe
   for (const unit of wholeMessageUnits(units)) {
     const relation = relationById.get(unit.messageId);
     if (!relation) continue;
+    if(sameReviewContext(input.reviewContext,reviewContextOf(relation)))continue;
     const ids = displayDependencyIds(relation);
     if (ids !== null) dependencies.push({ messageId: unit.messageId, dependencyId: ids[0] ?? unit.messageId });
   }
@@ -362,91 +366,19 @@ interface HasCrossNonReferenceTextLinkForClassifyTargetsDependencies extends Con
   edges: DemoEdge[];
 }
 
-export function hasCrossNonReferenceTextLinkForClassifyTargets(context: HasCrossNonReferenceTextLinkForClassifyTargetsDependencies, targetTextIds: string[], selectionUnits: UnitSelection[] = context.effectiveTargetUnits): string | null {
-  const { msgMap, relationTypeByRelMsgId, relationById, relations, edges } = context;
-  const ownership = context.containerEffect?.ownership ?? createContainerOwnership([...relationById.values()]);
-  const selected = new Set(targetTextIds);
-  const selectedRelationIds = new Set<string>();
-  const selectedContainerOwnedIds: Set<string>[] = [];
-  for (const unit of selectionUnits) {
-    if (!isWholeMessageSelection(unit, unit.messageId)) continue;
-    if (msgMap.get(unit.messageId)?.kind !== 'relation') continue;
-    selectedRelationIds.add(unit.messageId);
-    const relationType = relationTypeByRelMsgId.get(unit.messageId);
-    if (relationType === 'classify' || relationType === 'summary'
-      || relationType === 'arrange' || relationType === 'merge') {
-      // A selected container is an opaque target. Its nested messages are
-      // not individually selected, but relations entirely inside it do not
-      // cross the classification boundary.
-      const owned = ownership.owned(unit.messageId);
-      selectedContainerOwnedIds.push(new Set([
-        unit.messageId,
-        ...owned.textIds,
-        ...owned.relationIds,
-      ]));
-    }
-  }
-  if (selected.size === 0 && selectedRelationIds.size === 0) return null;
-  const selectedIds = new Set([...selected, ...selectedRelationIds]);
-  const describe = (id: string): string => `(${id})`;
-  const describeViolation = (fromId: string, toId: string, type: string): string =>
-    `消息${describe(fromId)}与消息${describe(toId)}存在「${getPresentationSpec(type.toLowerCase()).label}」关系，不能只将其中一方加入分类；`;
-  const crossesBoundary = (fromId: string, toId: string): boolean => {
-    if (fromId === toId) return false;
-    const fromMessage = msgMap.get(fromId);
-    const toMessage = msgMap.get(toId);
-    if (!fromMessage || !toMessage) return false;
-    if (selectedContainerOwnedIds.some(owned => owned.has(fromId) && owned.has(toId))) return false;
-    return selectedIds.has(fromId) !== selectedIds.has(toId);
-  };
-
-  // A directly selected text message inside an active, unselected MERGE container
-  // cannot be classified independently. Do not expand selected containers
-  // here, because their members are opaque targets.
-  const directlySelectedTextIds = new Set(
-    selectionUnits
-      .filter(unit => isWholeMessageSelection(unit, unit.messageId) && isContentKind(msgMap.get(unit.messageId)?.kind ?? 'normal'))
-      .map(unit => unit.messageId)
-  );
-  for (const merge of relations.filter(relation =>
-    relation.relationType.toUpperCase() === 'MERGE' && !selectedRelationIds.has(relation.id)
-    && !context.containerEffect?.rejectedContainerIds.has(relation.id)
-  )) {
-    const owned = ownership.owned(merge.id);
-    const selectedId = [...directlySelectedTextIds].find(id => owned.textIds.has(id));
-    if (selectedId) {
-      return `消息(${selectedId})已在归并消息(${merge.id})中，不能建立分类关系。`;
-    }
-  }
-
-  for (const e of edges) {
-    if (context.containerEffect?.rejectedContainerIds.has(e.relationMessageId)) continue;
-    // Citations and stances can cross scopes; they do not require shared membership.
-    if (['reference', 'agree', 'disagree'].includes(e.relationType.toLowerCase())) continue;
-    if (crossesBoundary(e.from.messageId, e.to.messageId)) {
-      return describeViolation(e.from.messageId, e.to.messageId, e.relationType);
-    }
-  }
-
-  // Re-check persisted relations because some relation endpoints (for
-  // example content-kind messages or relation sources) may not have a
-  // normal-to-normal DemoEdge after the graph is rebuilt.
-  for (const relation of relations) {
-    const relationType = relation.relationType.toUpperCase();
-    // Container relations describe membership, not a semantic cross-link
-    // between the selected messages and their surrounding messages.
-    if (relationType === 'REFERENCE' || relationType === 'AGREE' || relationType === 'DISAGREE' || relationType === 'JOIN'
-      || relationType === 'CLASSIFY' || relationType === 'SUMMARY'
-      || relationType === 'ARRANGE' || relationType === 'MERGE') continue;
-    const sourceId = relation.sourceMessageId;
-    const endpointIds = [
-      ...(sourceId ? [sourceId] : []),
-      ...(relation.targetRefs ?? []).map(target => target.kind === 'relation' ? target.relationId : target.messageId),
-    ].filter((id): id is string => Boolean(id));
-    const selectedId = endpointIds.find(id => selectedIds.has(id));
-    const outsideId = endpointIds.find(id => !selectedIds.has(id));
-    if (selectedId && outsideId && crossesBoundary(selectedId, outsideId)) {
-      return describeViolation(selectedId, outsideId, relationType);
+export function hasCrossNonReferenceTextLinkForClassifyTargets(context: HasCrossNonReferenceTextLinkForClassifyTargetsDependencies, _targetTextIds: string[], selectionUnits: UnitSelection[] = context.effectiveTargetUnits): string | null {
+  // Semantic links may cross organization boundaries. Only existing protected
+  // containers constrain membership; whole-container selections stay opaque.
+  const ownership = context.containerEffect?.ownership ?? createContainerOwnership(context.relations);
+  const selected = new Set(selectionUnits.filter(unit=>isWholeMessageSelection(unit,unit.messageId)).map(unit=>unit.messageId));
+  for (const container of context.relations) {
+    const type=container.relationType.toUpperCase();
+    if(!['MERGE','ARRANGE','SUMMARY'].includes(type)||selected.has(container.id)||context.containerEffect?.rejectedContainerIds.has(container.id))continue;
+    const owned=ownership.owned(container.id);
+    const member=[...selected].find(id=>owned.textIds.has(id)||owned.relationIds.has(id));
+    if(member){
+      const label=type==='MERGE'?'归并':type==='SUMMARY'?'总结':'排列';
+      return `消息(${member})已在${label}消息(${container.id})中，不能拆分已有容器，请选择整个容器。`;
     }
   }
   return null;

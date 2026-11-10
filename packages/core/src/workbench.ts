@@ -18,6 +18,8 @@ export interface ScopeView {
 }
 
 export interface MessageView {
+  moderation?: import('./moderation.js').ModerationSummary;
+  restricted?: boolean;
   id: string;
   sequence?: number;
   revision?: number;
@@ -81,6 +83,11 @@ export type TargetRef = ({ reference?: Reference } & (
 export type RelationTargetLayout = 'single-column' | 'multi-column' | 'single-row';
 
 export interface RelationPayload {
+  caseId?: string;
+  reviewRound?: number;
+  verdict?: 'pass'|'reject';
+  userId?: string;
+  enabled?: boolean;
   independentMemberships?: boolean;
   /** Imported documents may keep a container title separate from its readable body. */
   separateTitle?: boolean;
@@ -129,6 +136,8 @@ export interface RelationPayload {
 }
 
 export interface RelationView {
+  moderation?: import('./moderation.js').ModerationSummary;
+  restricted?: boolean;
   id: string;
   sequence?: number;
   revision?: number;

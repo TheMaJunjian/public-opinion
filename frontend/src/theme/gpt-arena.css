@@ -292,9 +292,10 @@
 :root[data-appearance='gpt-arena'] .desk-endpoints[data-empty='true'] .desk-empty-hint { display: none; }
 :root[data-appearance='gpt-arena'] .desk-endpoints[data-empty='true'] > div:not(.desk-section-title) { padding-block: 2px !important; font-size: 12px; }
 :root[data-appearance='gpt-arena'] .desk-relation-group { margin: 5px 0; gap: 8px; }
-:root[data-appearance='gpt-arena'] .desk-relation-group button { min-height: 30px; border-radius: 5px; }
-:root[data-appearance='gpt-arena'] .desk-relation-group button:hover { background: var(--surface-hover) !important; border-color: var(--text-muted) !important; }
-:root[data-appearance='gpt-arena'] .desk-relation-group button[aria-pressed='true'] {
+:root[data-appearance='gpt-arena'] :is(.desk-relation-group button, .workbench-choice) { min-height: 30px; border-radius: 5px; }
+:root[data-appearance='gpt-arena'] .workbench-choice { background: var(--button-secondary-bg); border-color: var(--button-secondary-border); color: var(--button-secondary-text); }
+:root[data-appearance='gpt-arena'] :is(.desk-relation-group button, .workbench-choice):hover { background: var(--surface-hover) !important; border-color: var(--text-muted) !important; }
+:root[data-appearance='gpt-arena'] :is(.desk-relation-group button, .workbench-choice)[aria-pressed='true'] {
   background: var(--button-primary-bg) !important; border-color: var(--fragment-accent) !important;
   box-shadow: inset 0 -2px var(--fragment-accent);
 }

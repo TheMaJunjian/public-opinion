@@ -3,6 +3,8 @@ import {readingStateSchema} from './reading-state.js';
 import {usagePointsSchema} from './usage-points.js';
 import {notificationSchema} from './notification-schema.js';
 import {accessSchema} from './access-schema.js';
+import {moderationSchema} from './moderation-schema.js';
+import {ledgerOperationSchema} from './ledger-operation-schema.js';
 /** Fresh PostgreSQL schema with explicit insertion positions. */
 export const schemaSql = `
 ${notificationSchema}
@@ -11,8 +13,9 @@ CREATE TABLE IF NOT EXISTS rule_versions(version INTEGER PRIMARY KEY,body TEXT N
 CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,name TEXT UNIQUE NOT NULL,password TEXT NOT NULL,founder INTEGER NOT NULL,"createdAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,position BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE);
 CREATE UNIQUE INDEX IF NOT EXISTS users_name_folded ON users(lower(name));
 CREATE TABLE IF NOT EXISTS accounts("userId" TEXT PRIMARY KEY,available BIGINT NOT NULL,locked BIGINT NOT NULL CHECK(locked >= 0),earned BIGINT NOT NULL,spent BIGINT NOT NULL);
-CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,"userId" TEXT NOT NULL,csrf TEXT NOT NULL,expires BIGINT NOT NULL,"deviceId" TEXT);
+CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,"userId" TEXT NOT NULL,csrf TEXT NOT NULL,expires BIGINT NOT NULL,"deviceId" TEXT,"lastActiveAt" BIGINT NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires);
+CREATE INDEX IF NOT EXISTS sessions_activity ON sessions("userId","lastActiveAt");
 CREATE TABLE IF NOT EXISTS signing_keys("userId" TEXT NOT NULL,"deviceId" TEXT NOT NULL,"publicKey" TEXT NOT NULL,"createdAt" TEXT NOT NULL,PRIMARY KEY("userId","deviceId"));
 CREATE TABLE IF NOT EXISTS signatures("messageId" TEXT PRIMARY KEY,"userId" TEXT NOT NULL,"deviceId" TEXT NOT NULL,"publicKey" TEXT NOT NULL,payload TEXT NOT NULL,signature TEXT NOT NULL,"createdAt" TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS notification_receipts("sourceId" TEXT NOT NULL,"userId" TEXT NOT NULL,"targetId" TEXT NOT NULL,PRIMARY KEY("sourceId","userId","targetId"));
@@ -33,9 +36,10 @@ CREATE INDEX IF NOT EXISTS bets_target ON bets USING hash("targetKey");
 CREATE TABLE IF NOT EXISTS execution_stances("sourceId" TEXT NOT NULL,revision INTEGER NOT NULL,"partId" TEXT NOT NULL,target TEXT NOT NULL,side TEXT NOT NULL,PRIMARY KEY("sourceId",revision,"partId"));
 CREATE TABLE IF NOT EXISTS ledger(id TEXT PRIMARY KEY,"userId" TEXT NOT NULL,"messageId" TEXT NOT NULL,amount BIGINT NOT NULL,"lockedDelta" BIGINT NOT NULL,reason TEXT NOT NULL,"createdAt" TEXT NOT NULL,"ruleVersion" INTEGER NOT NULL,"messageRevision" INTEGER NOT NULL,position BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE,"balanceAfter" BIGINT);
 CREATE INDEX IF NOT EXISTS ledger_user ON ledger("userId",position);
+${ledgerOperationSchema}
 CREATE TABLE IF NOT EXISTS changes(sequence BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS requests("userId" TEXT NOT NULL,"requestId" TEXT NOT NULL,input TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY("userId","requestId"));
 CREATE TABLE IF NOT EXISTS command_requests("userId" TEXT NOT NULL,"requestId" TEXT NOT NULL,input TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY("userId","requestId"));
 CREATE TABLE IF NOT EXISTS effects(key TEXT PRIMARY KEY,body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS escrows("messageId" TEXT PRIMARY KEY,"ownerId" TEXT NOT NULL,amount BIGINT NOT NULL,"recipientId" TEXT,"fulfillmentId" TEXT);
-` + querySchema + readingStateSchema + usagePointsSchema + accessSchema;
+` + querySchema + readingStateSchema + usagePointsSchema + accessSchema + moderationSchema;

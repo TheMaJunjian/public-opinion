@@ -12,6 +12,7 @@ import { sendSnapshot } from './snapshot-response.js';
 import { windowSnapshot } from './window-snapshot.js';
 import {bodyVersionSchema} from './reference-schema.js';
 import {validateBodyVersion} from './validation.js';
+import {assertMessageReadable,sanitizeModeration} from './moderation-visibility.js';
 import {activitySchema, updateUsagePoints} from './usage-points.js';
 import {pointTransactions} from './point-transactions.js';
 import { notificationPage, notificationSummary, notificationQuerySchema, notificationSeenSchema, notificationMuteSchema,
@@ -29,7 +30,7 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
         } catch (error) { next(error); }
     });
     router.post('/body-versions/resolve',(req,res,next)=>{
-        void store.read(async()=>{const version=bodyVersionSchema.parse(req.body);res.json({message:await validateBodyVersion(store,version)});}).catch(next);
+        void store.read(async()=>{const version=bodyVersionSchema.parse(req.body),session=await currentSession(store,req);for(const ref of [version,...version.corrections])await assertMessageReadable(store,ref.messageId,session?.user.id,ref.revision);res.json({message:await validateBodyVersion(store,version)});}).catch(next);
     });
     const get=(path:string,handler:(req:Request,res:Response,next:NextFunction)=>Promise<unknown>)=>
         router.get(path,(req,res,next)=>{void store.read(()=>handler(req,res,next)).catch(next);});
@@ -127,7 +128,8 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
         next(e);
     } });
     get('/tag-counts', async (req, res, next) => { try {
-        res.json({ counts: tagCounts((await viewsFor(store, (await scopeMessages(store, String(req.query.parent ?? 'root'))), String(req.query.parent ?? 'root')))) });
+        const views=await viewsFor(store,await scopeMessages(store,String(req.query.parent??'root')),String(req.query.parent??'root'));
+        res.json({ counts: tagCounts(await sanitizeModeration(store,views)) });
     }
     catch (e) {
         next(e);
@@ -171,7 +173,7 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
             const rows = all.filter(m => !scoped || scoped.has(m.id)), stanceRows: RecordData[] = [], tagRows: RecordData[] = [], stakeRows: RecordData[] = [];
             for (const message of rows) {
                 const view = (await messageView(store, message)), parent = (await parentOf(store, message.id)), scope = (await scopeView(store, parent)), targets = view.targetRefs.map((r: RecordData) => r.reference.messageId), target = targets[0] ? (await store.message(targets[0])) : null;
-                const base = { id: message.id, relationMessageId: message.id, scopeMessageId: parent === 'root' ? null : parent, scopeTitle: scope.title, createdAt: message.createdAt, amount: message.spending.wager, targetMessageId: target?.id ?? null, content: target ? textOf(target) : textOf(message) };
+                const base = { id: message.id, revision:message.revision, relationMessageId: message.id, scopeMessageId: parent === 'root' ? null : parent, scopeTitle: scope.title, createdAt: message.createdAt, amount: message.spending.wager, targetMessageId: target?.id ?? null, content: target ? textOf(target) : textOf(message) };
                 if (['AGREE', 'DISAGREE'].includes(view.relationType ?? ''))
                     stanceRows.push({ ...base, kind: 'relation', type: view.relationType, messageKind: target ? (await messageView(store, target)).kind : 'TEXT', targetRelationType: target ? relationViewType(target) : null });
                 if (['TAG', 'RECOMMEND', 'ARCHIVE'].includes(view.relationType ?? ''))
@@ -276,7 +278,9 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
         const session = await requireCsrf(store, req);
         await verifyDeviceSignature(store, req, session);
         const input = z.object({ batch: z.unknown(), parents: z.array(z.string().min(1).max(100)).max(20).optional() }).strict().parse(req.body);
-        res.json(await previewBatch(store, session.user, input.batch, input.parents));
+        // previewBatch already applied the viewer's moderation rules before
+        // rollback; the normal JSON boundary would replace them with live totals.
+        res.type('json').send(JSON.stringify(await previewBatch(store, session.user, input.batch, input.parents)));
     } catch (error) { next(error); } });
     router.post('/commands', async (req, res, next) => { try {
         const session = (await requireCsrf(store, req)), signature = (await verifyDeviceSignature(store, req, session));

@@ -32,7 +32,7 @@ function ReadingController(p:Props&{context:NonNullable<ReturnType<typeof useRea
   const messagesById=useMemo(()=>new Map(context.readingInput.messages.map(message=>[message.id,message])),[context.readingInput.messages]);
   const getMessageSummary=useCallback((id:string)=>{
     const message=messagesById.get(id);
-    if(message&&(message.kind==='round'||message.kind==='round_result'))return getMessageCardContent(message);
+    if(message&&(message.kind==='round'||message.kind==='round_result'||message.relationType==='correct'))return getMessageCardContent(message);
     return message?getOrganizationTitle(message)||context.data.hints.get(id)?.displayed.content||message.content:'';
   },[messagesById,context.data.hints]);
   const model=useMemo(()=>readingTasks(context.readingInput,p.scopeIds,p.allowedIds,p.direction,p.order,p.placementOrder,context.data.reading,new Set(p.path.at(-1)??[])),

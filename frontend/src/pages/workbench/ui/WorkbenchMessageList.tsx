@@ -1,4 +1,5 @@
 import React, {useMemo, type ComponentProps, type ReactNode } from 'react';
+import {formatCorrectionSummary} from '@gonglun/core';
 import RelatedMessages from '../../../components/RelatedMessages';
 import CrossCanvasRelatedMessages from '../../../components/CrossCanvasRelatedMessages';
 import type { CrossCanvasRelationGroups } from '../../../utils/crossCanvasRelations';
@@ -12,8 +13,9 @@ import {chronologicalOrder} from '../../../utils/discussionOrder';
 import { MessageDisplayMarker } from '../../../components/MessageDisplayHints';
 import RoundHistory from '../../../components/RoundHistory';
 import SettlementPanel from '../../../components/SettlementPanel';
+import ReviewPanel from '../../../components/ReviewPanel';
 import type { Relation } from '../../../types';
-import { getOrganizationTitle } from '../../../utils/messageDisplay';
+import { getOrganizationTitle, hasMetadataOnlyContent } from '../../../utils/messageDisplay';
 import { isWholeMessageSelection } from '../../../utils/messageElementSelection';
 import { messageScopePath } from '../../../utils/messageRoutes';
 import { type CorrectionVersion, type DemoEdge, type DemoMessage, isCardMessage, isContentKind, type RelationType, type UnitSelection } from '../../../utils/modelBridge';
@@ -65,7 +67,7 @@ interface ListComparison {
 }
 interface ListSettlement {
   settlementOpenMsgId: string | null;
-  settlementOpenType: 'TRUTH' | 'VALUE' | null;
+  settlementOpenType: 'TRUTH' | 'VALUE' | 'REVIEW' | null;
   settlementEntryHighlight: ComponentProps<typeof SettlementPanel>['entryHighlight'];
   closeSettlement: () => void;
   openSettlement: (messageId: string, type?: 'TRUTH' | 'VALUE') => void;
@@ -114,7 +116,7 @@ export default function WorkbenchMessageList(props: Props) {
   const showJoinRecords=props.showJoinRecords??props.display.joinFilterTargetId!==null;
   const listMessages = useMemo(() => filterMessageListContext(
     messagesToRenderFiltered
-      .filter(msg => msg.kind==='join'||!embeddedMessageIds.has(msg.id)),
+      .filter(msg => standaloneMessageIds?.has(msg.id)||msg.kind==='join'||!embeddedMessageIds.has(msg.id)),
     messages, edges, standaloneMessageIds,showJoinRecords,
   ).sort(chronologicalOrder), [messagesToRenderFiltered, messages, edges, embeddedMessageIds, rejectedContainerIds, standaloneMessageIds, showJoinRecords]);
   const { settlementOpenMsgId, settlementOpenType, settlementEntryHighlight, closeSettlement, openSettlement, onMessageCreated } = props.settlement;
@@ -130,7 +132,7 @@ export default function WorkbenchMessageList(props: Props) {
           const msg = rowMap.get(id)!;
           const isWholeSelected = draftUnits.some(u => isWholeMessageSelection(u, msg.id));
           const isActiveText = activeTextSelectId === msg.id;
-          const relType = msg.kind === "relation" ? relationTypeByRelMsgId.get(msg.id) : null;
+          const relType = msg.kind === "relation" ? msg.relationType??relationTypeByRelMsgId.get(msg.id) : null;
           const isClassification = relType === "classify";
           const isSummary = relType === "summary";
           const isMerge = relType === "merge";
@@ -151,7 +153,7 @@ export default function WorkbenchMessageList(props: Props) {
           const joinPresentation = getJoinStatusPresentation(joinStatus, props.catalog.joinEffectSourcesByMessage?.get(msg.id));
           const joinEntry=joinEntries.get(msg.id);
           const ctx: MessageCardContext = {
-            isRelationRecord: msg.kind === 'join' || msg.kind === 'round' || msg.kind === 'round_result' || (msg.kind === 'relation' && !isCardMessage(msg)),
+            isRelationRecord: msg.kind === 'join' || msg.kind === 'round' || msg.kind === 'round_result' || (msg.kind === 'relation' && (!isCardMessage(msg) || hasMetadataOnlyContent(msg))),
             isWholeSelected, isActiveText, isOrganizationMessage,
             isClassification: isClassification,
             isSummary: isSummary,
@@ -196,7 +198,6 @@ export default function WorkbenchMessageList(props: Props) {
             ? correctionSelection.text || correctionField.slice(correctionSelection.start, correctionSelection.start + correctionSelection.len)
             : correctionField;
           const correctionRange = correctionSelection?.kind === 'text' ? correctionSelection : { start: 0, len: correctionTargetText.length };
-          const correctionTargetLabel = correctionTargetText ? `「${correctionTargetText}」` : '所选内容';
           const correctionReplacement = (() => {
             if (typeof msg.relationPayload?.correctionValue === 'string') return msg.relationPayload.correctionValue;
             if (correctionSelection?.kind !== 'text') return correctionContent;
@@ -365,8 +366,8 @@ export default function WorkbenchMessageList(props: Props) {
               }
               overlays={settlementOpenMsgId === msg.id ? (
                 <div data-settlement-panel style={{ position: "absolute", right: 0, top: "100%", zIndex: 100, width: 360, marginTop: 4 }}>
-                  <SettlementPanel messageId={msg.id} scopeMessageId={scopeMessageId!} highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} onMessageCreated={onMessageCreated} filterSettlementType={settlementOpenType ?? undefined} />
-                  <div style={{ marginTop: 4 }}><RoundHistory messageId={msg.id} compact /></div>
+                  {settlementOpenType==='REVIEW'?<ReviewPanel messageId={msg.id} revision={msg.revision}/>:<><SettlementPanel messageId={msg.id} scopeMessageId={scopeMessageId!} highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} onMessageCreated={onMessageCreated} filterSettlementType={settlementOpenType ?? undefined} />
+                  <div style={{ marginTop: 4 }}><RoundHistory messageId={msg.id} compact /></div></>}
                 </div>
               ) : undefined}
             >
@@ -419,10 +420,7 @@ export default function WorkbenchMessageList(props: Props) {
                     {msg.relationPayload?.correctionKind === 'WIDTH' ? <div style={{color:'var(--ink-5eead4)'}}>宽度调整 · {msg.relationPayload.correctionWidth} px</div> : <>
                     <div style={{ fontSize: 11, color: 'var(--ink-5eead4)', marginBottom: 3 }}>{'修正文字'} · start={correctionRange.start} len={correctionRange.len}</div>
                     <div style={{ whiteSpace: 'pre-wrap', color: 'var(--ink-fca5a5)' }}>
-                      {correctionReplacement.length === 0
-                        ? `删除${correctionTargetLabel}`
-                        : correctionTargetText.length === 0 ? `在所选位置插入「${correctionReplacement}」`
-                          : `将${correctionTargetLabel}修改为「${correctionReplacement}」`}
+                      {formatCorrectionSummary(correctionTargetText, correctionReplacement)}
                     </div>
                     </>}
                   </div>

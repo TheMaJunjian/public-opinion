@@ -12,18 +12,33 @@ beforeEach(()=>{
   vi.spyOn(api,'confirmCommandPreview').mockResolvedValue({snapshots:[{scope:{messageId:null,title:'公论'},messages:[],relations:[],users:[],stakes:{},tagCounts:{},attentionUsers:{},sequence:3}]});
 });
 function setup() {
-  const show=vi.fn(),clear=vi.fn(),promote=vi.fn(),error=vi.fn();
+  const show=vi.fn(),clear=vi.fn(),promote=vi.fn(),error=vi.fn(),canPrepare=vi.fn(()=>true);
   const view=renderHook(({scope,sequence})=>{
     const composer=useWorkbenchComposer();
-    const preview=useSendPreview({composer,owner:'u',scope,liveSequence:sequence,sendInFlightRef:{current:false},
+    const preview=useSendPreview({composer,owner:'u',scope,liveSequence:sequence,sendInFlightRef:{current:false},canPrepare,
       captureTransient:async work=>{await work();},showSendPreview:show,clearSendPreview:clear,confirmSendPreview:promote,error,
       work:async()=>{queueCommand('/messages',{method:'POST',body:JSON.stringify({content:composer.newMessageContent})});composer.setNewMessageContent('');},
     });
     return {composer,preview};
   },{initialProps:{scope:'root',sequence:1}});
   act(()=>view.result.current.composer.setNewMessageContent('待发送内容'));
-  return {view,show,clear,promote,error};
+  return {view,show,clear,promote,error,canPrepare};
 }
+it('does not prepare or replace a preview when the current send is blocked',async()=>{
+  const {view,canPrepare,show}=setup();
+  canPrepare.mockReturnValue(false);
+  await act(()=>view.result.current.preview.prepare());
+  expect(api.prepareCommandBatch).not.toHaveBeenCalled();
+  expect(api.previewCommandBatch).not.toHaveBeenCalled();
+  expect(view.result.current.composer.newMessageContent).toBe('待发送内容');
+  canPrepare.mockReturnValue(true);
+  await act(()=>view.result.current.preview.prepare());
+  canPrepare.mockReturnValue(false);
+  await act(()=>view.result.current.preview.prepare());
+  expect(api.prepareCommandBatch).toHaveBeenCalledOnce();
+  expect(show).toHaveBeenCalledOnce();
+  expect(view.result.current.preview.active).toBe(true);
+});
 it('keeps the composer intact during preview and consumes it only after confirmation',async()=>{
   const {view,show,promote}=setup();const before=view.result.current.composer.capture();
   await act(()=>view.result.current.preview.prepare());

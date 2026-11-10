@@ -1,11 +1,56 @@
 import type { CSSProperties } from 'react';
+import {messageCorrectionSummary} from '@gonglun/core';
 import type { DemoEdge, DemoMessage } from './modelBridge';
 import { getPresentationSpec, getRelationTitle } from '../types';
-import { getRelationMessageLabel } from './attachedRelationLabels';
+import { getRelationMessageLabel, getRelationRecordContentLabel } from './attachedRelationLabels';
+
+const annotations = new Set(['tag', 'recommend', 'archive', 'attention', 'block']);
+const isReview = (message: DemoMessage) => message.relationType === 'review' || message.relationPayload?.operationType === 'REVIEW';
+
+export interface MessageTypeDetail {
+  kind: 'subtype' | 'verdict' | 'reason' | 'label';
+  label: string;
+  tone?: 'pass' | 'reject';
+}
+
+/** A category, its operation and its judgment are separate pieces of information. */
+export function getMessageTypeDetails(message: DemoMessage): MessageTypeDetail[] {
+  const type = message.relationType, payload = message.relationPayload;
+  if (isReview(message)) return [{ kind: 'subtype', label: '审核' },
+    ...(payload?.verdict === 'pass' || payload?.verdict === 'reject'
+      ? [{ kind: 'verdict' as const, label: payload.verdict === 'pass' ? '通过' : '不通过', tone: payload.verdict }] : [])];
+  if (message.kind === 'operations' || message.backendKind === 'OPERATIONS' || type === 'operations')
+    return [{ kind: 'subtype', label: '公告' }];
+  if (type === 'reference') {
+    const label = getRelationRecordContentLabel(message);
+    return label ? [{ kind: 'label', label }] : [];
+  }
+  if (annotations.has(type ?? '')) {
+    const detail = getRelationRecordContentLabel(message);
+    return [
+      ...(type === 'tag' ? [] : [{ kind: 'subtype' as const, label: getPresentationSpec(type!).label }]),
+      ...(detail ? [{ kind: type === 'tag' ? 'label' as const : 'reason' as const, label: detail }] : []),
+    ];
+  }
+  return [];
+}
+
+/** Generated label/reason text is already visible in the header, including when opened as a review target. */
+export function hasMetadataOnlyContent(message: DemoMessage): boolean {
+  if (!annotations.has(message.relationType ?? '') && message.relationType !== 'reference') return false;
+  const detail = message.relationType === 'reference' ? message.relationPayload?.label?.trim() : getRelationRecordContentLabel(message);
+  if (!detail || message.relationPayload?.content || message.relationPayload?.title) return false;
+  const readable = message.parts?.filter(part => ['text', 'code', 'web'].includes(part.type)) ?? [];
+  return readable.every(part => part.type === 'text' && (!part.text.trim() || part.text.trim() === detail));
+}
 
 /** Use the card's type names for entries in the selection collections. */
 export function getMessageTypeLabel(message: DemoMessage | undefined): string {
   if (!message) return '消息';
+  if (message.relationType === 'distribution') return '结算';
+  if (isReview(message)) return '运营';
+  if (message.relationType === 'reference') return '引用';
+  if (annotations.has(message.relationType ?? '')) return '标注';
   if (['classify', 'summary', 'merge'].includes(message.relationType ?? '')) return getPresentationSpec(message.relationType!).label;
   const specific = getRelationMessageLabel(message);
   if (specific) return specific;
@@ -25,6 +70,7 @@ export function getOrganizationTitle(message: DemoMessage, memberCount?: number)
 }
 
 export function getMessageCardContent(message: DemoMessage | undefined): string {
+  if (message?.relationType === 'correct' && message.parts) return messageCorrectionSummary({parts:message.parts}) ?? message.content;
   if (message && (message.kind === 'round' || message.kind === 'round_result')) {
     return [message.settlementTargetId ? `目标：${message.settlementTargetId}` : '目标未记录', getSettlementDetails(message)].filter(Boolean).join('\n');
   }

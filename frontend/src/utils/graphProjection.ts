@@ -19,6 +19,8 @@ export interface GraphProjectionInput {
   expandedFrameIds?: ReadonlySet<string>;
   showJoinRecords?: boolean;
   standaloneMessageIds?:ReadonlySet<string>;
+  /** A reviewed message must remain a card even when its normal form is a badge. */
+  forceCardMessageIds?:ReadonlySet<string>;
   rejectedContainerIds?:ReadonlySet<string>;
   rejectedRelationIds?:ReadonlySet<string>;
   hiddenMessageIds?:ReadonlySet<string>;
@@ -44,7 +46,7 @@ export function manualDiscussionTargets({ messages, edges, traceMode = false }: 
 }
 
 /** Derive visible cards, organization ownership and relative columns without DOM or UI state. */
-export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTraceWindow,expandedFrameIds,showJoinRecords=false,standaloneMessageIds,rejectedContainerIds,rejectedRelationIds,hiddenMessageIds,cardFrameIds,discussionTargetIds }: GraphProjectionInput) {
+export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTraceWindow,expandedFrameIds,showJoinRecords=false,standaloneMessageIds,forceCardMessageIds,rejectedContainerIds,rejectedRelationIds,hiddenMessageIds,cardFrameIds,discussionTargetIds }: GraphProjectionInput) {
   if(!isTraceWindow)traceExpandedFrameIds=new Set();
   traceExpandedFrameIds = new Set([...traceExpandedFrameIds, ...expandedFrameIds ?? []].filter(id => !rejectedContainerIds?.has(id)));
   const msgMap = new Map(messages.map(message => [message.id, message]));
@@ -77,7 +79,7 @@ export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTr
   for (const id of discussionRelationCardIds) relationCardMsgIds.add(id);
   for (const message of messages) {
     if (message.kind === 'relation' && (isCardMessage(message) || needsSeparateStanceCard(message, msgMap)
-      || standaloneMessageIds?.has(message.id)&&['agree','disagree'].includes(message.relationType??'')
+      || forceCardMessageIds?.has(message.id) || standaloneMessageIds?.has(message.id)&&['agree','disagree'].includes(message.relationType??'')
       || isRejectedContainer(message,rejectedContainerIds)||isRejectedRelation(message,rejectedRelationIds))) {
       relationCardMsgIds.add(message.id);
     }
@@ -104,9 +106,9 @@ export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTr
     tracedSummaryMembers.add(edge.to.messageId);
   }
   const hiddenTargetIds = new Set([...getSummaryCoveredIds(msgMap, edges)]
-    .filter(id => !summaryRelMsgIds.has(id) && !tracedSummaryMembers.has(id)));
+    .filter(id => !summaryRelMsgIds.has(id) && !tracedSummaryMembers.has(id) && !standaloneMessageIds?.has(id)));
   const normals = messages.filter(message => !isSettlementRecord(message) && (message.kind !== 'join' || showJoinRecords) && !hiddenMessageIds?.has(message.id) && !traceExpandedFrameIds.has(message.id) && !hiddenTargetIds.has(message.id)
-    && (!presentationTarget(message) || discussionRelationCardIds.has(message.id) || showJoinRecords && message.kind === 'join') && (isContentKind(message.kind)
+    && (!presentationTarget(message) || forceCardMessageIds?.has(message.id) || discussionRelationCardIds.has(message.id) || showJoinRecords && message.kind === 'join') && (isContentKind(message.kind)
       || message.kind === 'relation' && relationCardMsgIds.has(message.id)));
   const normalIds = normals.map(message => message.id);
   const relIds = new Set(messages.filter(message => message.kind === 'relation' && !relationCardMsgIds.has(message.id)).map(message => message.id));

@@ -10,6 +10,10 @@ import { journalManifest } from './export-response.js';
 import { RollbackUnconfirmedError } from './postgres.js';
 import { refreshUsagePoints } from './usage-points.js';
 import { createAccessRouter } from './access-routes.js';
+import { moderationHttp } from './moderation-http.js';
+import { createModerationRouter } from './moderation-routes.js';
+import { moderationPolicy } from './moderation.js';
+import { processReviewAssignments } from './review-assignments.js';
 const query = z.object({ parent: z.string().max(100).optional(), cursor: z.string().max(1000).optional(), limit: z.coerce.number().int().min(1).max(100).optional(), q: z.string().max(200).optional(), relation: z.string().max(80).optional(), author: z.string().max(100).optional() }).strict();
 const personalQuery = query.extend({ filter: z.enum(['normal', 'follow', 'read', 'unread', 'block', 'archive']).optional(), after: z.coerce.number().int().nonnegative().optional() });
 export async function createApp(options: {
@@ -53,9 +57,10 @@ export async function createApp(options: {
         }
     };
     const publish = ():Promise<void> => {
-        if(closed)return Promise.resolve();
+        if(closed||!clients.size)return Promise.resolve();
         if(publishing)return publishing;
         publishing=(async()=>{
+            if((await moderationPolicy(store)).enabled)for(const state of clients.values())state.cursorOnly=true;
             // Each subscriber owns its cursor. Joining during a database read must
             // never skip earlier events already delivered to another subscriber.
             for(let batch=0;batch<100&&clients.size&&!closed;batch++) {
@@ -91,6 +96,7 @@ export async function createApp(options: {
             next(error);
         }
     });
+    app.use('/api',moderationHttp(store));
     const attempts = new Map<string, {
         at: number;
         count: number;
@@ -163,6 +169,7 @@ export async function createApp(options: {
         next(error);
     } });
     app.use('/api/admin', createAccessRouter(store));
+    app.use('/api/moderation',createModerationRouter(store));
     app.use('/api/ui', createUiRouter(store, publish));
     get('/api/messages', async (req, res, next) => { try {
         res.json((await listMessages(store, query.parse(req.query))));
@@ -192,7 +199,7 @@ export async function createApp(options: {
             const before = req.query.cursor === undefined ? Number.MAX_SAFE_INTEGER : Number(req.query.cursor);
             if (!Number.isSafeInteger(before) || before < 1)
                 throw new DomainError('版本游标无效');
-            const rows = (await store.db.prepare("SELECT revision,body FROM revisions WHERE \"messageId\"=$1 AND revision<$2 ORDER BY revision DESC LIMIT $3").all(req.params.id!, before, limit + 1));
+            const rows = (await store.db.prepare("SELECT revision,body FROM revisions WHERE \"messageId\"=$1 AND revision::bigint<$2 ORDER BY revision DESC LIMIT $3").all(req.params.id!, before, limit + 1));
             res.json({ messages: rows.slice(0, limit).map(r => JSON.parse(r.body as string)), nextCursor: rows.length > limit ? String(rows[limit - 1]!.revision) : null });
         }
         catch (error) {
@@ -268,7 +275,7 @@ export async function createApp(options: {
         }
         res.status(200).set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
         res.flushHeaders();
-        const state = { after, cursorOnly: req.query.mode === 'cursor' };
+        const state = { after, cursorOnly: (await moderationPolicy(store)).enabled || req.query.mode === 'cursor' };
         clients.set(res, state);
         res.write(': connected\n\n');
         req.on('close', () => clients.delete(res));
@@ -284,7 +291,8 @@ export async function createApp(options: {
                 ruleVersion: number;
             }) => message.ruleVersion)));
             const rules = (await Promise.all([...versions].map(async (version) => (await store.db.prepare("SELECT * FROM rule_versions WHERE version=$1").get(version))))).filter(Boolean).map(row => ({ ...row, body: undefined, rules: JSON.parse(row!.body as string) }));
-            res.json({ format: 'gonglun-2', regionId: (await store.setting('region')), ledgerId: 'local', programVersion: '2.0.0', rules: (await store.rules()), ruleHistory: rules, journal: await journalManifest(store), ...page });
+            const restricted=(await moderationPolicy(store)).enabled;
+            res.json({ format: restricted?'gonglun-redacted-history-1':'gonglun-2', auditScope:restricted?'visible':'region', regionId: (await store.setting('region')), ledgerId: 'local', programVersion: '2.0.0', rules: (await store.rules()), ruleHistory: rules, ...(!restricted?{journal:await journalManifest(store)}:{}), ...page });
         }
         catch (error) {
             next(error);
@@ -320,7 +328,7 @@ export async function createApp(options: {
     let ticking:Promise<void>|undefined;
     const timer = setInterval(() => {
         if(closed||ticking||readOnlyRehearsal)return;
-        ticking=(async()=>{try{await refreshUsagePoints(store);await processDue(store);await publish();}catch(error){console.error('贡献点刷新、延时结算或同步失败',error);}})().finally(()=>{ticking=undefined;});
+        ticking=(async()=>{try{await refreshUsagePoints(store);await processDue(store);await processReviewAssignments(store);await publish();}catch(error){console.error('贡献点刷新、审核分配、延时结算或同步失败',error);}})().finally(()=>{ticking=undefined;});
     }, options.settlementTickMs ?? 1000);
     timer.unref();
     const heartbeat = setInterval(() => { for (const [response] of clients)

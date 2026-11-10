@@ -107,6 +107,16 @@ describe('classification boundaries for agreement on an organization', () => {
   it('allows a citation across the classification boundary', () => {
     expect(hasCrossNonReferenceTextLinkForClassifyTargets({ ...context, relations: [relation, { ...agreement, relationType: 'REFERENCE' }] }, ['reason'], [whole('reason')])).toBeNull();
   });
+  it.each(['REPLY','CORRECT','ANNOTATION','AGREE','DISAGREE','REFERENCE'])('allows a %s relation to cross an organization boundary without expanding the selection',type=>{
+    const link={...agreement,relationType:type};
+    expect(hasCrossNonReferenceTextLinkForClassifyTargets({...context,relations:[relation,link]},['reason'],[whole('reason')])).toBeNull();
+    expect(hasCrossNonReferenceTextLinkForClassifyTargets({...context,relations:[relation,link]},['a','b'],[whole('group')])).toBeNull();
+  });
+  it.each(['MERGE','SUMMARY','ARRANGE'])('protects the members of an existing %s while accepting the complete container',type=>{
+    const group={...relation,relationType:type},input={...context,relations:[group],relationById:new Map([[group.id,group]])};
+    expect(hasCrossNonReferenceTextLinkForClassifyTargets(input,['a'],[whole('a')])).toContain('不能拆分已有容器');
+    expect(hasCrossNonReferenceTextLinkForClassifyTargets(input,['a','b'],[whole('group')])).toBeNull();
+  });
 
   it('keeps the independent-member check when only a member of an unselected merge is chosen', () => {
     expect(hasCrossNonReferenceTextLinkForClassifyTargets(context, ['a'], [whole('a')]))

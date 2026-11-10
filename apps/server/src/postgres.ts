@@ -1,9 +1,10 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
 import { Pool, types, type PoolClient, type QueryResultRow } from 'pg';
 import type { LedgerEntry } from '@gonglun/core';
 
 type Row = QueryResultRow;
-type Transaction = { client: PoolClient; ledger: LedgerEntry[]; settings: Map<string,string>; savepoint: number; pending: Promise<void>; readOnly?: boolean; serialized?: boolean };
+type Transaction = { client: PoolClient; ledger: LedgerEntry[]; settings: Map<string,string>; savepoint: number; pending: Promise<void>; readOnly?: boolean; serialized?: boolean; operationId?: string };
 
 export class RollbackUnconfirmedError extends Error {
   constructor(error: unknown, rollbackError?: unknown) {
@@ -81,6 +82,13 @@ export class Postgres {
     return transaction.ledger;
   }
 
+  /** One committed user action, including all nested commands and generated records. */
+  get ledgerOperationId(): string {
+    const transaction = this.context.getStore();
+    if (!transaction?.serialized) throw new Error('账本操作必须在串行写事务中执行');
+    return transaction.operationId ??= randomUUID();
+  }
+
   async transaction<T>(fn: () => T | Promise<T>): Promise<T> {
     return this.write(fn, true);
   }
@@ -144,6 +152,11 @@ export class Postgres {
       if (releaseError || committing) throw new RollbackUnconfirmedError(error, releaseError);
       throw error;
     } finally { client.release(releaseError); }
+  }
+
+  /** HTTP response filtering may outlive its route's read transaction. */
+  detachedRead<T>(fn: () => T | Promise<T>): Promise<T> {
+    return this.context.exit(() => this.read(fn));
   }
 
   async read<T>(fn: () => T | Promise<T>): Promise<T> {

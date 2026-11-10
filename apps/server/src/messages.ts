@@ -9,8 +9,13 @@ import { normalizeAnnotationStance } from './annotation-stances.js';
 import {chargeMessage} from './message-spending.js';
 import {bindCommandContexts} from './reference-contexts.js';
 import { assertActiveAccount } from './account-access.js';
+import { REVIEW_RELATIONS } from '@gonglun/core';
+import { enrollModeration, normalizeReviewStance, processModerationAction, moderationCase, moderationPolicy } from './moderation.js';
+import { assertReferenceAllowed } from './moderation-visibility.js';
+import { normalizeReviewDiscussion } from './review-discussion.js';
+import { hasReviewContext, reviewContextOf, sameReviewContext } from '@gonglun/core';
 
-const actions=new Set(['agree','disagree','terminate','authorize','delegate','distribute','credit']);
+const actions=new Set(['agree','disagree','terminate','authorize','delegate','distribute','credit',...REVIEW_RELATIONS]);
 async function authorize(tx: Mutation, message: Message, user: User) {
     if (!user.founder)
         throw new DomainError('当前版本需要项目发起人授权', 403);
@@ -18,6 +23,7 @@ async function authorize(tx: Mutation, message: Message, user: User) {
     if (ref.partId || ref.memberId || ref.path?.length || ref.range)
         throw new DomainError('授权须指向完整提案');
     const proposal = await tx.store.message(ref.messageId, ref.revision), key = `authorized:${proposal.id}:${proposal.revision}`;
+    if((await moderationPolicy(tx.store)).enabled){const review=await moderationCase(tx.store,proposal.id,proposal.revision);if(review&&review.status!=='approved')throw new DomainError('提案须先通过传播审核',409);}
     if ((await hasEffect(tx.store, key)))
         throw new DomainError('提案已生效', 409);
     const kinds = relations(proposal).filter(r => ['amend', 'rule-change', 'recharge', 'revenue-injection'].includes(r.relation));
@@ -27,6 +33,7 @@ async function authorize(tx: Mutation, message: Message, user: User) {
     if (kinds[0]!.relation === 'amend') {
         const target = oneTarget(proposal, 'amend');
         const current = await tx.store.message(target.messageId);
+        if(relations(current).some(p=>REVIEW_RELATIONS.has(p.relation)||['review-record','review-enrollment'].includes(p.relation)))throw new DomainError('审核记录不可改写，请追加新的关系消息',409);
         if (data.expectedRevision !== current.revision || (target.revision !== undefined && target.revision !== current.revision))
             throw new DomainError('目标内容已变更，请重新提交修改', 409);
         const replacement = data.parts ?? data.value;
@@ -39,6 +46,14 @@ async function authorize(tx: Mutation, message: Message, user: User) {
         catch (error) {
             throw new DomainError(error instanceof Error ? error.message : '修改内容无效');
         }
+        if(parts.some(p=>p.type==='relation'&&(REVIEW_RELATIONS.has(p.relation)||['review-record','review-enrollment'].includes(p.relation))))
+            throw new DomainError('审核记录只能通过审核操作新增，不能由修改消息生成',409);
+        for(const part of parts){
+            const refs=part.type==='relation'?Object.values(part.roles).flatMap(bindings=>bindings.map(b=>b.reference)):part.type==='display'&&part.target?[part.target]:[];
+            for(const ref of refs)await assertReferenceAllowed(tx.store,ref,user.id);
+        }
+        if (hasReviewContext(current) && !sameReviewContext(reviewContextOf(current), reviewContextOf({parts})))
+            throw new DomainError('审核讨论不能改为其他审核范围或移出审核临时分类',409);
         await validateReferences(tx.store, parts);
         // Placement execution history is immutable even when the message is edited.
         const reserved = new Set(['membership-history', 'organization-memberships']);
@@ -47,6 +62,7 @@ async function authorize(tx: Mutation, message: Message, user: User) {
         await tx.put(updated);
         // Only organization structure changes are executed when an edit becomes effective.
         // A historical wager, credit, or authorization is never replayed by editing its content.
+        await enrollModeration(tx,updated);
         await reconcileMemberships(tx, current, updated);
     }
     else if (kinds[0]!.relation === 'rule-change') {
@@ -105,10 +121,10 @@ export async function send(store: Store, user: User, raw: unknown, options: {
         signature: string;
     };
 } = {}): Promise<SendResult> {
-    const input = parseSend(raw), serialized = JSON.stringify(input);
+    const supplied = parseSend(raw), serialized = JSON.stringify(supplied);
     return await store.transaction(async () => {
         await assertActiveAccount(store, user.id);
-        const previous = (await store.db.prepare(`SELECT input,result FROM requests WHERE "userId"=$1 AND "requestId"=$2`).get(user.id, input.requestId)) as {
+        const previous = (await store.db.prepare(`SELECT input,result FROM requests WHERE "userId"=$1 AND "requestId"=$2`).get(user.id, supplied.requestId)) as {
             input: string;
             result: string;
         } | undefined;
@@ -117,12 +133,22 @@ export async function send(store: Store, user: User, raw: unknown, options: {
                 throw new DomainError('相同请求编号不能用于不同内容', 409);
             return JSON.parse(previous.result) as SendResult;
         }
+        const input=await normalizeReviewDiscussion(store,await normalizeReviewStance(store,supplied),user.id);
+        for(const part of input.parts){
+            // Review operations address identity and status, never permit reusing the body.
+            const refs=part.type==='relation'?Object.entries(part.roles).filter(([role])=>role!=='target'||!REVIEW_RELATIONS.has(part.relation)&&part.relation!=='review-context').flatMap(([,bindings])=>bindings.map(b=>b.reference)):part.type==='display'&&part.target?[part.target]:[];
+            for(const ref of refs)await assertReferenceAllowed(store,ref,user.id);
+        }
         await validateReferences(store, input.parts);
         const actionParts = input.parts.filter(p => p.type === 'relation' && actions.has(p.relation));
         if (actionParts.length > 1)
             throw new DomainError('一条消息只能执行一个资金或授权操作');
         const wager = input.wager ?? 0, recommendation = input.recommendation ?? 0;
-        if (wager === 0 && recommendation === 0)
+        const reviewAction=actionParts.some(p=>p.type==='relation'&&REVIEW_RELATIONS.has(p.relation));
+        if(reviewAction&&input.parts.some(p=>p.type==='relation'&&!REVIEW_RELATIONS.has(p.relation)&&p.relation!=='member-of'))
+            throw new DomainError('审核记录不能同时执行其他关系操作');
+        if(reviewAction&&(wager||recommendation||input.selfStance))throw new DomainError('审核押注与真假、价值投入须分开记账');
+        if (wager === 0 && recommendation === 0 && !reviewAction)
             throw new DomainError('真假和价值至少一项须大于 0');
         if (input.selfStance && actionParts.some(p => p.type === 'relation' && ['agree', 'disagree'].includes(p.relation)))
             throw new DomainError('自我表态不能同时执行其他资金操作');
@@ -160,7 +186,11 @@ export async function send(store: Store, user: User, raw: unknown, options: {
             message.parts.push({ id: 'self-stance', type: 'relation', relation: normalized.selfStance === 'pro' ? 'agree' : 'disagree', roles: { target: [{ id: 'self', reference: { messageId: message.id,revision:message.revision,context:{kind:'MESSAGE'} } }] } });
             await tx.put(message);
         }
-        await chargeMessage(store,message,true);
+        // Releasing existing escrows may record protocol debt; new reviews and appeals must be funded.
+        const reviewAdministration=reviewAction&&actionParts.some(p=>p.type==='relation'&&['review-settle','review-finalize'].includes(p.relation));
+        await chargeMessage(store,message,true,reviewAdministration);
+        await enrollModeration(tx,message);
+        await processModerationAction(tx,message,input.reviewWager??0);
         if (!valueVote) await placeMessageValueWager(tx, message);
         await applyOrganization(tx, message);
         if (valueVote) await placeValueWager(tx, message, valueVote, recommendation);

@@ -83,8 +83,12 @@ for(const scope of ['root','inside'] as const)for(const scenario of scenarios)it
       container=await invoke('/relations',{relationType:scenario.type!.toUpperCase(),payload:{title:'现有容器'}});
       const joined=scenario.mode==='all-joined'?targets:['joined','stale-join','content-joined'].includes(scenario.mode??'')?targets.slice(0,1):[];
       for(const target of joined){
-        await invoke('/relations',{relationType:'JOIN',sourceMessageId:container!.id,targetRefs:[{kind:'message',messageId:target.id}]});
-        if(scenario.mode==='stale-join')await invoke('/relations',{relationType:'JOIN',sourceMessageId:parent.id,targetRefs:[{kind:'message',messageId:target.id}]});
+        const joinedRecord=await invoke('/relations',{relationType:'JOIN',sourceMessageId:container!.id,targetRefs:[{kind:'message',messageId:target.id}]});
+        if(scenario.mode==='stale-join'){
+          // Invalidate the old join first; moving an active member would split an existing container.
+          await invoke('/relations',{relationType:'DISAGREE',targetRefs:[{kind:'relation',relationId:joinedRecord.id}],wager:1,recommendation:0});
+          await invoke('/relations',{relationType:'JOIN',sourceMessageId:parent.id,targetRefs:[{kind:'message',messageId:target.id}]});
+        }
       }
     }
     if(scenario.mode==='fulfill'){

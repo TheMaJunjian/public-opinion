@@ -83,8 +83,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       : path === '/reading-state' ? '保存阅读状态'
         : path === '/login' ? '登录' : path === '/register' ? '注册' : path === '/logout' ? '退出登录' : '提交操作';
   const operationKey = JSON.stringify([owner, path, options.method, options.body]);
+  // A corrected login replaces its previous error even when credentials changed.
+  const feedbackKey = path === '/login' ? JSON.stringify([owner, path, options.method]) : operationKey;
   const perform = async () => {
-    const operation = beginRequestOperation(label, path === '/commands', owner, operationKey);
+    const operation = beginRequestOperation(label, path === '/commands', owner, feedbackKey);
     try {
       const result = await requestCore<T>(path, options, owner);
       operation.finish('confirmed', explicitRead ? '消息数据已返回' : undefined); return result;
@@ -121,7 +123,7 @@ export async function markReading(marks:ReadingMark[]) {
 async function requestCore<T>(path: string, options: RequestInit, owner = requestOwner()): Promise<T> {
   const rehearsal = path === '/commands/preview';
   options.signal?.throwIfAborted();
-  const core = ['/setup', '/session', '/login', '/register', '/logout'].includes(path) || path.startsWith('/admin/');
+  const core = ['/setup', '/session', '/login', '/register', '/logout'].includes(path) || path.startsWith('/admin/') || path.startsWith('/moderation/');
   const url = `${core ? CORE_URL : BASE_URL}${path}`;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -130,7 +132,7 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
   headers['X-Device-Id'] = getDeviceId();
   const isAuthBootstrap = ['/login', '/register', '/logout', '/auth/signing-key'].includes(path);
   const privateReading=path==='/reading-state';
-  const privateActivity=path==='/points/activity';
+  const privateActivity=path==='/points/activity'||path==='/moderation/presence';
   const privateNotifications=path.startsWith('/notifications') || path.startsWith('/admin/');
   const readOnlySnapshot = ['/snapshot/query','/body-versions/resolve'].includes(path.split('?')[0]);
   let identityKey: string | undefined;
@@ -281,7 +283,7 @@ export function logout() {
 
 export { cancelCommandBatch };
 export type { PreparedCommandBatch };
-export const prepareCommandBatch = (work: () => Promise<unknown>, previous?: PreparedCommandBatch) => prepareBatch(work, { apiBase: CORE_URL }, previous);
+export const prepareCommandBatch = (work: () => Promise<unknown>, previous?: PreparedCommandBatch, reviewContext?: import('@gonglun/core').ReviewContext) => prepareBatch(work, { apiBase: CORE_URL, reviewContext }, previous);
 export function previewCommandBatch(prepared: PreparedCommandBatch, parents: string[], signal?: AbortSignal) {
   return requestCore<{ snapshots: import('../data/workbench').WorkbenchSnapshot[]; messageIds: string[]; baseSequence: number }>('/commands/preview', {
     method: 'POST', body: JSON.stringify({ batch: prepared.envelope, parents }), signal,
@@ -290,8 +292,8 @@ export function previewCommandBatch(prepared: PreparedCommandBatch, parents: str
 export function confirmCommandPreview(prepared: PreparedCommandBatch) {
   return commitPreparedBatch(prepared, body => requestCore<CommandCommit>('/commands', { method: 'POST', body: JSON.stringify(body) }, prepared.context.owner));
 }
-export function withCommandBatch<T>(work: () => Promise<T>, onCommitted?: (commandCount: number) => void): Promise<T> {
-  return runCommandBatch(work, body => request('/commands', { method: 'POST', body: JSON.stringify(body) }), onCommitted, { apiBase: CORE_URL });
+export function withCommandBatch<T>(work: () => Promise<T>, onCommitted?: (commandCount: number) => void, reviewContext?: import('@gonglun/core').ReviewContext): Promise<T> {
+  return runCommandBatch(work, body => request('/commands', { method: 'POST', body: JSON.stringify(body) }), onCommitted, { apiBase: CORE_URL, reviewContext });
 }
 
 export async function getWorkbenchSnapshot({ signal, ...query }: import('../data/workbench').SnapshotQuery) {
@@ -388,6 +390,7 @@ export function getAttentionUsers(scopeMessageId: string) {
 }
 
 export function createRelation(scopeMessageId: string, data: {
+  reviewWager?: number;
   joinContribution?: {wager:number;recommendation:number};
   relationType: string;
   sourceMessageId?: string | null;
@@ -404,6 +407,35 @@ export function createRelation(scopeMessageId: string, data: {
     method: 'POST',
     body: JSON.stringify({ ...data, parentMessageId: scopeMessageId === 'root' ? undefined : scopeMessageId }),
   });
+}
+
+export interface ReviewDetail {
+  summary: import('@gonglun/core').ModerationSummary;
+  snapshot?: CoreMessage;
+  target?: import('@gonglun/core').NativeMessageView;
+  reviewEligibility?: import('@gonglun/core').ReviewEligibility;
+  readableWithoutAssignment?: boolean;
+  records: import('@gonglun/core').NativeMessageView[];
+  stakes: import('@gonglun/core').ReviewStakeItem[];
+  canReview: boolean;
+  canAppeal: boolean;
+  appealVerdict?: 'pass'|'reject';
+  canSettle: boolean;
+  restricted?: boolean;
+  feePaid?: boolean;
+  available?: number;
+  costs?: {protocol:number;reviewMinimum:number;appealFee:number;appealDeposit:number;appealTotal:number};
+  assignment?: {expiresAt:string;submittedAt:string|null;revokedAt:string|null}|null;
+  policy: import('@gonglun/core').ModerationPolicy;
+}
+export const getReview=(messageId:string,signal?:AbortSignal,revision?:number)=>request<ReviewDetail>(`/moderation/messages/${encodeURIComponent(messageId)}${revision?`?revision=${revision}`:''}`,{signal});
+export const getReviewQueue=(before?:string,signal?:AbortSignal)=>request<{items:Array<import('@gonglun/core').ModerationSummary&{author?:{name:string}}>;nextCursor:string|null;enabled:boolean;eligibility?:{online:boolean;available:number;minimumRequired:number};policy:import('@gonglun/core').ModerationPolicy}>(`/moderation/queue${before?`?before=${encodeURIComponent(before)}`:''}`,{signal});
+export const setReviewAvailability=(enabled:boolean)=>request<{enabled:boolean}>('/moderation/availability',{method:'PUT',body:JSON.stringify({enabled})});
+export const updateReviewPresence=(signal?:AbortSignal)=>requestCore<{ok:boolean}>('/moderation/presence',{method:'POST',signal});
+export function sendReviewAction(detail:ReviewDetail,action:'review'|'review-appeal'|'review-settle'|'review-finalize',reason='',verdict?:'pass'|'reject',reviewWager?:number){
+  if(action==='review-appeal')verdict=detail.appealVerdict??verdict??(detail.summary.status==='approved'?'reject':'pass');
+  return createRelation('root',{relationType:action.toUpperCase(),targetRefs:[{kind:'message',messageId:detail.summary.messageId,reference:{messageId:detail.summary.messageId,revision:detail.summary.revision}}],
+    payload:{caseId:detail.summary.caseId,reviewRound:detail.summary.round,content:reason,...(verdict?{verdict}:{})},wager:0,recommendation:0,reviewWager});
 }
 
 // Update a relation by creating a new version that supersedes the old one.
@@ -447,10 +479,14 @@ export function updateUsagePoints(data: { action: 'start' | 'tick'; roundId?: st
   return request<import('../types').UsagePointProgress>('/points/activity', { method: 'POST', body: JSON.stringify(data), signal });
 }
 
-export function getPointsTransactions(params?: { page?: number; limit?: number }) {
+export function getPointsTransactions(params?: { page?: number; limit?: number; mode?:'history'|'summary';messageId?:string;operationId?:string;day?:string }) {
   const qs = new URLSearchParams();
   if (params?.page) qs.set('page', String(params.page));
   if (params?.limit) qs.set('limit', String(params.limit));
+  if (params?.mode) qs.set('mode', params.mode);
+  if (params?.messageId) qs.set('messageId', params.messageId);
+  if (params?.operationId) qs.set('operationId', params.operationId);
+  if (params?.day) qs.set('day', params.day);
   return request<import('../types').PaginatedResponse<import('../types').PointTransaction>>(`/points/transactions?${qs}`);
 }
 

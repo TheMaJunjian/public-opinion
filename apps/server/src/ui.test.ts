@@ -15,6 +15,61 @@ async function actor(app:Awaited<ReturnType<typeof make>>,username:string,extra:
 const post=(user:Awaited<ReturnType<typeof actor>>,path:string,body:Record<string,unknown>={})=>user.agent.post(`/api/ui${path}`).set('x-csrf-token',user.session.csrf).set('x-request-id',(body as {requestId?:string}).requestId??randomUUID()).send(withTestCommandContributions(path,body as Record<string,unknown>));
 const good=async(response:PromiseLike<request.Response>)=>{const value=await response;expect(value.status,value.text).toBe(201);return value.body;};
 
+it.each(['TRUTH','VALUE'])('preserves the logical subject and %s round on settlement results in replies and snapshots',async settlementType=>{
+  const app=await make(),user=await actor(app,'结算关联测试'),target=await good(post(user,'/messages',{content:'关联原消息'}));
+  const round=await good(post(user,`/messages/${target.id}/rounds`,{settlementType}));
+  await good(post(user,`/rounds/${round.id}/votes`,{vote:'TRUE',amount:2}));
+  const settled=await good(post(user,`/rounds/${round.id}/close-and-settle`));
+  const expected={roundId:round.id,subjectId:target.id,settlementType};
+  expect(settled.resultMessage).toMatchObject({kind:'ROUND_RESULT',relationPayload:expected});
+  expect(settled.requestMessage).toMatchObject({kind:'ROUND',relationType:'ROUND',relationPayload:expected});
+  const snapshot=await user.agent.get('/api/ui/snapshot');
+  expect(snapshot.status,snapshot.text).toBe(200);
+  expect(snapshot.body.messages.find((m:{id:string})=>m.id===settled.resultMessage.id)).toMatchObject({relationPayload:expected});
+  expect(snapshot.body.messages.find((m:{id:string})=>m.id===settled.requestMessage.id)).toMatchObject({kind:'ROUND',relationPayload:expected});
+  const nextRound=await good(post(user,`/messages/${target.id}/rounds`,{settlementType}));
+  const resettled=await good(post(user,`/rounds/${nextRound.id}/close-and-settle`));
+  for(const mode of ['summary']){
+    const transactions=await user.agent.get('/api/ui/points/transactions').query({mode});
+    expect(transactions.status,transactions.text).toBe(200);
+    const reversal=transactions.body.data.find((row:{reason:string})=>row.reason==='撤回先前对赌分配'||row.reason==='恢复先前对赌本金');
+    expect(reversal).toBeDefined();
+    for(const sourceId of [settled.resultMessage.id,reversal.messageId,resettled.resultMessage.id]){
+      const rows=transactions.body.data.filter((row:{messageId:string})=>row.messageId===sourceId);
+      expect(rows.length).toBeGreaterThan(0);
+      for(const row of rows)expect(row.messages).toEqual([
+        expect.objectContaining({messageId:sourceId,messageType:'结算'}),
+        {messageId:target.id,messageRevision:1,messageType:'文本',summary:'关联原消息',scopeMessageId:'root'},
+      ]);
+    }
+  }
+  const history=await user.agent.get('/api/ui/points/transactions');
+  const operation=history.body.data.find((row:{messages:Array<{messageId:string}>})=>row.messages.some(m=>m.messageId===resettled.resultMessage.id));
+  expect(operation).toMatchObject({type:'OPERATION_GROUP'});
+  expect(operation.messages).toEqual(expect.arrayContaining([
+    expect.objectContaining({messageId:resettled.requestMessage.id}),
+    expect.objectContaining({messageId:resettled.resultMessage.id,messageType:'结算'}),
+    expect.objectContaining({messageId:target.id,messageType:'文本'}),
+  ]));
+  expect(operation.messages.filter((m:{messageId:string})=>m.messageId===target.id)).toHaveLength(1);
+});
+
+it('keeps a custom reference label on its relation while preserving explicitly authored reference content', async () => {
+  const app=await make(),user=await actor(app,'引用标签');
+  const source=await good(post(user,'/messages',{content:'来源正文'}));
+  const target=await good(post(user,'/messages',{content:'目标正文'}));
+  const endpoints={relationType:'REFERENCE',sourceMessageId:source.id,targetRefs:[{kind:'message',messageId:target.id}]};
+  const labeled=await good(post(user,'/relations',{...endpoints,payload:{label:'出处说明'}}));
+  expect(labeled.parts).toContainEqual({id:'body',type:'text',text:'出处说明'});
+  expect(labeled.parts).toContainEqual({id:'display',type:'display',relationPartId:'relation',layout:'relation'});
+  expect(labeled.payload.label).toBe('出处说明');
+  expect(labeled.sourceMessageId).toBe(source.id);
+  expect(await app.store.db.prepare('SELECT 1 FROM memberships WHERE "memberId"=$1').get(labeled.id)).toBeUndefined();
+  const authored=await good(post(user,'/relations',{...endpoints,payload:{label:'出处说明',content:'这是单独撰写的引用说明正文'}}));
+  expect(authored.parts).toContainEqual({id:'body',type:'text',text:'这是单独撰写的引用说明正文'});
+  expect(authored.parts.some((part:{type:string})=>part.type==='display')).toBe(false);
+});
+
 it('builds batch snapshots after commit and can recover a failed projection without charging again', async () => {
   const app=await make(),user=await actor(app,'提交边界');
   const batch={requestId:randomUUID(),commands:[{id:randomUUID(),method:'POST',path:'/messages',body:{content:'已经提交'}}]};
@@ -305,7 +360,8 @@ describe('保留操作方式的消息 API',()=>{
   it('原提案终止入口可在一个消息中原子终止多个选中对象',async()=>{
     const app=(await make()),user=await actor(app,'发起人'),ids:string[]=[];
     for(const content of ['规则一','规则二']){const message=await good(post(user,'/messages',{content,selfAgree:true,wager:2}));ids.push(message.id);}
-    await good(post(user,'/relations',{relationType:'PROPOSAL',targetRefs:[],payload:{operationType:'TERMINATE_SETTLEMENT',targetMessageIds:ids,content:'终止这些结算'}}));
+    const proposal=await good(post(user,'/relations',{relationType:'PROPOSAL',targetRefs:[],payload:{operationType:'TERMINATE_SETTLEMENT',targetMessageIds:ids,content:'终止这些结算'}}));
+    expect(proposal).toMatchObject({kind:'GOVERNANCE',relationType:'PROPOSAL',content:'终止这些结算'});
     expect((await app.store.db.prepare("SELECT COUNT(*) AS n FROM rounds WHERE body::jsonb->>'status'='settled'").get())!.n).toBe(2);expect((await app.store.account(user.session.user.id)).locked).toBe(1);
   });
   it('移动嵌套组织后，旧分类增量移除整个子树，原发送位置不会将成员重新拉回',async()=>{

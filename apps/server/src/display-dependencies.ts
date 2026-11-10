@@ -17,13 +17,16 @@ export function displayAttachmentSql(alias: string, host: string) {
       jsonb_array_elements(semantic.value->'roles'->(${roles}->>(semantic.value->>'relation'))) binding
       WHERE binding.value #>> '{reference,messageId}'=${host})
     OR EXISTS(SELECT 1 FROM jsonb_array_elements(${alias}.body::jsonb->'parts') part
-      WHERE part->>'type'='display' AND part #>> '{target,messageId}'=${host}))`;
+      WHERE part->>'type'='display' AND part #>> '{target,messageId}'=${host})
+    OR EXISTS(SELECT 1 FROM jsonb_array_elements(${alias}.body::jsonb->'parts') part
+      WHERE part->>'relation'='review-context' AND part #>> '{roles,target,0,reference,messageId}'=${host}))`;
 }
 
 export function isDependentMessageSql(alias: string) {
   return `(EXISTS(SELECT 1 FROM ${primary(alias)} semantic WHERE ${roles} ? (semantic.value->>'relation'))
     OR EXISTS(SELECT 1 FROM jsonb_array_elements(${alias}.body::jsonb->'parts') part
-      WHERE part->>'type'='display' AND part #>> '{target,messageId}' IS NOT NULL))`;
+      WHERE part->>'type'='display' AND part #>> '{target,messageId}' IS NOT NULL)
+    OR EXISTS(SELECT 1 FROM jsonb_array_elements(${alias}.body::jsonb->'parts') part WHERE part->>'relation'='review-context'))`;
 }
 
 /** Settlement history is opened from its subject, never paged as overview cards. */

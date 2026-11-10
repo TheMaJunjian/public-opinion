@@ -56,6 +56,28 @@ it('does not open a modal or retain completion noise for quick requests, and iso
   expect(screen.queryByText('发送消息')).toBeNull();
 });
 
+it('keeps the dialog animation and focus stable while send progress changes', () => {
+  const view = render(<OperationProgressDialog title="正在发送">正在等待服务器确认发送。</OperationProgressDialog>);
+  const dialog = screen.getByRole('dialog');
+  const message = dialog.querySelector<HTMLElement>('[tabindex="-1"]')!;
+  const observer = new MutationObserver(() => {});
+  observer.observe(dialog, { attributes: true, attributeFilter: ['data-dialog-panel'], attributeOldValue: true });
+  try {
+    for (const text of ['正在完成消息绘制。', '正在定位新消息。', '正在等待布局完成。']) {
+      view.rerender(<OperationProgressDialog title="正在发送">{text}</OperationProgressDialog>);
+      expect(screen.getByRole('dialog')).toBe(dialog);
+      expect(dialog).toHaveTextContent(text);
+      expect(message).toHaveFocus();
+    }
+    expect(dialog).toHaveAttribute('data-dialog-panel', 'true');
+    // Removing the paper theme's animation selector restarts its fade from zero.
+    expect(observer.takeRecords()).toEqual([]);
+  } finally {
+    observer.disconnect();
+    view.unmount();
+  }
+});
+
 it('keeps progress centered in the changing visible viewport without changing page scrolling or losing keyboard focus', () => {
   const viewport = new EventTarget();
   Object.assign(viewport, { offsetLeft: 80, offsetTop: 120, width: 360, height: 440 });

@@ -8,6 +8,7 @@ const compress = promisify(gzip);
 
 /** Also compress direct Node/SSH rehearsal traffic, which bypasses Caddy. */
 export async function sendSnapshot(req: Request, res: Response, data: Awaited<ReturnType<typeof snapshot>>) {
+  if(res.locals.reviewSanitize)data=await res.locals.reviewSanitize(data);
   if (req.query.detail === 'structure') data = structureSnapshot(data);
   const body = JSON.stringify(req.query.format === 'compact-v1' ? encodeWorkbenchSnapshot(data) : data);
   res.type('json').vary('Accept-Encoding').set('Cache-Control', 'private, no-store');

@@ -6,7 +6,10 @@ import { valueSubjects } from './value-subjects.js';
 import { personalMarks } from './personal.js';
 import { messageDisplayDependency } from '@gonglun/core';
 import { displayAttachmentSql } from './display-dependencies.js';
+import { inaccessibleMessages } from './moderation-visibility.js';
 export type RecordData = Record<string, any>;
+const explicitRoundId=(data:RecordData):string|undefined=>typeof data.roundId==='string'?data.roundId
+    :typeof data.inputs?.roundId==='string'?data.inputs.roundId:undefined;
 export const userView = async (store: Store, userId: string) => {
     if(userId==='system') return {id:'system',username:'公论规则',name:'公论规则',founder:false,createdAt:''};
     const user=await store.user(userId);
@@ -32,10 +35,11 @@ const cachedMessage = async (store: Store, id: string, revision?: number, contex
 };
 const cachedUser = async (store: Store, id: string, context?: ViewContext) => context?.users.get(id) ?? (await userView(store, id));
 export const primaryRelation = (message: Message) => relations(message).find(part =>
+    part.relation !== 'review-context' &&
     !((part.id === 'self-stance' || part.id.startsWith('minimum-self-stance-'))
       && ['agree','disagree'].includes(part.relation) && part.roles.target?.length === 1 && part.roles.target[0]!.reference.messageId === message.id)
     && (part.relation !== 'member-of'||!!part.roles.member?.length));
-const relationViewTypes: Record<string, string> = { follow: 'ATTENTION', amend: 'CORRECT', 'rule-change': 'PROPOSAL', recharge: 'PROPOSAL', 'revenue-injection': 'PROPOSAL', delegate: 'DELEGATION', fulfill: 'DELEGATION', 'member-of': 'JOIN', 'low-quality': 'ARCHIVE', 'open-settlement': 'ROUND', settlement: 'ROUND', distribution: 'ROUND_RESULT', terminate: 'OPERATIONS', release: 'CODE_CHANGE' };
+const relationViewTypes: Record<string, string> = { follow: 'ATTENTION', amend: 'CORRECT', 'rule-change': 'PROPOSAL', recharge: 'PROPOSAL', 'revenue-injection': 'PROPOSAL', delegate: 'DELEGATION', fulfill: 'DELEGATION', 'member-of': 'JOIN', 'low-quality': 'ARCHIVE', 'open-settlement': 'ROUND', settlement: 'ROUND', distribution: 'ROUND_RESULT', terminate: 'ROUND', release: 'CODE_CHANGE' };
 export function relationViewType(message: Message): string | null { const relation = primaryRelation(message); return String(dataOf(message).uiType ?? (relation ? (relationViewTypes[relation.relation] ?? relation.relation.toUpperCase()) : '')) || null; }
 export async function referenceView(store: Store, reference: Reference, context?: ViewContext): Promise<TargetRef & { reference: Reference }> {
     const target = (await cachedMessage(store, reference.messageId, reference.revision, context)), relation = primaryRelation(target);
@@ -181,11 +185,12 @@ export async function messageView(store: Store, message: Message, parent?: strin
     if (display?.type === 'display')
         payload.targetLayout = display.layout === 'row' ? 'single-row' : display.layout === 'columns' ? 'multi-column' : 'single-column';
     if (relation?.relation === 'settlement' || ['ROUND','ROUND_RESULT'].includes(kind)) {
-        const roundId=typeof data.roundId==='string'?data.roundId:message.id;
+        const roundId=explicitRoundId(data)??message.id;
         const row = context ? undefined : (await store.db.prepare("SELECT body FROM rounds WHERE id=$1").get(roundId)), round = context?.rounds.get(roundId) ?? (row ? JSON.parse(String(row.body)) : undefined);
         if (round) {
             payload.roundId = roundId;
             payload.targetMessageId = round.target.messageId;
+            payload.subjectId = round.subjectId??round.target.messageId;
             payload.settlementType=round.settlementType??'TRUTH';
             if(!references.length) references=[{messageId:round.subjectId??round.target.messageId}];
         }
@@ -223,7 +228,7 @@ export async function viewsFor(store: Store, messages: Message[], parent?: strin
             (context.recipients.get(key) ?? (context.recipients.set(key, []), context.recipients.get(key)!)).push(String(row.userId));
         }
     }
-    const roundIds=[...new Set(messages.map(message=>dataOf(message).roundId).filter((id):id is string=>typeof id==='string'&&!context.rounds.has(id)))];
+    const roundIds=[...new Set(messages.map(message=>explicitRoundId(dataOf(message))).filter((id):id is string=>typeof id==='string'&&!context.rounds.has(id)))];
     for(let offset=0;offset<roundIds.length;offset+=200) for(const row of await store.db.prepare('SELECT id,body FROM rounds WHERE id=ANY($1::text[])').all(roundIds.slice(offset,offset+200))) context.rounds.set(String(row.id),JSON.parse(String(row.body)));
     for(const round of context.rounds.values()) refs.set(`${round.target.messageId}:current`,{messageId:round.target.messageId});
     const missing = [...refs].filter(([key]) => !context.messages.has(key));
@@ -378,7 +383,9 @@ export async function tagCountsFor(store: Store, ids: string[]) {
             sources.set(message.id, message);
         }
     }
+    const restrictedTags=await inaccessibleMessages(store,[...sources.keys()]);
     for (const source of sources.values()) {
+        if(restrictedTags.has(source.id))continue;
         const type = relationViewType(source);
         if (!type || !['TAG', 'RECOMMEND', 'ARCHIVE'].includes(type))
             continue;

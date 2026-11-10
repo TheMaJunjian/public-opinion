@@ -1,6 +1,6 @@
 import type { DemoEdge, DemoMessage } from './modelBridge';
 import type { DiscussionTextCounts } from './discussionRegionStats';
-import { isDiscussionType, type DiscussionType } from './discussionTypes';
+import { isDiscussionType, isReviewDiscussionType, type DiscussionType } from './discussionTypes';
 
 export interface DiscussionLayoutItem {
   id: string;
@@ -30,8 +30,8 @@ export const DISCUSSION_REGION_HEADER = 24;
 export const DISCUSSION_REGION_FOOTER = 24;
 export const DISCUSSION_REGION_PADDING = 4;
 export const DISCUSSION_REGION_MIN_WIDTH = 200;
-type Branch = 'above' | 'right' | 'below' | 'recommend' | 'archive';
-const branchOrder: readonly Branch[] = ['above', 'right', 'below', 'recommend', 'archive'];
+type Branch = 'above' | 'right' | 'below' | 'recommend' | 'archive' | 'review-pass' | 'review-reject';
+const branchOrder: readonly Branch[] = ['above', 'right', 'below', 'review-pass', 'review-reject', 'recommend', 'archive'];
 type Parent = { id: string; branch: Branch; edge: DemoEdge; priority: number; time: number; sequence: number };
 type ChildPosition = { id: string; x: number; y: number; column: number };
 type Measured = { width: number; height: number; rootX: number; rootY: number; children: ChildPosition[]; regions: DiscussionRegionGeometry[] };
@@ -39,6 +39,7 @@ const branches: Partial<Record<DemoEdge['relationType'], { branch: Branch; prior
   agree: { branch: 'above', priority: 0 }, disagree: { branch: 'below', priority: 0 },
   recommend: { branch: 'recommend', priority: 0 }, archive: { branch: 'archive', priority: 0 },
   reply: { branch: 'right', priority: 1 },
+  'review-pass': { branch: 'review-pass', priority: 0 }, 'review-reject': { branch: 'review-reject', priority: 0 },
   reference: { branch: 'right', priority: 2 }, annotation: { branch: 'right', priority: 2 }, notify: { branch: 'right', priority: 2 },
 };
 
@@ -120,7 +121,7 @@ export function layoutDiscussion(items: readonly DiscussionLayoutItem[], edges: 
   for (const item of ordered) {
     const parent = chosen.get(item.id);
     if (!parent) { roots.push(item.id); continue; }
-    const siblings = children.get(parent.id) ?? { above: [], right: [], below: [], recommend: [], archive: [] };
+    const siblings = children.get(parent.id) ?? { above: [], right: [], below: [], recommend: [], archive: [], 'review-pass': [], 'review-reject': [] };
     siblings[parent.branch].push(item.id); children.set(parent.id, siblings);
   }
   const traversal = [...roots];
@@ -142,7 +143,7 @@ export function layoutDiscussion(items: readonly DiscussionLayoutItem[], edges: 
     const region = own[type]!;
     const rule = branches[type]!, ids = children.get(target)?.[rule.branch] ?? [];
     const owned = ids.filter(id => chosen.get(id)!.edge.relationType === type);
-    if (textIds && !owned.some(id => (subtreeText.get(id) ?? 0) > 0)) { delete own[type]; continue; }
+    if (textIds && !owned.some(id => (subtreeText.get(id) ?? 0) > 0) && !(isReviewDiscussionType(type) && owned.length)) { delete own[type]; continue; }
     for (const id of owned) ownerRegionById.set(id, region.key);
   }
   const folded = new Set([...regionsByTarget.values()].flatMap(own => Object.values(own).filter(region => region.collapsed).map(region => region.key)));
@@ -185,6 +186,7 @@ export function layoutDiscussion(items: readonly DiscussionLayoutItem[], edges: 
     const own = regionsByTarget.get(id);
     const above = measureBand(descendants?.above ?? [], own?.agree), right = measureBand(descendants?.right ?? [], own?.reply), below = measureBand(descendants?.below ?? [], own?.disagree);
     const recommended = measureBand(descendants?.recommend ?? [], own?.recommend), archived = measureBand(descendants?.archive ?? [], own?.archive);
+    const reviewPass = measureBand(descendants?.['review-pass'] ?? [], own?.['review-pass']), reviewReject = measureBand(descendants?.['review-reject'] ?? [], own?.['review-reject']);
     // A region already supplies the inset around its children. Frame bounds
     // include their own padding; do not add a second ring of empty space here.
     const outset = ownerRegionById.has(id) ? 0 : Math.max(0, item.outset ?? 0);
@@ -195,7 +197,7 @@ export function layoutDiscussion(items: readonly DiscussionLayoutItem[], edges: 
     // never moves it above/below the original card in the original column.
     let y = 0;
     const x = outset + item.width + columnGap;
-    for (const band of [above, right, below, recommended, archived]) {
+    for (const band of [above, right, below, reviewPass, reviewReject, recommended, archived]) {
       if (!band.height) continue;
       result.width = Math.max(result.width, x + band.width);
       for (const child of band.children) result.children.push({ ...child, x: x + child.x, y: y + child.y, column: 1 });

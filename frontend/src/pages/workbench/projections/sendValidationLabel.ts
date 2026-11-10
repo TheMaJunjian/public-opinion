@@ -48,6 +48,7 @@ export function deriveSendValidationLabel(input: DeriveSendValidationLabelInput)
   if (!joinOnlyAction && !totalConsumption?.groups && relationType && typeof relStakeAmount !== 'number') return "请输入关系消息贡献点";
   if (!joinOnlyAction && !totalConsumption?.groups && relationType && typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) return `关系消息最低押注 ${effectiveMinStake} 点`;
   if (totalConsumption && totalConsumption.total > availablePoints) return `贡献点余额不足：需要 ${totalConsumption.total} 点，可用 ${availablePoints} 点`;
+  if(relationType==='operations'&&secondaryRelationType==='review')return '审核需要选择一条完整目标消息，并选择通过或不通过；不能有来源消息';
   if (hasCorrectionRelationTarget) return "关系消息不能作为更正目标，请选择普通文本消息";
   if (hasInvalidCorrectTarget && (draftUnits.length > 0 ? draftUnits : targetUnits).length > 1) return '更正每次只能选择一个目标，请移除多余的整条消息、字段或片段';
   if (hasInvalidCorrectTarget) return secondaryRelationType === 'width-adjustment' ? '宽度调整需要选择一条当前完整消息，且不能有来源' : "更正只能选择原始内容中的一个文本字段";

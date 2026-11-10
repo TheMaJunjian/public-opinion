@@ -14,6 +14,10 @@ const summary: DemoMessage = {
 const summaryEdge: DemoEdge = { id: 'cover', relationMessageId: 'summary', relationType: 'summary', relationLabel: '总结', from: { messageId: 'anon:summary', selection: { kind: 'whole' } }, to: { messageId: 'original', selection: { kind: 'whole' }, reference: { messageId: 'original' } } };
 
 describe('message display effects', () => {
+  it('labels distribution records as settlements', () => {
+    expect(getMessageTypeLabel({ ...message('settlement'), relationType: 'distribution' })).toBe('结算');
+  });
+
   it('uses the same proposal name for governance and native relations while retaining operation names', () => {
     const proposals: DemoMessage[] = [
       { ...message('governance'), kind: 'governance', backendKind: 'GOVERNANCE' },
@@ -31,6 +35,16 @@ describe('message display effects', () => {
     const record:DemoMessage={...message('round'),kind:'round_result',content,settlementTargetId:'target-id',parts:[{id:'body',type:'text',text:content}]};
     expect(getMessageCardContent(record)).toBe('目标：target-id\n结果：赞成胜出');
     expect(record.content).toBe(content);
+  });
+
+  it('shows correction before/after text in shared message summaries',()=>{
+    const record:DemoMessage={...message('correction'),kind:'relation',relationType:'correct',content:'甲新乙',parts:[
+      {id:'corrected-body',type:'text',text:'甲新乙'},
+      {id:'relation',type:'relation',relation:'correct',roles:{target:[{id:'target',reference:{messageId:'original',partId:'body',revision:1,range:{start:1,end:2}}}]}},
+      {id:'data',type:'data',value:{value:'新',correctionBeforeContent:'甲旧乙'}},
+    ]};
+    expect(getMessageCardContent(record)).toBe('将「旧」修改为「新」');
+    expect(record.content).toBe('甲新乙');
   });
 
   it('restores the covered original when server suppresses a summary, retaining the declaration for inspection', () => {

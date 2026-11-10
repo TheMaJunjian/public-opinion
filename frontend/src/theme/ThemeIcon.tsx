@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 
 const shapes = {
+  review: <><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8 12 3 3 5-6"/></>,
   truth: <><path d="M12 3v17M6 21h12M4 7h16M6 7l-3 7h6L6 7Zm12 0-3 7h6l-3-7Z" /><path d="M3 14c0 3 6 3 6 0m6 0c0 3 6 3 6 0" /></>,
   value: <><path d="m7 4-5 7 10 11 10-11-5-7H7Zm-5 7h20M7 4l5 18 5-18" /></>,
   proposal: <><path d="m3 8 9-5 9 5H3Zm2 3v7m5-7v7m4-7v7m5-7v7M3 21h18" /></>,

@@ -4,6 +4,8 @@ import { archiveChangeFingerprint, type ArchiveCheckpoint, type Change, type Jou
 import { currentSession } from './auth.js';
 import { DomainError, type Store } from './db.js';
 import { attentionUsers, scopeSql, scopeView, stakesFor, tagCountsFor, usersFor, viewsFor } from './ui-projections.js';
+import { moderationPolicy } from './moderation.js';
+import { sanitizeModeration } from './moderation-visibility.js';
 
 export async function journalManifest(store: Store): Promise<JournalManifest> {
   const row = (await store.db.prepare('SELECT COUNT(*) AS count,COALESCE(MAX(sequence),0) AS last FROM changes').get())!;
@@ -32,12 +34,14 @@ async function verifyCheckpoint(store: Store, base: ArchiveCheckpoint): Promise<
 
 /** One repeatable-read snapshot, bounded pages and socket backpressure throughout the export. */
 export async function sendExport(store: Store, req: Request, res: Response, parent: string, base?: ArchiveCheckpoint): Promise<void> {
+  const restrictedExport=(await moderationPolicy(store)).enabled;
+  if(restrictedExport&&base)throw new DomainError('审核启用后请重新导出当前可见视图；完整历史可能包含受限正文',409);
   if (base) await verifyCheckpoint(store, base);
   const scope = await scopeView(store, parent), journal = await journalManifest(store);
-  const metadata = { format: base ? 'gonglun-2-update' : 'gonglun-2', formatVersion: 5, exportedAt: new Date().toISOString(), scope,
+  const metadata = { format: restrictedExport?'gonglun-view-3':base ? 'gonglun-2-update' : 'gonglun-2', formatVersion: 5, exportedAt: new Date().toISOString(), scope:await sanitizeModeration(store,scope),
     viewerUsername: (await currentSession(store, req))?.user.username ?? null, rules: await store.rules(),
     regionId: await store.setting('region'), ledgerId: 'local', programVersion: '2.0.0',
-    sequence: journal.lastSequence, auditScope: 'region', viewScope: { parent }, journal, ...(base ? { base } : {}) };
+    sequence: journal.lastSequence, auditScope: restrictedExport?'visible':'region', viewScope: { parent }, ...(!restrictedExport?{journal}:{}), ...(base ? { base } : {}) };
   const write = async (value: string) => {
     if (res.destroyed || res.writableEnded) throw new Error('导出连接已关闭');
     if (res.write(value)) return;
@@ -52,7 +56,7 @@ export async function sendExport(store: Store, req: Request, res: Response, pare
   async function array(name: string, values: AsyncIterable<unknown>) {
     await write(`,${JSON.stringify(name)}:[`);
     let separator = '';
-    for await (const value of values) { await write(separator + JSON.stringify(value)); separator = ','; }
+    for await (const value of values) { await write(separator + JSON.stringify(await sanitizeModeration(store,value))); separator = ','; }
     await write(']');
   }
   async function* messagePages() {
@@ -72,7 +76,7 @@ export async function sendExport(store: Store, req: Request, res: Response, pare
   }
   async function* messageViews(onlyRelations: boolean) {
     for await (const messages of messagePages()) {
-      for (const view of await viewsFor(store, messages, parent)) {
+      for (const view of await sanitizeModeration(store,await viewsFor(store, messages, parent))) {
         if (!onlyRelations || view.relationType) yield { ...view, authorId: view.createdBy.id, author: view.createdBy.username };
       }
     }
@@ -135,8 +139,7 @@ export async function sendExport(store: Store, req: Request, res: Response, pare
     await map('tagCounts', ids => tagCountsFor(store, ids));
     await map('attentionUsers', ids => attentionUsers(store, ids));
     await array('ruleHistory', rules());
-    await array('changes', changes());
-    await array('signatures', signatures());
+    if(!restrictedExport){await array('changes', changes());await array('signatures', signatures());}
     await write('}');
     res.end();
   } catch (error) { res.destroy(); throw error; }

@@ -7,11 +7,13 @@ import { useWorkbenchViewOnlyDrawing } from '../../components/WorkbenchLoadingBo
 import type { WorkbenchComposer, ComposerCheckpoint } from './useWorkbenchComposer';
 
 interface Options {
+  reviewContext?: import('@gonglun/core').ReviewContext;
   composer: WorkbenchComposer; owner: string; scope: string; liveSequence: number;
   sendInFlightRef: { current: boolean };
+  canPrepare(): boolean;
   work(): Promise<void>;
   captureTransient(work: () => Promise<unknown>): Promise<void>;
-  showSendPreview(pages: WorkbenchSnapshot[]): void;
+  showSendPreview(pages: WorkbenchSnapshot[], ids: string[]): void;
   clearSendPreview(): void;
   confirmSendPreview(pages: WorkbenchSnapshot[]): void;
   error(message: string): void;
@@ -29,7 +31,7 @@ export function useSendPreview(options: Options) {
   const drawing = useContext(WorkbenchDrawingContext);
   const stamp = JSON.stringify(options.composer.capture());
   const stale = !!preview && (stamp !== preview.stamp || options.liveSequence > preview.baseSequence);
-  const owner = `${options.owner}:${options.scope}`;
+  const owner = `${options.owner}:${options.scope}:${JSON.stringify(options.reviewContext)}`;
   const latest = useRef(options); latest.current = options;
   useEffect(() => {
     if (!preview || stale || revealed.current === preview.prepared.envelope.requestId || !options.viewport) return;
@@ -55,7 +57,7 @@ export function useSendPreview(options: Options) {
   }, [owner]);
 
   async function prepare() {
-    if (busy.current || options.sendInFlightRef.current || uncertain) return;
+    if (!latest.current.canPrepare() || busy.current || options.sendInFlightRef.current || uncertain || drawing?.pending || drawing?.failure) return;
     busy.current = true; setPhase('preparing'); options.error('');
     const version = ++generation.current, original = JSON.stringify(options.composer.capture());
     if (!preview && options.viewport?.current) origin.current = {top:options.viewport.current.scrollTop,left:options.viewport.current.scrollLeft};
@@ -70,17 +72,17 @@ export function useSendPreview(options: Options) {
         if (preview) flushSync(() => options.clearSendPreview());
         const source = latest.current;
         consumed = await source.composer.captureTransient(() => source.captureTransient(async () => {
-          prepared = await api.prepareCommandBatch(source.work, preview?.prepared);
+          prepared = await api.prepareCommandBatch(source.work, preview?.prepared, source.reviewContext);
         }));
       } finally {
         options.sendInFlightRef.current = false;
-        if (preview && version === generation.current) options.showSendPreview(preview.snapshots);
+        if (preview && version === generation.current) options.showSendPreview(preview.snapshots, preview.ids);
       }
       if (!prepared) return;
       const captured = prepared as PreparedCommandBatch;
       const result = await api.previewCommandBatch(captured, [options.scope], controller.signal);
       if (version !== generation.current || original !== JSON.stringify(latest.current.composer.capture())) return;
-      options.showSendPreview(result.snapshots);
+      options.showSendPreview(result.snapshots, result.messageIds);
       setPreview({ prepared: captured, consumed, stamp: original, baseSequence: result.baseSequence, ids: result.messageIds, snapshots: result.snapshots });
     } catch (error) {
       if (version === generation.current && !(error instanceof Error && error.name === 'AbortError')) options.error(error instanceof Error ? error.message : '预览失败，请重试');

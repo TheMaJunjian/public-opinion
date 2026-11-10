@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { convertMessagesToDemoModel } from '../utils/modelBridge';
+import { convertMessagesToDemoModel, isSettlementRecord } from '../utils/modelBridge';
 import type { Message, Relation, User } from '../types';
 
 const user: User = { id: 'user-1', username: 'tester', createdAt: '2024-01-01T00:00:00.000Z' };
@@ -29,6 +29,23 @@ function makeSummary(): Relation {
 }
 
 describe('convertMessagesToDemoModel', () => {
+  it('treats cached settlement termination requests like round records while retaining ordinary operations', () => {
+    const request: Message = {
+      id: 'close-request', kind: 'OPERATIONS', relationType: 'OPERATIONS', contentType: 'TEXT', content: '请求终止结算',
+      createdAt: '2026-11-09T00:00:00.000Z', createdBy: user,
+      parts: [{ id: 'relation', type: 'relation', relation: 'terminate', roles: { target: [{ id: 'target', reference: { messageId: 'target' } }] } }],
+      targetRefs: [{ kind: 'message', messageId: 'target' }],
+      relationPayload: { roundId: 'round-1' } as Message['relationPayload'],
+    };
+    const announcement: Message = { ...request, id: 'announcement', content: '运营公告', parts: [{ id: 'body', type: 'text', text: '运营公告' }], relationPayload: {} };
+    const { messages } = convertMessagesToDemoModel([request, announcement], []);
+    const close = messages.find(message => message.id === request.id), notice = messages.find(message => message.id === announcement.id);
+    expect(close).toMatchObject({ kind: 'round', backendKind: 'ROUND', relationType: 'round', settlementTargetId: 'target', roundPayload: { roundId: 'round-1' } });
+    expect(isSettlementRecord(close)).toBe(true);
+    expect(notice).toMatchObject({ kind: 'operations', content: '运营公告' });
+    expect(isSettlementRecord(notice)).toBe(false);
+  });
+
   it('preserves relation target references for navigation', () => {
     const result = convertMessagesToDemoModel(
       [],

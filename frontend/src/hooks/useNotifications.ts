@@ -28,7 +28,7 @@ export function useNotifications(userId: string) {
         const summary = await getNotificationSummary(abort.signal);
         if (abort.signal.aborted) return;
         cursor = summary.sequence;
-        setState(previous => ({summary,error:null,revision:previous.revision + (forced || previous.summary.through !== summary.through || previous.summary.unseenCount !== summary.unseenCount ? 1 : 0)}));
+        setState(previous => ({summary,error:null,revision:previous.revision + (forced || previous.summary.through !== summary.through || previous.summary.unseenCount !== summary.unseenCount || previous.summary.pendingReviewCount !== summary.pendingReviewCount ? 1 : 0)}));
         if (!stream || stream.readyState === 2) {
           stream?.close(); stream = subscribeChanges(cursor);
           stream.onmessage = event => { try { if (JSON.parse(event.data).sequence > cursor) schedule(); } catch { schedule(); } };

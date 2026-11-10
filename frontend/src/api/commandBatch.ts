@@ -1,11 +1,12 @@
 import type { Message, Relation, User } from '../types';
 import type { WorkbenchSnapshot } from '../data/workbench';
+import {reviewContextPart,type Part} from '@gonglun/core';
 
 export interface Command { id: string; method: string; path: string; body: Record<string, unknown> }
 export interface CommandEnvelope { requestId: string; commands: Command[] }
 export interface CommandCommit { snapshots?: WorkbenchSnapshot[]; sequence?: number }
-export interface CommandBatchContext { apiBase: string }
-interface CapturedContext { owner: string; api: string; key: string; user: User }
+export interface CommandBatchContext { apiBase: string; reviewContext?: import('@gonglun/core').ReviewContext }
+interface CapturedContext { owner: string; api: string; key: string; user: User; reviewContext?: import('@gonglun/core').ReviewContext }
 export interface PreparedCommandBatch { envelope: CommandEnvelope; context: CapturedContext }
 type Batch = CommandEnvelope & { context: CapturedContext; previous: CommandEnvelope | null; failure?: Error; provisional: Map<string, Message | Relation>; preview?: boolean };
 let current: Batch | null = null;
@@ -19,7 +20,7 @@ function captureContext(options?: CommandBatchContext): CapturedContext {
   const user = currentUser(), owner = String(user.id || 'anonymous');
   const page = typeof location === 'undefined' ? 'http://localhost/' : location.href;
   const api = new URL(options?.apiBase ?? import.meta.env.VITE_API_BASE_URL ?? '/api', page).href.replace(/\/$/, '');
-  return { owner, api, user, key: `gonglun:pending-send:v2:${JSON.stringify([api, owner])}` };
+  return { owner, api, user, ...(options?.reviewContext?{reviewContext:options.reviewContext}:{}), key: `gonglun:pending-send:v2:${JSON.stringify([api, owner])}` };
 }
 function assertOwner(context: CapturedContext) {
   if (String(currentUser().id || 'anonymous') !== context.owner) throw new DOMException('账户已切换，请重新操作', 'AbortError');
@@ -107,6 +108,7 @@ export function queueCommand(path: string, options: RequestInit): Message | Rela
   if (!current || !/^\/(messages|relations)(\/[^/]+)?$/.test(path)) return null;
   assertOwner(current.context);
   const body = JSON.parse(String(options.body || '{}')) as Record<string, unknown>;
+  if (current.context.reviewContext && (options.method ?? 'POST') === 'POST') body.reviewContext = current.context.reviewContext;
   const method = options.method || 'POST', previous = current.previous?.commands[current.commands.length];
   // References created later in this preparation must point to the original IDs.
   const id = previous?.method === method && previous.path === path ? previous.id : crypto.randomUUID();
@@ -116,7 +118,8 @@ export function queueCommand(path: string, options: RequestInit): Message | Rela
   const stamp = new Date().toISOString();
   const relationType = typeof body.relationType === 'string' ? body.relationType : undefined;
   const content = typeof body.content === 'string' ? body.content : '';
-  const parts = content ? [{ id: 'body', type: 'text' as const, text: content }] : [];
+  const parts:Part[] = content ? [{ id: 'body', type: 'text', text: content }] : [];
+  if(current.context.reviewContext)parts.push(reviewContextPart(current.context.reviewContext));
   const response = relationType ? {
     id, relationType, sourceMessageId: body.sourceMessageId ?? null, sourceRefs: body.sourceRefs,
     targetRefs: body.targetRefs ?? [], payload: body.payload, revision: 1, parts,

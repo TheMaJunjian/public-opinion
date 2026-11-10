@@ -58,12 +58,15 @@ it('累计奖励穿插支出时保持历史余额，跨日补发与当天奖励�
   const progress = await updateUsagePoints(store, userId, { action: 'tick', roundId: next.roundId }, midnight + 1000);
   await store.transaction(async () => {
     const tx = new Mutation(store), message = await tx.create('system', [{ id: 'body', type: 'text', text: '支出' }]);
-    await store.ledger(userId, message.id, -2, 0, '协议费');await store.operating(2);await tx.commit();
+    const spend=await store.ledger(userId, message.id, -2, 0, '协议费');
+    await store.db.prepare('UPDATE ledger SET "createdAt"=$2 WHERE id=$1').run(spend.id,new Date(midnight+1500).toISOString());
+    await store.operating(2);await tx.commit();
   });
   await updateUsagePoints(store, userId, { action: 'tick', roundId: progress.roundId }, midnight + 3000);
   const rows = await pointTransactions(store, userId, {});
   expect(rows.data[0]).toMatchObject({ type: 'USAGE_REWARD', amount: 3, data: { day: '2026-11-02', count: 3 } });
-  expect(rows.data[1]).toMatchObject({ type: 'SPEND', amount: -2, balanceAfter: 1 });
+  expect(rows.data[1]).toMatchObject({ type: 'OPERATION_GROUP', amount: -2, balanceAfter: 1, entryCount: 1,
+    reasonDetails: [{ reason: '协议费', amount: -2, lockedDelta: 0 }] });
   expect((await store.account(userId)).available).toBe(2);
   expect(await store.db.prepare('SELECT day,total FROM usage_reward_days ORDER BY day').all()).toEqual([
     { day: '2026-11-01', total: 1 }, { day: '2026-11-02', total: 3 },

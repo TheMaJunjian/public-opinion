@@ -6,7 +6,7 @@ import type {
   DemoEdge,
   DemoMessage
 } from "../../../utils/modelBridge";
-import { computeEffectiveSuppressedRelIds, withCorrectionContent } from "../../../utils/modelBridge";
+import { computeEffectiveSuppressedRelIds, isReviewDiscussion, isReviewRecord, withCorrectionContent } from "../../../utils/modelBridge";
 import { filterContainerEdgesByEffectiveJoins,projectJoinMembershipEdges } from '../model/membership';
 
 interface DeriveNormalGraphProjectionInput {
@@ -25,7 +25,8 @@ interface DeriveNormalGraphProjectionInput {
 
 export function deriveNormalGraphProjection(input: DeriveNormalGraphProjectionInput): { messages: DemoMessage[]; scopedMessages: DemoMessage[]; edges: DemoEdge[]; rejectedRelationIds:ReadonlySet<string>; } {
   const { graphMessagesToRender, correctionVersions, cleanVisibleIds, homeFilterResult, msgFilter, edges, messages, displayUser, graphEdgesToRender, relations, effectiveJoinRelationIds } = input;
-  const corrected = graphMessagesToRender.map(message => {
+  const hiddenReviewIds=new Set(messages.filter(isReviewDiscussion).map(message=>message.id));
+  const corrected = graphMessagesToRender.filter(message=>!isReviewDiscussion(message)).map(message => {
     const version = correctionVersions.get(message.id)?.current;
     return version ? withCorrectionContent(message, version.content, version.changes, version.snapshot) : message;
   });
@@ -40,7 +41,7 @@ export function deriveNormalGraphProjection(input: DeriveNormalGraphProjectionIn
   const filteredMessages = applyMessageFilter(homeScopedMessages, msgFilter);
   const suppressedRelIds = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
   const declaredEdges = filterContainerEdgesByEffectiveJoins(
-    graphEdgesToRender,
+    graphEdgesToRender.filter(edge=>!isReviewRecord(edge)&&!hiddenReviewIds.has(edge.relationMessageId)),
     relations,
     effectiveJoinRelationIds,
   );

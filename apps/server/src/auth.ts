@@ -25,11 +25,29 @@ async function bindKey(store:Store,userId:string,deviceId:string|undefined,publi
   try {const key=JSON.parse(publicKey);if(key.d||!((key.kty==='OKP'&&key.crv==='Ed25519')||(key.kty==='EC'&&key.crv==='P-256')))throw new Error();createPublicKey({key,format:'jwk'});}catch {throw new DomainError('签名公钥无效');}
   await store.db.prepare('INSERT INTO signing_keys VALUES ($1,$2,$3,$4) ON CONFLICT("userId","deviceId") DO UPDATE SET "publicKey"=excluded."publicKey","createdAt"=excluded."createdAt"').run(userId,deviceId,publicKey,new Date().toISOString());
 }
-export async function currentSession(store:Store,req:Request):Promise<Session|null> {
+async function currentSessionRow(store:Store,req:Request) {
   const cookie=req.headers.cookie?.split(';').map(s=>s.trim()).find(s=>s.startsWith('gonglun_session='))?.slice(16);
   if(!cookie) return null;
-  const row=await store.db.prepare('SELECT "userId",csrf,expires,"deviceId" FROM sessions s WHERE token=$1 AND NOT EXISTS(SELECT 1 FROM disabled_accounts d WHERE d."userId"=s."userId")').get(hash(cookie)) as {userId:string;csrf:string;expires:number;deviceId?:string}|undefined;
-  if(!row||row.expires<Date.now()) return null;
+  const row=await store.db.prepare('SELECT token,"userId",csrf,expires,"deviceId" FROM sessions s WHERE token=$1 AND NOT EXISTS(SELECT 1 FROM disabled_accounts d WHERE d."userId"=s."userId")').get(hash(cookie)) as {token:string;userId:string;csrf:string;expires:number;deviceId?:string}|undefined;
+  if(!row||row.expires<=Date.now()) return null;
+  return row;
+}
+/** Visibility checks need identity, without loading account balances or signing keys. */
+export async function currentSessionUserId(store:Store,req:Request):Promise<string|undefined> {
+  return (await currentSessionRow(store,req))?.userId;
+}
+/** Only explicit foreground heartbeats renew presence; background reads do not. */
+export async function updateSessionActivity(store:Store,req:Request):Promise<void> {
+  const row=await currentSessionRow(store,req);
+  if(!row)throw new DomainError('请先登录',401,'SESSION_REQUIRED');
+  if(req.get('x-csrf-token')!==row.csrf)throw new DomainError('会话校验失败，请刷新后重试',403);
+  const updated=await store.db.prepare(`UPDATE sessions s SET "lastActiveAt"=$2 WHERE token=$1 AND expires>$2
+    AND NOT EXISTS(SELECT 1 FROM disabled_accounts d WHERE d."userId"=s."userId") RETURNING token`).get(row.token,Date.now());
+  if(!updated)throw new DomainError('请先登录',401,'SESSION_REQUIRED');
+}
+export async function currentSession(store:Store,req:Request):Promise<Session|null> {
+  const row=await currentSessionRow(store,req);
+  if(!row)return null;
   const key=row.deviceId?await store.db.prepare('SELECT "publicKey" FROM signing_keys WHERE "userId"=$1 AND "deviceId"=$2').get(row.userId,row.deviceId):undefined;
   return {user:{...await store.user(row.userId),...(key?{publicKey:String(key.publicKey)}:{})},account:await store.account(row.userId),rules:await store.rules(),csrf:row.csrf};
 }
@@ -66,7 +84,8 @@ async function createSession(store:Store,userId:string,deviceId?:string):Promise
   await assertActiveAccount(store,userId,true);
   const raw=token(), csrf=token();
   await store.db.prepare('DELETE FROM sessions WHERE expires<$1').run(Date.now());
-  await store.db.prepare('INSERT INTO sessions(token,"userId",csrf,expires,"deviceId") VALUES ($1,$2,$3,$4,$5)').run(hash(raw),userId,csrf,Date.now()+30*86400000,deviceId??null);
+  const at=Date.now();
+  await store.db.prepare('INSERT INTO sessions(token,"userId",csrf,expires,"deviceId","lastActiveAt") VALUES ($1,$2,$3,$4,$5,$6)').run(hash(raw),userId,csrf,at+30*86400000,deviceId??null,at);
   const key=deviceId?await store.db.prepare('SELECT "publicKey" FROM signing_keys WHERE "userId"=$1 AND "deviceId"=$2').get(userId,deviceId):undefined;
   return {raw,session:{user:{...await store.user(userId),...(key?{publicKey:String(key.publicKey)}:{})},account:await store.account(userId),rules:await store.rules(),csrf}};
 }

@@ -9,6 +9,7 @@ import { readReference, validateBodyVersion } from './validation.js';
 import {bindCommandContexts} from './reference-contexts.js';
 import { withCommandIdentities } from './command-identities.js';
 import { assertActiveAccount } from './account-access.js';
+import { sanitizeModeration } from './moderation-visibility.js';
 export type Signature = {
     deviceId: string;
     publicKey: string;
@@ -57,7 +58,11 @@ export async function referenceFrom(store: Store, raw: RecordData): Promise<Refe
 }
 function membership(parent: string): Part[] { return parent === 'root' ? [] : [relation('member-of', { parent: [{ messageId: parent }] }, 'placement')]; }
 async function submit(context: CommandContext, parts: Part[], body: RecordData) {
-    return send(context.store, context.user, { requestId: context.requestId, parts, recommendation: number(body.recommendation), wager: number(body.wager), ...(body.selfAgree ? { selfStance: 'pro' } : {}),...(body.joinContribution!==undefined?{joinContribution:body.joinContribution}:{}) }, { messageId: context.messageId, signature: context.signature });
+    if (body.reviewContext !== undefined) {
+        const scope = z.object({messageId:z.string().min(1).max(100),revision:z.number().int().positive()}).strict().parse(body.reviewContext);
+        parts = [...parts,{id:'review-context',type:'relation',relation:'review-context',roles:{target:[{id:'review-context-target',reference:scope}]}}];
+    }
+    return send(context.store, context.user, { requestId: context.requestId, parts, recommendation: number(body.recommendation), wager: number(body.wager),reviewWager:number(body.reviewWager), ...(body.selfAgree ? { selfStance: 'pro' } : {}),...(body.joinContribution!==undefined?{joinContribution:body.joinContribution}:{}) }, { messageId: context.messageId, signature: context.signature });
 }
 async function publish(context: CommandContext, parts: Part[], body: RecordData) {
     return (await submit(context, parts, body)).message;
@@ -129,7 +134,7 @@ export async function createRelation(context: CommandContext, parent: string, bo
         name = payload.delegationKind === 'FULFILL' ? 'fulfill' : 'delegate';
     if (type === 'PROPOSAL' || type === 'OPERATIONS') {
         const actions: Record<string, string> = { DISTRIBUTE_REVENUE: 'distribute', RECHARGE: 'recharge', REVENUE_INJECTION: 'revenue-injection', TERMINATE_SETTLEMENT: 'terminate', UPDATE_RULES: 'rule-change' };
-        name = actions[String(payload.operationType)] ?? (payload.proposedParameters ? 'rule-change' : name);
+        name = payload.operationType==='REVIEW'?'review':actions[String(payload.operationType)] ?? (payload.proposedParameters ? 'rule-change' : name);
     }
     if (type === 'ARCHIVE' && ['SPAM', 'OFFTOPIC', 'LOWVALUE'].includes(payload.subType))
         name = 'low-quality';
@@ -192,6 +197,9 @@ export async function createRelation(context: CommandContext, parent: string, bo
         parts.push(relation('archive', { target: refs }, 'personal-archive'));
     if (['CLASSIFY', 'MERGE', 'SUMMARY', 'ARRANGE'].includes(type))
         parts.push({ id: 'display', type: 'display', relationPartId: 'relation', layout: type === 'SUMMARY' ? 'summary' : payload.targetLayout === 'single-row' ? 'row' : payload.targetLayout === 'multi-column' ? 'columns' : 'flow' });
+    // Custom reference text labels the relation; only explicit content creates a body card.
+    if (type === 'REFERENCE' && payload.label && !payload.content && !payload.title)
+        parts.push({ id: 'display', type: 'display', relationPartId: 'relation', layout: 'relation' });
     parts.push({ id: 'data', type: 'data', value: data });
     // Standalone content needs placement. Ordinary relations remain visible through their endpoints.
     if (['CLASSIFY','MERGE','SUMMARY','ARRANGE'].includes(type) ? refs.length===0 : ['PROPOSAL','OPERATIONS','CODE_CHANGE','DELEGATION'].includes(type))
@@ -294,7 +302,10 @@ export async function previewBatch(store: Store, user: User, input: unknown, par
             for (const command of body.commands) await withCommandIdentities(`${user.id}:${command.id}`, () =>
                 executeWithinTransaction({ store, user, requestId: command.id, messageId: command.id }, command.method, command.path, command.body));
             const scopes = [...new Set([...parents, ...body.commands.map(command => String(command.body.parentMessageId ?? 'root'))])];
-            const snapshots = await Promise.all(scopes.map(parent => snapshot(store, parent, { after: baseSequence }, user.id)));
+            // Both visibility and review totals belong to the simulated state.
+            // After rollback the new cases/votes no longer exist in the database.
+            const snapshots = await sanitizeModeration(store,
+                await Promise.all(scopes.map(parent => snapshot(store, parent, { after: baseSequence }, user.id))), user.id);
             throw new PreviewResult({ snapshots, messageIds: body.commands.map(command => command.id), baseSequence });
         });
     } catch (error) {

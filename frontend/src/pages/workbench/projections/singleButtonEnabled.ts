@@ -1,4 +1,5 @@
 import type { Relation } from "../../../types";
+import {isWholeMessageSelection} from '../../../utils/messageElementSelection';
 import type {
   DemoMessage,
   RelationType,
@@ -49,6 +50,8 @@ interface DeriveSingleButtonEnabledInput {
 export function deriveSingleButtonEnabled(input: DeriveSingleButtonEnabledInput): boolean {
   const { relationType, newMessageContent, hasTextContent, stakeAmount, joinOnlyAction, relStakeAmount, effectiveMinStake, totalConsumption, availablePoints, draftUnits, targetUnits, hasInvalidCorrectTarget, hasInvalidContainerSource, hasInvalidJoinTarget, hasCrossLinkValidationError, hasOrphanContainerLabel, hasClassifyCycle, hasInvalidDelegationFormat, hasInvalidProposalFormat, hasCorrectionRelationTarget, isClassifyType, sourceUnits, relations, hasTargetsAvailable, isSummaryType, isMergeType, secondaryRelationType, effectiveTargetUnits, isGovernanceOrOpsType, msgMap, isTagWithInlineBadge, subType, isTagWithQuickAnnotate, isAgreeDisagreeType, isArrangeType, isNotifyType, hasAttentionNotifyTarget } = input;
   if (totalConsumption?.contributionError) return false;
+  const reviewDraft=relationType==='operations'&&secondaryRelationType==='review';
+  if([...draftUnits,...targetUnits,...sourceUnits].some(unit=>{const message=msgMap.get(unit.messageId);return message?.restricted||!reviewDraft&&message?.moderation?.status==='rejected';}))return false;
   if (relationType === null) return newMessageContent.trim().length > 0 && typeof stakeAmount === 'number' && stakeAmount >= 0
     && (!totalConsumption || totalConsumption.total <= availablePoints);
   // Check that relation stake meets the effective minimum (type + subType combined)
@@ -59,6 +62,7 @@ export function deriveSingleButtonEnabled(input: DeriveSingleButtonEnabledInput)
   if (totalConsumption && totalConsumption.total > availablePoints) return false;
   // Ambiguous: both draft and target non-empty — force user to clear one
   if (draftUnits.length > 0 && targetUnits.length > 0) return false;
+  if(reviewDraft)return sourceUnits.length===0&&effectiveTargetUnits.length===1&&isWholeMessageSelection(effectiveTargetUnits[0]!,effectiveTargetUnits[0]!.messageId)&&['pass','reject'].includes(subType);
   if (hasInvalidCorrectTarget || hasInvalidContainerSource || hasInvalidJoinTarget || hasCrossLinkValidationError || hasOrphanContainerLabel || hasClassifyCycle || hasInvalidDelegationFormat || hasInvalidProposalFormat) return false;
   if (hasCorrectionRelationTarget) return false;
   if (isClassifyType) {

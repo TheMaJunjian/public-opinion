@@ -37,6 +37,14 @@ import {migratePrivateNotifications} from './private-notifications.js';
 import {notificationDeletionSchema} from '../../server/src/notification-schema.js';
 import {migrateNotificationMemberships} from './notification-memberships.js';
 import {accessSchema} from '../../server/src/access-schema.js';
+import {migrateModeration} from './moderation.js';
+import {migrateModerationDependencyRevisions} from './moderation-dependency-revisions.js';
+import {migrateStakeWeightedReview} from './stake-weighted-review.js';
+import {migrateRandomReviewAssignments} from './random-review-assignments.js';
+import {migrateParticipationReview} from './participation-review.js';
+import {migrateReviewEnrollmentAttachments} from './review-enrollment-attachments.js';
+import {migrateReviewSelfStakes} from './review-self-stakes.js';
+import {migrateLedgerOperations} from './ledger-operations.js';
 
 export interface Migration { version: number; name: string; changesFinances?: boolean; up(): Promise<void> }
 
@@ -108,7 +116,19 @@ export function migrationsFor(store: Store): Migration[] {
   {version:32,name:'persistent-private-notifications',up:()=>migratePrivateNotifications(store)},
   {version:33,name:'private-notification-deletion',up:()=>store.db.exec(notificationDeletionSchema)},
   {version:34,name:'membership-notification-state-changes',up:()=>migrateNotificationMemberships(store)},
-  {version:35,name:'invitation-registration-and-account-access',up:()=>store.db.exec(accessSchema)}];
+  {version:35,name:'invitation-registration-and-account-access',up:()=>store.db.exec(accessSchema)},
+  {version:36,name:'content-moderation-and-separate-review-escrows',changesFinances:true,up:()=>migrateModeration(store)},
+  {version:37,name:'versioned-moderation-dependency-index',up:()=>migrateModerationDependencyRevisions(store)},
+  {version:38,name:'random-staged-message-review-assignments',up:()=>migrateRandomReviewAssignments(store)},
+  {version:39,name:'online-review-candidate-sessions',up:()=>store.db.exec(`
+    ALTER TABLE sessions ADD COLUMN IF NOT EXISTS "lastActiveAt" BIGINT NOT NULL DEFAULT 0;
+    CREATE INDEX IF NOT EXISTS sessions_activity ON sessions("userId","lastActiveAt");
+  `)},
+  {version:40,name:'public-content-and-funded-review-rounds',up:()=>migrateParticipationReview(store)},
+  {version:41,name:'attach-historical-review-enrollment-records',up:()=>migrateReviewEnrollmentAttachments(store).then(()=>{})},
+  {version:42,name:'review-guarantees-as-sided-self-stakes',up:()=>migrateReviewSelfStakes(store).then(()=>{})},
+  {version:43,name:'stake-weighted-review-arbitration',up:()=>migrateStakeWeightedReview(store)},
+  {version:44,name:'ledger-operation-groups',up:()=>migrateLedgerOperations(store)}];
 }
 
 /** Runs under the cross-process write lock. Failed upgrades roll back together. */
@@ -124,6 +144,8 @@ export async function runMigrations(db: Postgres, migrations: Migration[]): Prom
     if(migrations.length>applied.length)await db.exec(`DO $$ BEGIN
       IF to_regclass('display_stances') IS NOT NULL THEN ALTER TABLE display_stances ADD COLUMN IF NOT EXISTS context JSONB; END IF;
       IF to_regclass('ledger') IS NOT NULL THEN ALTER TABLE ledger ADD COLUMN IF NOT EXISTS "balanceAfter" BIGINT; END IF;
+      -- Historical content backfills use today's reviewer selection; old sessions start offline.
+      IF to_regclass('sessions') IS NOT NULL THEN ALTER TABLE sessions ADD COLUMN IF NOT EXISTS "lastActiveAt" BIGINT NOT NULL DEFAULT 0; END IF;
     END $$`);
     for (const migration of migrations.slice(applied.length)) {
       const before=migration.changesFinances?null:await financialFingerprint(db);

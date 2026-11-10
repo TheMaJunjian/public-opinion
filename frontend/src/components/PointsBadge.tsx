@@ -9,6 +9,8 @@ import type { PointsBalance, PointTransaction, PointTransactionMessage } from '.
 import { useUsagePoints } from './useUsagePoints';
 import UsagePointsProgress from './UsagePointsProgress';
 import MessageReferenceControl from './MessageReferenceControl';
+import PointsTransactionDetails from './PointsTransactionDetails';
+import {balanceChange,transactionReferences} from '../utils/pointTransactions';
 
 /**
  * PointsBadge — 导航栏贡献点显示组件。
@@ -24,6 +26,7 @@ export default function PointsBadge() {
   const [balance, setBalance] = useState<PointsBalance | null>(null);
   const [error, setError] = useState(false);
   const [open, setOpen] = useState(false);
+  const [detailTx,setDetailTx]=useState<PointTransaction|null>(null);
   const [transactions, setTransactions] = useState<PointTransaction[]>([]);
   const [txLoading, setTxLoading] = useState(false);
   const [page, setPage] = useState(1);
@@ -31,6 +34,7 @@ export default function PointsBadge() {
   const [flash, setFlash] = useState<'gain' | 'loss' | null>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(()=>{setDetailTx(null);},[user?.id]);
 
   const fetchBalance = useCallback(async () => {
     if (!user) return;
@@ -83,7 +87,7 @@ export default function PointsBadge() {
 
   // Close popover on outside click
   useEffect(() => {
-    if (!open) return;
+    if (!open||detailTx) return;
     const onClick = (e: MouseEvent) => {
       if (e.target instanceof Element && e.target.closest('[data-guide-overlay="true"]')) return;
       if (popRef.current && !popRef.current.contains(e.target as Node)) {
@@ -92,7 +96,7 @@ export default function PointsBadge() {
     };
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
-  }, [open]);
+  }, [open,detailTx]);
 
   useEffect(() => {
     if (!open || !user) return;
@@ -121,7 +125,7 @@ export default function PointsBadge() {
   }
 
   function navigateToMessage(tx: PointTransaction, reference: PointTransactionMessage) {
-    const { messageId, scopeMessageId, roundId } = reference;
+    const { messageId, scopeMessageId = 'root', roundId } = reference;
     const targetPath = messageScopePath(scopeMessageId);
     if (location.pathname.replace(/\/+$/, '') === targetPath) {
       window.dispatchEvent(new CustomEvent('points-navigate', {
@@ -137,6 +141,7 @@ export default function PointsBadge() {
       navigate(`${targetPath}?${params.toString()}`);
     }
     setOpen(false);
+    setDetailTx(null);
   }
 
   if (!user) return null;
@@ -195,9 +200,10 @@ export default function PointsBadge() {
         <div
           ref={panelRef}
           role="dialog" aria-label="贡献点记录"
+          aria-hidden={detailTx?true:undefined}
           data-guide-points-panel="true"
-          className="absolute right-0 top-full mt-2 w-80 z-50 max-h-96 overflow-auto"
-          style={dialogStyles.panel}
+          className="absolute right-0 top-full mt-2 w-[30rem] max-w-[calc(100vw-2rem)] z-50 overflow-auto"
+          style={{...dialogStyles.panel,maxHeight:'min(44rem, calc(100dvh - 5rem))'}}
           aria-busy={txLoading}
           onClick={(e) => e.stopPropagation()}
         >
@@ -222,17 +228,16 @@ export default function PointsBadge() {
             <ul className="divide-y divide-[color:var(--dialog-border)]">
               {transactions.map((tx) => {
                 const txData = tx.data as Record<string, unknown> | null;
-                const references: PointTransactionMessage[] = tx.messages ?? (typeof txData?.messageId === 'string' ? [{
-                  messageId: txData.messageId, messageType: typeof txData.messageType === 'string' ? txData.messageType : '消息',
-                  scopeMessageId: typeof txData.scopeMessageId === 'string' ? txData.scopeMessageId : 'root',
-                  roundId: typeof txData.roundId === 'string' ? txData.roundId : undefined,
-                }] : []);
+                // Rejection removes excerpts and nested metadata, but the ledger's
+                // source ID must still offer a route to the covered message.
+                const sourceId=tx.messageId??(typeof txData?.messageId==='string'?txData.messageId:undefined);
+                const references=transactionReferences(tx);
                 const canNavigate = references.length === 1;
                 return (
                 <li
                   key={tx.id}
                   data-guide-points-record={txData?.roundId ? String(txData.roundId) : undefined}
-                  data-guide-points-message={txData?.messageId ? String(txData.messageId) : undefined}
+                  data-guide-points-message={[...new Set([sourceId,...references.map(reference=>reference.messageId)].filter(Boolean))].join(' ')||undefined}
                   className={`px-3 py-2 text-xs select-none ${canNavigate ? 'cursor-pointer hover:bg-[color:var(--surface-hover)]' : ''}`}
                   onDoubleClick={canNavigate ? (e) => {
                     e.preventDefault();
@@ -240,6 +245,23 @@ export default function PointsBadge() {
                   } : undefined}
                   title={canNavigate ? '双击跳转到相关消息' : undefined}
                 >
+                  <div className="mb-2 space-y-1">
+                    {tx.createdAt&&<div className="text-[color:var(--text-muted)]">{tx.type==='USAGE_REWARD'?'最近记录':'记录时间'} <time dateTime={tx.createdAt}>{new Date(tx.createdAt).toLocaleString('zh-CN')}</time></div>}
+                    {references.length===1&&<div style={{overflowWrap:'anywhere'}}>
+                      <span className="text-[color:var(--text-secondary)]">关联消息 · ID </span>
+                      <MessageReferenceControl messageId={references[0].messageId} type={references[0].messageType??'消息'} summary={references[0].summary}
+                        wholeMessage={false} onNavigate={()=>navigateToMessage(tx,references[0])} navigateLabel={`定位消息 ${references[0].messageId}`} />
+                    </div>}
+                    {references.length>1&&<details onDoubleClick={event=>event.stopPropagation()}>
+                      <summary className="cursor-pointer text-[color:var(--text-secondary)]">关联消息 · {references.length} 条</summary>
+                      <ul className="mt-1 space-y-1" style={{overflowWrap:'anywhere'}}>
+                        {references.map(reference=><li key={`${reference.messageId}:${reference.messageRevision??''}`}>
+                          <MessageReferenceControl messageId={reference.messageId} type={reference.messageType??'消息'} summary={reference.summary}
+                            wholeMessage={false} onNavigate={()=>navigateToMessage(tx,reference)} navigateLabel={`定位消息 ${reference.messageId}`} />
+                        </li>)}
+                      </ul>
+                    </details>}
+                  </div>
                   <div className="flex justify-between items-center gap-2">
                   <div>
                     <span className="font-medium text-[color:var(--text-primary)]">
@@ -254,20 +276,16 @@ export default function PointsBadge() {
                       {tx.amount >= 0 ? '+' : ''}{tx.amount.toLocaleString()}
                     </span>
                     {tx.type !== 'USAGE_REWARD' && <span className="ml-2 text-[color:var(--text-muted)]">
-                      余额 {tx.balanceAfter.toLocaleString()}
+                      余额 {balanceChange(tx)}
                     </span>}
                     {canNavigate && <span className="ml-1 text-[color:var(--ink-818cf8-3)]" title="双击跳转到相关消息">↗</span>}
                   </div>
                   </div>
-                  {references.length > 0 && <details className="mt-2" onDoubleClick={event => event.stopPropagation()}>
-                    <summary className="cursor-pointer text-[color:var(--text-secondary)]">关联消息{references.length > 1 ? ` · ${references.length} 条` : ''}</summary>
-                    <ul className="mt-1 space-y-1" style={{ overflowWrap: 'anywhere' }}>
-                      {references.map(reference => <li key={`${reference.messageId}:${reference.messageRevision ?? ''}`}>
-                        <MessageReferenceControl messageId={reference.messageId} type={reference.messageType} summary={reference.summary}
-                          wholeMessage={false} onNavigate={() => navigateToMessage(tx, reference)} navigateLabel={`定位消息 ${reference.messageId}`} />
-                      </li>)}
-                    </ul>
-                  </details>}
+                  <div className="flex justify-between items-center gap-2 mt-2">
+                    <span className="text-[color:var(--text-muted)]">{!!tx.lockedDelta&&`${tx.lockedDelta>0?'锁定':'解锁'} ${Math.abs(tx.lockedDelta)} 点`}</span>
+                    <button type="button" className="text-[color:var(--ink-818cf8-3)] hover:underline" aria-label={`查看${tx.type==='USAGE_REWARD'?'使用贡献':'收支'}详情 ${tx.id}`}
+                      onDoubleClick={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();setDetailTx(tx);}}>详情 ›</button>
+                  </div>
                 </li>
                 );
               })}
@@ -280,6 +298,7 @@ export default function PointsBadge() {
           </div>}
         </div>
       )}
+      {detailTx&&<PointsTransactionDetails transaction={detailTx} onClose={()=>setDetailTx(null)} onNavigate={reference=>navigateToMessage(detailTx,reference)}/>}
     </div>
   );
 }
@@ -293,8 +312,11 @@ function typeLabel(type: string): string {
     SETTLEMENT_LOSS: '结算损失',
     CLAWBACK: '推翻扣回',
     UNLOCK: '解锁',
+    LOCK: '锁定',
     SPEND: '支出',
     TRANSFER: '转入',
+    MESSAGE_GROUP: '消息收支',
+    OPERATION_GROUP: '操作收支',
     USAGE_REWARD: '使用贡献',
     REVENUE_DISTRIBUTION: '收入分配',
     REVENUE_WITHDRAWAL: '收入撤回',
@@ -303,8 +325,8 @@ function typeLabel(type: string): string {
 }
 
 function txDetail(tx: import('../types').PointTransaction): string {
-  const d = tx.data as Record<string, unknown> | null;
-  if (!d) return '';
+  const d = tx.data??{reason:tx.reason};
+  if(tx.type==='MESSAGE_GROUP'||tx.type==='OPERATION_GROUP')return `${tx.entryCount??tx.entries?.length??0} 笔合计`;
   if (tx.type === 'USAGE_REWARD') return `${String(d.day ?? '')} · ${Number(d.count ?? 0)} 次`;
 
   // Stake: show side + staked/burned

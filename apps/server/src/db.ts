@@ -6,6 +6,7 @@ import { DATABASE_MIGRATIONS } from './database-version.js';
 import { initializeDatabase } from './initialize-database.js';
 import { upgradeDatabase } from './database-upgrade.js';
 import { recordNotifications } from './notifications.js';
+import { indexModerationDependencies, affectModerationDependents } from './moderation-visibility.js';
 
 class DatabaseUpgradeRequired extends Error {}
 
@@ -18,6 +19,7 @@ export function integer(value: number, label = '金额'): number {
 }
 
 export class Store {
+  private ledgerOperationsReady = false;
   private constructor(readonly db: Postgres) {}
 
   /** Inspect an existing database in one enforced read-only snapshot, without startup upgrades. */
@@ -124,6 +126,10 @@ export class Store {
     } else {
       await this.db.prepare('INSERT INTO ledger(id,"userId","messageId",amount,"lockedDelta",reason,"createdAt","ruleVersion","messageRevision","balanceAfter") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)')
         .run(entry.id,userId,messageId,amount,lockedDelta,options ? '使用贡献汇总' : reason,entry.createdAt,entry.ruleVersion,entry.messageRevision,available);
+      // Earlier migrations can still write ledger rows before grouping is installed.
+      if (!this.ledgerOperationsReady) this.ledgerOperationsReady = !!(await this.db.prepare("SELECT to_regclass('ledger_operations') AS table_name").get())?.table_name;
+      if (this.ledgerOperationsReady) await this.db.prepare('INSERT INTO ledger_operations("entryId","operationId") VALUES ($1,$2)')
+        .run(entry.id, this.db.ledgerOperationId);
     }
     entries.push(entry);
     return entry;
@@ -143,6 +149,7 @@ export class Mutation {
   constructor(public store: Store, public publication?: {authorId:string;joinContribution:{wager:number;recommendation:number}}) { this.ledgerStart = store.db.ledger.length; }
 
   async put(message: Message): Promise<void> {
+    await indexModerationDependencies(this.store,message);
     this.messages.set(message.id, message);
     this.affected.add(message.id);
     for (const row of await this.store.db.prepare('SELECT "targetId" FROM refs WHERE "sourceId"=$1').all(message.id)) this.affected.add(row.targetId);
@@ -189,6 +196,7 @@ export class Mutation {
         .run(JSON.stringify(updates), sequence);
     }
     const ledger = this.store.db.ledger.slice(this.ledgerStart);
+    await affectModerationDependents(this.store,this.affected);
     const change: Change = { sequence,previousSequence,messages:[...this.messages.values()],memberships:[...this.memberships.values()],removedMemberships:[...this.removed],states:await statesFor(this.store,[...this.affected]),ledger,treasury:{operating:await this.store.setting<number>('operating'),issued:await this.store.setting<number>('minted')} };
     if (this.pointsReset) change.pointsReset = this.pointsReset;
     if (this.createdAccountIds) change.createdAccountIds = this.createdAccountIds;

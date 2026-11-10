@@ -1,4 +1,6 @@
 import type { Message, Reference } from './types.js';
+import { REVIEW_RECORD_RELATIONS } from './moderation.js';
+import { hasReviewContext, reviewContextOf } from './review-context.js';
 
 /** Display attachment is separate from explicit organization membership. */
 export const DISPLAY_DEPENDENCY_ROLES: Readonly<Record<string, 'source' | 'target' | 'parent'>> = {
@@ -7,6 +9,7 @@ export const DISPLAY_DEPENDENCY_ROLES: Readonly<Record<string, 'source' | 'targe
   recommend:'target', archive:'target', 'low-quality':'target', attention:'target', follow:'target',
   unfollow:'target', block:'target', unblock:'target', read:'target', unread:'target',
   join:'parent', 'member-of':'parent',
+  ...Object.fromEntries([...REVIEW_RECORD_RELATIONS].map(relation => [relation, 'target' as const])),
 };
 export function displayDependencyRole(relation: string): 'source' | 'target' | 'parent' | null {
   const name = relation.toLowerCase();
@@ -15,6 +18,7 @@ export function displayDependencyRole(relation: string): 'source' | 'target' | '
 
 /** Generated self stances and placement hints do not make ordinary content dependent. */
 export function messageDisplayDependency(message: Pick<Message, 'id' | 'parts'>): Reference[] | null {
+  if (hasReviewContext(message)) { const context = reviewContextOf(message); return context ? [context] : []; }
   const display = message.parts.find(part => part.type === 'display' && part.target);
   if (display?.type === 'display' && display.target) return [display.target];
   const primary = message.parts.find(part => part.type === 'relation'

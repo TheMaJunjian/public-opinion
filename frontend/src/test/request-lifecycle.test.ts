@@ -42,6 +42,16 @@ it('announces a revoked session without treating an incorrect login password as 
   } finally { window.removeEventListener('gonglun:session-expired',expired); }
 });
 
+it('clears the earlier login error when corrected credentials succeed', async () => {
+  vi.stubGlobal('fetch',vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({error:'用户名或密码错误'}),{status:401}))
+    .mockResolvedValueOnce(new Response(JSON.stringify({csrf:'fresh',user:{id:'u',username:'alice'}}))));
+  await expect(api.login({username:'alice',password:'wrong'})).rejects.toMatchObject({status:401});
+  expect(getOperations()).toMatchObject([{label:'登录',state:'failed'}]);
+  await api.login({username:'alice',password:'correct'});
+  expect(getOperations()).toEqual([]);
+});
+
 it('keeps a fresh login when a revoked-session response arrives late for the same account', async () => {
   const expired = vi.fn(); window.addEventListener('gonglun:session-expired',expired);
   let finish!: (response: Response) => void;

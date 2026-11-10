@@ -4,7 +4,9 @@ import { statesFor } from './projections.js';
 import { retiredOrganizationIds } from './retired-organizations.js';
 import {chargeMessage} from './message-spending.js';
 import {placeMessageValueWager,placeWager} from './economy.js';
-import { messageDisplayDependency } from '@gonglun/core';
+import { messageDisplayDependency, reviewContextOf, reviewContextPart, sameReviewContext } from '@gonglun/core';
+import { hasModerationTables } from './moderation-schema.js';
+import { moderationPolicy } from './moderation.js';
 
 const whole = (ref: { revision?: number; partId?: string; memberId?: string; path?: unknown[]; range?: unknown }) =>
     ref.revision === undefined && !ref.partId && !ref.memberId && !ref.path?.length && !ref.range;
@@ -35,13 +37,17 @@ async function validateMove(tx: Mutation, memberId: string, parentId: string, us
     const retired = await retiredOrganizationIds(tx.store);
     if (retired.has(parentId) || retired.has(memberId)) throw new DomainError('组织已退役，保留记录仅供历史查看', 409);
     if (memberId === parentId) throw new DomainError('消息不能包含自身');
-    const organization = await tx.store.message(parentId);
-    if (messageDisplayDependency(await tx.store.message(memberId)) !== null)
+    const organization = await tx.store.message(parentId), member = await tx.store.message(memberId);
+    const memberScope = reviewContextOf(member), parentScope = reviewContextOf(organization);
+    if ((memberScope || parentScope) && !sameReviewContext(memberScope, parentScope))
+        throw new DomainError('审核讨论只能在同一消息版本的审核临时分类中整理');
+    if (messageDisplayDependency(member) !== null && !sameReviewContext(memberScope, parentScope))
         throw new DomainError('附属关系消息跟随其依赖消息显示，不能独立加入组织');
     if (!relations(organization).some(p => ORGANIZATIONS.has(p.relation) || p.relation === 'members'))
         throw new DomainError('父消息必须是组织');
     if (await containerRejectedForUser(tx.store, parentId, userId))
         throw new DomainError('容器已被反对，请先赞同并恢复容器，再加入消息', 409);
+    await preserveExistingContainer(tx.store, memberId, parentId);
     let current: string | null = parentId;
     const seen = new Set<string>();
     while (current) {
@@ -49,6 +55,15 @@ async function validateMove(tx: Mutation, memberId: string, parentId: string, us
         seen.add(current); current = await parent(tx, current);
         if (seen.size > 1000) throw new DomainError('组织层级过深');
     }
+}
+
+/** Existing summaries, merges and arrangements move as complete containers. */
+async function preserveExistingContainer(store: Pick<Store,'db'|'message'>, memberId: string, destination: string) {
+    const previous = await store.db.prepare('SELECT "parentId" FROM memberships WHERE "memberId"=$1').get<{parentId:string}>(memberId);
+    if (!previous || previous.parentId === destination) return;
+    const owner = await store.message(previous.parentId);
+    if (!relations(owner).some(part => ['summary','merge','arrange'].includes(part.relation))) return;
+    throw new DomainError('不能拆分已有总结、归并或排列容器，请选择整个容器',409);
 }
 
 /** Check the resolved stance, including opposition to an opposing stance. */
@@ -59,9 +74,15 @@ export async function validateJoinApproval(store: Pick<Store,'db'|'message'>, ta
     const placement = relations(message).find(part => part.relation === 'member-of' && part.roles.member?.length);
     if (!placement || target.partId && target.partId !== placement.id) return;
     const memberId = placement.roles.member?.[0]?.reference.messageId;
-    if (memberId && messageDisplayDependency(await store.message(memberId)) !== null)
-        throw new DomainError('附属关系消息不能独立加入组织，历史加入消息不能恢复', 409);
     const parentId = placement.roles.parent?.[0]?.reference.messageId;
+    if (memberId && parentId) {
+        const member = await store.message(memberId), organization = await store.message(parentId);
+        const memberScope = reviewContextOf(member), parentScope = reviewContextOf(organization);
+        if ((memberScope || parentScope) && !sameReviewContext(memberScope,parentScope))
+            throw new DomainError('审核讨论只能在同一消息版本的审核临时分类中整理',409);
+        if (messageDisplayDependency(member) !== null && !sameReviewContext(memberScope,parentScope))
+            throw new DomainError('附属关系消息不能独立加入组织，历史加入消息不能恢复',409);
+    }
     if (parentId && (await retiredOrganizationIds(store)).has(parentId))
         throw new DomainError('组织已退役，历史加入消息不能恢复', 409);
     if (parentId && await containerRejectedForUser(store, parentId, userId))
@@ -87,6 +108,8 @@ async function recordJoin(tx: Mutation, message: Message, memberId: string, pare
 async function createJoin(tx: Mutation, origin: Message, memberId: string, parentId: string) {
     const parts: Part[] = [{ id: 'relation', type: 'relation', relation: 'member-of', roles: bindRoles({ parent: [{ messageId: parentId }], member: [{ messageId: memberId }] }) },
         { id: 'data', type: 'data', value: { uiType: 'JOIN', generatedBy: origin.id } }];
+    const scope = reviewContextOf(await tx.store.message(parentId));
+    if (scope) parts.push(reviewContextPart(scope));
     const publishing=tx.publication;
     const spending=publishing?{protocol:(await tx.store.rules()).protocolFee,...publishing.joinContribution}:undefined;
     const message = await tx.create(publishing?.authorId??origin.authorId, parts,spending);
@@ -126,6 +149,11 @@ export async function reconcileOrganizationEffects(tx: Mutation) {
     if (!actions.some(action => tx.affected.has(action.id) || tx.affected.has(action.parentId) || tx.affected.has(action.memberId))) return;
     const states = await statesFor(tx.store, [...new Set(actions.flatMap(action => [action.id, action.parentId]))]);
     const rejected = new Set(states.filter(state => state.suppressed).map(state => state.messageId));
+    if(await hasModerationTables(tx.store)&&(await moderationPolicy(tx.store)).enabled){
+        const cases=await tx.store.db.prepare('SELECT DISTINCT ON ("messageId") "messageId",status FROM moderation_cases ORDER BY "messageId",revision DESC').all<{messageId:string;status:string}>();
+        for(const c of cases)if(['rejected','appeal'].includes(c.status))rejected.add(c.messageId);
+        for(const action of actions)if(cases.some(c=>c.messageId===action.memberId&&['rejected','appeal'].includes(c.status)))rejected.add(action.id);
+    }
     for (const row of rows) if (row.disabled) rejected.add(String(row.id));
     const resolved = resolveMemberships(actions, rejected, await retiredOrganizationIds(tx.store));
     for (const memberId of resolved.trackedMembers) {

@@ -24,7 +24,7 @@ async function post(user:Actor,parts:Part[],spending:{wager?:number;recommendati
 async function message(user:Actor,parts:Part[],spending:{wager?:number;recommendation?:number}={}):Promise<Message>{const response=await post(user,parts,spending);expect(response.status,response.text).toBe(201);return response.body.message;}
 async function terminate(user:Actor,target:Message){return message(user,[rel('terminate',{messageId:target.id})]);}
 async function conserved(app:App){const balances=(await app.store.db.prepare('SELECT SUM(available+locked) AS total FROM accounts').get())!;expect(Number(balances.total)+(await app.store.setting<number>('operating'))).toBe((await app.store.setting<number>('minted')));}
-afterEach(async ()=>{vi.restoreAllMocks();vi.unstubAllEnvs();for(const app of apps.splice(0))(await app.close());await cleanupTestDatabases();});
+afterEach(async ()=>{vi.useRealTimers();vi.restoreAllMocks();vi.unstubAllEnvs();for(const app of apps.splice(0))(await app.close());await cleanupTestDatabases();});
 
 describe('公论事务与经济',()=>{
   it('发言必须投入，价值锁为本金；幂等重试不重复收费，失败完全回滚',async()=>{
@@ -293,13 +293,15 @@ describe('同步和结算时间',()=>{
   });
   it('延时终止不会被重复请求重置，截止后只执行一次',async()=>{
     const server=(await app()),a=await actor(server,'alice');
+    vi.useFakeTimers({toFake:['Date']});
     const proposal=await message(a,[rel('rule-change'),data({rules:{settlementDelayMs:200}})]);
     await message(a,[rel('authorize',{messageId:proposal.id})]);
     const claim=await message(a,[text('延时结算')]);await message(a,[rel('agree',{messageId:claim.id})],{wager:10});
     await terminate(a,claim);const before=(await a.agent.get(`/api/messages/${claim.id}/context`)).body.rounds[0];
     await terminate(a,claim);const repeated=(await a.agent.get(`/api/messages/${claim.id}/context`)).body.rounds[0];
     expect(repeated.endsAt).toBe(before.endsAt);expect(repeated.status).toBe('waiting');
-    await new Promise(resolve=>setTimeout(resolve,220));expect((await processDue(server.store))).not.toBeNull();expect((await processDue(server.store))).toBeNull();
+    vi.setSystemTime(Date.parse(before.endsAt)-1);expect((await processDue(server.store))).toBeNull();
+    vi.setSystemTime(Date.parse(before.endsAt));expect((await processDue(server.store))).not.toBeNull();expect((await processDue(server.store))).toBeNull();
     expect((await a.agent.get(`/api/messages/${claim.id}/context`)).body.rounds[0].status).toBe('settled');(await conserved(server));
   });
 });

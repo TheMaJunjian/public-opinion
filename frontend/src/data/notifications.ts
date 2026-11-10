@@ -1,4 +1,4 @@
-import type { NotificationItem } from '@gonglun/core';
+import {notificationSection,type NotificationItem} from '@gonglun/core';
 
 export const NOTIFICATIONS_CHANGED = 'gonglun:notifications-changed';
 export const NOTIFICATIONS_STORAGE_KEY = 'gonglun:notifications-refresh';
@@ -10,8 +10,9 @@ export function refreshNotifications() {
 export function groupNotifications(items: NotificationItem[]) {
   const groups = new Map<string, NotificationItem[]>();
   for (const item of [...items].sort((a, b) => b.id - a.id)) {
-    const group = groups.get(item.kind) ?? [];
-    group.push(item); groups.set(item.kind, group);
+    const key=`${notificationSection(item)==='review-revoked'?'withdrawn:':''}${item.kind}`;
+    const group = groups.get(key) ?? [];
+    group.push(item); groups.set(key, group);
   }
   return [...groups.values()];
 }
@@ -24,6 +25,8 @@ export function notificationTypeLabel(kind: string): string {
     fulfill: '委托完成', terminate: '结算截止', wager: '结算结果', reversal: '结果调整',
     delegation: '委托报酬', penalty: '评价处罚', operations: '运营分配', grant: '贡献点发放', distribution: '贡献点分配',
     classify: '分类', summary: '总结', merge: '归并', arrange: '排列', proposal: '提案',
+    'review-assigned':'审核任务','review-revoked':'审核任务撤回','review-expanded':'扩大审核',
+    'review-result':'审核结果','review-reopened':'重新审核','review-financial':'审核资金','review-vote':'审核判断',
   };
   return labels[kind] ?? '其他消息';
 }
@@ -37,6 +40,11 @@ export function notificationPath(item: NotificationItem, pathname: string, searc
   params.set('notificationSource', item.navigationId ?? item.sourceId);
   params.set('notificationTarget', item.targetId);
   params.set('notificationRequest', `${Date.now()}:${Math.random()}`);
+  if(item.reviewTarget){
+    params.set('notificationSource',item.reviewTarget.messageId);
+    params.set('notificationTarget',item.reviewTarget.messageId);
+    params.set('notificationReviewRevision',String(item.reviewTarget.revision));
+  }
   if (item.roundId) {
     params.set('notificationTarget', item.settlementTargetId ?? item.targetId);
     params.set('notificationRound', item.roundId);

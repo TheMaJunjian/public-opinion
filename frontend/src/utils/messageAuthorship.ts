@@ -11,7 +11,7 @@ export function messageAuthorInvestment(message:DemoMessage,stakes?:MessageStake
   const dimension=targetInvestmentDimension(message.relationType??'');
   const initial=message.spending?{truth:dimension?0:amount(message.spending.wager),
     value:dimension==='VALUE'?0:amount(message.spending.recommendation)}:undefined;
-  const own=message.authorId?stakes?.stakes.filter(stake=>stake.user.id===message.authorId)??[]:[];
+  const own=message.authorId?stakes?.stakes?.filter(stake=>stake.user?.id===message.authorId)??[]:[];
   const truth=own.filter(stake=>stake.settlementType!=='VALUE').reduce((sum,stake)=>sum+amount(stake.amount),0);
   const value=own.filter(stake=>stake.settlementType==='VALUE').reduce((sum,stake)=>sum+amount(stake.amount),0);
   const recordedInitialValue=own.filter(stake=>stake.settlementType==='VALUE'&&stake.sourceMessageId===message.id)

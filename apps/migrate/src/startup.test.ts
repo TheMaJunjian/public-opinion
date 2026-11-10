@@ -15,10 +15,11 @@ const time='2026-01-01T00:00:00.000Z';
 
 async function previousDatabase(version:number){
   const schema=newTestSchema(),store=Store.maintenance(testDatabaseUrl(),{schema});
+  const {moderation:_newPolicy,...legacyRules}=DEFAULT_RULES;
   await store.transaction(async()=>{
     await store.db.exec(`CREATE SCHEMA "${schema}"`);
     await store.db.exec(schemaSql);await initializePersonal(store);await initializeProjections(store);
-    for(const [key,value] of Object.entries({rules:DEFAULT_RULES,region:'old-region',operating:20,minted:520,'retired-legacy-topics':[]}))await store.set(key,value);
+    for(const [key,value] of Object.entries({rules:legacyRules,region:'old-region',operating:20,minted:520,'retired-legacy-topics':[]}))await store.set(key,value);
     await store.db.prepare('INSERT INTO users(id,name,password,founder) VALUES($1,$2,$3,$4)').run('actor','原用户','retained-password-hash',1);
     await store.db.prepare('INSERT INTO accounts VALUES($1,$2,$3,$4,$5)').run('actor',500,0,500,0);
     const base:Message={id:'body',revision:1,authorId:'actor',createdAt:time,updatedAt:time,sequence:1,regionId:'old-region',ledgerId:'local',programVersion:'2.0.0',ruleVersion:1,
@@ -56,7 +57,12 @@ it.each([0,1,2,3])('startup upgrades version %s, clears old points and funds min
     messages:oldChanges.flatMap(change=>change.messages),relations:[]};
   const store=await Store.open(testDatabaseUrl(),{schema});
   try{
-    expect(await store.account('actor')).toEqual({available:-6,locked:3,earned:0,spent:3});
+    expect(await store.account('actor')).toEqual({available:-22,locked:19,earned:0,spent:3});
+    expect(await store.db.prepare('SELECT COUNT(*) AS n FROM moderation_cases').get()).toEqual({n:1});
+    for(const table of ['moderation_votes','moderation_assignments'])expect(await store.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()).toEqual({n:0});
+    expect(await store.db.prepare("SELECT COUNT(*) AS n FROM messages m WHERE EXISTS(SELECT 1 FROM jsonb_array_elements(m.body::jsonb->'parts') p WHERE p->>'relation'='review-record')").get()).toEqual({n:0});
+    expect(await store.db.prepare("SELECT COUNT(*) AS n FROM messages m WHERE EXISTS(SELECT 1 FROM jsonb_array_elements(m.body::jsonb->'parts') p WHERE p->>'relation'='review-enrollment')").get()).toEqual({n:1});
+    expect(await store.db.prepare("SELECT COUNT(*) AS n FROM notifications WHERE category='review'").get()).toEqual({n:0});
     expect((await store.db.prepare('SELECT body FROM points_archive_rows WHERE "tableName"=$1 AND body->>\'userId\'=$2').get('accounts','actor'))!.body)
       .toEqual({userId:'actor',available:497,locked:3,earned:500,spent:0});
     expect(await store.setting('region')).toBe('old-region');
@@ -68,11 +74,12 @@ it.each([0,1,2,3])('startup upgrades version %s, clears old points and funds min
     expect(convertedOldFile.changes.map(archiveChangeFingerprint)).toEqual(databaseJournal.slice(0,oldChanges.length).map(archiveChangeFingerprint));
     const cursor=await store.latestSequence(),again=await Store.open(testDatabaseUrl(),{schema});
     try{expect(await again.latestSequence()).toBe(cursor);}finally{await again.close();}
-    const app=await createTestApp({databaseSchema:schema}),response=await request(app).get('/api/ui/export');
+    const app=await createTestApp({databaseSchema:schema,moderation:true}),response=await request(app).get('/api/ui/export');
     expect(response.status,response.text).toBe(200);
+    expect(response.body.format).toBe('gonglun-view-3');expect(response.text).toContain('保留正文');expect(response.text).not.toContain('unchanged signed input');
     const migrated=migrateViewFile(response.body);
     expect(validateExportForViewing(migrated).data.messages.map(message=>message.id)).toEqual(response.body.messages.map((message:any)=>message.id));
-    expect(replayArchive(migrated).accounts.get('actor')).toEqual(await store.account('actor'));
+    expect(replayArchive({format:'gonglun-2',changes:databaseJournal}).accounts.get('actor')).toEqual(await store.account('actor'));
     expect(migrateViewFile(migrated)).toEqual(migrated);
   }finally{await store.close();}
 },30_000);
@@ -98,8 +105,9 @@ it('concurrent automatic startups execute the same upgrade only once',async()=>{
   const schema=await previousDatabase(3);
   const [left,right]=await Promise.all([Store.open(testDatabaseUrl(),{schema}),Store.open(testDatabaseUrl(),{schema})]);
   try{
-    expect(await left.latestSequence()).toBe(13);
-    expect(await right.latestSequence()).toBe(13);
+    expect(await left.latestSequence()).toBe(15);
+    expect(await right.latestSequence()).toBe(15);
+    expect(await left.db.prepare('SELECT COUNT(*) AS n FROM moderation_cases').get()).toEqual({n:1});
     expect((await left.db.prepare('SELECT COUNT(*) AS n FROM reset_message_contributions').get())!.n).toBe(3);
     expect((await left.db.prepare('SELECT COUNT(*) AS n FROM points_archives').get())!.n).toBe(1);
     expect((await left.db.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get())?.n).toBe(DATABASE_MIGRATIONS.length);

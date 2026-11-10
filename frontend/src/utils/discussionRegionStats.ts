@@ -1,5 +1,5 @@
 import type { DemoMessage } from './modelBridge';
-import { hasDiscussionText, isDiscussionType, type DiscussionType } from './discussionTypes';
+import { hasDiscussionText, isDiscussionType, isReviewDiscussionType, type DiscussionType } from './discussionTypes';
 
 export interface DiscussionTextCounts {
   total: number;
@@ -8,6 +8,8 @@ export interface DiscussionTextCounts {
   disagree: number;
   recommend?: number;
   archive?: number;
+  'review-pass'?: number;
+  'review-reject'?: number;
 }
 const empty = (): DiscussionTextCounts => ({ total: 0, agree: 0, reply: 0, disagree: 0 });
 const add = (target: DiscussionTextCounts, source: DiscussionTextCounts) => {
@@ -17,6 +19,7 @@ const add = (target: DiscussionTextCounts, source: DiscussionTextCounts) => {
   target.disagree += source.disagree;
   if (source.recommend) target.recommend = (target.recommend ?? 0) + source.recommend;
   if (source.archive) target.archive = (target.archive ?? 0) + source.archive;
+  for (const type of ['review-pass','review-reject'] as const) if (source[type]) target[type] = (target[type] ?? 0) + source[type]!;
 };
 
 /** Count source bodies on the complete placement forest, independently of folds.
@@ -88,7 +91,8 @@ export function computeDiscussionRegionTextStats({ messages, parents, ownerRegio
     const type = actualType !== undefined ? isDiscussionType(actualType) ? actualType : undefined
       : region === undefined ? visit.inherited : regionTypes.get(region)!;
     const own = empty();
-    if (!frameIds?.has(visit.id) && hasDiscussionText(byId.get(visit.id))) {
+    const message = byId.get(visit.id);
+    if (!frameIds?.has(visit.id) && (hasDiscussionText(message) || isReviewDiscussionType(type) && message?.relationType === 'review')) {
       own.total = 1;
       if (type !== undefined) own[type] = 1;
     }

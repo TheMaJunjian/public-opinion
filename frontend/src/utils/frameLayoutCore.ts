@@ -5,7 +5,8 @@ import { siblingColumns, type ColumnConstraints } from './graphSiblingColumns';
 import { chronologicalOrder, discussionForest } from './discussionOrder';
 import { computeMinColumnsForAnnoRefRule1, applyReplyLayoutAdjustmentsWithConstraints, applyAgreeDisagreeColumnOverride } from './graphColumnRules';
 import type { layoutDiscussion, DiscussionRegionInput, DiscussionRegionGeometry } from './discussionLayout';
-import { hasDiscussionText, hasManualDiscussionOrder } from './discussionTypes';
+import { hasDiscussionText, hasManualDiscussionOrder, isDiscussionType } from './discussionTypes';
+import { projectContainerDiscussionEdges } from './containerDiscussionEdges';
 
 export interface FrameBlock {
   relMsgId: string;
@@ -172,7 +173,8 @@ export function computeFrameSceneLayout(input: SceneLayoutInput, discussionCompu
     : input.expandAllFrames).map(frame=>frame.relMsgId);
   const fullFrames=new Set(fullFrameIds);
   for (const edge of input.edges ?? []) {
-    if (!['annotation', 'reference', 'notify', 'agree', 'disagree', 'reply', ...(input.discussionLayout ? ['recommend', 'archive'] : [])].includes(edge.relationType)) continue;
+    if (!['annotation', 'reference', 'notify', 'agree', 'disagree', 'reply'].includes(edge.relationType)
+      && !(input.discussionLayout && isDiscussionType(edge.relationType))) continue;
     const source = ancestry(edge.from.messageId);
     if (!source.length) continue;
     // An arrow is placed with its own source. Its other dependencies remain
@@ -206,6 +208,10 @@ export function computeFrameSceneLayout(input: SceneLayoutInput, discussionCompu
       constraints.push(relationType === 'agree' ? [sourceId, targetId] : [targetId, sourceId]);
       scopeConstraints.set(scope, constraints);
     }
+  }
+  if (input.discussionLayout) {
+    const originals = new Map((input.edges ?? []).map(edge => [edge.id, edge]));
+    for (const [scope, edges] of scopeEdges) scopeEdges.set(scope, projectContainerDiscussionEdges(edges, originals, messages));
   }
   const time = (id: string) => {
     const result = Date.parse(messages.get(id)?.createdAt ?? '');

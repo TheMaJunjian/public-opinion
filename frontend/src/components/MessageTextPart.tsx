@@ -3,6 +3,7 @@ import type { DemoMessage } from '../utils/modelBridge';
 import { useReadingTextLinks } from './ReadingTextLinksContext';
 import { renderReadingTextLinks } from './ReadingTextLinks';
 import { messageTextField } from '../utils/messageTextField';
+import MessageBody from './MessageBody';
 
 /** Keep selection offsets local to content, never to card metadata or controls. */
 export default function MessageTextPart({ message, partId, displayedText, children, activeText = false, onMouseUp }: {
@@ -37,7 +38,7 @@ export default function MessageTextPart({ message, partId, displayedText, childr
     event.clipboardData.setData('text/plain', range.toString());
     event.preventDefault();
   };
-  return <div
+  return <MessageBody message={message}><div
     className="message-card-body"
     data-message-part-id={part?.id ?? (!message.parts ? partId ?? 'content' : undefined)}
     data-message-part-path={field?.path ? JSON.stringify(field.path) : undefined}
@@ -54,5 +55,5 @@ export default function MessageTextPart({ message, partId, displayedText, childr
     onCopy={copyOriginalText}
     style={{ userSelect: selectable || readingLinks ? 'text' : 'none', cursor: activeText || readingLinks ? 'text' : 'inherit', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', minWidth: 0,
       fontFamily: part?.type === 'code' ? 'Menlo, Monaco, Consolas, monospace' : 'var(--font-reading)', fontSize: 'inherit', fontWeight: 'inherit' }}
-  >{content}</div>;
+  >{content}</div></MessageBody>;
 }

@@ -9,6 +9,18 @@ beforeEach(() => { sessionStorage.clear(); localStorage.setItem('user', JSON.str
 const add = (body: object) => queueCommand('/messages', { method: 'POST', body: JSON.stringify(body) });
 
 describe('workbench sends', () => {
+  it('captures the review scope on every prepared text and relation command',async()=>{
+    const reviewContext={messageId:'reviewed',revision:3};
+    const prepared=await prepareCommandBatch(async()=>{
+      const source=add({content:'审核理由的回复'})!;
+      expect(displayDependencyIds({id:source.id,parts:source.parts})).toEqual(['reviewed']);
+      queueCommand('/relations',{method:'POST',body:JSON.stringify({relationType:'REPLY',sourceMessageId:source.id,targetRefs:[{kind:'message',messageId:'vote'}]})});
+    },{apiBase:'/api',reviewContext});
+    expect(prepared!.envelope.commands).toHaveLength(2);
+    expect(prepared!.envelope.commands.every(command=>JSON.stringify(command.body.reviewContext)===JSON.stringify(reviewContext))).toBe(true);
+    const commit=vi.fn(async()=>({}));await commitPreparedBatch(prepared!,commit);
+    expect(commit).toHaveBeenCalledExactlyOnceWith(prepared!.envelope);
+  });
   it('keeps provisional message identities and references when updating an unsent preview body',async()=>{
     const capture=async(content:string,previous?:Awaited<ReturnType<typeof prepareCommandBatch>>)=>prepareCommandBatch(async()=>{
       const message=add({content})!;

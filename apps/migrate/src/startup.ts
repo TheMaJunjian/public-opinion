@@ -8,6 +8,7 @@ import {ConversionFailure,conversionFailure} from '@gonglun/core';
 import {RollbackUnconfirmedError} from '../../server/src/postgres.js';
 import {resetContributionPoints} from './reset-contribution-points.js';
 import {fundResetMessageContributions} from './reset-message-contributions.js';
+import {migrateModeration} from './moderation.js';
 
 /** Resumes native upgrades; Prisma imports retain the entire original schema. */
 export async function prepareStartupDatabase(databaseUrl:string,schema='public',options:{plan?:boolean;founderId?:string;targetSchema?:string}={}){
@@ -51,6 +52,7 @@ export async function prepareStartupDatabase(databaseUrl:string,schema='public',
           await importedStore.db.prepare("DELETE FROM settings WHERE key='usage-points-start'").run();
           await resetContributionPoints(importedStore);
           await fundResetMessageContributions(importedStore);
+          await migrateModeration(importedStore);
           await importedStore.set('automatic-import-source',sourceSchema);
         });}finally{await importedStore.close();}
         await guard.exec(`ALTER SCHEMA "${staging}" RENAME TO "${current.schema}"`);

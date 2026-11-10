@@ -1,21 +1,25 @@
-import { relations, textOf, type Change, type Message, type Reference, type NotificationCategory,
+import { relations, textOf, REVIEW_RECORD_RELATIONS, type Change, type Message, type Reference, type NotificationCategory,
   type NotificationContent, type NotificationItem, type NotificationPage, type NotificationQuery,
-  type NotificationSeenInput, type NotificationDeleteInput, type NotificationSummary } from '@gonglun/core';
+  type NotificationSeenInput, type NotificationDeleteInput, type NotificationSummary, type NotificationSection, type ReviewTaskStatus } from '@gonglun/core';
 import { z } from 'zod';
 import { DomainError, type Store } from './db.js';
 import {membershipNotifications,type MembershipNotification} from './notification-memberships.js';
+import {recordReviewNotifications,describeReviewNotificationTargets} from './review-notifications.js';
+import {notificationSectionSql,reviewTaskJoinsSql} from './review-notification-status.js';
 
 const safeInteger = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 export const notificationQuerySchema = z.object({
-  category: z.enum(['all', 'direct', 'following', 'financial']).optional(),
+  category: z.enum(['all', 'direct', 'following', 'financial', 'review', 'review-revoked']).optional(),
   unread: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
+  pending: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
   cursor: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
   through: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
 }).strict();
 export const notificationSeenSchema = z.object({
   through: safeInteger, ids: z.array(safeInteger).min(1).max(100).optional(),
-  category: z.enum(['all', 'direct', 'following', 'financial']).optional(),
+  category: z.enum(['all', 'direct', 'following', 'financial', 'review', 'review-revoked']).optional(),
+  pending: z.boolean().optional(),
 }).strict();
 export const notificationDeleteSchema = notificationSeenSchema.extend({seenOnly:z.boolean().optional()})
   .refine(input=>Boolean(input.ids?.length)||input.seenOnly===true,'请选择通知或仅清除已查看通知');
@@ -31,7 +35,7 @@ const directActions: Record<string, string> = {
 };
 const quietRelations = new Set(['follow', 'unfollow', 'block', 'unblock', 'read', 'unread', 'archive', 'unarchive']);
 const highFrequency = new Set(['agree', 'disagree', 'recommend', 'tag']);
-const priority: Record<NotificationCategory, number> = { following: 0, direct: 1, financial: 2 };
+const priority: Record<NotificationCategory, number> = { following: 0, direct: 1, financial: 2, review: 1 };
 const excerpt = (message: Message) => textOf(message).replace(/\s+/g, ' ').slice(0, 180);
 function dataOf(message: Message): Record<string, unknown> {
   const data = message.parts.find(part => part.type === 'data');
@@ -77,6 +81,7 @@ export async function recordNotifications(store: Store, change: Change) {
   if (!change.messages.length&&!change.states.length) return;
   // Historical migrations do not replay deliveries. Version 32 enables the inbox at a precise boundary.
   if (!await store.db.prepare("SELECT 1 FROM settings WHERE key='notifications-start-sequence'").get()) return;
+  await recordReviewNotifications(store,change);
   const membershipEvents=await membershipNotifications(store,change);
   const events:Array<{message:Message;membership?:MembershipNotification}>=[
     ...change.messages.filter(message=>!membershipEvents.some(event=>event.message.id===message.id&&event.previousActive===undefined)).map(message=>({message})),
@@ -84,6 +89,7 @@ export async function recordNotifications(store: Store, change: Change) {
   ];
   const operation=change.messages.find(message=>message.revision===1&&message.authorId!=='system');
   for (const {message,membership} of events) {
+    if(relations(message).some(part=>REVIEW_RECORD_RELATIONS.has(part.relation)))continue;
     const parts = relations(message).filter(part => !quietRelations.has(part.relation));
     const data = dataOf(message);
     const inputs = data.inputs && typeof data.inputs === 'object' ? data.inputs as Record<string, unknown> : {};
@@ -175,6 +181,8 @@ export async function recordNotifications(store: Store, change: Change) {
         actorName, action: membership ? membership.active ? membership.previousActive===undefined?'加入已生效':'加入已恢复' : membership.previousActive===undefined?'加入未生效':'加入已失效'
           : distribution ? financialActions[kind] ?? '资金记录已更新' : kind === 'updated' ? '更新了消息正文' : directActions[kind] ?? '有新的讨论进展',
         excerpt: excerpt(member??message), targetExcerpt: excerpt(target), sourceRevision: message.revision,
+        excerptReference:{messageId:(member??message).id,revision:(member??message).revision},
+        targetExcerptReference:{messageId:target.id,revision:target.revision},
         references: [...new Map([recipient.reference, ...references].map(reference => [JSON.stringify(reference), reference])).values()],
         reasons: [...recipient.reasons], watchedIds: [...recipient.watchedIds],
         ...(membership?{membershipActive:membership.active,navigationId:membership.previousActive===undefined?membership.memberId:message.id}:{}),
@@ -192,41 +200,55 @@ export async function recordNotifications(store: Store, change: Change) {
   }
 }
 
-export async function notificationSummary(store: Store, userId: string): Promise<NotificationSummary> {
-  const row = await store.db.prepare(`SELECT (SELECT COUNT(*) FROM notifications WHERE "userId"=$1 AND "seenAt" IS NULL AND "deletedAt" IS NULL) AS "unseenCount",
-    (SELECT COALESCE(MAX(id),0) FROM notifications WHERE "userId"=$1) AS through`)
-    .get<{unseenCount:number;through:number}>(userId);
-  return {...row!, sequence: await store.latestSequence()};
+export async function notificationSummary(store: Store, userId: string, at=new Date().toISOString()): Promise<NotificationSummary> {
+  const rows=await store.db.prepare(`SELECT ${notificationSectionSql()} AS section,MAX(n.id) AS through,
+    COUNT(*) FILTER(WHERE n."seenAt" IS NULL AND n."deletedAt" IS NULL) AS unseen,
+    COUNT(*) FILTER(WHERE review_task.status='pending' AND n."deletedAt" IS NULL) AS pending
+    FROM notifications n ${reviewTaskJoinsSql('$2')} WHERE n."userId"=$1 GROUP BY 1`)
+    .all<{section:NotificationSection;through:number;unseen:number;pending:number}>(userId,at);
+  return {through:Math.max(0,...rows.map(row=>row.through)),unseenCount:rows.reduce((total,row)=>total+row.unseen,0),
+    unseenByCategory:{review:0,'review-revoked':0,...Object.fromEntries(rows.map(row=>[row.section,row.unseen]))},
+    pendingReviewCount:rows.reduce((total,row)=>total+row.pending,0),sequence:await store.latestSequence()};
 }
 
 export async function notificationPage(store: Store, userId: string, query: NotificationQuery): Promise<NotificationPage> {
-  const summary = await notificationSummary(store, userId);
+  const at=new Date().toISOString(),summary = await notificationSummary(store, userId,at);
   const through = Math.min(query.through ?? summary.through, summary.through);
-  const rows = await store.db.prepare(`SELECT n.*,COALESCE(p.muted,false) AS muted FROM notifications n
+  const rows = await store.db.prepare(`SELECT n.*,COALESCE(p.muted,false) AS muted,
+    review_task.status AS "reviewTaskStatus",review_task."expiresAt" AS "reviewTaskExpiresAt" FROM notifications n
     LEFT JOIN notification_preferences p ON p."userId"=n."userId" AND p."targetId"=n."targetId"
+    ${reviewTaskJoinsSql('$8')}
     WHERE n."userId"=$1 AND n."deletedAt" IS NULL AND n.id<=$2 AND ($3::bigint IS NULL OR n.id<$3)
-    AND ($4='all' OR n.category=$4) AND (NOT $5::boolean OR n."seenAt" IS NULL)
-    ORDER BY n.id DESC LIMIT $6`).all<{id:number;sourceId:string;targetId:string;actorId:string;category:NotificationCategory;kind:string;groupKey:string;createdAt:string;seenAt:string|null;muted:boolean;body:NotificationContent}>
-    (userId, through, query.cursor ?? null, query.category ?? 'all', query.unread ?? false, (query.limit ?? 30) + 1);
+    AND ($4='all' OR ${notificationSectionSql()}=$4) AND (NOT $5::boolean OR n."seenAt" IS NULL)
+    AND (NOT $7::boolean OR review_task.status='pending')
+    ORDER BY n.id DESC LIMIT $6`).all<{id:number;sourceId:string;targetId:string;actorId:string;category:NotificationCategory;kind:string;groupKey:string;createdAt:string;seenAt:string|null;muted:boolean;body:NotificationContent;reviewTaskStatus:ReviewTaskStatus|null;reviewTaskExpiresAt:string|null}>
+    (userId, through, query.cursor ?? null, query.category ?? 'all', query.unread ?? false, (query.limit ?? 30) + 1,query.pending??false,at);
   const items: NotificationItem[] = rows.slice(0, query.limit ?? 30).map(row => ({
     ...row.body, id:row.id, sourceId:row.sourceId, targetId:row.targetId, actorId:row.actorId, category:row.category,
     kind:row.kind, groupKey:row.groupKey, createdAt:row.createdAt, seenAt:row.seenAt, muted:row.muted,
+    ...(row.reviewTaskStatus?{reviewTaskStatus:row.reviewTaskStatus,reviewTaskExpiresAt:row.reviewTaskExpiresAt??undefined}:{}),
   }));
+  await describeReviewNotificationTargets(store,items);
   return {...summary, through, items, nextCursor: rows.length > items.length ? items.at(-1)!.id : null};
 }
 
 export async function markNotificationsSeen(store: Store, userId: string, input: NotificationSeenInput) {
-  await store.db.prepare(`UPDATE notifications SET "seenAt"=COALESCE("seenAt",$2)
-    WHERE "userId"=$1 AND id<=$3 AND ($4::bigint[] IS NULL OR id=ANY($4::bigint[])) AND ($5='all' OR category=$5)`)
-    .run(userId,new Date().toISOString(),input.through,input.ids ?? null,input.category ?? 'all');
+  await store.db.prepare(`UPDATE notifications n SET "seenAt"=COALESCE("seenAt",$2)
+    WHERE "userId"=$1 AND id<=$3 AND ($4::bigint[] IS NULL OR id=ANY($4::bigint[]))
+    AND n.id IN(SELECT n.id FROM notifications n ${reviewTaskJoinsSql('$2')} WHERE n."userId"=$1
+      AND ($5='all' OR ${notificationSectionSql()}=$5) AND (NOT $6::boolean OR review_task.status='pending'))`)
+    .run(userId,new Date().toISOString(),input.through,input.ids ?? null,input.category ?? 'all',input.pending??false);
 }
 
 /** Keep the delivery tombstone so retries cannot resurrect a deleted notification. */
 export async function deleteNotifications(store: Store, userId: string, input: NotificationDeleteInput) {
-  await store.db.prepare(`UPDATE notifications SET "deletedAt"=COALESCE("deletedAt",$2)
+  await store.db.prepare(`UPDATE notifications n SET "deletedAt"=COALESCE("deletedAt",$2)
     WHERE "userId"=$1 AND id<=$3 AND ($4::bigint[] IS NULL OR id=ANY($4::bigint[]))
-    AND ($5='all' OR category=$5) AND (NOT $6::boolean OR "seenAt" IS NOT NULL)`)
-    .run(userId,new Date().toISOString(),input.through,input.ids??null,input.category??'all',input.seenOnly??false);
+    AND (NOT $6::boolean OR "seenAt" IS NOT NULL)
+    AND n.id IN(SELECT n.id FROM notifications n ${reviewTaskJoinsSql('$2')} WHERE n."userId"=$1
+      AND ($5='all' OR ${notificationSectionSql()}=$5) AND (NOT $6::boolean OR review_task.status IS DISTINCT FROM 'pending')
+      AND (NOT $7::boolean OR review_task.status='pending'))`)
+    .run(userId,new Date().toISOString(),input.through,input.ids??null,input.category??'all',input.seenOnly??false,input.pending??false);
 }
 
 export async function muteNotifications(store: Store, userId: string, targetId: string, muted: boolean) {

@@ -36,7 +36,7 @@ export const partsSchema=z.array(part).min(1).max(64).superRefine((parts,ctx)=>{
       ctx.addIssue({ code: 'custom', message: '宽度调整需要一个当前完整消息目标，宽度须为 320–2400 的整数' });
   }
 });
-export const sendSchema=z.object({requestId:identifier,parts:partsSchema,recommendation:safe.optional(),wager:safe.optional(),selfStance:z.enum(['pro','con']).optional(),
+export const sendSchema=z.object({requestId:identifier,parts:partsSchema,recommendation:safe.optional(),wager:safe.optional(),reviewWager:safe.optional(),selfStance:z.enum(['pro','con']).optional(),
   joinContribution:z.object({wager:safe,recommendation:safe}).strict().refine(value=>value.wager>0||value.recommendation>0,'加入消息的真假和价值至少一项须大于 0').optional()}).strict();
 export function parseSend(input:unknown):SendInput {
   const parsed=sendSchema.parse(input);
@@ -88,4 +88,4 @@ export async function validateReferences(store: Store, parts: Part[]): Promise<v
             await readReference(store, part.target);
     }
 }
-export const rulesSchema=z.object({version:safe.min(1),protocolFee:safe.min(1),initialGrant:safe,operatingReserve:safe,lowQualityPenalty:safe,settlementDelayMs:safe.max(30*86400000),contributionWeights:z.object({content:safe,relation:safe,agreement:safe,evidence:safe,duplicate:safe,earlyBonus:safe,earlyWindow:safe,unrecognizedAuthorCap:safe}).strict()}).strict();
+export const rulesSchema=z.object({version:safe.min(1),protocolFee:safe.min(1),initialGrant:safe,operatingReserve:safe,lowQualityPenalty:safe,settlementDelayMs:safe.max(30*86400000),moderation:z.object({enabled:z.boolean(),fee:safe,deposit:safe,minReviewers:safe.min(1).max(100),appealDelayMs:safe.max(30*86400000),stages:z.array(safe.min(3).max(501).refine(n=>n%2===1)).min(1).max(5).refine(stages=>stages.every((n,i)=>i===0||n>stages[i-1]!)).optional(),assignmentTtlMs:safe.min(60_000).max(7*86400000).optional(),exposureMultiplier:safe.min(1).max(3).optional(),rewardSlots:safe.max(100).optional(),rewardAmount:safe.min(1).optional(),minWager:safe.min(1).optional(),appealFee:safe.optional(),appealDeposit:safe.optional()}).strict().optional(),contributionWeights:z.object({content:safe,relation:safe,agreement:safe,evidence:safe,duplicate:safe,earlyBonus:safe,earlyWindow:safe,unrecognizedAuthorCap:safe}).strict()}).strict();

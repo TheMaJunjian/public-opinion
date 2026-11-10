@@ -35,4 +35,13 @@ export const DATABASE_MIGRATIONS = [
   'private-notification-deletion',
   'membership-notification-state-changes',
   'invitation-registration-and-account-access',
+  'content-moderation-and-separate-review-escrows',
+  'versioned-moderation-dependency-index',
+  'random-staged-message-review-assignments',
+  'online-review-candidate-sessions',
+  'public-content-and-funded-review-rounds',
+  'attach-historical-review-enrollment-records',
+  'review-guarantees-as-sided-self-stakes',
+  'stake-weighted-review-arbitration',
+  'ledger-operation-groups',
 ] as const;

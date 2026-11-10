@@ -1,5 +1,6 @@
 import type { WorkbenchSnapshot, RelationPayload, TargetRef } from './workbench.js';
 import type { Part } from './types.js';
+import { referenceLabelPart } from './reference-label.js';
 
 /** Presence and topology only. Bodies, quoted text and replacement bodies are fetched by ID. */
 const payload = (value: RelationPayload | null | undefined) => {
@@ -11,14 +12,17 @@ const payload = (value: RelationPayload | null | undefined) => {
     ...(_after !== undefined ? { correctionAfterContent: '' } : {}) };
 };
 const refs = (values: TargetRef[] | undefined) => values?.map(ref => ref.kind === 'text-fragment' ? { ...ref, text: '' } : ref);
-const parts = (values: Part[] | undefined): Part[] | undefined => values?.map(part => {
-  if (part.type === 'text') return { ...part, text: part.text.trim() ? 'x' : '' };
-  if (part.type === 'code') return { ...part, source: '' };
-  if (part.type === 'data') return { ...part, value: null };
-  if (part.type === 'web') return { ...part, excerpt: '' };
-  // Native roles contain only reference identities, never readable bodies.
-  return part;
-});
+const parts = (values: Part[] | undefined): Part[] | undefined => {
+  const labelPart = referenceLabelPart(values);
+  return values?.map(part => {
+    if (part.type === 'text') return { ...part, text: part.id !== labelPart && part.text.trim() ? 'x' : '' };
+    if (part.type === 'code') return { ...part, source: '' };
+    if (part.type === 'data') return { ...part, value: null };
+    if (part.type === 'web') return { ...part, excerpt: '' };
+    // Native roles contain only reference identities, never readable bodies.
+    return part;
+  });
+};
 export function structureSnapshot(snapshot: WorkbenchSnapshot): WorkbenchSnapshot {
   const rows = new Map<object, object>();
   const compact = <T extends WorkbenchSnapshot['messages'][number] | WorkbenchSnapshot['relations'][number]>(row: T): T => {

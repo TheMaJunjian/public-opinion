@@ -20,6 +20,7 @@ import { summarizeDiscussionEdges, mergeRelatedGroups } from '../utils/discussio
 import { GRAPH_EDGE_PATH_LAYER, GRAPH_EDGE_LABEL_LAYER } from '../utils/graphPresentationGeometry';
 import { computeDiscussionRegionTextStats } from '../utils/discussionRegionStats';
 import type { DiscussionRegionGeometry } from '../utils/discussionLayout';
+import { DISCUSSION_REGION_FOOTER } from '../utils/discussionLayout';
 import {projectFrameViewports,createFrameClipResolver,frameConnectionVisible,type FrameScroll,type GraphFrameViewState} from '../utils/frameViewports';
 import {useAvailableFrameWidth} from '../hooks/useAvailableFrameWidth';
 import {computeSceneLayout,type FrameViewSize} from '../utils/frameLayout';
@@ -41,15 +42,17 @@ import { useCardMeasurements } from '../hooks/useCardMeasurements';
 import { useVirtualMessageMounts, type VirtualMessageRevealDetail } from '../hooks/useVirtualMessageMounts';
 import { intersectsViewport } from '../hooks/useCanvasViewport';
 import { createMessageJumpGroups, registerMessageJumpGroups } from '../utils/messageJumpDisplay';
-import { getMessageProminence, getMessageTypeLabel, getOrganizationTitle, isBodyCorrection, needsSeparateStanceCard } from '../utils/messageDisplay';
+import { getMessageProminence, getMessageTypeLabel, getOrganizationTitle, hasMetadataOnlyContent, isBodyCorrection, needsSeparateStanceCard } from '../utils/messageDisplay';
 import { activateMessageFromKeyboard } from '../utils/messageKeyboard';
 import MessageTextPart from './MessageTextPart';
+import MessageBody from './MessageBody';
 import { ReadingTextLinksContext } from './ReadingTextLinksContext';
 import { renderReadingTextLinks } from './ReadingTextLinks';
 import { describeUnit } from '../utils/selectionLabel';
 import { PART_SELECTION_EVENT, isWholeMessageSelection } from '../utils/messageElementSelection';
 import MessageElement from './MessageElement';
 import MessageCardSelfStake from './MessageCardSelfStake';
+import MessageTypeDetails from './MessageTypeDetails';
 import MessageMemberCount from './MessageMemberCount';
 import type { ContainerOwnership } from '../pages/workbench/model/ownership';
 import ClassificationCard from './graph/ClassificationCard';
@@ -59,6 +62,7 @@ import HomeFilterBadge from './HomeFilterBadge';
 import { MessageDisplayMarker, MessageDisplayHintsScope } from './MessageDisplayHints';
 import MessageSettlementActions from './MessageSettlementActions';
 import SettlementPanel from './SettlementPanel';
+import ReviewPanel from './ReviewPanel';
 import RoundHistory from './RoundHistory';
 import RelatedMessages from './RelatedMessages';
 import CrossCanvasRelatedMessages from './CrossCanvasRelatedMessages';
@@ -111,6 +115,7 @@ export interface GraphViewProps {
   relatedEdges?:DemoEdge[];
   onRelatedRelationView?:(id:string)=>void;
   standaloneMessageIds?:ReadonlySet<string>;
+  forceCardMessageIds?:ReadonlySet<string>;
   rejectedContainerIds?:ReadonlySet<string>;
   rejectedRelationIds?:ReadonlySet<string>;
   onRelatedMessageNavigate?:(id:string)=>void;
@@ -207,7 +212,7 @@ export interface GraphViewProps {
   /** Phase 3: currently open settlement message ID (for active state styling) */
   settlementOpenMsgId?: string | null;
   /** Phase 3: currently open settlement type (TRUTH or VALUE) */
-  settlementOpenType?: 'TRUTH' | 'VALUE' | null;
+  settlementOpenType?: 'TRUTH' | 'VALUE' | 'REVIEW' | null;
   onSettlementMessageCreated?: (m: { id: string; content: string; createdAt: string; author: string; kind: string }) => void;
   /** Phase 5: Stance path highlight — { stanceMsgId, evidenceMsgIds } */
   stanceHighlight?: { stanceMsgId: string; evidenceMsgIds: string[] } | null;
@@ -672,9 +677,9 @@ function GraphViewCanvas(props: GraphViewProps) {
   const { msgMap, edgesByRelMsg, classifyRelMsgIds, relationCardMsgIds, normals,
     layoutEdges, hiddenTargetIds, correctionsByTargetMsgId: renderedCorrectionsByTargetMsgId, frameBlocks, frameDepthMap,
     correctedEdgeIdsByRelMsg, pipelineCol, pipelineMaxCol } = useMemo(() => projectGraphScene({
-      messages, edges, traceExpandedFrameIds, isTraceWindow,expandedFrameIds:props.expandedFrameIds,showJoinRecords,standaloneMessageIds:props.standaloneMessageIds,rejectedContainerIds:props.rejectedContainerIds,rejectedRelationIds,hiddenMessageIds:effectiveHideMessageIds,cardFrameIds,
+      messages, edges, traceExpandedFrameIds, isTraceWindow,expandedFrameIds:props.expandedFrameIds,showJoinRecords,standaloneMessageIds:props.standaloneMessageIds,forceCardMessageIds:props.forceCardMessageIds,rejectedContainerIds:props.rejectedContainerIds,rejectedRelationIds,hiddenMessageIds:effectiveHideMessageIds,cardFrameIds,
       discussionTargetIds:discussionEnabled?discussionTargetIds:undefined,
-    }), [messages, edges, traceExpandedFrameIds, isTraceWindow,props.expandedFrameIds,showJoinRecords,props.standaloneMessageIds,props.rejectedContainerIds,rejectedRelationIds,effectiveHideMessageIds,cardFrameIds,discussionEnabled,discussionTargetIds]);
+    }), [messages, edges, traceExpandedFrameIds, isTraceWindow,props.expandedFrameIds,showJoinRecords,props.standaloneMessageIds,props.forceCardMessageIds,props.rejectedContainerIds,rejectedRelationIds,effectiveHideMessageIds,cardFrameIds,discussionEnabled,discussionTargetIds]);
   const availableFrameWidth=useAvailableFrameWidth(canvasRef,frameBlocks.some(frame=>frame.hasGroupHeader));
 
   const measuredHeights = useCardMeasurements(canvasRef, cardRefs);
@@ -951,8 +956,20 @@ function GraphViewCanvas(props: GraphViewProps) {
     return [id,type==='classify'||type==='summary'
       ?getGroupHeaderRect(rect,getGroupHeaderHeight(measuredHeights,id,hiddenFrameHeaderIds.has(id)?COMPACT_FRAME_HEADER_HEIGHT:undefined)):rect];
   })),[finalFrameRects,msgMap,measuredHeights,hiddenFrameHeaderIds]);
+  const labelTextObstacles = useMemo(() => {
+    const measured = new Set(measuredIds);
+    const headers = frameBlocks.flatMap(frame => measured.has(frame.relMsgId) && virtualBoxes[frame.relMsgId]
+      && (frame.isMerge || frame.hasCardHeader || frame.hasGroupHeader) ? [virtualBoxes[frame.relMsgId]] : []);
+    for (const region of discussionRegions) {
+      if (props.visibleMessageIds && !props.visibleMessageIds.has(region.targetId)) continue;
+      headers.push(frameViews.extent(region.targetId, { ...region, height: region.headerHeight }));
+      if (!region.collapsed) headers.push(frameViews.extent(region.targetId,
+        { ...region, y: region.y + region.height - DISCUSSION_REGION_FOOTER, height: DISCUSSION_REGION_FOOTER }));
+    }
+    return headers.filter(rect => rect.width > 0 && rect.height > 0);
+  }, [measuredIds, frameBlocks, virtualBoxes, discussionRegions, props.visibleMessageIds, frameViews]);
   const overlays = useGraphOverlays({
-    frameDecorationAnchors,
+    frameDecorationAnchors,labelObstacles:labelTextObstacles,
     hiddenMessageIds:hiddenRoutingIds,semanticEdges:edges,
     excludedStanceEdges:props.excludedStanceEdges, visibleDecorationIds, visibleAnnotationIds,
     pendingMeasurements: virtual.pending,
@@ -1370,6 +1387,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                       <ThemeLabel text={kindMeta.label} />
                     </MessageElement>
                   )}
+                  <MessageTypeDetails message={msg} />
                   <HomeFilterBadge label={homeRoleLabel(msg.id)} reason={props.homeReasonByMessageId?.get(msg.id)}/>
                   <MessageCardSelfStake message={msg} />
                 </div>
@@ -1436,11 +1454,11 @@ function GraphViewCanvas(props: GraphViewProps) {
                 </div>
               )}
               {isText&&<div style={{fontSize:11,color:"var(--ink-0b84ff)",marginBottom:4}}>拖选文字即可选择片段，或点击已有高亮片段</div>}
-              {(msg.kind === 'round' || msg.kind === 'round_result') ? (
+              <MessageBody message={msg}>{(msg.kind === 'round' || msg.kind === 'round_result') ? (
                 <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"var(--ink-f5f5f5)"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
                   <SettlementMessageContent message={msg} onTargetClick={onNavigateToMessage?(_event,id)=>onNavigateToMessage(id):undefined}/>
                 </div>
-              ) : !msg.joinInfo && (
+              ) : !msg.joinInfo && !hasMetadataOnlyContent(msg) && (
               <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"var(--ink-f5f5f5)"}}>
                 {msg.parts?.some(part => ['text', 'web', 'code'].includes(part.type))
                   ? msg.parts.filter(part => ['text', 'web', 'code'].includes(part.type)).map(part =>
@@ -1448,6 +1466,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                   : <MessageTextPart message={msg} activeText={activeTextSelectId === msg.id} onMouseUp={onTextMouseUp}>{renderContent(msg)}</MessageTextPart>}
               </div>
               )}
+              </MessageBody>
               {isContainer && <div className="message-card-members" style={{fontSize:12,color:'var(--ink-9ca3af)',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
                 <MessageMemberCount total={memberCounts?.total} direct={memberCounts?.direct} showEnterHint={props.containerEntryEnabled!==false&&!traceFrameIds.has(msg.id)&&['classify','summary'].includes(msg.relationType??'')}/>
               </div>}
@@ -1549,8 +1568,8 @@ function GraphViewCanvas(props: GraphViewProps) {
           width: 360,
           zIndex: 100,
         }}>
-          <SettlementPanel messageId={settlementOpenMsgId} scopeMessageId={scopeMessageId ?? ''} highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} onMessageCreated={onSettlementMessageCreated} filterSettlementType={settlementOpenType ?? undefined} />
-          <RoundHistory messageId={settlementOpenMsgId} compact />
+          {settlementOpenType==='REVIEW'?<ReviewPanel messageId={settlementOpenMsgId} revision={msgMap.get(settlementOpenMsgId)?.revision}/>:<><SettlementPanel messageId={settlementOpenMsgId} scopeMessageId={scopeMessageId ?? ''} highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} onMessageCreated={onSettlementMessageCreated} filterSettlementType={settlementOpenType ?? undefined} />
+          <RoundHistory messageId={settlementOpenMsgId} compact /></>}
         </div>
         );
       })()}

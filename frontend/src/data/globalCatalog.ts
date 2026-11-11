@@ -19,6 +19,8 @@ export interface CatalogCache {
 }
 export type CatalogPosition = Omit<CatalogCheckpoint, 'snapshot'> & { regionId: string; sequence: number };
 export interface CatalogProgress { ready: boolean; count: number; syncing: boolean; error?: string }
+/** Complete replay since the previous published index; absent after reset or optimistic publication. */
+export interface CatalogUpdate { previousSequence: number; changedIds: string[] }
 
 /** A separate cursor is essential: fetching a visible window cannot complete the global index. */
 export function syncGlobalCatalog(options: {
@@ -27,7 +29,7 @@ export function syncGlobalCatalog(options: {
   cache: CatalogCache;
   load(query: SnapshotQuery): Promise<WorkbenchSnapshot>;
   idle(signal: AbortSignal): Promise<void>;
-  onReady(snapshot: WorkbenchSnapshot): void;
+  onReady(snapshot: WorkbenchSnapshot, update?: CatalogUpdate): void;
   onProgress(progress: CatalogProgress): void;
 }) {
   const abort = new AbortController();
@@ -36,6 +38,13 @@ export function syncGlobalCatalog(options: {
   let initialized = false, stopped = false, running = false, queued = false, ready = false;
   let resetRequested = false;
   let publishedAfter = -1, failures = 0;
+  let previousPublication: number | undefined;
+  const changedIds = new Set<string>();
+  const rememberChanges = (page: WorkbenchSnapshot) => {
+    for (const id of [...page.messages.map(row => row.id), ...page.relations.map(row => row.id),
+      ...page.removedMessageIds ?? [], ...page.removedMemberships ?? [],
+      ...Object.keys(page.stakes), ...Object.keys(page.tagCounts), ...Object.keys(page.attentionUsers)]) changedIds.add(id);
+  };
   let journalPages = 0;
   let lastError: string | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -64,7 +73,10 @@ export function syncGlobalCatalog(options: {
     if (!ready || publishedAfter !== checkpoint.after) {
       publishedAfter = checkpoint.after;
       ready = true;
-      options.onReady({ ...store.snapshot(), sequence: checkpoint.after });
+      const snapshot = { ...store.snapshot(), sequence: checkpoint.after };
+      const update = previousPublication === undefined ? undefined : { previousSequence: previousPublication, changedIds: [...changedIds] };
+      previousPublication = snapshot.sequence; changedIds.clear();
+      if (update) options.onReady(snapshot, update); else options.onReady(snapshot);
     }
   };
   const schedule = (delay = 0) => {
@@ -82,6 +94,7 @@ export function syncGlobalCatalog(options: {
         await options.cache.clear();
         if (stopped) return;
         store = new WorkbenchStore(); checkpoint = null; ready = false; publishedAfter = -1; initialized = true; journalPages = 0;
+        previousPublication = undefined; changedIds.clear();
       }
       if (!initialized) {
         checkpoint = await options.cache.load();
@@ -126,7 +139,7 @@ export function syncGlobalCatalog(options: {
         if (page.sequence < checkpoint.after || (page.hasMore && page.sequence === checkpoint.after)) throw new Error('全局消息同步进度无效');
         const unchanged = checkpoint.complete && page.sequence === checkpoint.after && !page.messages.length
           && !page.relations.length && !page.removedMessageIds?.length;
-        store.apply(page);
+        rememberChanges(page); store.apply(page);
         checkpoint.after = page.sequence;
         more = !!page.hasMore || store.sequence > checkpoint.after;
         checkpoint.complete = !more;
@@ -141,6 +154,7 @@ export function syncGlobalCatalog(options: {
       if ((error as { status?: number }).status === 409) {
         await options.cache.clear();
         store = new WorkbenchStore(); checkpoint = null; ready = false; publishedAfter = -1; journalPages = 0;
+        previousPublication = undefined; changedIds.clear();
         schedule();
       } else {
         const failure = error instanceof Error ? error : new Error(String(error));
@@ -169,6 +183,9 @@ export function syncGlobalCatalog(options: {
       if (stopped || !ready || !checkpoint || (page.scope.messageId ?? 'root') !== options.parent) return;
       // Command responses update the visible model immediately, but never advance the replay cursor.
       store.apply({ ...page, windowed: false });
+      // A command response may skip intervening changes. Resume reuse only
+      // after the next complete replay has established a new baseline.
+      previousPublication = undefined; changedIds.clear();
       options.onReady(store.snapshot());
       schedule();
     },

@@ -1,0 +1,63 @@
+{
+  "date": "2026-11-11",
+  "scope": "Local release verification for login/message-page and category loading optimizations",
+  "baseCommit": "58e0569",
+  "workingTreeChanges": true,
+  "environment": {
+    "node": "v24.14.1",
+    "platform": "win32",
+    "dockerEngine": "29.4.0",
+    "dockerCompose": "5.1.1"
+  },
+  "regression": {
+    "fullRun": {
+      "command": "npm test -- --maxWorkers=4",
+      "filesPassed": 328,
+      "filesFailed": 1,
+      "testsPassed": 4337,
+      "testsFailed": 2,
+      "durationSeconds": 859.21
+    },
+    "resolution": {
+      "cause": "Two selection-interaction tests required a redundant body request after selecting an already hydrated card. Valid body-cache reuse correctly avoids that request.",
+      "change": "Exercise graph and list selection separately with a fully warm cache and with later message bodies absent from the first page. Assert no download on cache hits, and immediate selection/deselection while a genuine missing-body request is held pending.",
+      "applicationCodeChangedDuringVerification": false,
+      "command": "npx vitest run frontend/src/test/message-workbench-page.test.tsx -t 'updates card selection immediately' --maxWorkers=1",
+      "testsPassed": 4,
+      "testsFailed": 0,
+      "testsSkippedByNameFilter": 558,
+      "durationSeconds": 6.2
+    },
+    "method": "The complete suite was run once. After its two obsolete request assumptions were replaced, all four affected interaction scenarios were rerun. The other 4337 passing cases and application code were unchanged; the complete suite was not repeated after this test-only edit."
+  },
+  "checks": [
+    { "command": "npm --workspace frontend run lint", "result": "passed after the test update" },
+    { "command": "npm run typecheck", "result": "passed with the updated test cases" },
+    { "command": "npm run test:deployment", "result": "passed", "tests": 117, "failed": 0 },
+    { "command": "npm run test:bundle", "result": "passed", "routeBytes": 304021, "routeGzipBytes": 101306, "staticClosureGzipBytes": 343811 },
+    { "command": "npm run test:production", "result": "passed", "includesBuildAndTypecheck": true },
+    { "command": "git diff --check", "result": "passed" }
+  ],
+  "productionContainerExercise": {
+    "isolatedLocalComposeProject": true,
+    "syntheticDataOnly": true,
+    "checks": [
+      "Delayed startup remains eligible for Compose readiness",
+      "PostgreSQL, API and Caddy HTTPS",
+      "Static assets, founder protection, Secure cookie and CSRF",
+      "Message write, restart persistence, session and login",
+      "Older database upgrade and migrated bcrypt login with preserved messages and balances",
+      "Failed upgrade rollback and stable failure report, followed by recovery",
+      "Existing database launcher preserves its database container and volume",
+      "Packaged read-only migration checks, topic retirement and idempotent rerun"
+    ],
+    "temporaryContainersVolumesNetworkAndImageCleaned": true
+  },
+  "performanceEvidence": [
+    "navigation-2026-11-11.json",
+    "navigation-stage2-2026-11-11.json",
+    "navigation-stage3-2026-11-11.json",
+    "navigation-stage4-2026-11-11.json"
+  ],
+  "deploymentStatus": "Local changes only; no commit, push or production deployment was performed. Production latency remains to be measured after deployment."
+}

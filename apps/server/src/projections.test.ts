@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bindRoles, resolveStance, type Message, type Part, type Reference } from '@gonglun/core';
 import { Mutation, Store } from './db.js';
 import { recordStance, statesFor } from './projections.js';
+import { tagCountsFor } from './ui-projections.js';
 import { cleanupTestDatabases, createTestStore } from './test-database.js';
 
 const stores: Store[] = [];
@@ -42,6 +43,41 @@ async function fixture() {
 }
 
 describe('authoritative organization display states', () => {
+  it('counts each multi-target recommendation once per target across query batches', async () => {
+    const { store, publish, summary } = await fixture();
+    const other = await publish([{ id: 'body', type: 'text', text: '另一目标' }]);
+    await store.transaction(async () => {
+      const tx = new Mutation(store);
+      await tx.create('alice', [{ id: 'recommend', type: 'relation', relation: 'recommend',
+        roles: bindRoles({ target: [{ messageId: summary.id }, { messageId: other.id }] }) }], { protocol: 0, recommendation: 3, wager: 0 });
+      await tx.commit();
+    });
+    // Put the two targets on opposite sides of the batch boundary as well as
+    // in the same batch; the shared source must never multiply either count.
+    for (const ids of [[summary.id, other.id], [summary.id, ...Array.from({ length: 199 }, (_, i) => `absent-${i}`), other.id]]) {
+      const states = await statesFor(store, ids);
+      expect(states).toHaveLength(2);
+      expect(states.every(state => state.recommendationTotal === 3)).toBe(true);
+      const tags = await tagCountsFor(store, ids);
+      expect(tags[summary.id]).toEqual({ RECOMMEND: 1 });
+      expect(tags[other.id]).toEqual({ RECOMMEND: 1 });
+    }
+  });
+
+  it('does not apply votes on an older target revision to its updated body', async () => {
+    const { store, stance, summary } = await fixture();
+    await stance({ messageId: summary.id, revision: 1 }, 'con');
+    expect((await statesFor(store, [summary.id]))[0].oppositionCount).toBe(1);
+    await store.transaction(async () => {
+      const tx = new Mutation(store);
+      await tx.put({ ...summary, revision: 2 });
+      await tx.commit();
+    });
+    expect((await statesFor(store, [summary.id]))[0]).toMatchObject({ revision: 2, suppressed: false, supportCount: 0, oppositionCount: 0 });
+    await stance({ messageId: summary.id, revision: 2 }, 'pro');
+    expect((await statesFor(store, [summary.id]))[0]).toMatchObject({ revision: 2, supportCount: 1, oppositionCount: 0 });
+  });
+
   it('keeps an effective opposition after more than 100 later references push it out of the context page', async () => {
     const { store, publish, stance, summary } = await fixture();
     const opposition = await stance({ messageId: summary.id, revision: 1 }, 'con');

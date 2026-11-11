@@ -1,11 +1,49 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { useMessageWindow } from '../hooks/useMessageWindow';
 import type { DemoEdge, DemoMessage } from '../utils/modelBridge';
 import { createWorkbenchDrawingTasks, WorkbenchDrawingContext } from '../context/WorkbenchDrawingContext';
 import { createElement, type ReactNode } from 'react';
 
 const messages: DemoMessage[] = Array.from({ length: 150 }, (_, index) => ({ id: `m-${index}`, author: '用户', kind: 'normal', content: '', createdAt: new Date(index * 1000).toISOString() }));
+
+it('waits for the next body page, coalesces scroll requests and then reveals the completed batch', async () => {
+  let release!: () => void;
+  const loadMore = vi.fn(() => new Promise<void>(resolve => { release = resolve; }));
+  const { result, rerender } = renderHook(({ count, limit }) => useMessageWindow(messages.slice(0, count), [], true, 'remote', [], true, 'time',
+    { limit, hasMore: count < messages.length, loadMore }), { initialProps: { count: 20, limit: 20 } });
+  expect(result.current.messages).toHaveLength(20);
+  expect(result.current.hasMore).toBe(true);
+  let pending!: Promise<void>;
+  act(() => { pending = result.current.more(); expect(result.current.more()).toBe(pending); });
+  await waitFor(() => expect(loadMore).toHaveBeenCalledOnce());
+  expect(result.current.messages).toHaveLength(20);
+  expect(result.current.loading).toBe(true);
+  rerender({ count: 70, limit: 70 });
+  act(() => release());
+  await waitFor(() => expect(result.current.loading).toBe(false));
+  await pending;
+  expect(result.current.messages).toHaveLength(70);
+  expect(result.current.messages.map(row => row.id)).toEqual(messages.slice(0, 70).map(row => row.id));
+});
+
+it('rejects a failed body page without advancing the visible range and allows retry', async () => {
+  const loadMore = vi.fn().mockRejectedValueOnce(new Error('body fetch failed')).mockResolvedValue(undefined);
+  const { result, rerender } = renderHook(({ count }) => useMessageWindow(messages.slice(0, count), [], true, 'remote-error', [], true, 'time',
+    { limit: 20, hasMore: true, loadMore }), { initialProps: { count: 20 } });
+  let pending!: Promise<void>;
+  const failed = vi.fn();
+  act(() => { pending = result.current.more(); void pending.catch(failed); });
+  await waitFor(() => expect(failed).toHaveBeenCalledWith(expect.objectContaining({ message: 'body fetch failed' })));
+  expect(result.current.messages).toHaveLength(20);
+  expect(result.current.loading).toBe(false);
+  act(() => { pending = result.current.more(); });
+  await waitFor(() => expect(loadMore).toHaveBeenCalledTimes(2));
+  rerender({ count: 70 });
+  await waitFor(() => expect(result.current.loading).toBe(false));
+  await pending;
+  expect(result.current.messages).toHaveLength(70);
+});
 it('pages a mixed message list chronologically while keeping the graph placement available for discussion reading',()=>{
   const texts=messages.slice(0,52).map((message,index)=>({...message,createdAt:new Date(index*60000).toISOString()}));
   const record:DemoMessage={...messages[0],id:'early-record',kind:'relation',relationType:'agree',createdAt:new Date(30000).toISOString()};

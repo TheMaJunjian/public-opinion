@@ -13,6 +13,7 @@ export function createScopedProjectionCache<T>() {
       return entry?.value;
     },
     isCurrent(nextSource: unknown, nextIdentity: unknown) { return source === nextSource && identity === nextIdentity; },
+    *entries() { for (const [key, entry] of entries) yield [key, entry.value, entry.bytes] as const; },
     put(key: string, value: T, weight: number, capacity: number) {
       const previous = entries.get(key); if (previous) { bytes -= previous.bytes; entries.delete(key); }
       if (weight > 32 * 1024 * 1024) return;

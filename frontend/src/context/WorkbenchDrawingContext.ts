@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useLayoutEffect, useReducer, useRef } from 'react';
+import { startWorkbenchTiming } from '../utils/workbenchTiming';
 
 export type DrawingTaskKind = 'loading' | 'module' | 'projection' | 'measurement' | 'overlays' | 'positioning' | 'fonts';
 export type DrawingFailure = { kind: DrawingTaskKind | 'render'; reason: 'error' | 'timeout'; error?: unknown };
@@ -53,9 +54,10 @@ export function createWorkbenchDrawingTasks() {
   };
   const tasks = {
     begin(kind: DrawingTaskKind, foreground = false) {
+      const finishTiming = startWorkbenchTiming(`drawing:${kind}`);
       const id = Symbol(kind);
       const cleanups = new Set<() => void>();
-      const release = () => { if (pending.delete(id)) { cleanups.clear(); changed(); } };
+      const release = () => { if (pending.delete(id)) { finishTiming(); cleanups.clear(); changed(); } };
       const cancel = () => {
         pending.delete(id);
         for (const cleanup of cleanups) {

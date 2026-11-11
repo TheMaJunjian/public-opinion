@@ -2,12 +2,14 @@ import type { ExportData } from '../api/client';
 import type { Part } from '@gonglun/core';
 import { deriveContainerEffect, isContainerType } from '../pages/workbench/model/containerEffect';
 import { archiveToWorkbenchSnapshot, projectWorkbenchSnapshot } from './workbenchProjection';
-import { isCardMessage } from './modelBridge';
+import { isCardMessage, isReviewDiscussion, isReviewRecord, isSettlementRecord } from './modelBridge';
 import type { TraceDepths } from './traceRange';
 import { isNativeZhihuView } from './nativeZhihuView';
 import type { TargetRef } from '../types';
 import { hydratePagedArchive, pagedArchiveSource } from './pagedZhihuArchive';
 import { displayDependencyIds } from './displayDependency';
+import { projectContainerCanvas } from '../pages/workbench/projections/containerCanvas';
+import { planChronologicalMessageUnits } from './messageStructurePlan';
 
 type Row = ExportData['messages'][number];
 type RelationRow = ExportData['relations'][number];
@@ -29,11 +31,20 @@ export interface ZhihuViewerScope {
   /** Relationship history loads records/endpoints, without opening their categories. */
   recordIds?: string[];
   includeJoinRecords?: boolean;
+  viewMode?: 'list' | 'graph';
+  /** Temporary record lists and global operations retain complete hydration. */
+  bodyPaging?: boolean;
+  /** Reveal the chronological prefix containing navigation/send anchors. */
+  pinnedIds?: string[];
 }
+export interface StructuralBodyPage { limit: number; totalUnits: number; hasMore: boolean }
+interface StructuralWindow { data: ExportData; unloadedContainers: Set<string>; bodyPage?: StructuralBodyPage }
 
 export const structuralScopeKey = (scope: ZhihuViewerScope) => JSON.stringify([
   scope.classificationId, !!scope.full, scope.trace?.ids, scope.trace?.depths,
   scope.trace?.expandedIds, [...scope.extraIds ?? []].sort(), [...scope.recordIds ?? []].sort(), !!scope.includeJoinRecords,
+  scope.viewMode ?? 'list', scope.bodyPaging !== false,
+  [...scope.pinnedIds ?? []].sort(),
 ]);
 
 export function shouldUseZhihuStructuralViewer(data: ExportData): boolean {
@@ -234,8 +245,42 @@ export function createZhihuStructuralViewer(data: ExportData, username: string |
     return selected;
   }
 
-  function window(scope: ZhihuViewerScope) {
+  const pagePlans = new Map<string, { full: StructuralWindow; plan: ReturnType<typeof planChronologicalMessageUnits> }>();
+  function window(scope: ZhihuViewerScope, bodyLimit?: number): StructuralWindow {
     if (scope.full) return { data, unloadedContainers: new Set<string>() };
+    if (bodyLimit !== undefined && Number.isFinite(bodyLimit) && scope.bodyPaging !== false && !scope.trace
+      && !scope.recordIds?.length && !scope.extraIds?.length) {
+      const key = structuralScopeKey({ ...scope, pinnedIds: undefined });
+      let limit = Math.max(1, Math.floor(bodyLimit));
+      let cached = pagePlans.get(key);
+      if (!cached) {
+        const full = window(scope);
+        const model = indexProjection(full.data, full.data.messages, full.data.relations);
+        const scopedEffect = deriveContainerEffect({ ...model, username, stakeCounts: model.counts });
+        const canvas = projectContainerCanvas(scopedEffect, scope.classificationId
+          ? { kind: 'inside', id: scope.classificationId } : { kind: 'root' }, scope.viewMode ?? 'list');
+        const visible = canvas.messages.filter(row => row.kind !== 'join' && !isSettlementRecord(row)
+          && !isReviewRecord(row) && !isReviewDiscussion(row));
+        cached = { full, plan: planChronologicalMessageUnits(visible, canvas.edges) };
+      }
+      pagePlans.delete(key); pagePlans.set(key, cached);
+      while (pagePlans.size > 4) pagePlans.delete(pagePlans.keys().next().value!);
+      const { full, plan } = cached;
+      const positions = new Map(plan.units.map((id, position) => [id, position]));
+      for (const id of scope.pinnedIds ?? []) for (const dependency of [id, ...plan.pinDependencies.get(id) ?? []]) {
+        const unit = plan.byId.get(dependency);
+        if (unit !== undefined) limit = Math.max(limit, (positions.get(unit) ?? -1) + 1);
+      }
+      const bodyPage = { limit, totalUnits: plan.units.length, hasMore: limit < plan.units.length };
+      if (!bodyPage.hasMore) return { ...full, bodyPage };
+      const units = new Set(plan.units.slice(0, limit));
+      const ids = new Set(plan.order.filter(id => units.has(plan.byId.get(id)!)));
+      if (scope.classificationId) ids.add(scope.classificationId);
+      // Ordinary replies from a later page stay deferred. Semantic dependencies
+      // (membership alternatives, corrections and stance chains) remain complete.
+      return { ...completeWindow(ids, id => !plan.byId.has(id) || units.has(plan.byId.get(id)!),
+        new Set(full.data.messages.map(row => row.id))), bodyPage };
+    }
     const ids = scope.trace ? traceIds(scope.trace) : layer(scope.classificationId);
     if (scope.includeJoinRecords && !scope.recordIds?.length) for (const id of [...ids]) {
       for (const join of [...joinsBySource.get(id) ?? [], ...joinsByTarget.get(id) ?? []]) ids.add(join);
@@ -247,13 +292,18 @@ export function createZhihuStructuralViewer(data: ExportData, username: string |
       const parent = containingClassification(id);
       for (const child of layer(parent)) ids.add(child);
     }
+    return completeWindow(ids);
+  }
+
+  function completeWindow(ids: Set<string>, includeAdjacent: (id: string) => boolean = () => true, allowedIds?: ReadonlySet<string>): StructuralWindow {
     // Keep cross-canvas records and their immediate endpoints. This does not
     // recursively traverse arbitrary replies; trace distance owns that expansion.
     const seeds = [...ids];
     for (const id of seeds) for (const recordId of adjacent.get(id) ?? []) {
+      if (!includeAdjacent(recordId) || allowedIds && !allowedIds.has(recordId)) continue;
       ids.add(recordId);
       const record = relations.get(recordId)!;
-      for (const endpoint of endpoints(record)) if (byId.has(endpoint)) ids.add(endpoint);
+      for (const endpoint of endpoints(record)) if (byId.has(endpoint) && (!allowedIds || allowedIds.has(endpoint))) ids.add(endpoint);
     }
     // Membership alternatives, corrections and chains of stances must be loaded
     // together; otherwise a partial window could choose a different winner.
@@ -261,7 +311,7 @@ export function createZhihuStructuralViewer(data: ExportData, username: string |
     for (let index = 0; index < pending.length; index++) {
       const id = pending[index]; if (seen.has(id)) continue;
       seen.add(id);
-      const add = (next: string) => { if (byId.has(next) && !ids.has(next)) { ids.add(next); pending.push(next); } };
+      const add = (next: string) => { if (byId.has(next) && !ids.has(next) && (!allowedIds || allowedIds.has(next))) { ids.add(next); pending.push(next); } };
       for (const parent of parents.get(id) ?? []) add(parent);
       for (const recordId of affecting.get(id) ?? []) {
         add(recordId);

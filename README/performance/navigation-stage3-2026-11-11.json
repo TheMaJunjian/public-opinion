@@ -1,0 +1,1043 @@
+{
+  "date": "2026-11-11",
+  "baseline": "Working tree after stage 2: shared body cache and lightweight structure projection.",
+  "initialMessageUnits": 20,
+  "additionalMessageUnits": 50,
+  "parity": {
+    "records": 3957,
+    "scopesAndModesCompared": 60,
+    "visiblePrefixesAndCorrectionsEquivalent": true,
+    "method": "One read-only local PostgreSQL snapshot, anonymous visibility. Compare all category/list/graph first-20-unit prefixes, suppression and correction versions against full body hydration. Request counts and compact JSON bytes are calculated from identical snapshot rows, with a cold body cache per comparison; not HTTP/WAN or rendering timings.",
+    "scenarios": [
+      {
+        "scope": "root",
+        "viewMode": "list",
+        "units": 23,
+        "hasMore": true,
+        "before": {
+          "requested": 97,
+          "requests": 1,
+          "jsonBytes": 360347
+        },
+        "after": {
+          "requested": 90,
+          "requests": 1,
+          "jsonBytes": 338909
+        }
+      },
+      {
+        "scope": "root",
+        "viewMode": "graph",
+        "units": 28,
+        "hasMore": true,
+        "before": {
+          "requested": 97,
+          "requests": 1,
+          "jsonBytes": 360347
+        },
+        "after": {
+          "requested": 85,
+          "requests": 1,
+          "jsonBytes": 333873
+        }
+      },
+      {
+        "scope": "category-1",
+        "viewMode": "list",
+        "units": 2,
+        "hasMore": false,
+        "before": {
+          "requested": 10,
+          "requests": 1,
+          "jsonBytes": 115225
+        },
+        "after": {
+          "requested": 10,
+          "requests": 1,
+          "jsonBytes": 115225
+        }
+      },
+      {
+        "scope": "category-1",
+        "viewMode": "graph",
+        "units": 2,
+        "hasMore": false,
+        "before": {
+          "requested": 10,
+          "requests": 1,
+          "jsonBytes": 115225
+        },
+        "after": {
+          "requested": 10,
+          "requests": 1,
+          "jsonBytes": 115225
+        }
+      },
+      {
+        "scope": "category-2",
+        "viewMode": "list",
+        "units": 10,
+        "hasMore": false,
+        "before": {
+          "requested": 56,
+          "requests": 1,
+          "jsonBytes": 264440
+        },
+        "after": {
+          "requested": 56,
+          "requests": 1,
+          "jsonBytes": 264440
+        }
+      },
+      {
+        "scope": "category-2",
+        "viewMode": "graph",
+        "units": 8,
+        "hasMore": false,
+        "before": {
+          "requested": 56,
+          "requests": 1,
+          "jsonBytes": 264440
+        },
+        "after": {
+          "requested": 56,
+          "requests": 1,
+          "jsonBytes": 264440
+        }
+      },
+      {
+        "scope": "category-3",
+        "viewMode": "list",
+        "units": 7,
+        "hasMore": false,
+        "before": {
+          "requested": 406,
+          "requests": 3,
+          "jsonBytes": 1510639
+        },
+        "after": {
+          "requested": 406,
+          "requests": 3,
+          "jsonBytes": 1510639
+        }
+      },
+      {
+        "scope": "category-3",
+        "viewMode": "graph",
+        "units": 7,
+        "hasMore": false,
+        "before": {
+          "requested": 406,
+          "requests": 3,
+          "jsonBytes": 1510639
+        },
+        "after": {
+          "requested": 406,
+          "requests": 3,
+          "jsonBytes": 1510639
+        }
+      },
+      {
+        "scope": "category-4",
+        "viewMode": "list",
+        "units": 3,
+        "hasMore": false,
+        "before": {
+          "requested": 214,
+          "requests": 2,
+          "jsonBytes": 930994
+        },
+        "after": {
+          "requested": 214,
+          "requests": 2,
+          "jsonBytes": 930994
+        }
+      },
+      {
+        "scope": "category-4",
+        "viewMode": "graph",
+        "units": 3,
+        "hasMore": false,
+        "before": {
+          "requested": 214,
+          "requests": 2,
+          "jsonBytes": 930994
+        },
+        "after": {
+          "requested": 214,
+          "requests": 2,
+          "jsonBytes": 930994
+        }
+      },
+      {
+        "scope": "category-5",
+        "viewMode": "list",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        },
+        "after": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        }
+      },
+      {
+        "scope": "category-5",
+        "viewMode": "graph",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        },
+        "after": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        }
+      },
+      {
+        "scope": "category-6",
+        "viewMode": "list",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        },
+        "after": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        }
+      },
+      {
+        "scope": "category-6",
+        "viewMode": "graph",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        },
+        "after": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        }
+      },
+      {
+        "scope": "category-7",
+        "viewMode": "list",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        },
+        "after": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        }
+      },
+      {
+        "scope": "category-7",
+        "viewMode": "graph",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        },
+        "after": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        }
+      },
+      {
+        "scope": "category-8",
+        "viewMode": "list",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        },
+        "after": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        }
+      },
+      {
+        "scope": "category-8",
+        "viewMode": "graph",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        },
+        "after": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        }
+      },
+      {
+        "scope": "category-9",
+        "viewMode": "list",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60634
+        },
+        "after": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60634
+        }
+      },
+      {
+        "scope": "category-9",
+        "viewMode": "graph",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60634
+        },
+        "after": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60634
+        }
+      },
+      {
+        "scope": "category-10",
+        "viewMode": "list",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        },
+        "after": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        }
+      },
+      {
+        "scope": "category-10",
+        "viewMode": "graph",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        },
+        "after": {
+          "requested": 3,
+          "requests": 1,
+          "jsonBytes": 60584
+        }
+      },
+      {
+        "scope": "category-11",
+        "viewMode": "list",
+        "units": 1,
+        "hasMore": false,
+        "before": {
+          "requested": 31,
+          "requests": 1,
+          "jsonBytes": 183832
+        },
+        "after": {
+          "requested": 31,
+          "requests": 1,
+          "jsonBytes": 183832
+        }
+      },
+      {
+        "scope": "category-11",
+        "viewMode": "graph",
+        "units": 1,
+        "hasMore": false,
+        "before": {
+          "requested": 31,
+          "requests": 1,
+          "jsonBytes": 183832
+        },
+        "after": {
+          "requested": 31,
+          "requests": 1,
+          "jsonBytes": 183832
+        }
+      },
+      {
+        "scope": "category-12",
+        "viewMode": "list",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 15,
+          "requests": 1,
+          "jsonBytes": 111872
+        },
+        "after": {
+          "requested": 15,
+          "requests": 1,
+          "jsonBytes": 111872
+        }
+      },
+      {
+        "scope": "category-12",
+        "viewMode": "graph",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 15,
+          "requests": 1,
+          "jsonBytes": 111872
+        },
+        "after": {
+          "requested": 15,
+          "requests": 1,
+          "jsonBytes": 111872
+        }
+      },
+      {
+        "scope": "category-13",
+        "viewMode": "list",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 15,
+          "requests": 1,
+          "jsonBytes": 111854
+        },
+        "after": {
+          "requested": 15,
+          "requests": 1,
+          "jsonBytes": 111854
+        }
+      },
+      {
+        "scope": "category-13",
+        "viewMode": "graph",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 15,
+          "requests": 1,
+          "jsonBytes": 111854
+        },
+        "after": {
+          "requested": 15,
+          "requests": 1,
+          "jsonBytes": 111854
+        }
+      },
+      {
+        "scope": "category-14",
+        "viewMode": "list",
+        "units": 11,
+        "hasMore": false,
+        "before": {
+          "requested": 182,
+          "requests": 1,
+          "jsonBytes": 682861
+        },
+        "after": {
+          "requested": 182,
+          "requests": 1,
+          "jsonBytes": 682861
+        }
+      },
+      {
+        "scope": "category-14",
+        "viewMode": "graph",
+        "units": 11,
+        "hasMore": false,
+        "before": {
+          "requested": 182,
+          "requests": 1,
+          "jsonBytes": 682861
+        },
+        "after": {
+          "requested": 182,
+          "requests": 1,
+          "jsonBytes": 682861
+        }
+      },
+      {
+        "scope": "category-15",
+        "viewMode": "list",
+        "units": 26,
+        "hasMore": true,
+        "before": {
+          "requested": 342,
+          "requests": 2,
+          "jsonBytes": 1243999
+        },
+        "after": {
+          "requested": 284,
+          "requests": 2,
+          "jsonBytes": 1073151
+        }
+      },
+      {
+        "scope": "category-15",
+        "viewMode": "graph",
+        "units": 26,
+        "hasMore": true,
+        "before": {
+          "requested": 342,
+          "requests": 2,
+          "jsonBytes": 1243999
+        },
+        "after": {
+          "requested": 284,
+          "requests": 2,
+          "jsonBytes": 1073151
+        }
+      },
+      {
+        "scope": "category-16",
+        "viewMode": "list",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 15,
+          "requests": 1,
+          "jsonBytes": 114746
+        },
+        "after": {
+          "requested": 15,
+          "requests": 1,
+          "jsonBytes": 114746
+        }
+      },
+      {
+        "scope": "category-16",
+        "viewMode": "graph",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 15,
+          "requests": 1,
+          "jsonBytes": 114746
+        },
+        "after": {
+          "requested": 15,
+          "requests": 1,
+          "jsonBytes": 114746
+        }
+      },
+      {
+        "scope": "category-17",
+        "viewMode": "list",
+        "units": 4,
+        "hasMore": false,
+        "before": {
+          "requested": 51,
+          "requests": 1,
+          "jsonBytes": 215713
+        },
+        "after": {
+          "requested": 51,
+          "requests": 1,
+          "jsonBytes": 215713
+        }
+      },
+      {
+        "scope": "category-17",
+        "viewMode": "graph",
+        "units": 4,
+        "hasMore": false,
+        "before": {
+          "requested": 51,
+          "requests": 1,
+          "jsonBytes": 215713
+        },
+        "after": {
+          "requested": 51,
+          "requests": 1,
+          "jsonBytes": 215713
+        }
+      },
+      {
+        "scope": "category-18",
+        "viewMode": "list",
+        "units": 10,
+        "hasMore": false,
+        "before": {
+          "requested": 158,
+          "requests": 1,
+          "jsonBytes": 619321
+        },
+        "after": {
+          "requested": 158,
+          "requests": 1,
+          "jsonBytes": 619321
+        }
+      },
+      {
+        "scope": "category-18",
+        "viewMode": "graph",
+        "units": 10,
+        "hasMore": false,
+        "before": {
+          "requested": 158,
+          "requests": 1,
+          "jsonBytes": 619321
+        },
+        "after": {
+          "requested": 158,
+          "requests": 1,
+          "jsonBytes": 619321
+        }
+      },
+      {
+        "scope": "category-19",
+        "viewMode": "list",
+        "units": 19,
+        "hasMore": false,
+        "before": {
+          "requested": 271,
+          "requests": 2,
+          "jsonBytes": 1031217
+        },
+        "after": {
+          "requested": 271,
+          "requests": 2,
+          "jsonBytes": 1031217
+        }
+      },
+      {
+        "scope": "category-19",
+        "viewMode": "graph",
+        "units": 19,
+        "hasMore": false,
+        "before": {
+          "requested": 271,
+          "requests": 2,
+          "jsonBytes": 1031217
+        },
+        "after": {
+          "requested": 271,
+          "requests": 2,
+          "jsonBytes": 1031217
+        }
+      },
+      {
+        "scope": "category-20",
+        "viewMode": "list",
+        "units": 22,
+        "hasMore": true,
+        "before": {
+          "requested": 249,
+          "requests": 2,
+          "jsonBytes": 933409
+        },
+        "after": {
+          "requested": 232,
+          "requests": 2,
+          "jsonBytes": 883323
+        }
+      },
+      {
+        "scope": "category-20",
+        "viewMode": "graph",
+        "units": 22,
+        "hasMore": true,
+        "before": {
+          "requested": 249,
+          "requests": 2,
+          "jsonBytes": 933409
+        },
+        "after": {
+          "requested": 232,
+          "requests": 2,
+          "jsonBytes": 883323
+        }
+      },
+      {
+        "scope": "category-21",
+        "viewMode": "list",
+        "units": 6,
+        "hasMore": false,
+        "before": {
+          "requested": 113,
+          "requests": 1,
+          "jsonBytes": 503592
+        },
+        "after": {
+          "requested": 113,
+          "requests": 1,
+          "jsonBytes": 503592
+        }
+      },
+      {
+        "scope": "category-21",
+        "viewMode": "graph",
+        "units": 6,
+        "hasMore": false,
+        "before": {
+          "requested": 113,
+          "requests": 1,
+          "jsonBytes": 503592
+        },
+        "after": {
+          "requested": 113,
+          "requests": 1,
+          "jsonBytes": 503592
+        }
+      },
+      {
+        "scope": "category-22",
+        "viewMode": "list",
+        "units": 3,
+        "hasMore": false,
+        "before": {
+          "requested": 57,
+          "requests": 1,
+          "jsonBytes": 260147
+        },
+        "after": {
+          "requested": 57,
+          "requests": 1,
+          "jsonBytes": 260147
+        }
+      },
+      {
+        "scope": "category-22",
+        "viewMode": "graph",
+        "units": 3,
+        "hasMore": false,
+        "before": {
+          "requested": 57,
+          "requests": 1,
+          "jsonBytes": 260147
+        },
+        "after": {
+          "requested": 57,
+          "requests": 1,
+          "jsonBytes": 260147
+        }
+      },
+      {
+        "scope": "category-23",
+        "viewMode": "list",
+        "units": 7,
+        "hasMore": false,
+        "before": {
+          "requested": 110,
+          "requests": 1,
+          "jsonBytes": 444189
+        },
+        "after": {
+          "requested": 110,
+          "requests": 1,
+          "jsonBytes": 444189
+        }
+      },
+      {
+        "scope": "category-23",
+        "viewMode": "graph",
+        "units": 7,
+        "hasMore": false,
+        "before": {
+          "requested": 110,
+          "requests": 1,
+          "jsonBytes": 444189
+        },
+        "after": {
+          "requested": 110,
+          "requests": 1,
+          "jsonBytes": 444189
+        }
+      },
+      {
+        "scope": "category-24",
+        "viewMode": "list",
+        "units": 10,
+        "hasMore": false,
+        "before": {
+          "requested": 219,
+          "requests": 2,
+          "jsonBytes": 920095
+        },
+        "after": {
+          "requested": 219,
+          "requests": 2,
+          "jsonBytes": 920095
+        }
+      },
+      {
+        "scope": "category-24",
+        "viewMode": "graph",
+        "units": 10,
+        "hasMore": false,
+        "before": {
+          "requested": 219,
+          "requests": 2,
+          "jsonBytes": 920095
+        },
+        "after": {
+          "requested": 219,
+          "requests": 2,
+          "jsonBytes": 920095
+        }
+      },
+      {
+        "scope": "category-25",
+        "viewMode": "list",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 7,
+          "requests": 1,
+          "jsonBytes": 82677
+        },
+        "after": {
+          "requested": 7,
+          "requests": 1,
+          "jsonBytes": 82677
+        }
+      },
+      {
+        "scope": "category-25",
+        "viewMode": "graph",
+        "units": 0,
+        "hasMore": false,
+        "before": {
+          "requested": 7,
+          "requests": 1,
+          "jsonBytes": 82677
+        },
+        "after": {
+          "requested": 7,
+          "requests": 1,
+          "jsonBytes": 82677
+        }
+      },
+      {
+        "scope": "category-26",
+        "viewMode": "list",
+        "units": 3,
+        "hasMore": false,
+        "before": {
+          "requested": 50,
+          "requests": 1,
+          "jsonBytes": 219700
+        },
+        "after": {
+          "requested": 50,
+          "requests": 1,
+          "jsonBytes": 219700
+        }
+      },
+      {
+        "scope": "category-26",
+        "viewMode": "graph",
+        "units": 3,
+        "hasMore": false,
+        "before": {
+          "requested": 50,
+          "requests": 1,
+          "jsonBytes": 219700
+        },
+        "after": {
+          "requested": 50,
+          "requests": 1,
+          "jsonBytes": 219700
+        }
+      },
+      {
+        "scope": "category-27",
+        "viewMode": "list",
+        "units": 28,
+        "hasMore": true,
+        "before": {
+          "requested": 288,
+          "requests": 2,
+          "jsonBytes": 1034995
+        },
+        "after": {
+          "requested": 225,
+          "requests": 2,
+          "jsonBytes": 819186
+        }
+      },
+      {
+        "scope": "category-27",
+        "viewMode": "graph",
+        "units": 28,
+        "hasMore": true,
+        "before": {
+          "requested": 288,
+          "requests": 2,
+          "jsonBytes": 1034995
+        },
+        "after": {
+          "requested": 225,
+          "requests": 2,
+          "jsonBytes": 819186
+        }
+      },
+      {
+        "scope": "category-28",
+        "viewMode": "list",
+        "units": 12,
+        "hasMore": false,
+        "before": {
+          "requested": 132,
+          "requests": 1,
+          "jsonBytes": 471594
+        },
+        "after": {
+          "requested": 132,
+          "requests": 1,
+          "jsonBytes": 471594
+        }
+      },
+      {
+        "scope": "category-28",
+        "viewMode": "graph",
+        "units": 12,
+        "hasMore": false,
+        "before": {
+          "requested": 132,
+          "requests": 1,
+          "jsonBytes": 471594
+        },
+        "after": {
+          "requested": 132,
+          "requests": 1,
+          "jsonBytes": 471594
+        }
+      },
+      {
+        "scope": "category-29",
+        "viewMode": "list",
+        "units": 2,
+        "hasMore": false,
+        "before": {
+          "requested": 32,
+          "requests": 1,
+          "jsonBytes": 176377
+        },
+        "after": {
+          "requested": 32,
+          "requests": 1,
+          "jsonBytes": 176377
+        }
+      },
+      {
+        "scope": "category-29",
+        "viewMode": "graph",
+        "units": 2,
+        "hasMore": false,
+        "before": {
+          "requested": 32,
+          "requests": 1,
+          "jsonBytes": 176377
+        },
+        "after": {
+          "requested": 32,
+          "requests": 1,
+          "jsonBytes": 176377
+        }
+      }
+    ]
+  },
+  "http": {
+    "method": "Actual read-only HTTP requests to the local API, anonymous visibility, cold body cache per scope and version. Compact JSON bytes measured after HTTP decompression; not compressed wire bytes or production latency. Compare complete category hydration with a first page of 20 chronological message units plus dependencies.",
+    "runs": [
+      {
+        "scope": "root",
+        "version": "before",
+        "requests": 1,
+        "returnedRows": 97,
+        "jsonBytes": 310517
+      },
+      {
+        "scope": "root",
+        "version": "after",
+        "requests": 1,
+        "returnedRows": 90,
+        "jsonBytes": 289079,
+        "totalUnits": 23,
+        "hasMore": true
+      },
+      {
+        "scope": "category-15",
+        "version": "before",
+        "requests": 2,
+        "returnedRows": 342,
+        "jsonBytes": 1145347
+      },
+      {
+        "scope": "category-15",
+        "version": "after",
+        "requests": 2,
+        "returnedRows": 284,
+        "jsonBytes": 974495,
+        "totalUnits": 26,
+        "hasMore": true
+      },
+      {
+        "scope": "category-20",
+        "version": "before",
+        "requests": 2,
+        "returnedRows": 249,
+        "jsonBytes": 831761
+      },
+      {
+        "scope": "category-20",
+        "version": "after",
+        "requests": 2,
+        "returnedRows": 232,
+        "jsonBytes": 781675,
+        "totalUnits": 22,
+        "hasMore": true
+      },
+      {
+        "scope": "category-27",
+        "version": "before",
+        "requests": 2,
+        "returnedRows": 288,
+        "jsonBytes": 936699
+      },
+      {
+        "scope": "category-27",
+        "version": "after",
+        "requests": 2,
+        "returnedRows": 225,
+        "jsonBytes": 720707,
+        "totalUnits": 28,
+        "hasMore": true
+      }
+    ]
+  }
+}

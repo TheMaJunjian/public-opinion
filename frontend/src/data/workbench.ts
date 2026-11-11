@@ -2,7 +2,7 @@ import { isReviewAudit, type WorkbenchSnapshot } from '@gonglun/core';
 export type { WorkbenchSnapshot } from '@gonglun/core';
 import type { Message, Relation, ScopeView, User, MessageStakes } from '../types';
 import type { WorkbenchCache } from './workbenchCache';
-export interface SnapshotQuery { parent: string; after?: number; cursor?: string; regionId?: string; signal?: AbortSignal; mode?: 'window'; limit?: number; batch?: number; ids?: string[]; knownIds?: string[]; viewParent?: string; relatedTo?: string }
+export interface SnapshotQuery { parent: string; after?: number; cursor?: string; regionId?: string; signal?: AbortSignal; mode?: 'window'; limit?: number; batch?: number; ids?: string[]; includeContext?: boolean; knownIds?: string[]; viewParent?: string; relatedTo?: string }
 
 /** The authoritative records are stored once; workbench models are derived from them. */
 export class WorkbenchStore {

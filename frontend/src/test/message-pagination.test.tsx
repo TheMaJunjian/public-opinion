@@ -106,3 +106,18 @@ it('offers an explicit retry after a failed automatic load', async () => {
   await tick(); expect(onMore).toHaveBeenCalledTimes(2);
   expect(screen.queryByRole('alert')).toBeNull();
 });
+
+it('keeps the retry notice when loading state changes replace the scroll observer during a failed request', async () => {
+  let reject!: (error: Error) => void;
+  const onMore = vi.fn(() => new Promise<void>((_, fail) => { reject = fail; })), onError = vi.fn();
+  const props = { parent: 'root', loadedCount: 20, hasMore: true, loading: false, panelRef: { current: null }, onMore, onError };
+  const view = render(<MessagePagination {...props} />);
+  vi.spyOn(screen.getByText(/^当前已显示/), 'getBoundingClientRect').mockReturnValue(rect(100));
+  await tick(); expect(onMore).toHaveBeenCalledOnce();
+  view.rerender(<MessagePagination {...props} loading />);
+  await act(async () => reject(new Error('正文下载失败')));
+  view.rerender(<MessagePagination {...props} />);
+  expect(onError).toHaveBeenCalledWith('正文下载失败');
+  expect(screen.getByRole('button', { name: '重试加载消息' })).toBeInTheDocument();
+  fireEvent.scroll(document); await tick(); expect(onMore).toHaveBeenCalledOnce();
+});

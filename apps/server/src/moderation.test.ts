@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { afterEach, expect, it } from 'vitest';
-import { replayArchive, messageDisplayDependency, reviewContextPart, type Part, type ReviewStakeItem } from '@gonglun/core';
+import { replayArchive, messageDisplayDependency, reviewContextPart, decodeWorkbenchSnapshot, structureSnapshot, type WorkbenchSnapshot, type Part, type ReviewStakeItem } from '@gonglun/core';
 import { cleanupTestDatabases, createTestApp, testInvitation } from './test-database.js';
 import { migrateModeration } from '../../migrate/src/moderation.js';
 import { Mutation } from './db.js';
@@ -453,6 +453,20 @@ it('publishes pending content, then hides a final rejection across APIs, exports
   }
   expect((await t.observer.agent.get('/api/messages?q=SECRET')).body.messages).toEqual([]);
   const snapshot=(await t.observer.agent.get('/api/ui/snapshot')).body;
+  for(const detail of ['', '&detail=structure']){
+    const compact=await t.observer.agent.get(`/api/ui/snapshot?format=compact-v1${detail}`);
+    expect(compact.status,compact.text).toBe(200);
+    expect(compact.body.relationRecords.length).toBeGreaterThan(0);
+    expect(compact.body.relationRecords.every((record:unknown)=>typeof record==='number')).toBe(true);
+    expect(compact.text).not.toContain(secret);
+    const decoded=decodeWorkbenchSnapshot<WorkbenchSnapshot>(compact.body);
+    for(const relation of decoded.relations)expect(decoded.messages.find(message=>message.id===relation.id)).toBe(relation);
+    if(!detail)expect(decoded).toEqual(snapshot);
+    else expect(decoded).toEqual(JSON.parse(JSON.stringify(structureSnapshot(snapshot))));
+  }
+  const exact=await t.observer.agent.post('/api/ui/snapshot/query?format=compact-v1').send({mode:'window',ids:[m.id],includeContext:false});
+  expect(exact.status,exact.text).toBe(200);expect(exact.text).not.toContain(secret);
+  expect(decodeWorkbenchSnapshot<WorkbenchSnapshot>(exact.body).messages).toEqual([expect.objectContaining({id:m.id,restricted:true})]);
   const reviewRecord=snapshot.messages.find((message:any)=>message.parts.some((part:any)=>part.relation==='review-record'));
   expect(reviewRecord).toBeTruthy();expect(reviewRecord.restricted).toBe(true);
   expect(messageDisplayDependency(reviewRecord)).toEqual([{messageId:m.id,revision:1}]);

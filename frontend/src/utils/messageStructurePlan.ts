@@ -79,6 +79,10 @@ function timePlan(messages: DemoMessage[], edges: DemoEdge[], placementOrder: st
 }
 
 /** Chronological paging is independent of the optional legacy placement plan. */
+export function planChronologicalMessageUnits(messages: DemoMessage[], edges: DemoEdge[]) {
+  return timePlan(messages, edges, []);
+}
+
 export function planMessageStructures({ messages, edges, order='placement' }: MessageStructureInput) {
   const placementOrder = placementFor(messages, edges);
   if (order === 'time') return timePlan(messages, edges, placementOrder);

@@ -29,9 +29,13 @@ it('requests structure-only pages at startup and downloads complete bodies only 
     expect(fetch.mock.calls.every(([url]) => new URL(url).searchParams.get('detail') === 'structure')).toBe(true);
     expect(ready.mock.lastCall![0].projected.messages).toEqual([]);
     expect(ready.mock.lastCall![0].index?.messages[0].content).toBe('x');
+    expect(ready.mock.lastCall![0].update).toBeUndefined();
     expect((await engine.leaderboard()).messageRows[0].preview).toContain('按需读取');
     expect(fetch.mock.calls.some(([url]) => !new URL(url).searchParams.has('detail'))).toBe(true);
     expect(ready).toHaveBeenCalledOnce(); // A leaderboard must not replace the scoped canvas with a full catalog.
+    snapshot.sequence = 11;
+    await engine.refresh();
+    expect(ready.mock.lastCall![0].update).toEqual({ previousSequence: 10, changedIds: [] });
   } finally { engine.stop(); }
 });
 

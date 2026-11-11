@@ -19,11 +19,12 @@ import { inheritExportCacheReference, loadCachedExport, loadLastExport, loadRefe
 import { isZhihuViewingData } from '../../utils/zhihuArchive';
 import { prepareExportForViewing } from '../../utils/exportArchive';
 import { getPreparedViewerExport, releasePreparedViewerExport, type ExportViewerRouteState } from '../../utils/exportViewerSession';
-import { createZhihuStructuralViewer, shouldUseZhihuStructuralViewer, structuralScopeKey, type ZhihuStructuralViewer, type ZhihuViewerScope } from '../../utils/zhihuStructuralViewer';
+import { createZhihuStructuralViewer, shouldUseZhihuStructuralViewer, structuralScopeKey, type ZhihuStructuralViewer, type ZhihuViewerScope, type StructuralBodyPage } from '../../utils/zhihuStructuralViewer';
 import { hydratePagedArchive } from '../../utils/pagedZhihuArchive';
 import { useViewCacheSettings } from '../../context/ViewCacheSettingsContext';
 import { createScopedProjectionCache } from '../../utils/scopedProjectionCache';
 import { hydrateOnlineStructure, onlineSourceSnapshot, onlineStructuralSource } from '../../utils/onlineStructuralSource';
+import { startWorkbenchTiming } from '../../utils/workbenchTiming';
 
 export const VIEWER_USERNAME_KEY = 'export-viewer-username';
 
@@ -134,30 +135,39 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
   const [viewerStructure, setViewerStructure] = useState<ZhihuStructuralViewer | null>(null);
   const [unloadedViewerContainers, setUnloadedViewerContainers] = useState<ReadonlySet<string>>(new Set());
   const viewerIndex = useRef<ZhihuStructuralViewer | null>(null);
-  const viewerScope = useRef<ZhihuViewerScope>({ classificationId: null });
+  const viewerScope = useRef<ZhihuViewerScope>({ classificationId: null, viewMode });
+  const [viewerBodyPage, setViewerBodyPage] = useState<StructuralBodyPage>();
+  const bodyPageRef = useRef<StructuralBodyPage>();
+  const bodyPageLimits = useRef(new Map<string, number>());
   const appliedViewerScopeKey = useRef<string | null>(null);
   const [appliedScopeKey, setAppliedScopeKey] = useState<string | null>(null);
   const viewerUsername = useRef(viewerUser?.username ?? null); viewerUsername.current = viewerUser?.username ?? null;
   const viewerScopeGeneration = useRef(0);
   const cancelViewerScope = useRef<(() => void) | null>(null);
-  type ScopedProjection = { index: ZhihuStructuralViewer | null; window: { data: ExportData; unloadedContainers: Set<string> }; snapshot: import('../../data/workbench').WorkbenchSnapshot; projected: ReturnType<typeof projectWorkbenchSnapshot> };
+  type ScopedProjection = { index: ZhihuStructuralViewer | null; window: ReturnType<ZhihuStructuralViewer['window']>; snapshot: import('../../data/workbench').WorkbenchSnapshot; projected: ReturnType<typeof projectWorkbenchSnapshot> };
   const projectionCache = useRef(createScopedProjectionCache<ScopedProjection>());
-  const projectViewer = async (source: ExportData, scope: ZhihuViewerScope, username: string | null, signal?: AbortSignal) => {
+  const projectViewer = async (source: ExportData, scope: ZhihuViewerScope, username: string | null, signal?: AbortSignal, bodyLimit?: number) => {
     projectionCache.current.select(source, username);
     const key = structuralScopeKey(scope), cached = projectionCache.current.get(key);
-    if (cached) return cached;
+    const pageKey = structuralScopeKey({ ...scope, pinnedIds: undefined });
+    const requestedLimit = bodyLimit ?? bodyPageLimits.current.get(pageKey) ?? 20;
+    if (cached && (!cached.window.bodyPage?.hasMore || cached.window.bodyPage.limit >= requestedLimit)) return cached;
     const previous = viewerIndex.current;
     const online = onlineSourceSnapshot(source);
+    const finishStructure = startWorkbenchTiming('structure-window');
     const index = online || shouldUseZhihuStructuralViewer(source)
       ? previous?.source === source && previous.username === username ? previous : createZhihuStructuralViewer(source, username,
         online ? selected => hydrateOnlineStructure(source, selected) : undefined)
       : null;
-    const selected = index?.window(scope) ?? { data: source, unloadedContainers: new Set<string>() };
+    const selected = index?.window(scope, online ? requestedLimit : undefined) ?? { data: source, unloadedContainers: new Set<string>() };
+    finishStructure();
     const window = { ...selected, data: online ? await hydrateOnlineStructure(source, selected.data, signal) : await hydratePagedArchive(source, selected.data, signal) };
     signal?.throwIfAborted();
+    const finishProjection = startWorkbenchTiming('projection');
     const snapshot = { ...archiveToWorkbenchSnapshot(window.data), ...(online ? { sequence: online.sequence, regionId: online.regionId } : {}) };
     const value = { index, window, snapshot, projected: projectWorkbenchSnapshot(snapshot, { loadedOnly: !!index && !scope.full }) };
     if (!scope.full && projectionCache.current.isCurrent(source, username)) projectionCache.current.put(key, value, snapshot.messages.reduce((bytes, row) => bytes + 1024 + row.content.length * 4, 0), scopeCacheLimit);
+    finishProjection();
     return value;
   };
   const publishViewer = (value: Awaited<ReturnType<typeof projectViewer>>) => {
@@ -167,21 +177,29 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     setUnloadedViewerContainers(value.window.unloadedContainers);
     appliedViewerScopeKey.current = structuralScopeKey(viewerScope.current);
     setAppliedScopeKey(appliedViewerScopeKey.current);
+    bodyPageRef.current = value.window.bodyPage;
+    setViewerBodyPage(value.window.bodyPage);
+    if (value.window.bodyPage) {
+      const pageKey = structuralScopeKey({ ...viewerScope.current, pinnedIds: undefined });
+      bodyPageLimits.current.delete(pageKey);
+      bodyPageLimits.current.set(pageKey, value.window.bodyPage.limit);
+      while (bodyPageLimits.current.size > scopeCacheLimit) bodyPageLimits.current.delete(bodyPageLimits.current.keys().next().value!);
+    }
     records.replace(value.snapshot, value.projected);
     if (value.index && onlineSourceSnapshot(value.index.source)) {
       if (publishedCatalog.current) publishedCatalog.current = { ...publishedCatalog.current, projected: value.projected };
       catalogReadyRef.current = true; setCatalogReady(true); setCatalogVersion(version => version + 1);
-      setIsPreloaded(false); setLoading(false); setLoadError(null);
+      setOnDemand(true); setIsPreloaded(false); setLoading(false); setLoadError(null);
     }
   };
-  const loadViewerScope = useCallback(async (scope: ZhihuViewerScope) => {
+  const loadViewerScope = useCallback(async (scope: ZhihuViewerScope, bodyLimit?: number) => {
     const index = viewerIndex.current;
     if (!index) return;
     const username = onlineSourceSnapshot(index.source) ? user?.username ?? null : viewerUsername.current;
     cancelViewerScope.current?.();
     viewerScope.current = scope;
     const generation = ++viewerScopeGeneration.current;
-    if (structuralScopeKey(scope) === appliedViewerScopeKey.current && index.username === username) return;
+    if (bodyLimit === undefined && structuralScopeKey(scope) === appliedViewerScopeKey.current && index.username === username) return;
     const task = startProjection();
     const controller = new AbortController();
     await new Promise<void>((resolve, reject) => {
@@ -189,7 +207,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
         if (!mounted.current || generation !== viewerScopeGeneration.current) { task.cancel(); resolve(); return; }
         task.run(async () => {
           try {
-            const next = await projectViewer(index.source, scope, username, controller.signal);
+            const next = await projectViewer(index.source, scope, username, controller.signal, bodyLimit);
             if (!mounted.current || generation !== viewerScopeGeneration.current) { resolve(); return; }
             if (graphViewRef.current) beginWorkbenchDrawing();
             // A parked scene suspends its old tree. Commit the bounded scope and
@@ -199,7 +217,11 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
             resolve();
           } catch (error) {
             if (controller.signal.aborted) resolve();
-            else if (onlineSourceSnapshot(index.source) && (error as {status?: number}).status === 409) { catalogRef.current?.catchUp(); appliedViewerScopeKey.current = null; resolve(); }
+            else if (onlineSourceSnapshot(index.source) && (error as {status?: number}).status === 409) {
+              if ((error as { reloadCatalog?: boolean }).reloadCatalog) catalogRef.current?.reload();
+              else catalogRef.current?.catchUp();
+              appliedViewerScopeKey.current = null; resolve();
+            }
             else reject(error);
           }
           finally { if (generation === viewerScopeGeneration.current) cancelViewerScope.current = null; task.complete(); }
@@ -209,6 +231,10 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
       task.onCancel(() => { controller.abort(); cancelAnimationFrame(frame); resolve(); });
     });
   }, [viewerUser?.username, user?.username, startProjection, records.replace, scopeCacheLimit]);
+  const loadMoreViewerBodies = useCallback(async () => {
+    const page = bodyPageRef.current;
+    if (page?.hasMore) await loadViewerScope(viewerScope.current, page.limit + 50);
+  }, [loadViewerScope]);
   viewerEnsure.current = viewerStructure ? async ids => {
     if (ids.some(id => !viewerIndex.current?.has(id))) throw new Error(isViewerRoute ? '这份阅览文件中没有该消息' : '未找到该消息，消息可能已删除或不在当前可访问范围内');
     await loadViewerScope({ ...viewerScope.current, extraIds: [...new Set([...viewerScope.current.extraIds ?? [], ...ids])] });
@@ -314,6 +340,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     viewerScopeGeneration.current++;
     cancelViewerScope.current?.(); cancelViewerScope.current = null;
     viewerIndex.current = null; appliedViewerScopeKey.current = null;
+    bodyPageLimits.current.clear(); bodyPageRef.current = undefined; setViewerBodyPage(undefined);
     setViewerStructure(null); setAppliedScopeKey(null); setViewingExport(null);
     catalogReadyRef.current = false;
     publishedCatalog.current = null;
@@ -322,6 +349,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     let cancelled = false;
     let stop: (() => void) | undefined;
     let catalogStarting = false;
+    let bodySeed: import('../../data/workbench').WorkbenchSnapshot | undefined;
     const startCatalog = (regionId?: string) => {
       if (catalogStarting) return;
       catalogStarting = true;
@@ -335,7 +363,9 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
               catalogRef.current?.catchUp(); return;
             }
             if (index) {
-              const source = onlineStructuralSource(index, api.getWorkbenchSnapshot);
+              const source = onlineStructuralSource(index, api.getWorkbenchSnapshot, bodySeed,
+                { identity: user.id, previous: viewerIndex.current?.source, update: data.update });
+              bodySeed = undefined;
               viewerIndex.current = createZhihuStructuralViewer(source, user.username, selected => hydrateOnlineStructure(source, selected));
               publishedCatalog.current = data;
               appliedViewerScopeKey.current = null;
@@ -367,14 +397,23 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
         setLoading(false);
       });
     };
-    // Fetch the worker client module while the first window request is in flight.
+    // Fetch the worker module while the initial window request is in flight.
     void import('../../data/catalogClient').catch(() => {});
     void Promise.all([import('../../data/workbench'), import('../../data/workbenchCache')]).then(([{ syncWorkbench }, { createWorkbenchCache }]) => {
       if (cancelled) return;
       const sync = syncWorkbench({
         parent: scopeMessageId,
         cache: createWorkbenchCache(user.id, scopeMessageId),
-        load: api.getWorkbenchSnapshot,
+        load: async query => {
+          const snapshot = await api.getWorkbenchSnapshot(query);
+          // Begin the required index as soon as a window arrives, while its
+          // delta is still in flight. Full snapshots keep their existing path.
+          if (!cancelled && snapshot.windowed) {
+            if (query.after === undefined) bodySeed = snapshot;
+            startCatalog(snapshot.regionId);
+          }
+          return snapshot;
+        },
         events: api.subscribeChanges,
         onSyncState: active => { if (active) beginWorkbenchSync(); else finishWorkbenchSync(); },
         onSnapshot(snapshot) {
@@ -479,7 +518,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     refreshLeaderboard, registeredUsers, isPreloaded, viewerUser, setViewerUser,
     displayUser, correctionVersions, preloadedData, loadedExport, viewerUsers, loading, persistPreloadedExport, isViewerRoute,
     viewerNavigation,
-    viewingExport, viewerStructure, unloadedViewerContainers, loadViewerScope,
+    viewingExport, viewerStructure, unloadedViewerContainers, loadViewerScope, viewerBodyPage, loadMoreViewerBodies,
     appliedScopeKey,
     tagCounts,
     onDemand, ensureMessages,

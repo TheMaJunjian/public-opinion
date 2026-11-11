@@ -5,7 +5,7 @@ import { WorkbenchDrawingContext, useWorkbenchDrawingTask, type WorkbenchDrawing
 import { useWorkbenchDrawingPreparation } from '../components/WorkbenchLoadingBoundary';
 
 /** Reveal chronological message units; placement paging remains an explicit legacy option. */
-export function useMessageWindow(messages: DemoMessage[], edges: DemoEdge[], enabled: boolean, key: string, pinned: string[], organize = enabled, order:'placement'|'time'='time') {
+export function useMessageWindow(messages: DemoMessage[], edges: DemoEdge[], enabled: boolean, key: string, pinned: string[], organize = enabled, order:'placement'|'time'='time', bodies?: { limit: number; hasMore: boolean; loadMore(): Promise<void> }) {
   const [limits, setLimits] = useState<ReadonlyMap<string, number>>(() => new Map());
   const [loading, setLoading] = useState(false);
   const startTask = useWorkbenchDrawingTask('positioning');
@@ -16,7 +16,7 @@ export function useMessageWindow(messages: DemoMessage[], edges: DemoEdge[], ena
   // A body-version change must not unmount the existing canvas while its new
   // structure order is computed. Never reuse another scope's paging plan.
   const structure = useSceneComputation(job, true, key);
-  const limit = limits.get(key) ?? 50;
+  const limit = limits.get(key) ?? bodies?.limit ?? 50;
   const pinnedKey = pinned.join('\0');
   const effectiveLimit = useMemo(() => {
     let next = limit;
@@ -72,7 +72,7 @@ export function useMessageWindow(messages: DemoMessage[], edges: DemoEdge[], ena
     return edges.filter(edge => visibleIds.has(edge.relationMessageId) || visibleIds.has(edge.from.messageId) || visibleIds.has(edge.to.messageId));
   }, [messages, edges, visibleIds, enabled, order, organize, structure, effectiveLimit]);
   const edgeIds = useMemo(() => new Set(visibleEdges.map(edge => edge.id)), [visibleEdges]);
-  const hasMore = enabled && !!structure && effectiveLimit < structure.units.length;
+  const hasMore = enabled && !!structure && (effectiveLimit < structure.units.length || !!bodies?.hasMore);
   useLayoutEffect(() => {
     if (enabled && effectiveLimit > limit) setLimits(previous => new Map(previous).set(key, effectiveLimit));
   }, [enabled, effectiveLimit, limit, key]);
@@ -96,8 +96,9 @@ export function useMessageWindow(messages: DemoMessage[], edges: DemoEdge[], ena
     if (!hasMore || !structure || tasks?.failure || tasks?.blocking) return Promise.resolve();
     const task = startTask();
     let resolve!: () => void;
-    const promise = new Promise<void>(done => { resolve = done; });
-    const nextLimit = Math.min(structure.units.length, effectiveLimit + 50);
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<void>((done, fail) => { resolve = done; reject = fail; });
+    const nextLimit = bodies?.hasMore ? effectiveLimit + 50 : Math.min(structure.units.length, effectiveLimit + 50);
     const current = { key, limit: nextLimit, task, promise, cancelPreparation() {}, finish() {
       current.cancelPreparation();
       if (request.current === current) { request.current = null; setLoading(false); }
@@ -107,10 +108,17 @@ export function useMessageWindow(messages: DemoMessage[], edges: DemoEdge[], ena
     task.onCancel(current.finish);
     current.cancelPreparation = prepareDrawing(() => task.run(() => {
       setLoading(true);
-      setLimits(previous => new Map(previous).set(key, nextLimit));
+      const reveal = () => {
+        if (request.current === current) setLimits(previous => new Map(previous).set(key, nextLimit));
+      };
+      if (bodies?.hasMore) void bodies.loadMore().then(reveal, error => {
+        if (request.current !== current) return;
+        reject(error); task.cancel(); current.finish();
+      });
+      else reveal();
     }));
     return promise;
-  }, [key, structure, effectiveLimit, hasMore, startTask, tasks, prepareDrawing]);
+  }, [key, structure, effectiveLimit, hasMore, startTask, tasks, prepareDrawing, bodies?.hasMore, bodies?.loadMore]);
   return { messages: visible, edges: visibleEdges, visibleIds, edgeIds, structureOrder: structure?.placementOrder,
     totalCount: messages.length, hasMore, more, loading: loading || (organize && !structure), enabled };
 }

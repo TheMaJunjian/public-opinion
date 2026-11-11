@@ -1,5 +1,5 @@
 import { decodeWorkbenchSnapshot, structureSnapshot, type CompactSnapshot, type WorkbenchSnapshot, type ReadingMark } from '@gonglun/core';
-import { syncGlobalCatalog, type CatalogProgress } from './globalCatalog';
+import { syncGlobalCatalog, type CatalogProgress, type CatalogUpdate } from './globalCatalog';
 import { createGlobalCatalogCache } from './globalCatalogCache';
 import { projectWorkbenchSnapshot } from '../utils/workbenchProjection';
 import type { buildLeaderboardRows } from '../utils/leaderboardRows';
@@ -18,6 +18,7 @@ export interface CatalogData {
   projected: ReturnType<typeof projectWorkbenchSnapshot>;
   rows?: ReturnType<typeof buildLeaderboardRows>;
   index?: WorkbenchSnapshot;
+  update?: CatalogUpdate;
 }
 export interface CatalogFilterQuery { rules: CleanFilterRule[]; home: HomeFilterMode | null; user: User | null; readingMarks?:ReadingMark[] }
 export interface CatalogFilterResult {
@@ -71,12 +72,12 @@ export function createCatalogEngine(options: CatalogOptions, callbacks: {
       return snapshot;
     },
     onProgress: callbacks.onProgress,
-    onReady(snapshot) {
+    onReady(snapshot, update) {
       const projected = projectWorkbenchSnapshot(options.structural ? { ...snapshot, messages: [], relations: [], stakes: {} } : snapshot);
       // Keep raw bodies in the worker; the UI only needs the projected model and scope metadata.
       published = { snapshot: { scope: snapshot.scope, users: snapshot.users, attentionUsers: snapshot.attentionUsers,
         tagCounts: snapshot.tagCounts, sequence: snapshot.sequence, regionId: snapshot.regionId },
-        projected, ...(options.structural ? { index: snapshot } : {}) };
+        projected, ...(options.structural ? { index: snapshot, ...(update ? { update } : {}) } : {}) };
       leaderboard = undefined;
       callbacks.onReady(published);
     },

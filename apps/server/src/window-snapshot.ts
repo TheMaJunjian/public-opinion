@@ -8,11 +8,14 @@ const input = z.object({
   parent: z.string().min(1).max(100).default('root'), mode: z.literal('window'),
   limit: z.number().int().min(1).max(50).default(50), cursor: z.string().max(1000).optional(),
   after: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
-  regionId: z.string().max(100).optional(), ids: z.array(z.string().min(1).max(100)).max(50).optional(),
+  regionId: z.string().max(100).optional(), ids: z.array(z.string().min(1).max(100)).max(200).optional(),
+  includeContext: z.boolean().default(true),
   knownIds: z.array(z.string().min(1).max(100)).max(20000).default([]),
   viewParent: z.string().min(1).max(100).optional(),
   relatedTo: z.string().min(1).max(100).optional(),
-});
+}).refine(query => !query.includeContext || !query.ids || query.ids.length <= 50, '带上下文的消息查询最多 50 条')
+  .refine(query => query.includeContext || !!query.ids?.length && query.after === undefined && query.cursor === undefined
+    && query.relatedTo === undefined && query.viewParent === undefined && !query.knownIds.length, '精确消息查询需要消息编号且不能包含分页或增量条件');
 const cursorSchema = z.object({ sequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), id: z.string().max(100) });
 const cursorFor = (message: Message) => Buffer.from(JSON.stringify({ sequence: message.sequence, id: message.id })).toString('base64url');
 
@@ -47,7 +50,7 @@ export async function windowSnapshot(store: Store, raw: unknown): Promise<Workbe
   params.push(limit + 1);
   const rows = query.ids ? await store.db.prepare('SELECT body FROM messages WHERE id=ANY($1::text[]) ORDER BY sequence DESC,id DESC').all(query.ids)
     : await store.db.prepare(`SELECT m.body FROM messages m WHERE ${clauses.join(' AND ')} ORDER BY m.sequence DESC,m.id DESC LIMIT $${params.length}`).all(...params);
-  const selected = rows.slice(0, limit).map(row => JSON.parse(String(row.body)) as Message);
+  const selected = (query.includeContext ? rows.slice(0, limit) : rows).map(row => JSON.parse(String(row.body)) as Message);
   if (query.ids && selected.length !== new Set(query.ids).size) throw new DomainError('消息不存在', 404);
   const nextCursor = !query.ids && rows.length > limit ? cursorFor(selected.at(-1)!) : null;
   let removedMessageIds: string[] = [];
@@ -73,7 +76,9 @@ export async function windowSnapshot(store: Store, raw: unknown): Promise<Workbe
   }
   const messages = new Map(selected.map(message => [message.id, message]));
   const seeds = [...messages.keys()];
-  if (seeds.length) {
+  // The structural viewer already resolved the complete dependency set. Its
+  // body requests must not expand the same neighbors again for every batch.
+  if (seeds.length && query.includeContext) {
     const expandable = selected.filter(message => !relations(message).some(part => ['classify', 'summary', 'merge', 'arrange', ...(query.relatedTo ? [] : ['member-of'])].includes(part.relation))).map(message => message.id);
     const context = await store.db.prepare(`SELECT body FROM messages WHERE id IN (
       SELECT "targetId" FROM refs WHERE "sourceId"=ANY($1::text[])

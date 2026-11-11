@@ -1,0 +1,32 @@
+{
+  "date": "2026-11-11",
+  "method": "Read the current structural index and category first-page bodies via local HTTP. Simulate one body revision and a complete delta in memory, compare inherited cache hydration with cold hydration of the same in-memory copy. Count requested records and batches; no database writes or production/WAN latency measurements. Derived descriptions are held constant in this request-count simulation; quote refresh correctness is covered separately in unit tests.",
+  "runs": [
+    {
+      "scope": "category-15",
+      "before": {
+        "requested": 284,
+        "requests": 2
+      },
+      "after": {
+        "requested": 45,
+        "requests": 1
+      },
+      "sequenceOnlyRequests": 0,
+      "equivalentToColdHydration": true
+    },
+    {
+      "scope": "category-27",
+      "before": {
+        "requested": 225,
+        "requests": 2
+      },
+      "after": {
+        "requested": 46,
+        "requests": 1
+      },
+      "sequenceOnlyRequests": 0,
+      "equivalentToColdHydration": true
+    }
+  ]
+}

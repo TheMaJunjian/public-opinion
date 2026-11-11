@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { Pool, types, type PoolClient, type QueryResultRow } from 'pg';
 import type { LedgerEntry } from '@gonglun/core';
+import { timeQuery } from './query-timing.js';
 
 type Row = QueryResultRow;
 type Transaction = { client: PoolClient; ledger: LedgerEntry[]; settings: Map<string,string>; savepoint: number; pending: Promise<void>; readOnly?: boolean; serialized?: boolean; operationId?: string };
@@ -43,10 +44,10 @@ export class Postgres {
 
   private async query<R extends Row = Row>(sql: string, values: unknown[] = []) {
     const transaction = this.context.getStore();
-    if (!transaction) return this.pool.query<R>(sql, values);
+    if (!transaction) return timeQuery(() => this.pool.query<R>(sql, values));
     // Projections may request several reads together, but one PostgreSQL client
     // executes one query at a time. Drain this queue before commit or rollback.
-    const result = transaction.pending.then(() => transaction.client.query<R>(sql, values));
+    const result = transaction.pending.then(() => timeQuery(() => transaction.client.query<R>(sql, values)));
     transaction.pending = result.then(() => {}, () => {});
     return result;
   }

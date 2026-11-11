@@ -5,7 +5,7 @@ import request from 'supertest';
 import { randomUUID, generateKeyPairSync, sign, createHash } from 'node:crypto';
 import { createApp } from './app.js';
 import { createTestApp, cleanupTestDatabases, newTestSchema } from './test-database.js';
-import { bodyVersion, replayArchive, decodeWorkbenchSnapshot, type WorkbenchSnapshot } from '@gonglun/core';
+import { bodyVersion, replayArchive, decodeWorkbenchSnapshot, structureSnapshot, type WorkbenchSnapshot } from '@gonglun/core';
 import * as projections from './ui-projections.js';
 
 const apps:Awaited<ReturnType<typeof createApp>>[]=[];
@@ -14,6 +14,14 @@ afterEach(async ()=>{vi.restoreAllMocks();for(const app of apps.splice(0))(await
 async function actor(app:Awaited<ReturnType<typeof make>>,username:string,extra:Record<string,unknown>={}) {const agent=request.agent(app);const response=await agent.post('/api/register').send({inviteCode:await testInvitation(app),username,password:'a-test-password',...extra});expect(response.status,response.text).toBe(201);return {agent,session:response.body};}
 const post=(user:Awaited<ReturnType<typeof actor>>,path:string,body:Record<string,unknown>={})=>user.agent.post(`/api/ui${path}`).set('x-csrf-token',user.session.csrf).set('x-request-id',(body as {requestId?:string}).requestId??randomUUID()).send(withTestCommandContributions(path,body as Record<string,unknown>));
 const good=async(response:PromiseLike<request.Response>)=>{const value=await response;expect(value.status,value.text).toBe(201);return value.body;};
+async function expectStructuralProjection(user: Awaited<ReturnType<typeof actor>>, query: Record<string, string | number> = {}) {
+  const full = await user.agent.get('/api/ui/snapshot').query(query);
+  const light = await user.agent.get('/api/ui/snapshot').query({ ...query, detail: 'structure', format: 'compact-v1' });
+  expect(full.status, full.text).toBe(200); expect(light.status, light.text).toBe(200);
+  expect(decodeWorkbenchSnapshot(light.body)).toEqual(JSON.parse(JSON.stringify(structureSnapshot(full.body))));
+  expect(light.headers['server-timing']).toMatch(/projection;dur=\d+\.\d, moderation;dur=\d+\.\d, db;dur=\d+\.\d;desc="\d+ queries", encode;dur=\d+\.\d/);
+  return full.body as WorkbenchSnapshot;
+}
 
 it.each(['TRUTH','VALUE'])('preserves the logical subject and %s round on settlement results in replies and snapshots',async settlementType=>{
   const app=await make(),user=await actor(app,'结算关联测试'),target=await good(post(user,'/messages',{content:'关联原消息'}));
@@ -27,6 +35,7 @@ it.each(['TRUTH','VALUE'])('preserves the logical subject and %s round on settle
   expect(snapshot.status,snapshot.text).toBe(200);
   expect(snapshot.body.messages.find((m:{id:string})=>m.id===settled.resultMessage.id)).toMatchObject({relationPayload:expected});
   expect(snapshot.body.messages.find((m:{id:string})=>m.id===settled.requestMessage.id)).toMatchObject({kind:'ROUND',relationPayload:expected});
+  await expectStructuralProjection(user);
   const nextRound=await good(post(user,`/messages/${target.id}/rounds`,{settlementType}));
   const resettled=await good(post(user,`/rounds/${nextRound.id}/close-and-settle`));
   for(const mode of ['summary']){
@@ -146,6 +155,17 @@ it('loads one bounded window, pages explicitly, and returns no old bodies in an 
   expect((await read({ ids: [missing.id] })).messages.some(message => message.id === missing.id)).toBe(true);
   const limited = await user.agent.post('/api/ui/snapshot/query').send({ mode: 'window', limit: 51 });
   expect(limited.status).toBe(400);
+  const ids = commands.map(command => command.id);
+  const exact = await read({ ids, includeContext: false });
+  expect(exact.messages.map(message => message.id).sort()).toEqual([...ids].sort());
+  expect(exact.nextCursor).toBeNull();
+  for (const query of [{ ids }, { ids: Array(201).fill(ids[0]), includeContext: false },
+    { includeContext: false }, { ids, includeContext: false, after: first.sequence }]) {
+    const invalid = await user.agent.post('/api/ui/snapshot/query').send({ mode: 'window', ...query });
+    expect(invalid.status, invalid.text).toBe(400);
+  }
+  const absent = await user.agent.post('/api/ui/snapshot/query').send({ mode: 'window', ids: [randomUUID()], includeContext: false });
+  expect(absent.status).toBe(404);
 });
 
 it('does not download closed container members until their scope is opened', async () => {
@@ -161,6 +181,12 @@ it('does not download closed container members until their scope is opened', asy
   expect(inside.status, inside.text).toBe(200);
   expect(inside.body.messages.filter((message: { content: string }) => message.content?.startsWith('分类成员 '))).toHaveLength(50);
   expect(inside.body.nextCursor).toBeTruthy();
+  const exact = await user.agent.post('/api/ui/snapshot/query').send({ mode: 'window', ids: commands.map(command => command.id), includeContext: false });
+  expect(exact.status, exact.text).toBe(200);
+  expect(exact.body.messages.map((message: { id: string }) => message.id).sort()).toEqual(commands.map(command => command.id).sort());
+  // A regular navigation query still includes the owning category.
+  const context = await user.agent.post('/api/ui/snapshot/query').send({ mode: 'window', ids: [commands[0].id] });
+  expect(context.body.messages.some((message: { id: string }) => message.id === group.id)).toBe(true);
 });
 
 it('pages older unseen members restored to the window without expanding other closed containers', async () => {
@@ -302,6 +328,7 @@ describe('保留操作方式的消息 API',()=>{
     expect(record.state.suppressed).toBe(true);
     expect((await app.store.message(classification.id)).revision).toBe(1);
     const reply=await good(post(other,'/relations',{relationType:'REPLY',targetRefs:[{kind:'text-fragment',messageId:classification.id,text:'是否',hash:'x',reference:fragment}],payload:{content:'讨论原来的用词'}}));expect(reply.targetRefs[0].reference).toEqual({...fragment,context:{kind:'MESSAGE',version:bodyVersion(classification.id)}});
+    await expectStructuralProjection(founder);
   });
   it('总结正文更正保留所有上下文，仅替换所选范围并拒绝无效替换',async()=>{
     const app=await make(),user=await actor(app,'总结作者'),editor=await actor(app,'更正者');
@@ -375,6 +402,8 @@ describe('保留操作方式的消息 API',()=>{
     const after=(await user.agent.get(`/api/ui/snapshot?parent=${left.id}&after=${before.sequence}`)).body;
     for(const id of [group.id,...children.map(m=>m.id)])expect(after.removedMessageIds).toContain(id);
     expect((await user.agent.get(`/api/ui/snapshot?parent=${right.id}`)).body.messages.map((m:any)=>m.id)).toEqual(expect.arrayContaining([group.id,...children.map(m=>m.id)]));
+    await expectStructuralProjection(user, { parent: left.id, after: before.sequence });
+    await expectStructuralProjection(user, { parent: right.id });
   });
   it('自赞是显式选择，片段来源保留，快照投影按批读取并连续追赶变更',async()=>{
     const app=(await make()),user=await actor(app,'发起人'),commands=Array.from({length:45},(_,i)=>({id:randomUUID(),method:'POST',path:'/messages',body:{content:`发言 ${i}`}}));
@@ -382,6 +411,7 @@ describe('保留操作方式的消息 API',()=>{
     const spy=vi.spyOn(app.store.db,'prepare');const response=await user.agent.get('/api/ui/snapshot?parent=root&limit=50');expect(response.status,response.text).toBe(200);expect(spy.mock.calls.length).toBeLessThan(35);spy.mockRestore();
     const compact=await user.agent.get('/api/ui/snapshot?parent=root&limit=50&format=compact-v1').set('Accept-Encoding','gzip');
     expect(compact.status,compact.text).toBe(200);expect(compact.headers['content-encoding']).toBe('gzip');
+    expect(compact.headers['server-timing']).toMatch(/gzip;dur=\d+\.\d/);
     expect(compact.headers.vary).toContain('Accept-Encoding');expect(compact.headers['cache-control']).toBe('private, no-store');
     expect(decodeWorkbenchSnapshot(compact.body)).toEqual(response.body);
     expect(Number(compact.headers['content-length'])).toBeLessThan(Buffer.byteLength(response.text));
@@ -393,6 +423,17 @@ describe('保留操作方式的消息 API',()=>{
     const own=await good(post(user,'/messages',{content:'显式自赞',selfAgree:true,wager:7,recommendation:2}));expect((await app.store.account(user.session.user.id))).toMatchObject({available:before.available-10,locked:before.locked+9});
     const relation=await good(post(user,'/relations',{relationType:'REFERENCE',sourceRefs:[{messageId:source,revision:1,partId:'body',range:{start:0,end:2}}],targetRefs:[{kind:'message',messageId:own.id}]}));expect(relation.sourceRefs[0].partId).toBe('body');expect(relation.sourceRefs[0].range).toEqual({start:0,end:2});
     const delta=await user.agent.get(`/api/ui/snapshot?parent=root&after=${sequence}`);expect(delta.status,delta.text).toBe(200);expect(delta.body.sequence).toBe((await app.store.latestSequence()));expect(delta.body.messages.some((m:any)=>m.id===own.id)).toBe(true);expect(delta.body.messages.length).toBeLessThan(15);
+    await expectStructuralProjection(user, { after: sequence });
+    const first = await expectStructuralProjection(user, { limit: 10 });
+    expect(first.nextCursor).toBeTruthy();
+    await expectStructuralProjection(user, { limit: 10, cursor: first.nextCursor! });
+    const queries = vi.spyOn(app.store.db, 'prepare');
+    const structure = await user.agent.get('/api/ui/snapshot?detail=structure');
+    expect(structure.status, structure.text).toBe(200);
+    expect(queries.mock.calls.some(([sql]) => sql.includes('SUM(amount) AS amount FROM stake_positions'))).toBe(true);
+    expect(queries.mock.calls.some(([sql]) => sql.includes('p.*,b."messageId" AS "sourceMessageId"'))).toBe(false);
+    expect(queries.mock.calls.some(([sql]) => sql.startsWith('SELECT body FROM messages WHERE id IN'))).toBe(false);
+    queries.mockRestore();
   });
 });
 

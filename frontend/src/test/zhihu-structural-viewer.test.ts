@@ -8,6 +8,8 @@ import { archiveToWorkbenchSnapshot, projectWorkbenchSnapshot } from '../utils/w
 import { deriveContainerEffect } from '../pages/workbench/model/containerEffect';
 import { buildTraceProjection } from '../utils/traceProjection';
 import { projectContainerCanvas } from '../pages/workbench/projections/containerCanvas';
+import { planChronologicalMessageUnits } from '../utils/messageStructurePlan';
+import { computeCorrectionVersions, isReviewRecord, isReviewDiscussion, isSettlementRecord } from '../utils/modelBridge';
 
 const user = '本地整理者';
 const item = (id: string) => `zhihu:item:answer:${id}`;
@@ -165,6 +167,20 @@ describe('structural Zhihu message loading', () => {
         const ordinary = (value: ReturnType<typeof fullEffect>) => projectContainerCanvas(value, scope).messages
           .filter(row => row.kind !== 'join').map(row => row.id).sort();
         expect(ordinary(partial), `canvas:${classificationId}`).toEqual(ordinary(full));
+        for (const viewMode of ['list', 'graph'] as const) for (const limit of [1, 2, 5]) {
+          const paged = index.window({ classificationId, viewMode }, limit), actual = fullEffect(paged.data);
+          expect(paged.data.messages.every(row => index.window({ classificationId }).data.messages.some(fullRow => fullRow.id === row.id))).toBe(true);
+          const prefix = (value: ReturnType<typeof fullEffect>) => {
+            const canvas = projectContainerCanvas(value, scope, viewMode);
+            const visible = canvas.messages.filter(row => row.kind !== 'join' && !isSettlementRecord(row) && !isReviewRecord(row) && !isReviewDiscussion(row));
+            const plan = planChronologicalMessageUnits(visible, canvas.edges), units = new Set(plan.units.slice(0, limit));
+            return plan.order.filter(id => units.has(plan.byId.get(id)!));
+          };
+          expect(prefix(actual), `paged:${classificationId}:${viewMode}:${limit}`).toEqual(prefix(full));
+          const expectedVersions = computeCorrectionVersions(full.messages, full.edges, full.suppressed, user);
+          const actualVersions = computeCorrectionVersions(actual.messages, actual.edges, actual.suppressed, user);
+          for (const id of prefix(full)) expect(actualVersions.get(id), `correction:${id}`).toEqual(expectedVersions.get(id));
+        }
       }
       for (const id of [item('a'), comment('a'), item('b'), item('c'), frame, question('a')]) {
         for (const depths of [{ up: 0, down: 0 }, { up: 1, down: 0 }, { up: 0, down: 1 }, { up: 1, down: 2 }, { up: 3, down: 1 }]) {

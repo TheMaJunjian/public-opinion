@@ -50,16 +50,20 @@ interface StanceRow {
   side: 'pro' | 'con';
 }
 /** Authoritative display state is independent of which relation messages a page includes. */
-export async function statesFor(store: Store, ids: string[]): Promise<MessageState[]> {
+export async function statesFor(store: Store, ids: string[], loadedMessages?: readonly Message[]): Promise<MessageState[]> {
     const retiredTopics = await retiredOrganizationIds(store);
     const uniqueIds = [...new Set(ids)];
+    const loaded = loadedMessages && new Map(loadedMessages.map(message => [message.id, message]));
     const result: MessageState[] = [];
     // Keep query results bounded even when a mutation touches many messages.
     for (let offset = 0; offset < uniqueIds.length; offset += 200) {
         const batch = uniqueIds.slice(offset, offset + 200);
         const placeholders = batch.map((_, index) => `$${index + 1}`).join(',');
-        const messages = (await store.db.prepare(`SELECT body FROM messages WHERE id IN (${placeholders})`)
-            .all(...batch)).map(row => JSON.parse(String(row.body)) as Message);
+        // viewsFor already read these bodies in this transaction. Other callers
+        // keep the authoritative lookup; never cache messages across requests.
+        const messages = loaded && batch.every(id => loaded.has(id)) ? batch.map(id => loaded.get(id)!)
+            : (await store.db.prepare(`SELECT body FROM messages WHERE id IN (${placeholders})`)
+                .all(...batch)).map(row => JSON.parse(String(row.body)) as Message);
         const byId = new Map(messages.map(message => [message.id, message]));
         const states = new Map<string, MessageState>(messages.map(message => [message.id, {
                 messageId: message.id,
@@ -90,6 +94,8 @@ export async function statesFor(store: Store, ids: string[]): Promise<MessageSta
                 side: execution.side as 'pro' | 'con',
             };
         }
+        // Revisions are already available in this read snapshot. Joining their
+        // scalar values avoids decoding every target body again for each vote.
         const stances = (await store.db.prepare(`
       SELECT "authorId", "targetId", "targetPartId", "wholeComponent", side,context FROM (
         SELECT stance.*, ROW_NUMBER() OVER (
@@ -98,11 +104,10 @@ export async function statesFor(store: Store, ids: string[]): Promise<MessageSta
           ORDER BY stance.sequence DESC, stance."sourceId" DESC
         ) AS position
         FROM display_stances stance
-        JOIN messages target ON target.id = stance."targetId"
-        WHERE stance."targetId" IN (${placeholders})
-          AND stance."targetRevision" = (target.body::jsonb #>> '{revision}')::integer
+        JOIN unnest($1::text[],$2::integer[]) AS target(id,revision)
+          ON target.id = stance."targetId" AND target.revision = stance."targetRevision"
       ) ranked WHERE position = 1 ORDER BY sequence DESC, "sourceId" DESC
-    `).all(...batch)) as unknown as StanceRow[];
+    `).all(messages.map(message=>message.id),messages.map(message=>message.revision))) as unknown as StanceRow[];
         const correctionVoters = new Set<string>();
         const correctionIds = new Set<string>();
         for (const stance of stances) {
@@ -148,12 +153,14 @@ export async function statesFor(store: Store, ids: string[]): Promise<MessageSta
             const total=scopes[key]??={truth:{pro:0,con:0},value:{pro:0,con:0}};
             total[row.settlementType==='VALUE'?'value':'truth'][row.side==='pro'?'pro':'con']+=Number(row.amount);
         }
+        // Materialize the referenced candidates before inspecting JSON. Without
+        // this boundary PostgreSQL may decode the whole messages table per page.
         const recommendations = await store.db.prepare(`
-      SELECT DISTINCT source.id, source.body FROM refs
-      JOIN messages source ON source.id = refs."sourceId"
-      WHERE refs."targetId" IN (${placeholders})
-        AND (source.body::jsonb #>> '{spending,recommendation}')::bigint > 0
-    `).all(...batch);
+      WITH candidates AS MATERIALIZED (
+        SELECT source.body FROM messages source
+        WHERE source.id IN (SELECT "sourceId" FROM refs WHERE "targetId"=ANY($1::text[]))
+      ) SELECT body FROM candidates WHERE (body::jsonb #>> '{spending,recommendation}')::bigint > 0
+    `).all(batch);
         for (const row of recommendations) {
             const source = JSON.parse(String(row.body)) as Message;
             const recommended = new Set(relations(source)

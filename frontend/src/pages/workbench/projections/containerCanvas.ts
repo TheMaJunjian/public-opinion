@@ -9,7 +9,7 @@ import {isRejectedRelation} from '../../../utils/relatedMessages';
 export type ContainerCanvasScope = {kind:'root'} | {kind:'inside';id:string};
 
 /** Normal canvas context for comparison navigation; never constructs a temporary category. */
-export function projectContainerCanvas(effect:ContainerEffect,scope:ContainerCanvasScope){
+export function projectContainerCanvas(effect:ContainerEffect,scope:ContainerCanvasScope,mode:'graph'|'list'='graph'){
   const {messages,edges,msgMap,rejectedContainerIds,rejectedJoinRelationIds}=effect;
   const {relations,relationById,ownership}=effect;
   const scopeId=scope.kind==='inside'?scope.id:null;
@@ -30,6 +30,7 @@ export function projectContainerCanvas(effect:ContainerEffect,scope:ContainerCan
     classifiedTargetClassifyRelMsgIds:empty(),classifiedTargetMergeRelMsgIds:empty(),classifiedTargetARRANGERelMsgIds:empty(),
     graphExclusiveRelMsgIds:exclusive,graphHiddenTextIds:hiddenText,
   });
-  const visible=scoped.graphMessagesToRender.filter(message=>!effect.suppressed.has(message.id)||isContentKind(message.kind)||isRejectedRelation(message,effect.suppressed));
-  return {messages:visible,edges:effect.projectEdges(scoped.graphEdgesToRender,new Set(visible.map(message=>message.id))),hideMessageIds:scoped.hideMessageIds,rejectedRelationIds:effect.suppressed};
+  const visible=(mode==='list'?scoped.listMessagesToRender:scoped.graphMessagesToRender)
+    .filter(message=>mode==='list'||!effect.suppressed.has(message.id)||isContentKind(message.kind)||isRejectedRelation(message,effect.suppressed));
+  return {messages:visible,edges:mode==='list'?scoped.listEdgesToRender:effect.projectEdges(scoped.graphEdgesToRender,new Set(visible.map(message=>message.id))),hideMessageIds:scoped.hideMessageIds,rejectedRelationIds:effect.suppressed};
 }

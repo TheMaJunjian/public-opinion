@@ -16,6 +16,7 @@ export const userView = async (store: Store, userId: string) => {
     return {...user,username:user.name,createdAt:user.createdAt??String((await store.db.prepare('SELECT MIN("createdAt") AS at FROM ledger WHERE "userId"=$1').get(userId))?.at??'')};
 };
 interface ViewContext {
+    structureOnly?: boolean;
     users: Map<string, UserView>;
     messages: Map<string, Message>;
     members: Map<string, string[]>;
@@ -44,6 +45,7 @@ export function relationViewType(message: Message): string | null { const relati
 export async function referenceView(store: Store, reference: Reference, context?: ViewContext): Promise<TargetRef & { reference: Reference }> {
     const target = (await cachedMessage(store, reference.messageId, reference.revision, context)), relation = primaryRelation(target);
     if (reference.range) {
+        if (context?.structureOnly) return { kind: 'text-fragment', messageId: target.id, text: '', hash: `${target.id}:${target.revision}:${reference.partId}:${reference.range.start}:${reference.range.end}`, reference };
         const part = target.parts.find(p => p.id === reference.partId);
         const text = part?.type === 'text' ? part.text : part?.type === 'code' ? part.source : part?.type === 'web' ? part.excerpt : '';
         const quoted=reference.context&&'version' in reference.context&&reference.context.version?await readReference(store,reference):text.slice(reference.range.start,reference.range.end);
@@ -108,20 +110,24 @@ export async function scopeView(store: Store, messageId: string): Promise<ScopeV
 export async function contentView(store: Store, message: Message, context?: ViewContext): Promise<string> {
     const content = textOf(message);
     if (content)
-        return content;
+        return context?.structureOnly ? (content.trim() ? 'x' : '') : content;
     const data = dataOf(message), relation = primaryRelation(message);
     if (typeof data.content === 'string' && data.content)
-        return data.content;
+        return context?.structureOnly ? (data.content.trim() ? 'x' : '') : data.content;
     if (relation?.relation === 'distribution') {
+        if (context?.structureOnly) return 'x';
         const labels: Record<string, string> = { wager: '对赌分配', operations: '运营收入分配', delegation: '委托报酬', penalty: '低质量处罚', reversal: '分配调整', grant: '贡献点发放' };
         const allocations = Array.isArray(data.allocations) ? data.allocations as unknown as RecordData[] : [];
         return `${labels[String(data.source)] ?? '分配'}：${Number(data.total ?? 0)} 贡献点${allocations.length ? '；' + (await Promise.all(allocations.map(async (a) => `${(await cachedUser(store, String(a.userId), context)).username} ${Number(a.amount) > 0 ? '+' : ''}${a.amount}`))).join('，') : ''}。`;
     }
     const target = relation?.roles.target?.[0]?.reference;
+    const labels: Record<string, string> = { settlement: '发起结算', 'open-settlement': '请求发起结算', terminate: '请求终止结算', agree: '赞同', disagree: '反对', amend: '提出修改', authorize: '授权生效', follow: '关注', read: '标记已读', unread: '标记未读', recommend: '推荐', archive: '冷藏', 'low-quality': '低质量评价', 'rule-change': '规则修改', distribute: '请求分配运营收入', recharge: '充值分账申请', 'member-of': '加入组织' };
+    const label = relation ? labels[relation.relation] ?? relationViewType(message) ?? relation.relation : '消息';
+    // Presence only; no quoted target text or allocation-user descriptions.
+    if (context?.structureOnly) return target || relation?.relation === 'follow' || relation?.relation === 'block' || label.trim() ? 'x' : '';
     const targetMessage = target ? (await cachedMessage(store, target.messageId, target.revision, context)) : undefined;
     if (relation?.relation === 'follow' || relation?.relation === 'block') return `${relation.relation === 'follow' ? '关注' : '拉黑'}－${relation.reason === 'YES' ? '是' : '否'}${targetMessage ? `：「${textOf(targetMessage).slice(0,120)}」` : ''}`;
-    const labels: Record<string, string> = { settlement: '发起结算', 'open-settlement': '请求发起结算', terminate: '请求终止结算', agree: '赞同', disagree: '反对', amend: '提出修改', authorize: '授权生效', follow: '关注', read: '标记已读', unread: '标记未读', recommend: '推荐', archive: '冷藏', 'low-quality': '低质量评价', 'rule-change': '规则修改', distribute: '请求分配运营收入', recharge: '充值分账申请', 'member-of': '加入组织' };
-    return `${relation ? labels[relation.relation] ?? relationViewType(message) ?? relation.relation : '消息'}${targetMessage ? `：「${textOf(targetMessage).slice(0, 120) || relationViewType(targetMessage) || '消息'}」` : ''}`;
+    return `${label}${targetMessage ? `：「${textOf(targetMessage).slice(0, 120) || relationViewType(targetMessage) || '消息'}」` : ''}`;
 }
 export async function messageView(store: Store, message: Message, parent?: string, state?: MessageState, context?: ViewContext): Promise<NativeMessageView> {
     const relation = primaryRelation(message), data = dataOf(message), type = relationViewType(message) ?? (['ROUND','ROUND_RESULT'].includes(String(data.kind))?String(data.kind):null);
@@ -151,7 +157,7 @@ export async function messageView(store: Store, message: Message, parent?: strin
             if (data.value !== undefined) payload.correctionValue = data.value;
         } else if (relation?.relation === 'amend' && typeof data.value === 'string' && !relation.roles.target?.[0]?.reference.partId) {
             const reference = relation.roles.target?.[0]?.reference;
-            if (reference) payload.correctionBeforeContent = textOf(await cachedMessage(store, reference.messageId, reference.revision ?? (typeof data.expectedRevision === 'number' ? data.expectedRevision : undefined), context));
+            if (reference) payload.correctionBeforeContent = context?.structureOnly ? '' : textOf(await cachedMessage(store, reference.messageId, reference.revision ?? (typeof data.expectedRevision === 'number' ? data.expectedRevision : undefined), context));
             payload.correctionAfterContent = data.value; payload.correctionContent = data.value;
         }
     }
@@ -201,18 +207,25 @@ export async function messageView(store: Store, message: Message, parent?: strin
     }
     const stateValue = state ?? (await statesFor(store, [message.id]))[0];
     const projectRef = (ref:Reference) => referenceView(store,ref,context);
-    return { id: message.id, kind, contentType: data.contentType === 'MARKDOWN' ? 'MARKDOWN' : 'TEXT', content: (await contentView(store, message, context)), createdAt: message.createdAt, updatedAt: message.updatedAt, createdBy: (await cachedUser(store, message.authorId, context)), relationType: type, relSourceId: sources[0]?.reference.messageId ?? null, sourceMessageId: sources[0]?.reference.messageId ?? null, sourceRefs: sources.map(b => b.reference), targetRefs: (await Promise.all(references.map(projectRef))), declaredTargetRefs: (await Promise.all(declaredTargetRefs.map(projectRef))), relationPayload: payload, payload, revision: message.revision, parts: message.parts, sequence: message.sequence, spending: message.spending, state: stateValue, executedStance: stateValue?.executedStance, supersededBy: typeof data.supersededBy === 'string' ? data.supersededBy : null };
+    const view: NativeMessageView = { id: message.id, kind, contentType: data.contentType === 'MARKDOWN' ? 'MARKDOWN' : 'TEXT', content: (await contentView(store, message, context)), createdAt: message.createdAt, updatedAt: message.updatedAt, createdBy: (await cachedUser(store, message.authorId, context)), relationType: type, relSourceId: sources[0]?.reference.messageId ?? null, sourceMessageId: sources[0]?.reference.messageId ?? null, sourceRefs: sources.map(b => b.reference), targetRefs: (await Promise.all(references.map(projectRef))), declaredTargetRefs: (await Promise.all(declaredTargetRefs.map(projectRef))), relationPayload: payload, payload, revision: message.revision, parts: message.parts, sequence: message.sequence, spending: message.spending, state: stateValue, executedStance: stateValue?.executedStance, supersededBy: typeof data.supersededBy === 'string' ? data.supersededBy : null };
+    return view;
 }
-export async function viewsFor(store: Store, messages: Message[], parent?: string, knownUsers?: UserView[]) {
-    const ids = messages.map(m => m.id), states = new Map((await statesFor(store, ids)).map(s => [s.messageId, s])), context: ViewContext = { users: new Map((knownUsers ?? await usersFor(store, messages.map(message => message.authorId))).map(user => [user.id, user])), messages: new Map(), members: new Map(), rounds: new Map(), recipients: new Map() };
+export async function viewsFor(store: Store, messages: Message[], parent?: string, knownUsers?: UserView[], structureOnly = false) {
+    // Only the structural snapshot path guarantees current rows. Other callers
+    // can project historical moderation snapshots and still need current state.
+    const ids = messages.map(m => m.id), states = new Map((await statesFor(store, ids, structureOnly ? messages : undefined)).map(s => [s.messageId, s])), context: ViewContext = { structureOnly, users: new Map((knownUsers ?? await usersFor(store, messages.map(message => message.authorId))).map(user => [user.id, user])), messages: new Map(), members: new Map(), rounds: new Map(), recipients: new Map() };
     context.users.set('system', (await userView(store, 'system')));
     const refs = new Map<string, Reference>();
     for (const message of messages) {
         context.messages.set(`${message.id}:current`, message);
         context.messages.set(`${message.id}:${message.revision}`, message);
-        for (const part of relations(message))
-            for (const binding of Object.values(part.roles).flat())
-                refs.set(`${binding.reference.messageId}:${binding.reference.revision ?? 'current'}`, binding.reference);
+        const relation = primaryRelation(message);
+        // Structural cards only resolve declared target kinds, current members
+        // and correction validity. Other native roles retain their identities
+        // for topology/permission checks without loading the referenced body.
+        const bindings = structureOnly ? relation?.roles.target ?? relation?.roles.members ?? relation?.roles.member ?? []
+            : relations(message).flatMap(part => Object.values(part.roles).flat());
+        for (const binding of bindings) refs.set(`${binding.reference.messageId}:${binding.reference.revision ?? 'current'}`, binding.reference);
     }
     for (let offset = 0; offset < ids.length; offset += 200) {
         const batch = ids.slice(offset, offset + 200), placeholders = batch.map((_,index) => `$${index+1}`).join(',');
@@ -278,7 +291,7 @@ export async function accountView(store: Store, userId: string) {
     }
     return { points: { available: account.available, locked: account.locked }, balance: { amount: account.available, debtFrozen: account.available < 0 }, breakdown: { initialMinted: sum(r => r.reason === '初始发放' ? Number(r.amount) : 0), totalEarned, totalLost, totalProtocolFees: sum(r => r.reason === '协议费' ? -Number(r.amount) : 0) } };
 }
-export async function stakesFor(store: Store, ids: string[], knownUsers?: UserView[]): Promise<Record<string, NativeMessageStakes>> {
+export async function stakesFor(store: Store, ids: string[], knownUsers?: UserView[], structureOnly = false): Promise<Record<string, NativeMessageStakes>> {
   const users=new Map((knownUsers??[]).map(user=>[user.id,user])),result:Record<string,NativeMessageStakes>={};
   const claims=new Map<string,Reference>();
   const cacheClaims=async(references:Reference[])=>{
@@ -295,29 +308,34 @@ export async function stakesFor(store: Store, ids: string[], knownUsers?: UserVi
     const contexts=value.contexts??={};
     return contexts[key]??={messageId:value.messageId,pool:{lockedPro:0,lockedCon:0},pools:{TRUTH:{lockedPro:0,lockedCon:0},VALUE:{lockedPro:0,lockedCon:0}},stakes:[],counts:{pro:0,con:0},countsByType:{TRUTH:{pro:0,con:0},VALUE:{pro:0,con:0}}};
   };
-  for(const id of ids)result[id]={messageId:id,contexts:{},pool:{lockedPro:0,lockedCon:0},pools:{TRUTH:{lockedPro:0,lockedCon:0},VALUE:{lockedPro:0,lockedCon:0}},
+  for(const id of ids)result[id]={messageId:id,contexts:structureOnly?undefined:{},pool:{lockedPro:0,lockedCon:0},pools:{TRUTH:{lockedPro:0,lockedCon:0},VALUE:{lockedPro:0,lockedCon:0}},
     stakes:[],counts:{pro:0,con:0},countsByType:{TRUTH:{pro:0,con:0},VALUE:{pro:0,con:0}}};
   for(let offset=0;offset<ids.length;offset+=200){
     const batch=ids.slice(offset,offset+200);
-    const positions=await store.db.prepare(`SELECT p.*,b."messageId" AS "sourceMessageId" FROM stake_positions p LEFT JOIN bets b ON b.id=p.id
+    const positions=await store.db.prepare(structureOnly ? `SELECT "subjectId","settlementType",side,SUM(amount) AS amount FROM stake_positions
+      WHERE "subjectId"=ANY($1::text[]) GROUP BY "subjectId","settlementType",side` : `SELECT p.*,b."messageId" AS "sourceMessageId" FROM stake_positions p LEFT JOIN bets b ON b.id=p.id
       WHERE p."subjectId"=ANY($1::text[]) ORDER BY p."createdAt",p.id`).all(batch);
-    await cacheClaims(positions.filter(row=>row.settlementType==='VALUE'&&row.reference).map(row=>row.reference as Reference));
-    for(const user of await usersFor(store,[...new Set(positions.map(row=>String(row.userId)).filter(id=>!users.has(id)))]))users.set(user.id,user);
+    if (!structureOnly) {
+      await cacheClaims(positions.filter(row=>row.settlementType==='VALUE'&&row.reference).map(row=>row.reference as Reference));
+      for(const user of await usersFor(store,[...new Set(positions.map(row=>String(row.userId)).filter(id=>!users.has(id)))]))users.set(user.id,user);
+    }
     for(const row of positions){
       const value=result[row.subjectId],type=row.settlementType==='VALUE'?'VALUE':'TRUTH',side=row.side==='pro'?'pro':'con';
       value.counts[side]+=Number(row.amount);value.countsByType[type][side]+=Number(row.amount);
+      if (structureOnly) continue;
       value.stakes.push({id:row.id,side:side==='pro'?'PRO':'CON',amount:row.amount,createdAt:row.createdAt,roundId:row.roundId,
         settlementType:type,user:users.get(row.userId)!,...(row.sourceMessageId?{sourceMessageId:String(row.sourceMessageId)}:{}),...(row.reference?{reference:row.reference}:{})});
       const scoped=scopeValue(value,scopeFor(row.reference,type));scoped.stakes.push(value.stakes.at(-1)!);scoped.counts[side]+=Number(row.amount);scoped.countsByType![type][side]+=Number(row.amount);
     }
     const pools=await store.db.prepare(`SELECT COALESCE(r.body::jsonb->>'subjectId',r.body::jsonb #>> '{target,messageId}') AS subject,
-      COALESCE(r.body::jsonb->>'settlementType','TRUTH') AS type,b.side,r.body::jsonb->'target' AS reference,SUM(b.amount) AS amount FROM bets b JOIN rounds r ON r.id=b."roundId"
+      COALESCE(r.body::jsonb->>'settlementType','TRUTH') AS type,b.side,${structureOnly ? '' : "r.body::jsonb->'target' AS reference,"}SUM(b.amount) AS amount FROM bets b JOIN rounds r ON r.id=b."roundId"
       WHERE COALESCE(r.body::jsonb->>'subjectId',r.body::jsonb #>> '{target,messageId}')=ANY($1::text[])
-      AND r.body::jsonb->>'status'<>'settled' GROUP BY subject,type,b.side,reference`).all(batch);
-    await cacheClaims(pools.filter(row=>row.type==='VALUE'&&row.reference).map(row=>row.reference as Reference));
+      AND r.body::jsonb->>'status'<>'settled' GROUP BY subject,type,b.side${structureOnly ? '' : ',reference'}`).all(batch);
+    if (!structureOnly) await cacheClaims(pools.filter(row=>row.type==='VALUE'&&row.reference).map(row=>row.reference as Reference));
     for(const row of pools){
       const value=result[row.subject],type=String(row.type),key=row.side==='pro'?'lockedPro':'lockedCon';
       value.pools[type]??={lockedPro:0,lockedCon:0};value.pools[type][key]+=Number(row.amount);value.pool[key]+=Number(row.amount);
+      if (structureOnly) continue;
       const scoped=scopeValue(value,scopeFor(row.reference,type));scoped.pools![type]??={lockedPro:0,lockedCon:0};scoped.pools![type][key]+=Number(row.amount);scoped.pool[key]+=Number(row.amount);
     }
     for(const row of await store.db.prepare('SELECT "messageId",amount FROM escrows WHERE "messageId"=ANY($1::text[]) AND "recipientId" IS NULL').all(batch)){
@@ -378,7 +396,10 @@ export async function tagCountsFor(store: Store, ids: string[]) {
         const batch = ids.slice(i, i + 200);
         if (!batch.length)
             continue;
-        for (const row of (await store.db.prepare(`SELECT DISTINCT m.body FROM messages m JOIN refs r ON r."sourceId"=m.id WHERE r."targetId"=ANY($1::text[]) AND EXISTS (SELECT 1 FROM jsonb_array_elements(m.body::jsonb -> 'parts') p WHERE (p.value::jsonb #>> '{relation}') IN ('tag','recommend','archive','low-quality'))`).all(batch))) {
+        // Check relation bodies only after selecting this batch's unique sources.
+        for (const row of (await store.db.prepare(`WITH candidates AS MATERIALIZED (
+            SELECT m.body FROM messages m WHERE m.id IN (SELECT "sourceId" FROM refs WHERE "targetId"=ANY($1::text[]))
+        ) SELECT body FROM candidates WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(body::jsonb -> 'parts') p WHERE (p.value::jsonb #>> '{relation}') IN ('tag','recommend','archive','low-quality'))`).all(batch))) {
             const message = JSON.parse(String(row.body)) as Message;
             sources.set(message.id, message);
         }
@@ -432,11 +453,11 @@ export async function snapshot(store: Store, parent: string, query: RecordData, 
                 present.add(message.id);
             }
         }
-        const users = await usersFor(store, [...messages.map(message => message.authorId), ...changes.flatMap(change => change.ledger.map(entry => entry.userId))]), views = (await viewsFor(store, messages, parent, users)), ids = messages.map(m => m.id), marks = [];
+        const users = await usersFor(store, [...messages.map(message => message.authorId), ...changes.flatMap(change => change.ledger.map(entry => entry.userId))]), views = (await viewsFor(store, messages, parent, users, query.detail === 'structure')), ids = messages.map(m => m.id), marks = [];
         if (userId)
             for (let i = 0; i < ids.length; i += 100)
                 marks.push(...(await personalMarks(store, userId, ids.slice(i, i + 100))));
-        return { regionId, scope: (await scopeView(store, parent)), messages: views, relations: views.filter(isRelationView), users, stakes: (await stakesFor(store, ids, users)), tagCounts: (await tagCountsFor(store, ids)), attentionUsers: (await attentionUsers(store, ids)), personalStates: marks, sequence: selected.length ? Number(selected.at(-1)!.sequence) : after, hasMore: changeRows.length > 100, nextCursor: null, removedMemberships: [...new Set(changes.flatMap(c => c.removedMemberships))], removedMessageIds: changedIds.filter(id => id !== parent && !present.has(id)) };
+        return { regionId, scope: (await scopeView(store, parent)), messages: views, relations: views.filter(isRelationView), users, stakes: (await stakesFor(store, ids, users, query.detail === 'structure')), tagCounts: (await tagCountsFor(store, ids)), attentionUsers: (await attentionUsers(store, ids)), personalStates: marks, sequence: selected.length ? Number(selected.at(-1)!.sequence) : after, hasMore: changeRows.length > 100, nextCursor: null, removedMemberships: [...new Set(changes.flatMap(c => c.removedMemberships))], removedMessageIds: changedIds.filter(id => id !== parent && !present.has(id)) };
     }
     const scope = scopeSql(parent), params: (string | number)[] = [...scope.params], extra: string[] = [];
     const parameter=(value:string|number)=>{params.push(value);return `$${params.length}`;};
@@ -457,7 +478,7 @@ export async function snapshot(store: Store, parent: string, query: RecordData, 
         extra.push(`(m.sequence<${sequence} OR (m.sequence=${sequence} AND m.id<${id}))`);
     }
     const bound=parameter(limit+1);
-    const rows = (await store.db.prepare(`${scope.cte} SELECT m.body FROM messages m WHERE ${scope.predicate}${extra.length ? ' AND ' + extra.join(' AND ') : ''} ORDER BY m.sequence DESC,m.id DESC LIMIT ${bound}`).all(...params)), messages = rows.slice(0, limit).map(r => JSON.parse(String(r.body)) as Message), last = messages.at(-1), users = query.cursor ? await usersFor(store, messages.map(message => message.authorId)) : await allUsers(store), views = (await viewsFor(store, messages, parent, users)), ids = messages.map(m => m.id);
+    const rows = (await store.db.prepare(`${scope.cte} SELECT m.body FROM messages m WHERE ${scope.predicate}${extra.length ? ' AND ' + extra.join(' AND ') : ''} ORDER BY m.sequence DESC,m.id DESC LIMIT ${bound}`).all(...params)), messages = rows.slice(0, limit).map(r => JSON.parse(String(r.body)) as Message), last = messages.at(-1), users = query.cursor ? await usersFor(store, messages.map(message => message.authorId)) : await allUsers(store), views = (await viewsFor(store, messages, parent, users, query.detail === 'structure')), ids = messages.map(m => m.id);
     const removedMemberships: string[] = [], removedMessageIds: string[] = [];
     if (after) {
         for (const row of (await store.db.prepare("SELECT body FROM changes WHERE sequence>$1").all(after))) {
@@ -474,7 +495,7 @@ export async function snapshot(store: Store, parent: string, query: RecordData, 
     if (userId)
         for (let i = 0; i < ids.length; i += 100)
             marks.push(...(await personalMarks(store, userId, ids.slice(i, i + 100))));
-    return { regionId, scope: (await scopeView(store, parent)), messages: views, relations: views.filter(isRelationView), users, stakes: (await stakesFor(store, ids, users)), tagCounts: (await tagCountsFor(store, ids)), attentionUsers: (await attentionUsers(store, ids)), personalStates: marks, sequence: (await store.latestSequence()), hasMore: false, nextCursor: rows.length > limit && last ? Buffer.from(JSON.stringify({ sequence: last.sequence, id: last.id })).toString('base64url') : null, removedMemberships: [...new Set(removedMemberships)], removedMessageIds: [...new Set(removedMessageIds)] };
+    return { regionId, scope: (await scopeView(store, parent)), messages: views, relations: views.filter(isRelationView), users, stakes: (await stakesFor(store, ids, users, query.detail === 'structure')), tagCounts: (await tagCountsFor(store, ids)), attentionUsers: (await attentionUsers(store, ids)), personalStates: marks, sequence: (await store.latestSequence()), hasMore: false, nextCursor: rows.length > limit && last ? Buffer.from(JSON.stringify({ sequence: last.sequence, id: last.id })).toString('base64url') : null, removedMemberships: [...new Set(removedMemberships)], removedMessageIds: [...new Set(removedMessageIds)] };
 }
 import {readReference} from './validation.js';
 import {contextKey} from '@gonglun/core';

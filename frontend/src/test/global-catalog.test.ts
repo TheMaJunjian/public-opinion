@@ -140,10 +140,28 @@ it('shows committed command records immediately while still replaying unrelated 
   sync.applyCommitted({ ...page(12, ['sent']), windowed: true });
   expect(onReady.mock.lastCall![0].messages.map((m: { id: string }) => m.id)).toEqual(['old', 'sent']);
   expect(onReady.mock.lastCall![0].windowed).toBeUndefined();
+  expect(onReady.mock.lastCall![1]).toBeUndefined();
   load.mockImplementation(async () => page(13, ['unrelated-change']));
   await sync.refresh();
   expect(load.mock.calls[2][0].after).toBe(10);
   expect(onReady.mock.lastCall![0].messages.map((m: { id: string }) => m.id)).toEqual(['old', 'sent', 'unrelated-change']);
+  expect(onReady.mock.lastCall![1]).toBeUndefined();
+});
+
+it('reports all changed IDs only after a complete replay and drops continuity on reload', async () => {
+  let updating = false;
+  const load = vi.fn(async ({ after }: SnapshotQuery) => !updating ? page(10, after === undefined ? ['a', 'b'] : [])
+    : after === 10 ? { ...page(11, ['a']), tagCounts: { b: { RECOMMEND: 1 } }, hasMore: true }
+    : after === 11 ? { ...page(12), removedMessageIds: ['b'], attentionUsers: { a: [] } }
+    : page(12, after === undefined ? ['a'] : []));
+  const { sync, onReady } = start(load);
+  await vi.waitFor(() => expect(onReady).toHaveBeenCalledOnce());
+  expect(onReady.mock.lastCall![1]).toBeUndefined();
+  updating = true; await sync.refresh();
+  expect(onReady).toHaveBeenCalledTimes(2);
+  expect(onReady.mock.lastCall![1]).toEqual({ previousSequence: 10, changedIds: ['a', 'b'] });
+  sync.reload(); await sync.refresh();
+  expect(onReady.mock.lastCall![1]).toBeUndefined();
 });
 
 it('persists bounded pages instead of repeatedly copying the growing catalog, then compacts only after replay completes', async () => {

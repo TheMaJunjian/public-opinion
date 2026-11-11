@@ -80,10 +80,10 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
         } catch(error){next(error);}
     });
     router.post('/snapshot/query', (req, res, next) => {
-        void store.read(async () => sendSnapshot(req, res, await windowSnapshot(store, req.body))).catch(next);
+        void store.read(async () => sendSnapshot(req, res, () => windowSnapshot(store, req.body))).catch(next);
     });
     get('/snapshot', async (req, res, next) => { try {
-        await sendSnapshot(req, res, await snapshot(store, String(req.query.parent ?? 'root'), req.query, (await currentSession(store, req))?.user.id));
+        await sendSnapshot(req, res, async () => snapshot(store, String(req.query.parent ?? 'root'), req.query, (await currentSession(store, req))?.user.id));
     }
     catch (e) {
         next(e);

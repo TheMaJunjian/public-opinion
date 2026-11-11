@@ -20,6 +20,10 @@ export default function MessagePagination({ parent, loadedCount, hasMore, loadin
   const failed = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
+  const mounted = useRef(true);
+  const scope = useRef({ parent });
+  if (scope.current.parent !== parent) scope.current = { parent };
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { failed.current = false; setError(null); }, [parent]);
   useEffect(() => {
     if (!hasMore || loading || !loadedCount) return;
@@ -31,9 +35,12 @@ export default function MessagePagination({ parent, loadedCount, hasMore, loadin
     const more = () => {
       if (disposed || failed.current || inFlight.current || document.hidden || tasks?.blocking || tasks?.failure) return;
       const promise = onMore(parent);
+      const requestedScope = scope.current;
       inFlight.current = promise;
       void promise.catch(error => {
-        if (!disposed) { failed.current = true; const message = error instanceof Error ? error.message : '消息加载失败'; setError(message); onError(message); }
+        // Loading/row-count updates replace the observer effect while a body
+        // request is pending. Its error still belongs to this mounted scope.
+        if (mounted.current && scope.current === requestedScope) { failed.current = true; const message = error instanceof Error ? error.message : '消息加载失败'; setError(message); onError(message); }
       }).finally(() => { if (inFlight.current === promise) inFlight.current = null; });
     };
     const check = () => {

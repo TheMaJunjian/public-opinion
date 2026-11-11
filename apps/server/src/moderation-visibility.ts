@@ -82,7 +82,8 @@ export async function sanitizeModeration<T>(store:Store,value:T,userId=moderatio
   if(!await hasModerationTables(store)||!(await moderationPolicy(store)).enabled)return value;
   const ids=new Set<string>();
   const refs=new Map<string,{id:string;revision?:number}>();
-  const collect=(item:any)=>{if(!item||typeof item!=='object')return;if(Array.isArray(item)){item.forEach(collect);return;}for(const [key,val] of Object.entries(item)){if(identityKeys.has(key)&&typeof val==='string'){ids.add(val);const revision=identityRevision(item,key);refs.set(referenceKey(val,revision),{id:val,revision});}collect(val);}};
+  const collected=new WeakSet<object>();
+  const collect=(item:any)=>{if(!item||typeof item!=='object'||collected.has(item))return;collected.add(item);if(Array.isArray(item)){item.forEach(collect);return;}for(const [key,val] of Object.entries(item)){if(identityKeys.has(key)&&typeof val==='string'){ids.add(val);const revision=identityRevision(item,key);refs.set(referenceKey(val,revision),{id:val,revision});}collect(val);}};
   collect(value);
   const blocked=await inaccessibleMessages(store,[...ids],userId);
   const blockedVersions=await inaccessibleReferences(store,[...refs.values()],userId);
@@ -95,7 +96,15 @@ export async function sanitizeModeration<T>(store:Store,value:T,userId=moderatio
     const deposits=await store.db.prepare('SELECT * FROM moderation_deposits WHERE "caseId"=ANY($1::text[])').all<ReviewDeposit>(cases.map(c=>c.id));
     for(const c of cases){const summary=summarizeReview(c,votes.filter(v=>v.caseId===c.id),deposits.filter(d=>d.caseId===c.id),userId);versions.set(referenceKey(c.messageId,c.revision),summary);if(!summaries.has(c.messageId))summaries.set(c.messageId,summary);}
   }
+  // Snapshots share message/relation records. Keep those identities through
+  // filtering so compact transport can send each sanitized record only once.
+  const sanitized=new WeakMap<object,unknown>();
   const walk=(item:any):any=>{
+    if(!item||typeof item!=='object')return item;
+    if(sanitized.has(item))return sanitized.get(item);
+    const clean=walkObject(item);sanitized.set(item,clean);return clean;
+  };
+  const walkObject=(item:any):any=>{
     if(!item||typeof item!=='object')return item;
     if(Array.isArray(item))return item.map(walk);
     const notification=typeof item.sourceId==='string'&&typeof item.actorId==='string'&&Array.isArray(item.references);

@@ -206,7 +206,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     tagCounts, setRelatedTraceContext, captureOptimisticRollback,
     onDemand, ensureMessages,
     catalog, catalogReady, catalogVersion, catalogComputationsCurrent, globalRows,
-    viewingExport, viewerStructure, unloadedViewerContainers, loadViewerScope, appliedScopeKey,
+    viewingExport, viewerStructure, unloadedViewerContainers, loadViewerScope, appliedScopeKey, viewerBodyPage, loadMoreViewerBodies,
     captureTransient, showSendPreview, clearSendPreview, confirmSendPreview, liveSequence, sendPreviewPages, sendPreviewMessageIds,
   } = useWorkbenchData({ user, authLoading, scopeMessageId, navigate, viewMode });
   const [currentRecordCategory,setRecordCategory]=useState<{targetId:string;label:string;recordIds:string[];revision?:number}|null>(null);
@@ -917,6 +917,8 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
 
   const requestedViewerScope = {
     classificationId: classifyRelMsgId,
+    ...(onDemand && !isPreloaded ? { viewMode, bodyPaging: !recordCategory && !joinFilterTargetId && !correctionFilterTargetId } : {}),
+    ...(onDemand && !isPreloaded ? { pinnedIds: [...(lastClickedMessageId ? [lastClickedMessageId] : []), ...sendPreviewMessageIds ?? []] } : {}),
     ...(traceEntries.length ? { trace: { ids: traceEntries.at(-1)!.ids, depths: traceDepths,
       expandedIds: [...traceExpandedFrameIds].sort() } } : {}),
     full: cleanMode || homeFilterMode !== null || comparisonMode || comparisonReviewed
@@ -3389,7 +3391,8 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     edgesToRender, onDemand && !isPreloaded && !comparisonReviewed && !containerPreview && traceEntries.length === 0,
     JSON.stringify([scopeMessageId, activePageParent, viewMode, cleanFilters, homeFilterMode, msgFilter, comparisonMode]),
     [lastClickedMessageId ?? '', ...sendPreview.ids, ...draftUnits.map(unit => unit.messageId), ...sourceUnits.map(unit => unit.messageId), ...targetUnits.map(unit => unit.messageId)],
-    !comparisonReviewed && !containerPreview && traceEntries.length === 0,'time');
+    !comparisonReviewed && !containerPreview && traceEntries.length === 0,'time',
+    viewerBodyPage ? { ...viewerBodyPage, loadMore: loadMoreViewerBodies } : undefined);
   const readingScope=traceScopeIds;
   const readingAllowed=useMemo(()=>new Set([...applyMessageFilter(messages.filter(message=>(!cleanVisibleIds||cleanVisibleIds.visibleTextIds.has(message.id)||cleanVisibleIds.visibleRelIds.has(message.id))
     &&(!homeFilterResult||homeFilterResult.displayIds.has(message.id))),msgFilter).map(message=>message.id),...readingMessageIds]),[messages,cleanVisibleIds,homeFilterResult,msgFilter,readingMessageIds]);

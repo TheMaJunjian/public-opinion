@@ -413,13 +413,18 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     } finally { release(); view.unmount(); viewerRoute.query = ''; graphRendering.actual = false; geometry.mockRestore(); mockApi.getWorkbenchSnapshot.mockImplementation(original); }
   });
 
-  it.each(['graph', 'list'])('updates card selection immediately during online hydration in %s', async mode => {
+  it.each(['graph', 'list'].flatMap(mode => [
+    { mode, cache: 'warm', additionalBodies: 0 },
+    { mode, cache: 'partially loaded', additionalBodies: 25 },
+  ]))('updates card selection immediately in $mode with a $cache body cache', async ({ mode, additionalBodies }) => {
     const original = mockApi.getWorkbenchSnapshot.getMockImplementation()!;
     const category: Relation = { ...makeRelation(), id: 'category', relationType: 'CLASSIFY', sourceMessageId: null,
       targetRefs: [], payload: { title: '测试分类' }, revision: 1 };
     const full = { regionId: 'selection-region', scope: { messageId: 'classification-1', title: '选择测试' }, sequence: 10,
       messages: [{ ...makeMessage('text', '测试正文'), revision: 1 }, { ...makeMessage(category.id, '测试分类'), revision: 1,
-        kind: 'RELATION', relationType: category.relationType, targetRefs: category.targetRefs, relationPayload: category.payload }],
+        kind: 'RELATION', relationType: category.relationType, targetRefs: category.targetRefs, relationPayload: category.payload },
+        ...Array.from({ length: additionalBodies }, (_, i) => ({ ...makeMessage(`uncached-${String(i).padStart(2, '0')}`, `后续正文 ${i}`),
+          revision: 1, createdAt: '2024-01-01T00:02:00.000Z' }))],
       relations: [category], users: [makeUser()], stakes: {}, tagCounts: {}, attentionUsers: {} };
     let hold = false;
     const releases: Array<() => void> = [];
@@ -449,7 +454,15 @@ describe('rejected child container boundaries and single-side comparison',()=>{
         expect(staging).toHaveTextContent(id);
         expect(card(id)).toBe(originalCard);
         expect(originalCard).toHaveAttribute('data-whole-selected', 'true');
-        await waitFor(() => expect(releases.length).toBeGreaterThan(requestsBefore));
+        if (additionalBodies) {
+          // Selection needs context beyond the first body page. Hold a real
+          // cache miss so deselection is exercised while hydration is pending.
+          await waitFor(() => expect(releases.length).toBeGreaterThan(requestsBefore));
+        } else {
+          await waitForWorkbenchIdle();
+          expect(releases.length).toBe(requestsBefore);
+          expect(card(id)).toBe(originalCard);
+        }
         await pointer.click(within(originalCard).getByText(content));
         expect(staging).toHaveTextContent('当前未选择任何候选。');
         expect(originalCard).not.toHaveAttribute('data-whole-selected');

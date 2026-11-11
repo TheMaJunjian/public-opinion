@@ -1,0 +1,333 @@
+{
+  "date": "2026-11-11",
+  "baseline": "Working tree after the first navigation optimization; this measures the additional structure projection and body reuse changes.",
+  "environment": {
+    "node": "v24.14.1",
+    "platform": "win32",
+    "cpu": "Intel(R) Core(TM) i7-14700F"
+  },
+  "structureMethod": "One enforced read-only local PostgreSQL snapshot. Warm both versions once, then alternate their order for five measured pairs. Collect SQL round-trip timing, projection, moderation, compact JSON and gzip level 4; exclude equality assertions from timing. Force GC before each sample. No concurrent tests or builds. Not production or WAN timings.",
+  "structure": {
+    "records": 3957,
+    "runs": [
+      {
+        "version": "before",
+        "run": 0,
+        "warmup": true,
+        "ms": 1736,
+        "projectionMs": 981,
+        "moderationMs": 674,
+        "queries": 426,
+        "dbMs": 1318,
+        "pages": 5,
+        "records": 3957,
+        "jsonBytes": 9247585,
+        "gzipBytes": 742250
+      },
+      {
+        "version": "after",
+        "run": 0,
+        "warmup": true,
+        "ms": 1732,
+        "projectionMs": 975,
+        "moderationMs": 682,
+        "queries": 381,
+        "dbMs": 1342,
+        "pages": 5,
+        "records": 3957,
+        "jsonBytes": 9247585,
+        "gzipBytes": 742250
+      },
+      {
+        "version": "after",
+        "run": 1,
+        "warmup": false,
+        "ms": 1567,
+        "projectionMs": 889,
+        "moderationMs": 602,
+        "queries": 381,
+        "dbMs": 1250,
+        "pages": 5,
+        "records": 3957,
+        "jsonBytes": 9247585,
+        "gzipBytes": 742250
+      },
+      {
+        "version": "before",
+        "run": 1,
+        "warmup": false,
+        "ms": 1693,
+        "projectionMs": 1004,
+        "moderationMs": 613,
+        "queries": 423,
+        "dbMs": 1314,
+        "pages": 5,
+        "records": 3957,
+        "jsonBytes": 9247585,
+        "gzipBytes": 742250
+      },
+      {
+        "version": "before",
+        "run": 2,
+        "warmup": false,
+        "ms": 1741,
+        "projectionMs": 1026,
+        "moderationMs": 640,
+        "queries": 423,
+        "dbMs": 1366,
+        "pages": 5,
+        "records": 3957,
+        "jsonBytes": 9247585,
+        "gzipBytes": 742250
+      },
+      {
+        "version": "after",
+        "run": 2,
+        "warmup": false,
+        "ms": 1547,
+        "projectionMs": 830,
+        "moderationMs": 640,
+        "queries": 381,
+        "dbMs": 1210,
+        "pages": 5,
+        "records": 3957,
+        "jsonBytes": 9247585,
+        "gzipBytes": 742250
+      },
+      {
+        "version": "after",
+        "run": 3,
+        "warmup": false,
+        "ms": 1429,
+        "projectionMs": 756,
+        "moderationMs": 598,
+        "queries": 381,
+        "dbMs": 1094,
+        "pages": 5,
+        "records": 3957,
+        "jsonBytes": 9247585,
+        "gzipBytes": 742250
+      },
+      {
+        "version": "before",
+        "run": 3,
+        "warmup": false,
+        "ms": 1624,
+        "projectionMs": 918,
+        "moderationMs": 621,
+        "queries": 423,
+        "dbMs": 1233,
+        "pages": 5,
+        "records": 3957,
+        "jsonBytes": 9247585,
+        "gzipBytes": 742250
+      },
+      {
+        "version": "before",
+        "run": 4,
+        "warmup": false,
+        "ms": 1618,
+        "projectionMs": 885,
+        "moderationMs": 661,
+        "queries": 423,
+        "dbMs": 1253,
+        "pages": 5,
+        "records": 3957,
+        "jsonBytes": 9247585,
+        "gzipBytes": 742250
+      },
+      {
+        "version": "after",
+        "run": 4,
+        "warmup": false,
+        "ms": 1542,
+        "projectionMs": 868,
+        "moderationMs": 595,
+        "queries": 381,
+        "dbMs": 1222,
+        "pages": 5,
+        "records": 3957,
+        "jsonBytes": 9247585,
+        "gzipBytes": 742250
+      },
+      {
+        "version": "after",
+        "run": 5,
+        "warmup": false,
+        "ms": 1563,
+        "projectionMs": 894,
+        "moderationMs": 590,
+        "queries": 381,
+        "dbMs": 1255,
+        "pages": 5,
+        "records": 3957,
+        "jsonBytes": 9247585,
+        "gzipBytes": 742250
+      },
+      {
+        "version": "before",
+        "run": 5,
+        "warmup": false,
+        "ms": 1719,
+        "projectionMs": 1004,
+        "moderationMs": 639,
+        "queries": 423,
+        "dbMs": 1317,
+        "pages": 5,
+        "records": 3957,
+        "jsonBytes": 9247585,
+        "gzipBytes": 742250
+      }
+    ],
+    "medianAfterMs": 1547,
+    "pages": 5,
+    "decodedPagesEquivalent": true,
+    "medianBeforeMs": 1693
+  },
+  "bodyReuseMethod": "Local HTTP, same sequence and anonymous visibility, same full results. Seed from the initial fresh 50-record window plus bounded context (84 records). Browse overview, five largest categories and revisit the first. Both variants keep four projected categories; before has no shared message-body cache. One timing sample per navigation; JSON bytes are decoded response sizes, not compressed wire bytes. Initial window cost is common and excluded.",
+  "bodyReuse": {
+    "equivalent": true,
+    "projectionCacheCapacity": 4,
+    "initialWindowRecords": 84,
+    "runs": [
+      {
+        "version": "before",
+        "scope": "root",
+        "selected": 97,
+        "requests": 1,
+        "returnedRows": 97,
+        "jsonBytes": 310517,
+        "ms": 189
+      },
+      {
+        "version": "before",
+        "scope": "category-1",
+        "selected": 342,
+        "requests": 2,
+        "returnedRows": 342,
+        "jsonBytes": 1145347,
+        "ms": 199
+      },
+      {
+        "version": "before",
+        "scope": "category-2",
+        "selected": 219,
+        "requests": 2,
+        "returnedRows": 219,
+        "jsonBytes": 819645,
+        "ms": 181
+      },
+      {
+        "version": "before",
+        "scope": "category-3",
+        "selected": 158,
+        "requests": 1,
+        "returnedRows": 158,
+        "jsonBytes": 569288,
+        "ms": 161
+      },
+      {
+        "version": "before",
+        "scope": "category-4",
+        "selected": 249,
+        "requests": 2,
+        "returnedRows": 249,
+        "jsonBytes": 831761,
+        "ms": 133
+      },
+      {
+        "version": "before",
+        "scope": "category-5",
+        "selected": 110,
+        "requests": 1,
+        "returnedRows": 110,
+        "jsonBytes": 394339,
+        "ms": 195
+      },
+      {
+        "version": "before",
+        "scope": "category-1-revisit",
+        "selected": 342,
+        "requests": 2,
+        "returnedRows": 342,
+        "jsonBytes": 1145347,
+        "ms": 210
+      },
+      {
+        "version": "after",
+        "scope": "root",
+        "selected": 97,
+        "requests": 1,
+        "returnedRows": 78,
+        "jsonBytes": 215674,
+        "ms": 83
+      },
+      {
+        "version": "after",
+        "scope": "category-1",
+        "selected": 342,
+        "requests": 2,
+        "returnedRows": 311,
+        "jsonBytes": 997699,
+        "ms": 120
+      },
+      {
+        "version": "after",
+        "scope": "category-2",
+        "selected": 219,
+        "requests": 1,
+        "returnedRows": 170,
+        "jsonBytes": 641868,
+        "ms": 110
+      },
+      {
+        "version": "after",
+        "scope": "category-3",
+        "selected": 158,
+        "requests": 1,
+        "returnedRows": 79,
+        "jsonBytes": 217648,
+        "ms": 76
+      },
+      {
+        "version": "after",
+        "scope": "category-4",
+        "selected": 249,
+        "requests": 2,
+        "returnedRows": 232,
+        "jsonBytes": 748990,
+        "ms": 131
+      },
+      {
+        "version": "after",
+        "scope": "category-5",
+        "selected": 110,
+        "requests": 1,
+        "returnedRows": 77,
+        "jsonBytes": 237538,
+        "ms": 112
+      },
+      {
+        "version": "after",
+        "scope": "category-1-revisit",
+        "selected": 342,
+        "requests": 0,
+        "returnedRows": 0,
+        "jsonBytes": 0,
+        "ms": 6
+      }
+    ],
+    "totals": {
+      "after": {
+        "jsonBytes": 3059417.0,
+        "returnedRows": 947.0,
+        "requests": 8.0
+      },
+      "before": {
+        "jsonBytes": 5216244.0,
+        "returnedRows": 1517.0,
+        "requests": 11.0
+      }
+    }
+  }
+}

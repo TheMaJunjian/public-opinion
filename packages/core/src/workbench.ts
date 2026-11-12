@@ -209,6 +209,9 @@ export function isRelationView(view: NativeMessageView): view is NativeMessageVi
 }
 
 export interface WorkbenchSnapshot {
+  /** A complete semantic context for one bounded discussion page, not a global catalog. */
+  discussion?: { focusId: string; pageIds: string[]; nextCursor: string | null;
+    memberCounts: Record<string, { direct: number; total: number }> };
   /** Contains topology and body-presence placeholders, never displayable body text. */
   structureOnly?: boolean;
   regionId?: string;
@@ -227,6 +230,14 @@ export interface WorkbenchSnapshot {
   hasMore?: boolean;
   removedMessageIds?: string[];
   removedMemberships?: string[];
+}
+export interface DiscussionQuery {
+  focusId: string;
+  classificationId?: string | null;
+  cursor?: string;
+  extraIds?: string[];
+  recordIds?: string[];
+  trace?: { ids: string[]; depths: { up: number; down: number }; expandedIds: string[] };
 }
 /** Private viewing progress. These records are never public messages or investments. */
 export interface ReadingMark {

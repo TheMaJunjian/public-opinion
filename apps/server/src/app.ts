@@ -27,7 +27,7 @@ export async function createApp(options: {
     const migrationRow=await store.db.prepare("SELECT value FROM settings WHERE key='access-mode'").get();
     const readOnlyRehearsal=migrationRow&&JSON.parse(String(migrationRow.value))==='read-only';
     if(readOnlyRehearsal) app.use((req,res,next)=>{
-        if(['POST','PUT','PATCH','DELETE'].includes(req.method)&&!['/api/login','/api/logout','/api/ui/snapshot/query'].includes(req.path)) {
+        if(['POST','PUT','PATCH','DELETE'].includes(req.method)&&!['/api/login','/api/logout','/api/ui/snapshot/query','/api/ui/snapshot/discussion'].includes(req.path)) {
             res.status(503).json({error:'当前数据库为只读模式，业务写入和结算已禁用'});
             return;
         }

@@ -45,6 +45,7 @@ const { mockApi, mockNavigate, mockGraphView, graphRendering, viewerRoute } = vi
     getMessages: vi.fn(),
     getAllMessages: vi.fn(),
     getWorkbenchSnapshot: vi.fn(),
+    getDiscussionSnapshot: vi.fn(),
     getMessageContext: vi.fn(),
     subscribeChanges: vi.fn(() => ({ close: vi.fn(), onmessage: null, onopen: null, onerror: null })),
     withCommandBatch: vi.fn<(work: () => Promise<unknown>, onCommitted?: (count: number) => void) => Promise<unknown>>(),
@@ -114,6 +115,15 @@ const { mockApi, mockNavigate, mockGraphView, graphRendering, viewerRoute } = vi
       sequence: 1, nextCursor: null, hasMore: false,
     };
   });
+  mockApi.getDiscussionSnapshot.mockImplementation(async (query: {focusId:string;extraIds?:string[]}) => {
+    const base = await mockApi.getWorkbenchSnapshot({parent:'root'});
+    const missing = [...new Set([query.focusId,...query.extraIds??[]])].filter(id => !base.messages.some((row:Message)=>row.id===id));
+    const extra = missing.length ? await mockApi.getWorkbenchSnapshot({parent:'root',ids:missing}) : null;
+    const messages = [...new Map([...base.messages,...extra?.messages??[]].map((row:Message)=>[row.id,row])).values()];
+    if (query.focusId!==base.scope.messageId && !messages.some(row=>row.id===query.focusId)) throw new Error('未找到该消息');
+    return {...base, messages,
+      discussion:{focusId:query.focusId,pageIds:[],nextCursor:null,memberCounts:{}}};
+  });
   return { mockApi, mockNavigate: vi.fn(), mockGraphView: vi.fn(), graphRendering: { actual: false,
     tasks: null as ReturnType<typeof import('../context/WorkbenchDrawingContext')['createWorkbenchDrawingTasks']> | null,
   }, viewerRoute: { archive: null as ExportData | null, key: '', query: '', nativeRouter: false, anonymous: false,
@@ -157,7 +167,7 @@ vi.mock('react-router-dom', async () => {
     ...actual,
     useParams: () => viewerRoute.nativeRouter ? actual.useParams() : viewerRoute.archive ? {} : ({ messageId: 'classification-1' }),
     useNavigate: () => viewerRoute.nativeRouter ? actual.useNavigate() : mockNavigate,
-    useLocation: () => viewerRoute.nativeRouter ? actual.useLocation() : ({ pathname: viewerRoute.archive ? '/viewer' : '/messages/classification-1', state: viewerRoute.archive ? { exportData: viewerRoute.archive, viewerNavigation: viewerRoute.navigation ?? undefined } : null, key: viewerRoute.key, search: '', hash: '' }),
+    useLocation: () => viewerRoute.nativeRouter ? actual.useLocation() : ({ pathname: viewerRoute.archive ? '/viewer' : '/messages/classification-1', state: viewerRoute.archive ? { exportData: viewerRoute.archive, viewerNavigation: viewerRoute.navigation ?? undefined } : null, key: viewerRoute.key, search: '?catalog=full', hash: '' }),
     useSearchParams: () => viewerRoute.nativeRouter ? actual.useSearchParams() : [new URLSearchParams(viewerRoute.query), (next: URLSearchParams) => { viewerRoute.query = next.toString(); }] as const,
   };
 });
@@ -1983,7 +1993,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       const draft = screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）');
       const rootScope = screen.queryByRole('button', { name: '退出分类' })?.parentElement?.textContent;
       fireEvent.change(draft, { target: { value: '跳转后继续编辑' } });
-      expect(document.querySelector('[data-workbench-left-panel] [data-msgid="A"]')).not.toBeNull();
+      await waitFor(() => expect(document.querySelector('[data-workbench-left-panel] [data-msgid="A"]')).not.toBeNull());
       await jumpToMessageId('A');
       await waitForWorkbenchIdle();
       expect(query().get('msg')).toBe('A');

@@ -4,6 +4,7 @@ import { api } from '../api';
 import { getDeviceId, getPrivateKeyForCurrentUser, getPrivateKeyForUser, storePrivateKeyForUser } from '../api/client';
 import { generateSigningKeyPair, privateKeyMatchesPublicKey, publicKeyFromPrivateKey, signPayloadWithPrivateJwk } from '../utils/signature';
 import { useReviewPresence } from '../hooks/useReviewPresence';
+import { startEntryTiming } from '../utils/entryTiming';
 
 interface AuthContextValue {
   user: User | null;
@@ -38,6 +39,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
     };
     window.addEventListener('gonglun:session-expired', expired);
+    const finishSessionTiming = startEntryTiming('session');
     api.getSession().then(session => {
       if (!current()) return;
       if (session) {
@@ -50,11 +52,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }).catch(() => {
       if (current()) { setUser(null); setToken(null); }
-    }).finally(() => { if (current()) setLoading(false); });
+    }).finally(() => { finishSessionTiming(); if (current()) setLoading(false); });
     return () => { active = false; window.removeEventListener('gonglun:session-expired', expired); };
   }, []);
 
   async function login(username: string, password: string) {
+    const finishLoginTiming = startEntryTiming('login');
+    try {
     const storedPrivateKey = getPrivateKeyForUser(username);
     let privateJwk: JsonWebKey | null = null;
     let publicKey: string;
@@ -85,6 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(res.token);
     setUser(res.user);
     setLoading(false);
+    } finally { finishLoginTiming(); }
   }
 
   async function register(username: string, password: string, publicKey?: string | null, founderKey?: string, inviteCode?: string) {

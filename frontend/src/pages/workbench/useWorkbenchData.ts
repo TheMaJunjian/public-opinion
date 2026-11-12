@@ -25,6 +25,7 @@ import { useViewCacheSettings } from '../../context/ViewCacheSettingsContext';
 import { createScopedProjectionCache } from '../../utils/scopedProjectionCache';
 import { hydrateOnlineStructure, onlineSourceSnapshot, onlineStructuralSource } from '../../utils/onlineStructuralSource';
 import { startWorkbenchTiming } from '../../utils/workbenchTiming';
+import type { DiscussionClient, DiscussionPageState } from '../../data/discussionClient';
 
 export const VIEWER_USERNAME_KEY = 'export-viewer-username';
 
@@ -57,6 +58,10 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
   const [showUnauthenticatedNotice, setShowUnauthenticatedNotice] = useState(false);
   const [showRegistrationGuide, setShowRegistrationGuide] = useState(false);
   const syncRef = useRef<ReturnType<typeof syncWorkbench> | null>(null);
+  const discussionRef = useRef<DiscussionClient | null>(null);
+  const [discussionPage, setDiscussionPage] = useState<DiscussionPageState | null>(null);
+  const turnDiscussionPage = useCallback((direction: -1 | 1) => discussionRef.current?.turn(direction) ?? Promise.resolve(), []);
+  const refreshDiscussion = useCallback(() => discussionRef.current?.refresh() ?? Promise.resolve(), []);
   const [onDemand, setOnDemand] = useState(false);
   const [catalog, setCatalog] = useState<CatalogClient | null>(null);
   const catalogRef = useRef<CatalogClient | null>(null);
@@ -72,7 +77,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     && relations === publishedCatalog.current.projected.relations && stakeCounts === publishedCatalog.current.projected.counts
     && messageBettorCounts === publishedCatalog.current.projected.bettors;
   const viewerEnsure = useRef<((ids: string[]) => Promise<void>) | null>(null);
-  const ensureMessages = useCallback((ids: string[]) => viewerEnsure.current?.(ids)
+  const ensureMessages = useCallback((ids: string[]) => discussionRef.current?.ensure(ids) ?? viewerEnsure.current?.(ids)
     ?? syncRef.current?.ensureMessages(ids) ?? Promise.reject(new Error('讨论尚未载入')), []);
   const [isPreloaded, setIsPreloaded] = useState(false);
   const [viewerUser, setViewerUser] = useState<User | null>(() => {
@@ -94,6 +99,14 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const isViewerRoute = location.pathname === '/viewer';
+  const entryFocus = new URLSearchParams(location.search).get('msg')?.trim() || (scopeMessageId !== 'root' ? scopeMessageId : '');
+  const explicitFullCatalog = new URLSearchParams(location.search).get('catalog') === 'full';
+  // Message links also update the URL during in-place navigation. Keep the
+  // source selected at entry instead of restarting it and losing the canvas.
+  const entryMode = useRef({ pathname: location.pathname, full: explicitFullCatalog, scoped: !!entryFocus && !explicitFullCatalog });
+  if (entryMode.current.pathname !== location.pathname || entryMode.current.full !== explicitFullCatalog)
+    entryMode.current = { pathname: location.pathname, full: explicitFullCatalog, scoped: !!entryFocus && !explicitFullCatalog };
+  const scopedDiscussion = !isViewerRoute && entryMode.current.scoped;
   const viewerInstanceKey = (location.state as ExportViewerRouteState | null)?.viewerInstanceKey;
   const preparedRouteExport = useMemo(() => getPreparedViewerExport(viewerInstanceKey), [viewerInstanceKey]);
   useEffect(() => { releasePreparedViewerExport(viewerInstanceKey); }, [viewerInstanceKey]);
@@ -127,6 +140,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
   }, [needsCacheRestore, location.key, routeExport, routeCacheReference]);
   const refreshLeaderboard = useCallback(() => {
     if (preloadedData) return Promise.resolve(false);
+    if (discussionRef.current) return discussionRef.current.refresh().then(() => true);
     return catalogRef.current?.refresh() ?? syncRef.current?.refresh() ?? Promise.reject(new Error('讨论尚未载入'));
   }, [preloadedData]);
   const [loadedExport, setLoadedExport] = useState<ExportData | null>(null);
@@ -193,6 +207,12 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     }
   };
   const loadViewerScope = useCallback(async (scope: ZhihuViewerScope, bodyLimit?: number) => {
+    if (discussionRef.current) {
+      viewerScope.current = scope;
+      await discussionRef.current.select(scope);
+      if (viewerScope.current === scope) { appliedViewerScopeKey.current = structuralScopeKey(scope); setAppliedScopeKey(appliedViewerScopeKey.current); }
+      return;
+    }
     const index = viewerIndex.current;
     if (!index) return;
     const username = onlineSourceSnapshot(index.source) ? user?.username ?? null : viewerUsername.current;
@@ -346,10 +366,60 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     publishedCatalog.current = null;
     windowVersion.current = { regionId: undefined, sequence: 0 };
     setCatalogReady(false); setCatalog(null); setGlobalRows(undefined);
+    setDiscussionPage(null);
     let cancelled = false;
     let stop: (() => void) | undefined;
     let catalogStarting = false;
     let bodySeed: import('../../data/workbench').WorkbenchSnapshot | undefined;
+    if (scopedDiscussion) {
+      let events: EventSource | undefined, timer: ReturnType<typeof setTimeout> | undefined, connected = false;
+      let hasPage = false;
+      const refresh = () => {
+        if (cancelled || document.hidden || timer) return;
+        timer = setTimeout(() => { timer = undefined; void discussionRef.current?.refresh().catch(() => {}); }, 250);
+      };
+      void import('../../data/discussionClient').then(({ createDiscussionClient }) => {
+        if (cancelled) return;
+        const client = createDiscussionClient(scopeMessageId === 'root' ? entryFocus : scopeMessageId, {
+          username: user.username, load: api.getDiscussionSnapshot, baseClassificationId: scopeMessageId === 'root' ? undefined : scopeMessageId,
+          status: status => { if (!cancelled) { setDiscussionPage(status); if ((!hasPage || status.restricted) && status.error) { setLoadError(status.error); setLoading(false); } } },
+          publish({ snapshot, projected, index, scope }) {
+            if (cancelled) return;
+            hasPage = true;
+            if (graphViewRef.current) beginWorkbenchDrawing();
+            flushSync(() => {
+              viewerScope.current = scope; viewerIndex.current = index;
+              setViewerStructure(index); setViewingExport(index.source);
+              setUnloadedViewerContainers(new Set(Object.keys(snapshot.discussion!.memberCounts).filter(id =>
+                snapshot.discussion!.memberCounts[id]!.direct > index.window({ classificationId: id }).data.messages.length - 1)));
+              appliedViewerScopeKey.current = structuralScopeKey(scope); setAppliedScopeKey(appliedViewerScopeKey.current);
+              records.replace(snapshot, projected); setOnDemand(true); setCatalogReady(true); catalogReadyRef.current = true;
+              setLoading(false); setLoadError(null); setIsPreloaded(false);
+            });
+            if (!events) {
+              events = api.subscribeChanges(snapshot.sequence);
+              events.onmessage = event => {
+                try { if (Number(JSON.parse(event.data).sequence) > client.sequence) refresh(); } catch { refresh(); }
+              };
+              events.onopen = () => { if (connected) refresh(); connected = true; };
+            }
+          },
+        });
+        discussionRef.current = client;
+        viewerScope.current = { classificationId: scopeMessageId === 'root' ? null : scopeMessageId, viewMode,
+          ...(scopeMessageId !== 'root' && entryFocus !== scopeMessageId ? {extraIds:[entryFocus]} : {}) };
+        void client.select(viewerScope.current).catch(() => {});
+      }).catch(error => { if (!cancelled) { setLoadError(String(error)); setLoading(false); } });
+      const eventsToWatch = ['gonglun:reload','gonglun:invalidate-cache','gonglun:catch-up','gonglun:committed','pageshow','focus','online'];
+      eventsToWatch.forEach(name => window.addEventListener(name, refresh));
+      document.addEventListener('visibilitychange', refresh);
+      return () => {
+        cancelled = true; if (timer) clearTimeout(timer); events?.close();
+        discussionRef.current?.stop(); discussionRef.current = null;
+        eventsToWatch.forEach(name => window.removeEventListener(name, refresh));
+        document.removeEventListener('visibilitychange', refresh);
+      };
+    }
     const startCatalog = (regionId?: string) => {
       if (catalogStarting) return;
       catalogStarting = true;
@@ -481,7 +551,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
       cancelled = true; viewerScopeGeneration.current++; cancelViewerScope.current?.(); cancelViewerScope.current = null;
       stop?.(); catalogRef.current?.stop(); catalogRef.current = null;
     };
-  }, [scopeMessageId, authLoading, user?.id, preloadedData, isViewerRoute]);
+  }, [scopeMessageId, authLoading, user?.id, preloadedData, isViewerRoute, scopedDiscussion]);
 
   useEffect(() => {
     if (!isViewerRoute && !authLoading && !preloadedData && !user) {
@@ -520,6 +590,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     viewerNavigation,
     viewingExport, viewerStructure, unloadedViewerContainers, loadViewerScope, viewerBodyPage, loadMoreViewerBodies,
     appliedScopeKey,
+    discussionPage, turnDiscussionPage, refreshDiscussion,
     tagCounts,
     onDemand, ensureMessages,
     catalog, catalogReady, catalogVersion, catalogComputationsCurrent,

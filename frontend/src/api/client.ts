@@ -1,5 +1,5 @@
 import { signPayloadWithPrivateJwk } from '../utils/signature';
-import type { Session, Reference, ReadingMark,BodyVersion,Message as CoreMessage } from '@gonglun/core';
+import type { Session, Reference, ReadingMark,BodyVersion,Message as CoreMessage, FeedMode, FeedPage } from '@gonglun/core';
 import { decodeWorkbenchSnapshot, type CompactSnapshot } from '@gonglun/core';
 import { cancelCommandBatch, isPendingMessage, queueCommand, runCommandBatch, prepareCommandBatch as prepareBatch, commitPreparedBatch, type PreparedCommandBatch, type CommandCommit } from './commandBatch';
 import { beginRequestOperation, clearWriteRequestIdentity, fetchJsonWithDeadline, requestOwner, singleRequest, UncertainRequestError, writeRequestIdentity } from '../utils/requestLifecycle';
@@ -66,8 +66,8 @@ export function getPrivateKeyForUser(username: string): string | null {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  if (path === '/points/activity' || path.startsWith('/notifications')) return requestCore<T>(path, options);
-  const readOnly=['/snapshot/query','/body-versions/resolve'].includes(path.split('?')[0]);
+  if (path === '/points/activity' || path.startsWith('/notifications') || path === '/feed/hidden') return requestCore<T>(path, options);
+  const readOnly=['/snapshot/query','/snapshot/discussion','/body-versions/resolve'].includes(path.split('?')[0]);
   const queued = options.method && options.method !== 'GET' && path !== '/reading-state'&&!readOnly ? queueCommand(path, options) : null;
   if (queued) return queued as T;
   const writes = !!options.method && options.method !== 'GET'&&!readOnly;
@@ -110,6 +110,14 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 export const getReadingState = () => request<{marks:ReadingMark[]}>('/reading-state');
+export const getFeed = (mode: FeedMode, cursor?: string, signal?: AbortSignal) => {
+  const query = new URLSearchParams({ mode, limit: '20' });
+  if (cursor) query.set('cursor', cursor);
+  return request<FeedPage>(`/feed?${query}`, { signal });
+};
+export const setFeedHidden = (messageId: string, hidden: boolean) => request<{ok: boolean}>('/feed/hidden', {
+  method: 'POST', body: JSON.stringify({ messageId, hidden }),
+});
 export const resolveBodyVersion=(version:BodyVersion)=>request<{message:CoreMessage}>('/body-versions/resolve',{method:'POST',body:JSON.stringify(version)});
 export async function markReading(marks:ReadingMark[]) {
   const saved:ReadingMark[]=[];
@@ -133,8 +141,8 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
   const isAuthBootstrap = ['/login', '/register', '/logout', '/auth/signing-key'].includes(path);
   const privateReading=path==='/reading-state';
   const privateActivity=path==='/points/activity'||path==='/moderation/presence';
-  const privateNotifications=path.startsWith('/notifications') || path.startsWith('/admin/');
-  const readOnlySnapshot = ['/snapshot/query','/body-versions/resolve'].includes(path.split('?')[0]);
+  const privateNotifications=path.startsWith('/notifications') || path.startsWith('/admin/') || path === '/feed/hidden';
+  const readOnlySnapshot = ['/snapshot/query','/snapshot/discussion','/body-versions/resolve'].includes(path.split('?')[0]);
   let identityKey: string | undefined;
   const checkOwner = () => { if (requestOwner() !== owner) throw new DOMException('账户已切换，请重新操作', 'AbortError'); };
   if (path === '/auth/signing-key' || path === '/logout' || (privateReading||privateActivity||privateNotifications)&&options.method==='POST') {
@@ -309,6 +317,12 @@ export async function getWorkbenchSnapshot({ signal, ...query }: import('../data
   if (query.after === undefined) params.set('batch', '4');
   for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));
   return decodeWorkbenchSnapshot<Snapshot>(await request<Snapshot | CompactSnapshot<Snapshot>>(`/snapshot?${params}`, { signal }));
+}
+export async function getDiscussionSnapshot(query: import('@gonglun/core').DiscussionQuery, signal?: AbortSignal) {
+  type Snapshot = import('@gonglun/core').WorkbenchSnapshot;
+  return decodeWorkbenchSnapshot<Snapshot>(await request<Snapshot | CompactSnapshot<Snapshot>>('/snapshot/discussion?format=compact-v1', {
+    method: 'POST', body: JSON.stringify(query), signal,
+  }));
 }
 export function subscribeChanges(after: number) {
   return new EventSource(`${CORE_URL}/events?after=${after}&mode=cursor`, { withCredentials: true });

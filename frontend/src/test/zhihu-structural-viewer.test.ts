@@ -53,6 +53,8 @@ describe('structural Zhihu message loading', () => {
     Object.defineProperty(hidden, 'content', { enumerable: true, configurable: true, get: () => { bodyReads++; return body; } });
     const index = createZhihuStructuralViewer(data, user);
     const root = index.window({ classificationId: null });
+    // Locating an overview category must not enter itself via one of its children.
+    expect(index.containingClassification('zhihu:type:answer')).toBeNull();
     const projected = projectWorkbenchSnapshot(archiveToWorkbenchSnapshot(root.data));
     expect(root.data.messages.map(row => row.id)).toEqual(['zhihu:type:answer']);
     expect(projected.messages).toHaveLength(1);

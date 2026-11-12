@@ -44,4 +44,5 @@ export const DATABASE_MIGRATIONS = [
   'review-guarantees-as-sided-self-stakes',
   'stake-weighted-review-arbitration',
   'ledger-operation-groups',
+  'lightweight-discovery-feed',
 ] as const;

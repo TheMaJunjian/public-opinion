@@ -16,6 +16,7 @@ export const userView = async (store: Store, userId: string) => {
     return {...user,username:user.name,createdAt:user.createdAt??String((await store.db.prepare('SELECT MIN("createdAt") AS at FROM ledger WHERE "userId"=$1').get(userId))?.at??'')};
 };
 interface ViewContext {
+    boundedIds?: ReadonlySet<string>;
     structureOnly?: boolean;
     users: Map<string, UserView>;
     messages: Map<string, Message>;
@@ -133,6 +134,10 @@ export async function messageView(store: Store, message: Message, parent?: strin
     const relation = primaryRelation(message), data = dataOf(message), type = relationViewType(message) ?? (['ROUND','ROUND_RESULT'].includes(String(data.kind))?String(data.kind):null);
     const sources = relation?.roles.source ?? relation?.roles.reason ?? (relation?.relation==='member-of'?relation.roles.parent:undefined) ?? [];
     let references = (relation?.roles.target ?? relation?.roles.members ?? relation?.roles.member ?? []).map(b => b.reference);
+    // A discussion window keeps native parts intact, but only materializes
+    // organization edges belonging to this page. Unopened members stay remote.
+    if (context?.boundedIds && relation && ['classify', 'summary', 'merge', 'arrange'].includes(relation.relation))
+        references = references.filter(ref => context.boundedIds!.has(ref.messageId));
     const declaredTargetRefs = references;
     if (relation && ['classify', 'summary', 'merge', 'arrange'].includes(relation.relation)) {
         const members=context ? context.members.get(message.id) ?? [] : (await store.db.prepare("SELECT \"memberId\" FROM memberships WHERE \"parentId\"=$1 ORDER BY position").all(message.id)).map(row=>String(row.memberId));
@@ -210,10 +215,11 @@ export async function messageView(store: Store, message: Message, parent?: strin
     const view: NativeMessageView = { id: message.id, kind, contentType: data.contentType === 'MARKDOWN' ? 'MARKDOWN' : 'TEXT', content: (await contentView(store, message, context)), createdAt: message.createdAt, updatedAt: message.updatedAt, createdBy: (await cachedUser(store, message.authorId, context)), relationType: type, relSourceId: sources[0]?.reference.messageId ?? null, sourceMessageId: sources[0]?.reference.messageId ?? null, sourceRefs: sources.map(b => b.reference), targetRefs: (await Promise.all(references.map(projectRef))), declaredTargetRefs: (await Promise.all(declaredTargetRefs.map(projectRef))), relationPayload: payload, payload, revision: message.revision, parts: message.parts, sequence: message.sequence, spending: message.spending, state: stateValue, executedStance: stateValue?.executedStance, supersededBy: typeof data.supersededBy === 'string' ? data.supersededBy : null };
     return view;
 }
-export async function viewsFor(store: Store, messages: Message[], parent?: string, knownUsers?: UserView[], structureOnly = false) {
+export async function viewsFor(store: Store, messages: Message[], parent?: string, knownUsers?: UserView[], structureOnly = false, boundedIds?: ReadonlySet<string>) {
     // Only the structural snapshot path guarantees current rows. Other callers
     // can project historical moderation snapshots and still need current state.
     const ids = messages.map(m => m.id), states = new Map((await statesFor(store, ids, structureOnly ? messages : undefined)).map(s => [s.messageId, s])), context: ViewContext = { structureOnly, users: new Map((knownUsers ?? await usersFor(store, messages.map(message => message.authorId))).map(user => [user.id, user])), messages: new Map(), members: new Map(), rounds: new Map(), recipients: new Map() };
+    context.boundedIds = boundedIds;
     context.users.set('system', (await userView(store, 'system')));
     const refs = new Map<string, Reference>();
     for (const message of messages) {
@@ -225,11 +231,14 @@ export async function viewsFor(store: Store, messages: Message[], parent?: strin
         // for topology/permission checks without loading the referenced body.
         const bindings = structureOnly ? relation?.roles.target ?? relation?.roles.members ?? relation?.roles.member ?? []
             : relations(message).flatMap(part => Object.values(part.roles).flat());
-        for (const binding of bindings) refs.set(`${binding.reference.messageId}:${binding.reference.revision ?? 'current'}`, binding.reference);
+        for (const binding of bindings) {
+            if (boundedIds && relation && ['classify', 'summary', 'merge', 'arrange'].includes(relation.relation) && !boundedIds.has(binding.reference.messageId)) continue;
+            refs.set(`${binding.reference.messageId}:${binding.reference.revision ?? 'current'}`, binding.reference);
+        }
     }
     for (let offset = 0; offset < ids.length; offset += 200) {
         const batch = ids.slice(offset, offset + 200), placeholders = batch.map((_,index) => `$${index+1}`).join(',');
-        for (const row of (await store.db.prepare(`SELECT "parentId","memberId" FROM memberships WHERE "parentId" IN (${placeholders}) ORDER BY position`).all(...batch))) {
+        for (const row of (await store.db.prepare(`SELECT "parentId","memberId" FROM memberships WHERE "parentId" IN (${placeholders})${boundedIds ? ` AND "memberId"=ANY($${batch.length + 1}::text[])` : ''} ORDER BY position`).all(...batch, ...(boundedIds ? [[...boundedIds]] : [])))) {
             const parentId = String(row.parentId), memberId = String(row.memberId);
             (context.members.get(parentId) ?? (context.members.set(parentId, []), context.members.get(parentId)!)).push(memberId);
             refs.set(`${memberId}:current`, { messageId: memberId });

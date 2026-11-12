@@ -2,7 +2,7 @@ import { DISPLAY_DEPENDENCY_ROLES } from '@gonglun/core';
 
 const roles = `'${JSON.stringify(DISPLAY_DEPENDENCY_ROLES)}'::jsonb`;
 /** Same primary-relation and attachment policy as messageDisplayDependency. */
-function primary(alias: string) {
+export function primaryRelationSql(alias: string) {
   return `(SELECT part.value FROM jsonb_array_elements(${alias}.body::jsonb->'parts') WITH ORDINALITY part(value,position)
     WHERE part.value->>'type'='relation'
       AND (part.value->>'relation'<>'member-of' OR jsonb_array_length(COALESCE(part.value #> '{roles,member}','[]'::jsonb))>0)
@@ -12,6 +12,7 @@ function primary(alias: string) {
         AND part.value #>> '{roles,target,0,reference,messageId}'=${alias}.id)
     ORDER BY part.position LIMIT 1)`;
 }
+const primary = primaryRelationSql;
 export function displayAttachmentSql(alias: string, host: string) {
   return `(EXISTS(SELECT 1 FROM ${primary(alias)} AS semantic,
       jsonb_array_elements(semantic.value->'roles'->(${roles}->>(semantic.value->>'relation'))) binding

@@ -63,3 +63,20 @@ export function startOfflineViewer(): Promise<void> {
   return starting;
 }
 export function retryOfflineViewer() { starting = null; return startOfflineViewer(); }
+
+/** Give first-use authentication and reading priority over downloading the complete offline build. */
+export function scheduleOfflineViewer() {
+  if (!import.meta.env.PROD) return () => {};
+  let done = false;
+  const dispose = () => {
+    clearTimeout(timer);
+    window.removeEventListener('gonglun:entry-ready', ready);
+    window.removeEventListener('open-export-viewer', begin);
+  };
+  const begin = () => { if (done) return; done = true; dispose(); void startOfflineViewer(); };
+  const ready = () => { clearTimeout(timer); timer = setTimeout(begin, 1500); };
+  let timer = setTimeout(begin, 15000);
+  window.addEventListener('gonglun:entry-ready', ready, { once: true });
+  window.addEventListener('open-export-viewer', begin, { once: true });
+  return () => { done = true; dispose(); };
+}

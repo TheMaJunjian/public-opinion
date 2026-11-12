@@ -63,6 +63,7 @@ function RegistrationTime({ value }: { value: string }) {
 }
 
 export interface LeaderboardModalProps {
+  scopeLabel?: string;
   globalRows?: ReturnType<typeof buildLeaderboardRows>;
   open: boolean;
   onClose: () => void;
@@ -76,6 +77,7 @@ export interface LeaderboardModalProps {
 }
 
 function LeaderboardModal({
+  scopeLabel,
   globalRows,
   open,
   onClose,
@@ -198,7 +200,7 @@ function LeaderboardModal({
       header={(
         <div style={{ ...dialogStyles.header, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--ink-e2e8f0)' }}>排行榜</div>
+            <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--ink-e2e8f0)' }}>{scopeLabel ? `${scopeLabel}排行榜` : '排行榜'}</div>
             <LeaderboardRefreshButton onRefresh={onRefresh} />
             <button
               onClick={() => setWindowSize(null)}

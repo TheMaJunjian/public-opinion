@@ -340,7 +340,7 @@ export function createZhihuStructuralViewer(data: ExportData, username: string |
     }
     // A relationship's display host determines the destination for ID navigation.
     const record = relations.get(id);
-    if (record) for (const endpoint of endpoints(record)) {
+    if (record && !containers.has(typeOf(record))) for (const endpoint of endpoints(record)) {
       if (endpoint !== id && byId.has(endpoint)) {
         const candidates = parents.get(endpoint) ?? [];
         const parent = candidates.find(closed); if (parent) return parent;

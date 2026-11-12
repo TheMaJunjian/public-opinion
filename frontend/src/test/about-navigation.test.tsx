@@ -20,6 +20,7 @@ vi.mock('../context/AuthContext', () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => children,
   useAuth: () => ({ user: auth.user, loading: false }), useOptionalAuth: () => null,
 }));
+vi.mock('../api', () => ({ api: { getFeed: vi.fn(async () => ({ mode: 'recommended', items: [], nextCursor: null })) } }));
 vi.mock('../components/Navbar', () => ({ default: () => <nav><AboutLink>介绍</AboutLink><AboutLink href="/about.html#guide-selection">暂存区帮助</AboutLink></nav> }));
 vi.mock('../components/AppUpdateNotice', () => ({ default: () => null }));
 vi.mock('../components/OperationFeedback', () => ({ default: () => null }));
@@ -209,7 +210,10 @@ it.each([false, true])('公论标志进入首页，浏览器逐步返回文档�
   expect(input).toHaveValue('首页往返不丢失');
   expect(screen.getByLabelText('当前分类')).toHaveTextContent('分类 A');
   for (let step = 0; step < 3; step++) await traverseHistory(1);
-  fireEvent.click(screen.getByRole('link', { name: '进入消息界面' }));
+  fireEvent.click(screen.getByRole('link', { name: '进入讨论首页' }));
+  expect(await screen.findByRole('heading', { name: '值得继续的讨论' })).toBeVisible();
+  expect(unmounted).not.toHaveBeenCalled();
+  fireEvent.click(screen.getAllByRole('link', { name: /进入消息工作台/ })[0]!);
   expect(await screen.findByRole('textbox', { name: '消息输入' })).toBe(input);
   expect(input).toHaveValue('首页往返不丢失');
   expect(screen.getByLabelText('当前分类')).toHaveTextContent('分类 A');

@@ -7,12 +7,14 @@ function runtime(files = ['index.html', 'assets/app.js', 'assets/lazy-view.js', 
   const saved = new Map<string, Map<string, { url: string; body: string }>>();
   const fetch = vi.fn(async () => { throw new Error('offline'); });
   const addRequests: Request[] = [];
+  const batchSizes: number[] = [];
   const caches = {
     open: async (name: string) => {
       if (!saved.has(name)) saved.set(name, new Map());
       const values = saved.get(name)!;
       return {
         addAll: async (requests: Request[]) => {
+          batchSizes.push(requests.length);
           addRequests.push(...requests);
           for (const request of requests) {
             values.set(request.url, { url: request.url, body: request.url.endsWith('index.html') ? 'app shell' : 'lazy code' });
@@ -39,7 +41,7 @@ function runtime(files = ['index.html', 'assets/app.js', 'assets/lazy-view.js', 
     return result ? await result : undefined;
   };
   const request = (path: string, mode = 'cors', method = 'GET') => ({ url: `https://gonglun.test${path}`, mode, method });
-  return { dispatch, request, saved, fetch, addRequests, skipWaiting, claim };
+  return { dispatch, request, saved, fetch, addRequests, batchSizes, skipWaiting, claim };
 }
 
 describe('offline viewing build cache', () => {
@@ -50,6 +52,7 @@ describe('offline viewing build cache', () => {
     expect(app.skipWaiting).toHaveBeenCalledOnce();
     expect(app.claim).toHaveBeenCalledOnce();
     expect(app.addRequests.every(request => request.credentials === 'omit')).toBe(true);
+    expect(app.batchSizes).toEqual([2, 2]);
     expect(await app.dispatch('fetch', { request: app.request('/viewer', 'navigate') })).toMatchObject({ body: 'app shell' });
     for (const path of ['/assets/lazy-view.js', '/assets/scene.worker.js']) {
       expect(await app.dispatch('fetch', { request: app.request(path) })).toMatchObject({ body: 'lazy code' });

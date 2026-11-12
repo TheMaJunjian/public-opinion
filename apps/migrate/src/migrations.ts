@@ -45,6 +45,7 @@ import {migrateParticipationReview} from './participation-review.js';
 import {migrateReviewEnrollmentAttachments} from './review-enrollment-attachments.js';
 import {migrateReviewSelfStakes} from './review-self-stakes.js';
 import {migrateLedgerOperations} from './ledger-operations.js';
+import {migrateDiscoveryFeed} from './discovery-feed.js';
 
 export interface Migration { version: number; name: string; changesFinances?: boolean; up(): Promise<void> }
 
@@ -128,7 +129,8 @@ export function migrationsFor(store: Store): Migration[] {
   {version:41,name:'attach-historical-review-enrollment-records',up:()=>migrateReviewEnrollmentAttachments(store).then(()=>{})},
   {version:42,name:'review-guarantees-as-sided-self-stakes',up:()=>migrateReviewSelfStakes(store).then(()=>{})},
   {version:43,name:'stake-weighted-review-arbitration',up:()=>migrateStakeWeightedReview(store)},
-  {version:44,name:'ledger-operation-groups',up:()=>migrateLedgerOperations(store)}];
+  {version:44,name:'ledger-operation-groups',up:()=>migrateLedgerOperations(store)},
+  {version:45,name:'lightweight-discovery-feed',up:()=>migrateDiscoveryFeed(store)}];
 }
 
 /** Runs under the cross-process write lock. Failed upgrades roll back together. */

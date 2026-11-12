@@ -207,6 +207,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     onDemand, ensureMessages,
     catalog, catalogReady, catalogVersion, catalogComputationsCurrent, globalRows,
     viewingExport, viewerStructure, unloadedViewerContainers, loadViewerScope, appliedScopeKey, viewerBodyPage, loadMoreViewerBodies,
+    discussionPage, turnDiscussionPage, refreshDiscussion,
     captureTransient, showSendPreview, clearSendPreview, confirmSendPreview, liveSequence, sendPreviewPages, sendPreviewMessageIds,
   } = useWorkbenchData({ user, authLoading, scopeMessageId, navigate, viewMode });
   const [currentRecordCategory,setRecordCategory]=useState<{targetId:string;label:string;recordIds:string[];revision?:number}|null>(null);
@@ -2998,7 +2999,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       }).catch(error => {
         if (pendingRemoteNavigationRef.current === request) {
           pendingRemoteNavigationRef.current = null;
-          showAlert(error instanceof Error ? error.message : '消息加载失败');
+          showAlert(`消息 ${messageId} 加载失败：${error instanceof Error ? error.message : '请重试'}`);
           options?.onComplete?.(false);
         }
       }).finally(task.complete);
@@ -3562,6 +3563,8 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       <div style={{ padding: 16, background: "var(--surface-101010)", color: "var(--ink-eee)", height: "100%" }}>
         <div style={{ fontWeight: 700, marginBottom: 8 }}>加载失败</div>
         <pre style={{ whiteSpace: "pre-wrap", color: "var(--ink-ff8080)" }}>{loadError}</pre>
+        {discussionPage && <div style={{display:'flex',gap:12}}><button disabled={discussionPage.loading} onClick={() => void refreshDiscussion().catch(() => {})}>重试讨论</button>
+          <button onClick={() => navigate('/messages?catalog=full')}>打开完整工作台</button></div>}
         {isViewerRoute && <button onClick={() => window.dispatchEvent(new Event('open-export-viewer'))}>选择阅览文件</button>}
       </div>
     );
@@ -3592,7 +3595,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     <ReadingTextLinksContext.Provider value={readingTextLinks}>
     <MessageDisplayHintsProvider input={displayHintsInput} onView={viewDisplayHint} onMarkRead={async (...args)=>{if(!sendPreview.active)await readingState.markRead?.(...args);}} readingError={readingState.error} onReadNavigate={(id,tasks)=>void navigateReading(id,tasks,traceEntries.length===0).catch(error=>{if(error.name!=='AbortError')showAlert(error.message);})}
       windowState={displayHintWindow} currentContainerId={hintContainerId} versionHistory={readingVersionHistory}>
-      <AuthoredReadingBackfill enabled={!sendPreview.active&&!isPreloaded&&!loading&&readingState.ready} userId={user?.id}/>
+      <AuthoredReadingBackfill enabled={!discussionPage&&!sendPreview.active&&!isPreloaded&&!loading&&readingState.ready} userId={user?.id}/>
       <ErrorBoundary onError={reportDrawingFailure}>
         <div className="workbench-shell" style={{ flex: "1 0 auto", width: effectiveContainerWidth, minWidth: MIN_LEFT_PX + MIN_RIGHT_PX + 12, margin: 0, display: "flex", flexDirection: "column", background: "var(--surface-101010)", color: "var(--ink-eee)", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
           <DeferredWorkbench label="关系工具栏" blocksDrawing><RelationToolbar barRef={relationBarRef} leftControlsRef={relationLeftControlsRef} rightControlsRef={relationRightControlsRef}
@@ -3607,6 +3610,15 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
               保留页面边界传递和快捷符入口。 */}
           <div ref={panelContainerRef} className="workbench-panels" style={{ display: "flex", flex: "1 0 auto", width: "100%", minWidth: 0 }}>
             <div className="workbench-message-pane" data-workbench-panel-surface="true" style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: MIN_LEFT_PX, alignSelf: 'flex-start', position: 'sticky', top: panelStickyTop, overflow: "visible", paddingBottom: 8 }}>
+              {discussionPage && <div aria-label="当前讨论范围" style={{ padding: '10px 16px', background: 'var(--surface-card)', borderBottom: '1px solid var(--border-default)', fontSize: 12, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
+                <span>当前讨论 · 第 {discussionPage.page} 页 · 每页最多 20 条关联消息</span>
+                <button disabled={!discussionPage.previous || discussionPage.loading} onClick={() => void turnDiscussionPage(-1).catch(error => showAlert(error.message))}>上一页</button>
+                <button disabled={!discussionPage.next || discussionPage.loading} onClick={() => void turnDiscussionPage(1).catch(error => showAlert(error.message))}>下一页</button>
+                <button disabled={discussionPage.loading} onClick={() => void refreshDiscussion().catch(error => showAlert(error.message))}>{discussionPage.loading ? '正在更新…' : '刷新讨论'}</button>
+                <button onClick={() => navigate('/messages?catalog=full')}>打开完整工作台</button>
+                <span style={{ color: 'var(--text-secondary)' }}>筛选与对比作用于本页及必要上下文</span>
+                {discussionPage.error && <span role="alert">{discussionPage.error}</span>}
+              </div>}
               <DeferredWorkbench label="视图工具栏" blocksDrawing><WorkbenchViewToolbar top={panelStickyTop}
                 onJump={confirmMessageIdNavigation}
                 history={browsingHistory}
@@ -3782,7 +3794,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                 </RecentWorkbenchViews>
                 {!isPreloaded && onDemand && <React.Suspense fallback={null}>
                   {!globalFilterPending && <MessagePagination parent={activePageParent} loadedCount={messageWindow.messages.length}
-                    hasMore={messageWindow.hasMore} loading={messageWindow.loading} showLoadingNotice={false}
+                    hasMore={messageWindow.hasMore} loading={messageWindow.loading} showLoadingNotice={false} pagedScope={!!discussionPage}
                     panelRef={leftPanelRef} onMore={messageWindow.more} onError={showAlert} />}
                 </React.Suspense>}
                 <div aria-hidden="true" style={{ height: 96, flexShrink: 0 }} />
@@ -3990,6 +4002,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       />
 
       <LeaderboardController ref={leaderboardRef}
+        scopeLabel={discussionPage ? '当前页' : undefined}
         catalogVersion={catalogVersion} useCatalogRows={catalogComputationsCurrent}
         catalog={catalog} globalReady={!onDemand || isPreloaded || catalogReady} globalRows={onDemand && !isPreloaded ? globalRows : undefined}
         onRefresh={refreshLeaderboard}

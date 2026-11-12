@@ -12,7 +12,7 @@ vi.mock('../context/AuthContext', () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => children,
   useAuth: () => ({ ...auth, login, register }), useOptionalAuth: () => null,
 }));
-vi.mock('../api/client', () => ({ getSetup, storePrivateKeyForUser: vi.fn() }));
+vi.mock('../api/client', () => ({ getSetup, storePrivateKeyForUser: vi.fn(), getFeed: vi.fn(async () => ({ mode: 'recommended', items: [], nextCursor: null })) }));
 vi.mock('../components/Navbar', () => ({ default: () => <nav /> }));
 vi.mock('../components/AppUpdateNotice', () => ({ default: () => null }));
 vi.mock('../components/OperationFeedback', () => ({ default: () => null }));
@@ -23,6 +23,21 @@ vi.mock('../pages/MessageWorkbenchPage', () => ({ default: function Workbench() 
 } }));
 
 const user = { id: 'user', username: '与会者', createdAt: '' };
+
+it.each([false, true])('普通登录后显示轻量首页，不挂载全局工作台（生产模式：%s）', async production => {
+  vi.stubEnv('PROD', production);
+  window.history.replaceState(null, '', production ? '/#/' : '/');
+  login.mockImplementation(async () => { auth.user = user; });
+  render(<App />);
+  await screen.findByRole('dialog', { name: '登录公论' });
+  fireEvent.change(screen.getByLabelText('与会者名'), { target: { value: '与会者' } });
+  fireEvent.change(screen.getByLabelText('密码'), { target: { value: 'password' } });
+  fireEvent.click(screen.getByRole('button', { name: '登录' }));
+  expect(await screen.findByRole('heading', { name: '值得继续的讨论' })).toBeVisible();
+  expect(mounted).not.toHaveBeenCalled();
+  fireEvent.click(screen.getAllByRole('link', { name: /进入消息工作台/ })[0]!);
+  expect(await screen.findByTestId('workbench-route')).toHaveTextContent('/messages');
+});
 
 it.each([false, true])('从首页介绍进入消息后，浏览器后退恢复介绍而非登录窗口（生产模式：%s）', async production => {
   vi.stubEnv('PROD', production);
@@ -167,8 +182,9 @@ it.each(['cmsrg29ky000h1hcqfec26kva', 'cmv4ln3s000k7md14vijeu209'])('旧话题�
   expect(await screen.findByRole('dialog', { name: '旧话题链接已作废' })).toHaveTextContent('该页面已停止使用');
   expect(screen.getByRole('button', { name: '刷新页面' })).toBeEnabled();
   fireEvent.click(screen.getByRole('button', { name: '回首页' }));
-  expect(await screen.findByTestId('workbench-route')).toHaveTextContent('/messages');
-  expect(window.location.hash).toBe('#/messages');
+  expect(await screen.findByRole('heading', { name: '值得继续的讨论' })).toBeVisible();
+  expect(mounted).not.toHaveBeenCalled();
+  expect(window.location.hash).toBe('#/');
 });
 
 it('未登录打开旧话题时先登录提示，关闭后显示作废提示，回首页后不再弹登录', async () => {

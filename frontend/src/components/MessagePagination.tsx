@@ -7,13 +7,14 @@ interface Props {
   hasMore: boolean;
   loading: boolean;
   showLoadingNotice?: boolean;
+  pagedScope?: boolean;
   panelRef: RefObject<HTMLDivElement>;
   onMore: (parent: string) => Promise<void>;
   onError: (message: string) => void;
 }
 
 /** Follow the last mounted message, even when the graph reserves more canvas below it. */
-export default function MessagePagination({ parent, loadedCount, hasMore, loading, showLoadingNotice = true, panelRef, onMore, onError }: Props) {
+export default function MessagePagination({ parent, loadedCount, hasMore, loading, showLoadingNotice = true, pagedScope = false, panelRef, onMore, onError }: Props) {
   const tasks = useContext(WorkbenchDrawingContext);
   const footerRef = useRef<HTMLDivElement>(null);
   const inFlight = useRef<Promise<void> | null>(null);
@@ -73,7 +74,7 @@ export default function MessagePagination({ parent, loadedCount, hasMore, loadin
   }, [parent, loadedCount, hasMore, loading, panelRef, onMore, onError, retry, tasks]);
   return <>
     <div ref={footerRef} style={{ padding: 16, textAlign: 'center', color: 'var(--ink-94a3b8)', fontSize: 12 }}>
-      当前已显示 {loadedCount} 条消息。{hasMore ? '继续浏览将按时间显示后续消息。' : loading ? '' : '当前范围已全部显示。'}
+      {pagedScope ? '本页已显示' : '当前已显示'} {loadedCount} 条消息。{hasMore ? '继续浏览将按时间显示后续消息。' : loading ? '' : pagedScope ? '更多关联请使用上方分页。' : '当前范围已全部显示。'}
     </div>
     {(loading && showLoadingNotice || error) && <div data-message-loading-notice style={{ position: 'sticky', bottom: 8, height: 0, zIndex: 26, pointerEvents: 'none' }}>
       <div role={error ? 'alert' : 'status'} aria-live="polite" style={{ position: 'absolute', bottom: 0, left: 12, maxWidth: 'calc(100% - 24px)', padding: '6px 10px',

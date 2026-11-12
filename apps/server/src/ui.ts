@@ -10,6 +10,9 @@ import { dataOf } from './economy.js';
 import { executeBatch, executeCommand, previewBatch } from './ui-commands.js';
 import { sendSnapshot } from './snapshot-response.js';
 import { windowSnapshot } from './window-snapshot.js';
+import { discussionSnapshot } from './discussion-snapshot.js';
+import { feedPage, feedQuerySchema, feedHiddenSchema, hideFeedMessage } from './feed.js';
+import { measureQueries } from './query-timing.js';
 import {bodyVersionSchema} from './reference-schema.js';
 import {validateBodyVersion} from './validation.js';
 import {assertMessageReadable,sanitizeModeration} from './moderation-visibility.js';
@@ -34,6 +37,27 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
     });
     const get=(path:string,handler:(req:Request,res:Response,next:NextFunction)=>Promise<unknown>)=>
         router.get(path,(req,res,next)=>{void store.read(()=>handler(req,res,next)).catch(next);});
+    get('/feed',async(req,res)=>{
+        const started = performance.now();
+        const measured = await measureQueries(async()=>{
+            const session=await requireSession(store,req);
+            const page=await feedPage(store,session.user.id,feedQuerySchema.parse(req.query));
+            return res.locals.reviewSanitize ? await res.locals.reviewSanitize(page) : page;
+        });
+        res.set('Cache-Control','private, no-store')
+            .set('Server-Timing',`feed;dur=${(performance.now()-started).toFixed(1)}, db;dur=${measured.ms.toFixed(1)};desc="${measured.count} queries"`)
+            .type('json').send(JSON.stringify(measured.value));
+    });
+    router.post('/feed/hidden',async(req,res,next)=>{
+        try {
+            const session=await requireCsrf(store,req),input=feedHiddenSchema.parse(req.body);
+            await store.sessionTransaction(async()=>{
+                await assertActiveAccount(store,session.user.id,true);
+                await hideFeedMessage(store,session.user.id,input.messageId,input.hidden);
+            });
+            res.json({ok:true});
+        } catch(error){next(error);}
+    });
     get('/reading-state',async(req,res)=>{
         const session=await requireSession(store,req);
         res.set('Cache-Control','private, no-store').json({marks:await readingState(store,session.user.id)});
@@ -81,6 +105,12 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
     });
     router.post('/snapshot/query', (req, res, next) => {
         void store.read(async () => sendSnapshot(req, res, () => windowSnapshot(store, req.body))).catch(next);
+    });
+    router.post('/snapshot/discussion', (req, res, next) => {
+        void store.read(async () => {
+            const session = await requireSession(store, req);
+            await sendSnapshot(req, res, () => discussionSnapshot(store, req.body, session.user.id));
+        }).catch(next);
     });
     get('/snapshot', async (req, res, next) => { try {
         await sendSnapshot(req, res, async () => snapshot(store, String(req.query.parent ?? 'root'), req.query, (await currentSession(store, req))?.user.id));

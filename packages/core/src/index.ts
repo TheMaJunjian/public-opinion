@@ -13,6 +13,8 @@ export * from './body-versions.js';
 export * from './correction-summary.js';
 export * from './notifications.js';
 export * from './access.js';
+export * from './feed.js';
+export { hasModeratedContent } from './moderation-content.js';
 export * from './moderation.js';
 export * from './review-context.js';
 export { structureSnapshot } from './structure-snapshot.js';

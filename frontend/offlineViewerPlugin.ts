@@ -15,7 +15,10 @@ const BASE = new URL(ROOT).pathname;
 self.addEventListener('install', event => event.waitUntil((async () => {
   const cache = await caches.open(CACHE);
   try {
-    await cache.addAll(FILES.map(url => new Request(url, { cache: 'reload', credentials: 'omit' })));
+    // Complete offline coverage without flooding the first visit with every lazy chunk at once.
+    for (let offset = 0; offset < FILES.length; offset += 2) {
+      await cache.addAll(FILES.slice(offset, offset + 2).map(url => new Request(url, { cache: 'reload', credentials: 'omit', priority: 'low' })));
+    }
     await self.skipWaiting();
   } catch (error) { await caches.delete(CACHE); throw error; }
 })()));

@@ -7,6 +7,7 @@ import { initializeDatabase } from './initialize-database.js';
 import { upgradeDatabase } from './database-upgrade.js';
 import { recordNotifications } from './notifications.js';
 import { indexModerationDependencies, affectModerationDependents } from './moderation-visibility.js';
+import { indexFeedMessages } from './feed-index.js';
 
 class DatabaseUpgradeRequired extends Error {}
 
@@ -195,6 +196,7 @@ export class Mutation {
       ) UPDATE revisions r SET body=i.body FROM input i WHERE r."messageId"=i.id AND r.revision=i.revision`)
         .run(JSON.stringify(updates), sequence);
     }
+    await indexFeedMessages(this.store, messages);
     const ledger = this.store.db.ledger.slice(this.ledgerStart);
     await affectModerationDependents(this.store,this.affected);
     const change: Change = { sequence,previousSequence,messages:[...this.messages.values()],memberships:[...this.memberships.values()],removedMemberships:[...this.removed],states:await statesFor(this.store,[...this.affected]),ledger,treasury:{operating:await this.store.setting<number>('operating'),issued:await this.store.setting<number>('minted')} };

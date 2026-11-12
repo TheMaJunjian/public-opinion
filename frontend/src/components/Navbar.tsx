@@ -24,7 +24,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const authState = { returnTo: location.pathname === '/' ? `/messages${location.search}` : `${location.pathname}${location.search}` };
+  const authState = { returnTo: location.pathname === '/' && new URLSearchParams(location.search).has('msg') ? `/messages${location.search}` : `${location.pathname}${location.search}` };
   const navRef = useRef<HTMLElement>(null);
   const leftControlsRef = useRef<HTMLDivElement>(null);
   const rightControlsRef = useRef<HTMLDivElement>(null);
@@ -76,6 +76,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
           <span className="text-xl font-bold tracking-widest">公论</span>
           <span className="text-xs text-[color:var(--ink-a5b4fc-3)] tracking-wide">一切记录在案，是非自有公论</span>
         </Link>
+        {user && <Link to="/" aria-current={location.pathname === '/' ? 'page' : undefined} className="text-sm font-medium hover:opacity-80">首页</Link>}
         <AboutLink className="text-[color:var(--ink-c7d2fe)] hover:text-[color:var(--ink-fff-2)] text-sm font-medium transition-colors">介绍</AboutLink>
         <button
           type="button"

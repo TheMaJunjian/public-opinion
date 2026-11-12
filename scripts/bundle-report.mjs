@@ -15,9 +15,14 @@ await build({root:resolve('frontend'),configFile:resolve('frontend/vite.config.t
     const route=chunks.find(chunk=>Object.keys(chunk.modules).some(id=>id.endsWith('/pages/MessageWorkbenchPage.tsx')));
     assert.ok(route,'Workbench route chunk is missing');
     const initial=closure(route.fileName);
+    const feed=chunks.find(chunk=>Object.keys(chunk.modules).some(id=>id.endsWith('/pages/FeedPage.tsx')));
+    assert.ok(feed,'Discovery route chunk is missing');
+    const feedFiles=closure(feed.fileName);
     const graph=chunks.find(chunk=>Object.keys(chunk.modules).some(id=>id.endsWith('/components/GraphView.tsx')));
     const graphView=[...new Set([...initial,...(graph ? closure(graph.fileName) : [])])];
     report={createdAt:new Date().toISOString(),node:process.version,route:route.fileName,routeBytes:Buffer.byteLength(route.code),routeGzipBytes:gzipSync(route.code).length,
+      feedRouteBytes:Buffer.byteLength(feed.code),feedRouteGzipBytes:gzipSync(feed.code).length,
+      feedStaticClosureGzipBytes:feedFiles.reduce((n,file)=>n+gzipSync(bundle[file]?.code??'').length,0),
       staticClosureBytes:initial.reduce((n,file)=>n+Buffer.byteLength(bundle[file]?.code??''),0),
       staticClosureGzipBytes:initial.reduce((n,file)=>n+gzipSync(bundle[file]?.code??'').length,0),
       graphViewBytes:graphView.reduce((n,file)=>n+Buffer.byteLength(bundle[file]?.code??''),0),
@@ -30,8 +35,13 @@ await build({root:resolve('frontend'),configFile:resolve('frontend/vite.config.t
       const eagerModules=report.chunks.filter(chunk=>chunk.initial).flatMap(chunk=>chunk.modules.map(m=>m.path));
       for(const optional of ['GraphView.tsx','LeaderboardModal.tsx','CorrectionComparisonPopup.tsx'])
         assert.ok(!eagerModules.some(path=>path.endsWith('/'+optional)),`${optional} is loaded eagerly`);
+      const feedModules=feedFiles.flatMap(file=>Object.keys(bundle[file]?.modules??{}));
+      for(const heavy of ['MessageWorkbenchPage.tsx','catalogClient.ts','catalogEngine.ts','GraphView.tsx','useWorkbenchData.ts'])
+        assert.ok(!feedModules.some(path=>path.endsWith('/'+heavy)),`${heavy} is loaded by the discovery homepage`);
+      assert.ok(report.feedRouteGzipBytes<15000,'Discovery route exceeds 15 KB gzipped');
     }
   }
 }]});
 await mkdir(dirname(output),{recursive:true});await writeFile(output,JSON.stringify(report,null,2)+'\n');
-console.log(JSON.stringify({routeBytes:report.routeBytes,routeGzipBytes:report.routeGzipBytes,staticClosureBytes:report.staticClosureBytes,staticClosureGzipBytes:report.staticClosureGzipBytes,graphViewBytes:report.graphViewBytes,graphViewGzipBytes:report.graphViewGzipBytes}));
+console.log(JSON.stringify({routeBytes:report.routeBytes,routeGzipBytes:report.routeGzipBytes,staticClosureBytes:report.staticClosureBytes,staticClosureGzipBytes:report.staticClosureGzipBytes,graphViewBytes:report.graphViewBytes,graphViewGzipBytes:report.graphViewGzipBytes,
+  feedRouteGzipBytes:report.feedRouteGzipBytes,feedStaticClosureGzipBytes:report.feedStaticClosureGzipBytes}));

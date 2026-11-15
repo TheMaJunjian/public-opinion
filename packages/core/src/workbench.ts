@@ -213,6 +213,8 @@ export interface WorkbenchSnapshot {
   discussion?: { focusId: string; pageIds: string[]; nextCursor: string | null;
     /** Stable start of this batch, used to revalidate already loaded replies. */
     cursor?: string;
+    /** Bodies whose owned links/inline members are open, excluding background context. */
+    expandedIds?: string[];
     memberCounts: Record<string, { direct: number; total: number }> };
   /** Contains topology and body-presence placeholders, never displayable body text. */
   structureOnly?: boolean;

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { isRelationView, relations, type Message, type WorkbenchSnapshot } from '@gonglun/core';
 import { DomainError, type Store } from './db.js';
-import { primaryRelationSql, displayAttachmentSql, isDependentMessageSql, isSettlementRecordSql } from './display-dependencies.js';
+import { primaryRelationSql, displayAttachmentSql, isDependentMessageSql, isReviewDiscussionSql, isSettlementRecordSql } from './display-dependencies.js';
 import { attentionUsers, primaryRelation, stakesFor, tagCountsFor, usersFor, viewsFor } from './ui-projections.js';
 import { assertMessageReadable } from './moderation-visibility.js';
 
@@ -14,7 +14,7 @@ const querySchema = z.object({ focusId: id, classificationId: id.nullable().opti
 const cursorSchema = z.object({ key: z.string(), through: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   sequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), id });
 const containers = new Set(['classify', 'summary', 'merge', 'arrange']);
-const effects = ['agree','disagree','correct','amend','annotation','tag','recommend','archive','low-quality','follow','unfollow','block','unblock','read','unread'];
+const effects = ['agree','disagree','correct','amend','annotation','tag','recommend','archive','low-quality','attention','follow','unfollow','block','unblock','read','unread'];
 const PAGE_SIZE = 20, CONTEXT_LIMIT = 600;
 const tooLarge = () => new DomainError('这段讨论的必要关联超过单页上限，请打开完整工作台查看，或选择更具体的消息', 422, 'DISCUSSION_TOO_LARGE');
 
@@ -72,38 +72,77 @@ export async function discussionSnapshot(store: Store, raw: unknown, userId: str
   const params: unknown[] = [traceIds ?? category ?? focus.id, cursor.through, cursor.sequence, cursor.id, PAGE_SIZE + 1, focus.id];
   const selectionSql = traceIds ? 'm.id=ANY($1::text[])'
     : category ? `COALESCE((SELECT mm."parentId" FROM memberships mm WHERE mm."memberId"=m.id),'root')=$1 AND NOT ${isDependentMessageSql('m')}`
-    : `m.id IN (SELECT "sourceId" FROM refs WHERE "targetId"=$1 UNION SELECT "targetId" FROM refs WHERE "sourceId"=$1)
-      AND COALESCE(${primaryRelationSql('m')}->>'relation','') NOT IN ('${[...effects,'member-of'].join("','")}')`;
+    : `m.id IN (SELECT "sourceId" FROM refs WHERE "targetId"=$1)
+      AND COALESCE(${primaryRelationSql('m')}->>'relation','') NOT IN ('${[...effects,...containers,'member-of','join'].join("','")}')
+      AND NOT ${isReviewDiscussionSql('m')}
+      AND EXISTS(SELECT 1 FROM ${primaryRelationSql('m')} semantic,jsonb_each(semantic.value->'roles') role,
+        jsonb_array_elements(role.value) binding WHERE role.key IN ('source','reason','target') AND binding #>> '{reference,messageId}'=$1)`;
   const rows = await store.db.prepare(`SELECT m.body FROM messages m WHERE ${selectionSql} AND m.id<>$6
     AND NOT ${isSettlementRecordSql('m')} AND m.sequence<=$2 AND (m.sequence,m.id)<($3,$4)
     ORDER BY m.sequence DESC,m.id DESC LIMIT $5`).all(...params);
   const page = rows.slice(0, PAGE_SIZE).map(row => JSON.parse(String(row.body)) as Message);
   const records = new Map<string, Message>([[focus.id, focus], ...page.map(message => [message.id, message] as const)]);
-  const fetched = new Set<string>();
-  let pending = [...new Set([focus.id, ...page.map(message => message.id), ...query.extraIds, ...query.recordIds, ...(category && category !== 'root' ? [category] : []), ...query.trace?.ids ?? []])];
-  // Never publish a truncated correction, stance or membership competition.
-  for (let wave = 0; pending.length; wave++) {
-    if (wave >= 40 || fetched.size + pending.length > CONTEXT_LIMIT) throw tooLarge();
-    const batch = pending; pending = []; batch.forEach(id => fetched.add(id));
-    const loaded = await store.db.prepare('SELECT body FROM messages WHERE id=ANY($1::text[])').all(batch);
+  // Context supplies a referenced body or ancestor, relation supplies its direct
+  // endpoints, and body additionally opens its inline members/owned links. Merely
+  // mentioning a message must not recursively open that message's discussion.
+  const context = 0, relation = 1, body = 2;
+  const requested = new Map<string, number>(), processed = new Map<string, number>();
+  const need = (id: string, level: number) => {
+    if (id === 'root') return;
+    if (level > (requested.get(id) ?? -1)) requested.set(id, level);
+    if (requested.size > CONTEXT_LIMIT) throw tooLarge();
+  };
+  for (const id of [focus.id,...page.map(message=>message.id),...query.extraIds,...query.recordIds,...query.trace?.ids??[]]) need(id,body);
+  if (category) need(category,body);
+  // Levels only increase, so cycles terminate without a depth cutoff. Never
+  // publish a truncated correction, stance or membership competition.
+  for (;;) {
+    const entries = [...requested].filter(([id,level])=>level > (processed.get(id) ?? -1));
+    if (!entries.length) break;
+    const batch = entries.map(([id])=>id), fresh = batch.filter(id=>!processed.has(id));
+    for (const [id,level] of entries) processed.set(id,level);
+    const loaded = await store.db.prepare('SELECT body FROM messages WHERE id=ANY($1::text[])').all(fresh);
     for (const row of loaded) { const message = JSON.parse(String(row.body)) as Message; records.set(message.id, message); }
-    const needed = new Set<string>(), inlineFrames: string[] = [];
-    for (const currentId of batch) {
+    const inlineFrames: string[] = [], attachmentHosts: string[] = [];
+    for (const [currentId,level] of entries) {
       const message = records.get(currentId); if (!message) continue;
       const primary = primaryRelation(message);
+      if (level >= relation && (level === body || !containers.has(primary?.relation ?? ''))) attachmentHosts.push(currentId);
       // Classifications and summaries stay closed. Merge/arrange frames render
-      // their effective members inline, except when paging inside that frame.
-      if (currentId !== category && ['merge', 'arrange'].includes(primary?.relation ?? '')) inlineFrames.push(currentId);
+      // members only when displayed, not when supplied as ownership context.
+      if (level === body && currentId !== category && ['merge', 'arrange'].includes(primary?.relation ?? '')) inlineFrames.push(currentId);
       if (!containers.has(primary?.relation ?? '')) for (const part of relations(message))
-        for (const binding of Object.values(part.roles).flat()) needed.add(binding.reference.messageId);
-      for (const part of message.parts) if (part.type === 'display' && part.target) needed.add(part.target.messageId);
+        if (level >= relation || effects.includes(part.relation) || part.relation === 'member-of')
+          for (const binding of Object.values(part.roles).flat()) need(binding.reference.messageId,context);
+      // An explicitly selected source-owned link presents that source's body.
+      if (level === body && ['reference','reply','notify','annotation'].includes(primary?.relation ?? ''))
+        for (const binding of primary?.roles.source ?? []) need(binding.reference.messageId,body);
+      for (const part of message.parts) if (part.type === 'display' && part.target) need(part.target.messageId,context);
     }
     if (inlineFrames.length) {
-      const members = await store.db.prepare('SELECT "memberId","sourceId" FROM memberships WHERE "parentId"=ANY($1::text[])').all(inlineFrames);
-      for (const row of members) { needed.add(String(row.memberId)); needed.add(String(row.sourceId)); }
+      const members = await store.db.prepare('SELECT "memberId","sourceId" FROM memberships WHERE "parentId"=ANY($1::text[]) LIMIT $2').all(inlineFrames,CONTEXT_LIMIT + 1);
+      for (const row of members) { need(String(row.memberId),body); need(String(row.sourceId),relation); }
     }
     const parents = await store.db.prepare('SELECT "parentId","sourceId" FROM memberships WHERE "memberId"=ANY($1::text[])').all(batch);
-    for (const row of parents) { needed.add(String(row.parentId)); needed.add(String(row.sourceId)); }
+    for (const row of parents) { need(String(row.parentId),context); need(String(row.sourceId),relation); }
+    // Executed stances retain their original target after edits. Current refs
+    // alone can miss those decisions. A body's automatic self stake does not
+    // promote background context into an open discussion.
+    const stances = await store.db.prepare(`SELECT "sourceId","targetId" FROM display_stances
+      WHERE "sourceId"<>"targetId" AND ("targetId"=ANY($1::text[]) OR "sourceId"=ANY($1::text[]))
+      LIMIT $2`).all(fresh,CONTEXT_LIMIT + 1);
+    for (const row of stances) { need(String(row.sourceId),relation); need(String(row.targetId),context); }
+    // JOIN edits preserve an executed membership history independently of the
+    // current raw references. Include competitors/predecessors and their parents.
+    const memberships = await store.db.prepare(`SELECT id,body FROM membership_actions
+      WHERE id=ANY($1::text[]) OR body->>'memberId'=ANY($1::text[]) LIMIT $2`).all(batch,CONTEXT_LIMIT + 1);
+    for (const row of memberships) {
+      need(String(row.id),relation);
+      const history = row.body as {memberId:string;parentId:string;previousId:string|null;previousParentId:string|null};
+      need(history.memberId,context); need(history.parentId,context);
+      if (history.previousId) need(history.previousId,relation);
+      if (history.previousParentId) need(history.previousParentId,context);
+    }
     // Ordinary pages need the source-owned links excluded from body paging.
     // Trace links were selected by direction above; adding others would widen it.
     // Parent-owned JOIN records must not open every member of a closed category.
@@ -115,13 +154,14 @@ export async function discussionSnapshot(store: Store, raw: unknown, userId: str
           jsonb_array_elements(semantic.value #> '{roles,target}') binding
           WHERE semantic.value->>'relation' IN ('${effects.join("','")}')
             AND binding #>> '{reference,messageId}'=r."targetId")
-        OR (${!query.trace} AND COALESCE(${primaryRelationSql('m')}->>'relation','') NOT IN ('member-of','join')
-          AND NOT ${isSettlementRecordSql('m')} AND ${displayAttachmentSql('m', 'r."targetId"')})
+        OR (${!query.trace} AND r."targetId"=ANY($3::text[])
+          AND COALESCE(${primaryRelationSql('m')}->>'relation','') NOT IN ('member-of','join')
+          AND NOT ${isSettlementRecordSql('m')} AND NOT ${isReviewDiscussionSql('m')}
+          AND ${displayAttachmentSql('m', 'r."targetId"')})
         OR EXISTS(SELECT 1 FROM jsonb_array_elements(m.body::jsonb->'parts') part,
           jsonb_array_elements(part->'roles'->'member') binding WHERE part->>'relation'='member-of' AND binding #>> '{reference,messageId}'=r."targetId")
-      ) LIMIT $2`).all<{id:string}>(batch, CONTEXT_LIMIT + 1);
-    for (const row of affecting) needed.add(row.id);
-    pending = [...needed].filter(id => !fetched.has(id) && id !== 'root');
+      ) LIMIT $2`).all<{id:string}>(batch, CONTEXT_LIMIT + 1, attachmentHosts);
+    for (const row of affecting) need(row.id,relation);
   }
   const all = [...records.values()], ids = all.map(message => message.id);
   const users = await usersFor(store, all.map(message => message.authorId));
@@ -141,5 +181,6 @@ export async function discussionSnapshot(store: Store, raw: unknown, userId: str
   return { regionId, sequence, scope: { messageId: null, title: '当前讨论' }, messages: views, relations: views.filter(isRelationView), users,
     stakes: await stakesFor(store, ids, users), tagCounts: await tagCountsFor(store, ids), attentionUsers: await attentionUsers(store, ids),
     discussion: { focusId: focus.id, pageIds: page.map(message => message.id), nextCursor,
+      expandedIds: [...requested].filter(([id,level])=>level === body && records.has(id)).map(([id])=>id),
       cursor: Buffer.from(JSON.stringify(cursor)).toString('base64url'), memberCounts } };
 }

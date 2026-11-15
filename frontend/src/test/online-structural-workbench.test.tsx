@@ -10,8 +10,8 @@ import { bindRoles, type Part } from '@gonglun/core';
 import { createZhihuStructuralViewer } from '../utils/zhihuStructuralViewer';
 import { hydrateOnlineStructure, onlineStructuralSource } from '../utils/onlineStructuralSource';
 
-const harness = vi.hoisted(() => ({ ready: null as null | ((data: CatalogData) => void), get: vi.fn(), discussion: vi.fn(), search: '', catchUp: vi.fn(), reload: vi.fn() }));
-vi.mock('react-router-dom', () => ({ useLocation: () => ({ pathname: '/messages', search: harness.search, key: 'normal', state: null }) }));
+const harness = vi.hoisted(() => ({ ready: null as null | ((data: CatalogData) => void), get: vi.fn(), discussion: vi.fn(), pathname: '/messages', search: '', catchUp: vi.fn(), reload: vi.fn() }));
+vi.mock('react-router-dom', () => ({ useLocation: () => ({ pathname: harness.pathname, search: harness.search, key: 'normal', state: null }) }));
 vi.mock('../api', () => ({ api: { getWorkbenchSnapshot: (query: SnapshotQuery) => harness.get(query), getDiscussionSnapshot: harness.discussion,
   subscribeChanges: () => ({ addEventListener: vi.fn(), close: vi.fn() }) } }));
 vi.mock('../data/catalogClient', () => ({ createCatalogClient: (_user: string, _parent: string, callbacks: { onReady(data: CatalogData): void }) => {
@@ -30,7 +30,7 @@ function fixture(): WorkbenchSnapshot {
 }
 let full: WorkbenchSnapshot;
 beforeEach(() => {
-  vi.clearAllMocks(); localStorage.clear(); harness.ready = null; harness.search = ''; full = fixture();
+  vi.clearAllMocks(); localStorage.clear(); harness.ready = null; harness.pathname = '/messages'; harness.search = ''; full = fixture();
   harness.get.mockImplementation(async (query: SnapshotQuery) => {
     const ids = new Set(query.ids ?? (query.after === undefined ? ['A', 'B'] : []));
     return { ...full, windowed: true, messages: full.messages.filter(row => ids.has(row.id)), relations: full.relations.filter(row => ids.has(row.id)) };
@@ -42,6 +42,110 @@ const publish = (update?: CatalogData['update']) => {
   const index = structureSnapshot(full);
   act(() => harness.ready!({ snapshot: index, index, ...(update ? { update } : {}), projected: projectWorkbenchSnapshot({ ...index, messages: [], relations: [] }) }));
 };
+
+const oversized = () => Object.assign(new Error('这段讨论的必要关联超过单页上限'), { status: 422, code: 'DISCUSSION_TOO_LARGE' });
+function followFullNavigation() {
+  const [destination, options] = input.navigate.mock.calls.at(-1)!;
+  expect(options).toEqual({ replace: true });
+  const route = new URL(destination, 'https://example.com');
+  expect(route.searchParams.get('catalog')).toBe('full');
+  harness.search = route.search;
+  return route;
+}
+
+it('opens an oversized cold link in the full workbench and waits for its message without reporting failure', async () => {
+  harness.search = '?msg=body-A&locate=1&view=list';
+  harness.discussion.mockRejectedValueOnce(oversized());
+  const { result, rerender } = renderHook(() => useWorkbenchData(input));
+  let outcome: 'loaded' | Error | undefined;
+  const jump = result.current.ensureMessages(['body-A']).then(() => { outcome = 'loaded'; }, error => { outcome = error; });
+  await waitFor(() => expect(input.navigate).toHaveBeenCalledOnce());
+  expect(result.current.loadError).toBeNull();
+  expect(result.current.loading).toBe(true);
+  const route = followFullNavigation();
+  expect(Object.fromEntries(route.searchParams)).toEqual({ msg: 'body-A', locate: '1', view: 'list', catalog: 'full' });
+  rerender();
+  await waitFor(() => expect(harness.ready).not.toBeNull());
+  expect(outcome).toBeUndefined();
+  publish();
+  await act(async () => { await jump; });
+  expect(outcome).toBe('loaded');
+  expect(result.current.messages.find(row => row.id === 'body-A')?.content).toBe('分类 A 的完整原文');
+  expect(result.current.discussionPage).toBeNull();
+  expect(result.current.loadError).toBeNull();
+  expect(harness.discussion).toHaveBeenCalledOnce();
+});
+
+it('keeps an in-place jump pending until an oversized destination is loaded by the full catalog', async () => {
+  harness.search = '?msg=body-A&locate=1';
+  harness.discussion.mockResolvedValueOnce({ ...full, discussion: { focusId: 'body-A', pageIds: [], nextCursor: null, memberCounts: {} } });
+  const { result, rerender } = renderHook(() => useWorkbenchData(input));
+  await waitFor(() => expect(result.current.loading).toBe(false));
+  harness.discussion.mockRejectedValueOnce(oversized());
+  let jump!: Promise<void>, outcome: 'loaded' | Error | undefined;
+  act(() => { jump = result.current.ensureMessages(['body-B']).then(() => { outcome = 'loaded'; }, error => { outcome = error; }); });
+  await waitFor(() => expect(input.navigate).toHaveBeenCalledOnce());
+  expect(followFullNavigation().searchParams.get('msg')).toBe('body-B');
+  rerender();
+  await waitFor(() => expect(harness.ready).not.toBeNull());
+  expect(outcome).toBeUndefined();
+  publish();
+  await act(async () => { await jump; });
+  expect(outcome).toBe('loaded');
+  expect(result.current.messages.find(row => row.id === 'body-B')?.content).toBe('分类 B 的完整原文');
+  expect(result.current.loadError).toBeNull();
+  expect(harness.discussion).toHaveBeenCalledTimes(2);
+});
+
+it('retains a linked member inside an oversized category route', async () => {
+  harness.pathname = '/messages/B'; harness.search = '?msg=body-B&locate=1';
+  harness.discussion.mockRejectedValueOnce(oversized());
+  const { result, rerender } = renderHook(() => useWorkbenchData({ ...input, scopeMessageId: 'B' }));
+  await waitFor(() => expect(input.navigate).toHaveBeenCalledOnce());
+  expect(harness.discussion.mock.calls[0]![0]).toMatchObject({ focusId: 'B', extraIds: ['body-B'] });
+  const route = followFullNavigation();
+  expect(route.pathname).toBe('/messages/B');
+  expect(route.searchParams.get('msg')).toBe('body-B');
+  rerender();
+  await waitFor(() => expect(harness.ready).not.toBeNull());
+  publish();
+  await waitFor(() => expect(result.current.loading).toBe(false));
+  expect(result.current.messages.find(row => row.id === 'body-B')?.content).toBe('分类 B 的完整原文');
+  expect(result.current.loadError).toBeNull();
+});
+
+it('preserves the requested category when its semantic context requires the full workbench', async () => {
+  harness.search = '?msg=body-A';
+  harness.discussion.mockResolvedValueOnce({ ...full, discussion: { focusId: 'body-A', pageIds: [], nextCursor: null, memberCounts: {} } });
+  const { result, rerender } = renderHook(() => useWorkbenchData(input));
+  await waitFor(() => expect(result.current.loading).toBe(false));
+  harness.discussion.mockRejectedValueOnce(oversized());
+  let selected!: Promise<void>;
+  act(() => { selected = result.current.loadViewerScope({ classificationId: 'B', viewMode: 'list' }); });
+  await waitFor(() => expect(input.navigate).toHaveBeenCalledOnce());
+  followFullNavigation(); rerender();
+  await waitFor(() => expect(harness.ready).not.toBeNull());
+  publish();
+  await act(async () => { await selected; });
+  expect(result.current.messages.find(row => row.id === 'body-B')?.content).toBe('分类 B 的完整原文');
+  expect(result.current.discussionPage).toBeNull();
+});
+
+it('reports a full-workbench failure to the waiting jump without retrying the oversized page', async () => {
+  harness.search = '?msg=body-A';
+  harness.discussion.mockRejectedValueOnce(oversized());
+  const { result, rerender } = renderHook(() => useWorkbenchData(input));
+  const jump = result.current.ensureMessages(['body-A']).then(() => null, error => error);
+  await waitFor(() => expect(input.navigate).toHaveBeenCalledOnce());
+  followFullNavigation();
+  harness.get.mockRejectedValue(new Error('完整工作台连接中断'));
+  rerender();
+  await waitFor(() => expect(result.current.loading).toBe(false));
+  expect(await jump).toMatchObject({ message: '完整工作台连接中断' });
+  expect(result.current.loadError).toBe('完整工作台连接中断');
+  expect(harness.discussion).toHaveBeenCalledOnce();
+  expect(input.navigate).toHaveBeenCalledOnce();
+});
 
 it('waits for the new source when a message jump coincides with switching to the full workbench', async () => {
   harness.search = '?msg=body-A';

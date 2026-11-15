@@ -452,6 +452,85 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     }finally{view.unmount();mockApi.getDiscussionSnapshot.mockImplementation(original);viewerRoute.nativeRouter=false;window.history.replaceState(null,'',previousUrl);graphRendering.actual=false;geometry.mockRestore();}
   });
 
+  it.each(['browser', 'hash'])('recovers an oversized message link and locates it without an error prompt (%s router)', async router => {
+    const original = mockApi.getWorkbenchSnapshot.getMockImplementation()!;
+    const focus = makeMessage('oversized-focus', '超限后继续阅读的正文');
+    const full = { regionId: `oversized-${router}`, sequence: 1,
+      scope: { messageId: null, title: '完整工作台' }, messages: [focus], relations: [], users: [makeUser()],
+      stakes: {}, tagCounts: {}, attentionUsers: {} };
+    mockApi.getWorkbenchSnapshot.mockImplementation(async ({ ids }: { ids?: string[] }) => ({ ...full, windowed: true,
+      messages: full.messages.filter(row => ids?.includes(row.id)) }));
+    mockApi.getDiscussionSnapshot.mockRejectedValueOnce(Object.assign(new Error('这段讨论的必要关联超过单页上限'), {
+      status: 422, code: 'DISCUSSION_TOO_LARGE',
+    }));
+    const previousUrl = window.location.href;
+    window.history.replaceState(null, '', `${router === 'hash' ? '/#' : ''}/messages?msg=${focus.id}&locate=1`);
+    viewerRoute.nativeRouter = true; graphRendering.actual = true;
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
+    const Router = router === 'hash' ? HashRouter : BrowserRouter;
+    const view = render(<Router><Routes><Route path="/messages" element={<MessageWorkbenchPage />} /></Routes></Router>);
+    try {
+      await waitFor(() => expect(catalogHarness.callbacks).not.toBeNull());
+      const index = structureSnapshot(full);
+      const { projectWorkbenchSnapshot } = await import('../utils/workbenchProjection');
+      act(() => catalogHarness.callbacks.onReady({ snapshot: index, index,
+        projected: projectWorkbenchSnapshot({ ...index, messages: [], relations: [] }) }));
+      await waitFor(() => expect(document.querySelector(`[data-message-jump-target="${focus.id}"]`)).not.toBeNull());
+      await waitForWorkbenchIdle();
+      const url = new URL(router === 'hash' ? window.location.hash.slice(1) : window.location.href, 'https://example.com');
+      expect(url.searchParams.get('catalog')).toBe('full');
+      expect(url.searchParams.get('msg')).toBe(focus.id);
+      expect(url.searchParams.get('locate')).toBe('1');
+      expect(messageCanvas().getByText(focus.content)).toBeInTheDocument();
+      expect(screen.queryByText(/必要关联超过单页上限/)).toBeNull();
+      expect(mockApi.getDiscussionSnapshot).toHaveBeenCalledOnce();
+    } finally {
+      view.unmount(); mockApi.getWorkbenchSnapshot.mockImplementation(original); catalogHarness.callbacks = null;
+      viewerRoute.nativeRouter = false; graphRendering.actual = false;
+      window.history.replaceState(null, '', previousUrl); geometry.mockRestore();
+    }
+  });
+
+  it('keeps the draft and finishes a jump when a large destination switches to the full workbench', async () => {
+    const original = mockApi.getWorkbenchSnapshot.getMockImplementation()!;
+    const origin = makeMessage('small-origin', '当前阅读的正文'), target = makeMessage('large-destination', '大讨论中的目标正文');
+    const snapshot = { regionId: 'large-jump', sequence: 1, scope: { messageId: null, title: '完整工作台' },
+      messages: [origin, target], relations: [], users: [makeUser()], stakes: {}, tagCounts: {}, attentionUsers: {} };
+    mockApi.getWorkbenchSnapshot.mockImplementation(async ({ ids }: { ids?: string[] }) => ({ ...snapshot, windowed: true,
+      messages: snapshot.messages.filter(row => ids?.includes(row.id)) }));
+    mockApi.getDiscussionSnapshot.mockResolvedValueOnce({ ...snapshot, messages: [origin],
+      discussion: { focusId: origin.id, pageIds: [], nextCursor: null, memberCounts: {} } });
+    const previousUrl = window.location.href;
+    window.history.replaceState(null, '', `/messages?msg=${origin.id}&locate=1`);
+    viewerRoute.nativeRouter = true; graphRendering.actual = true;
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
+    const view = render(<BrowserRouter><Routes><Route path="/messages" element={<MessageWorkbenchPage />} /></Routes></BrowserRouter>);
+    try {
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+      await waitForWorkbenchIdle();
+      fireEvent.change(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）'), { target: { value: '切换后保留的草稿' } });
+      mockApi.getDiscussionSnapshot.mockRejectedValueOnce(Object.assign(new Error('这段讨论的必要关联超过单页上限'), {
+        status: 422, code: 'DISCUSSION_TOO_LARGE',
+      }));
+      await jumpToMessageId(target.id);
+      await waitFor(() => expect(catalogHarness.callbacks).not.toBeNull());
+      const index = structureSnapshot(snapshot);
+      const { projectWorkbenchSnapshot } = await import('../utils/workbenchProjection');
+      act(() => catalogHarness.callbacks.onReady({ snapshot: index, index,
+        projected: projectWorkbenchSnapshot({ ...index, messages: [], relations: [] }) }));
+      await waitFor(() => expect(document.querySelector(`[data-message-jump-target="${target.id}"]`)).not.toBeNull());
+      await waitForWorkbenchIdle();
+      expect(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）')).toHaveValue('切换后保留的草稿');
+      expect(messageCanvas().getByText(target.content)).toBeInTheDocument();
+      expect(screen.queryByText(/必要关联超过单页上限/)).toBeNull();
+      expect(new URL(window.location.href).searchParams.get('catalog')).toBe('full');
+    } finally {
+      view.unmount(); mockApi.getWorkbenchSnapshot.mockImplementation(original); catalogHarness.callbacks = null;
+      viewerRoute.nativeRouter = false; graphRendering.actual = false;
+      window.history.replaceState(null, '', previousUrl); geometry.mockRestore();
+    }
+  });
+
   it('waits for the root scope before highlighting an exited category, then appends root messages below the canvas', async () => {
     const original = mockApi.getDiscussionSnapshot.getMockImplementation()!;
     const focus=makeMessage('exit-child','分类内消息'),first=makeMessage('root-first','根目录第一批'),second=makeMessage('root-second','根目录下一批');

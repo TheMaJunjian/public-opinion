@@ -1,17 +1,19 @@
 import type { MessageView, TargetRef, WorkbenchSnapshot } from '@gonglun/core';
 
-const organizations = new Set(['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE']);
 const mergeRefs = (previous: TargetRef[] = [], current: TargetRef[] = []) => [...new Map([...previous, ...current].map(ref => [
   JSON.stringify(ref.reference ?? (ref.kind === 'relation' ? [ref.kind, ref.relationId, ref.part] : [ref.kind, ref.messageId])), ref,
 ])).values()];
 
-/** Organization edges are projected per batch; retain the loaded members of each batch. */
-function mergeViews<T extends Pick<MessageView, 'id' | 'revision' | 'relationType' | 'targetRefs' | 'declaredTargetRefs' | 'restricted'>>(groups: T[][]): T[] {
+/** Edges are projected per batch, including context-only references. Keep each
+ * freshly validated edge even when another page supplies only its source body. */
+function mergeViews<T extends Pick<MessageView, 'id' | 'revision' | 'targetRefs' | 'declaredTargetRefs' | 'restricted'> & {content?:string}>(groups: T[][]): T[] {
   const result = new Map<string, T>();
   for (const group of groups) for (const row of group) {
     const previous = result.get(row.id);
     result.set(row.id, previous && previous.revision === row.revision && !previous.restricted && !row.restricted
-      && organizations.has(row.relationType ?? '') ? { ...row,
+      && (previous.targetRefs || row.targetRefs) ? { ...row,
+        // A context-only synthetic label may omit a remote target's quotation.
+        content: (previous.targetRefs?.length ?? 0) > (row.targetRefs?.length ?? 0) ? previous.content : row.content,
         targetRefs: mergeRefs(previous.targetRefs, row.targetRefs),
         declaredTargetRefs: mergeRefs(previous.declaredTargetRefs, row.declaredTargetRefs),
       } : row);
@@ -34,6 +36,10 @@ export function mergeDiscussionSnapshots(pages: WorkbenchSnapshot[]): WorkbenchS
     attentionUsers: Object.assign({}, ...ordered.map(page => page.attentionUsers)),
     discussion: { ...pages[0]!.discussion!,
       pageIds: [...new Set(pages.flatMap(page => page.discussion!.pageIds))],
+      ...(pages.some(page=>page.discussion!.expandedIds) ? {
+        expandedIds: [...new Set(ordered.flatMap(page=>(page.discussion!.expandedIds ?? page.messages.map(row=>row.id))
+          .filter(id=>page.messages.find(row=>row.id===id)?.revision === byId.get(id)?.revision)))],
+      } : {}),
       nextCursor: pages.at(-1)!.discussion!.nextCursor,
       memberCounts: Object.assign({}, ...ordered.map(page => page.discussion!.memberCounts)),
     },

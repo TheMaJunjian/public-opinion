@@ -1,10 +1,11 @@
-import { DISPLAY_DEPENDENCY_ROLES } from '@gonglun/core';
+import { DISPLAY_DEPENDENCY_ROLES, REVIEW_RECORD_RELATIONS } from '@gonglun/core';
 
 const roles = `'${JSON.stringify(DISPLAY_DEPENDENCY_ROLES)}'::jsonb`;
 /** Same primary-relation and attachment policy as messageDisplayDependency. */
 export function primaryRelationSql(alias: string) {
   return `(SELECT part.value FROM jsonb_array_elements(${alias}.body::jsonb->'parts') WITH ORDINALITY part(value,position)
     WHERE part.value->>'type'='relation'
+      AND part.value->>'relation'<>'review-context'
       AND (part.value->>'relation'<>'member-of' OR jsonb_array_length(COALESCE(part.value #> '{roles,member}','[]'::jsonb))>0)
       AND NOT ((part.value->>'id'='self-stance' OR part.value->>'id' LIKE 'minimum-self-stance-%')
         AND part.value->>'relation' IN ('agree','disagree')
@@ -28,6 +29,12 @@ export function isDependentMessageSql(alias: string) {
     OR EXISTS(SELECT 1 FROM jsonb_array_elements(${alias}.body::jsonb->'parts') part
       WHERE part->>'type'='display' AND part #>> '{target,messageId}' IS NOT NULL)
     OR EXISTS(SELECT 1 FROM jsonb_array_elements(${alias}.body::jsonb->'parts') part WHERE part->>'relation'='review-context'))`;
+}
+
+/** Moderation history/discussion is fetched through its own explicit entry points. */
+export function isReviewDiscussionSql(alias: string) {
+  return `EXISTS(SELECT 1 FROM jsonb_array_elements(${alias}.body::jsonb->'parts') part
+    WHERE part->>'type'='relation' AND part->>'relation' IN ('review-context','${[...REVIEW_RECORD_RELATIONS].join("','")}'))`;
 }
 
 /** Settlement history is opened from its subject, never paged as overview cards. */

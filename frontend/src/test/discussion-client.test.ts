@@ -50,6 +50,38 @@ it('deduplicates selection changes and advances an unchanged refresh without red
   t.client.stop();
 });
 
+it('expands a selected context-only body once and retains expanded references across pages',async()=>{
+  const t=setup(), first=snapshot(['first'],'next');
+  first.messages.push(message('context'));
+  first.discussion!.expandedIds=['focus','first'];
+  t.windows.set('latest',first);t.windows.set('head',first);
+  await t.client.select({classificationId:null});
+  const expanded=snapshot(['first'],'next');
+  expanded.messages.push(message('context'),message('target'));
+  expanded.discussion!.expandedIds=['focus','first','context'];
+  const link={...message('link'),kind:'RELATION',relationType:'REFERENCE',sourceMessageId:'context',
+    content:'引用：「目标正文」',targetRefs:[{kind:'message' as const,messageId:'target'}]};
+  expanded.messages.push(link);expanded.relations.push(link);
+  t.windows.set('latest',expanded);t.windows.set('head',expanded);
+  await t.client.select({classificationId:null,pinnedIds:['context']});
+  expect(t.load).toHaveBeenCalledTimes(2);expect(ids(t)).toContain('target');
+  await t.client.select({classificationId:null,pinnedIds:['context','first']});
+  expect(t.load).toHaveBeenCalledTimes(2);
+  const tail=snapshot(['second'],null,'next');
+  tail.discussion!.expandedIds=['focus','second'];
+  const backgroundLink={...link,content:'REFERENCE',targetRefs:[]};
+  tail.messages.push(backgroundLink);tail.relations.push(backgroundLink);
+  t.windows.set('next',tail);
+  await t.client.loadMore();
+  const result=t.publish.mock.calls.at(-1)![0].snapshot as WorkbenchSnapshot;
+  expect(result.relations.find(row=>row.id==='link')!.targetRefs).toEqual(link.targetRefs);
+  expect(result.messages.find(row=>row.id==='link')!.content).toBe(link.content);
+  expect(result.discussion!.expandedIds).toEqual(expect.arrayContaining(['context','first','second']));
+  const count=t.load.mock.calls.length;
+  await t.client.select({classificationId:null,pinnedIds:['context','second']});
+  expect(t.load).toHaveBeenCalledTimes(count);
+});
+
 it('appends replies once, retains a failed batch and retries the same cursor',async()=>{
   const t=setup(), first=snapshot(['first'],'next');
   t.windows.set('latest',first);t.windows.set('head',first);t.windows.set('next',snapshot(['first','second'],null,'next'));

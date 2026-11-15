@@ -1,6 +1,7 @@
 import {useReadingViewportAnchor} from '../hooks/useReadingViewportAnchor';
 import DiscussionReplies, { DiscussionRepliesContext } from '../components/DiscussionReplies';
 import DiscussionStatusControl from '../components/DiscussionStatusControl';
+import { fullWorkbenchPath } from '../utils/messageRoutes';
 import type {ReadingTask,ReadingOrder} from './workbench/model/readingTasks';
 import {exitTrace as runExitTrace} from './workbench/actions/viewHistory';
 import {DEFAULT_TRACE_DEPTHS,traceDepths as legacyTraceDepths,type TraceDirection,type TraceDepths} from '../utils/traceRange';
@@ -175,6 +176,7 @@ export default function MessageWorkbenchPage() {
 }
 
 function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
+  const location = useLocation();
   const composer = useWorkbenchComposer();
   const {
     draftUnits, setDraftUnits, sourceUnits, setSourceUnits, targetUnits, setTargetUnits, activeTextSelectId,
@@ -3594,7 +3596,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
         <div style={{ fontWeight: 700, marginBottom: 8 }}>加载失败</div>
         <pre style={{ whiteSpace: "pre-wrap", color: "var(--ink-ff8080)" }}>{loadError}</pre>
         {discussionPage && <div style={{display:'flex',gap:12}}><button disabled={discussionPage.loading} onClick={() => void refreshDiscussion().catch(() => {})}>重试讨论</button>
-          <button onClick={() => navigate('/messages?catalog=full')}>打开完整工作台</button></div>}
+          <button onClick={() => navigate(fullWorkbenchPath(location, discussionPage.focusId))}>打开完整工作台</button></div>}
         {isViewerRoute && <button onClick={() => window.dispatchEvent(new Event('open-export-viewer'))}>选择阅览文件</button>}
       </div>
     );
@@ -3649,7 +3651,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                   onRefresh={() => {
                     if (discussionPage) void refreshDiscussion().catch(error => showAlert(error.message));
                     else window.dispatchEvent(new Event('gonglun:reload'));
-                  }} onOpenFull={() => navigate('/messages?catalog=full')} />}
+                  }} onOpenFull={() => navigate(fullWorkbenchPath(location, discussionPage?.error ? discussionPage.focusId : undefined))} />}
                 scopeMessageId={scopeMessageId} exportTitle={scope?.title ?? 'export'} showAlert={showAlert}
                 exportData={loadedExport ?? preloadedData} exportUsername={displayUser?.username ?? null}
                 discussion={discussion}

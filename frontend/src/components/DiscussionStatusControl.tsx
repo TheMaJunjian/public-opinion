@@ -38,7 +38,8 @@ export default function DiscussionStatusControl({ state, onRefresh, onOpenFull }
         <strong>{state ? state.classificationId === 'root' ? '根目录' : '当前讨论' : '完整工作台'}</strong>
         {state ? <>
           <span role="status">已加载 {state.loadedCount} 条关联消息{state.loading ? '，正在更新…' : ''}</span>
-          <span>{state.hasMore ? '还可继续加载更多消息。' : '当前范围的关联消息已全部加载。'}</span>
+          <span>{state.error ? '当前范围加载未完成。' : state.loading ? '正在加载当前范围的关联消息。'
+            : state.hasMore ? '还可继续加载更多消息。' : '当前范围的关联消息已全部加载。'}</span>
           <span>筛选与对比作用于已加载的消息</span>
           {state.error && <div role="alert">{state.error}</div>}
         </> : <span>当前为完整工作台，消息随浏览按需加载。</span>}

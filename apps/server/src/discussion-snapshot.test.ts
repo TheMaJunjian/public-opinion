@@ -1,9 +1,13 @@
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { afterEach, expect, it } from 'vitest';
-import { bindRoles, type Message, type Part, type Session, type WorkbenchSnapshot } from '@gonglun/core';
+import { bindRoles, isRelationView, type Message, type Part, type Session, type WorkbenchSnapshot } from '@gonglun/core';
 import { createTestApp, cleanupTestDatabases, testInvitation, withTestContribution } from './test-database.js';
 import { Mutation } from './db.js';
+import { viewsFor } from './ui-projections.js';
+import { recordStance } from './projections.js';
+import { convertMessagesToDemoModel, computeCorrectionVersions, computeEffectiveSuppressedRelIds } from '../../../frontend/src/utils/modelBridge.js';
+import { deriveContainerEffect } from '../../../frontend/src/pages/workbench/model/containerEffect.js';
 
 afterEach(cleanupTestDatabases);
 type App = Awaited<ReturnType<typeof createTestApp>>;
@@ -168,6 +172,156 @@ it('refuses genuinely oversized effect chains instead of publishing incomplete s
   expect(response.body.code).toBe('DISCUSSION_TOO_LARGE');
   expect(response.body.messages).toBeUndefined();
 }, 30_000);
+
+it('loads review history on demand without importing every audit and its trigger discussion', async () => {
+  const app = await createTestApp(), who = await actor(app);
+  const [focus, trigger] = await seed(app, who.session.user.id, [[body('当前正文')], [body('审核触发原因')]]);
+  const audits = await seed(app, who.session.user.id, Array.from({length:601}, () => [
+    body('审核历史'), relation('review-record', {target:[{messageId:focus!.id}], trigger:[{messageId:trigger!.id}]}),
+  ]));
+  const first = await page(who, {focusId:focus!.id});
+  expect(first.messages.map(message => message.id)).toEqual([focus!.id]);
+  expect(first.discussion!.pageIds).toEqual([]);
+  const selected = await page(who, {focusId:focus!.id, recordIds:[audits[0]!.id]});
+  expect(new Set(selected.messages.map(message => message.id))).toEqual(new Set([focus!.id, trigger!.id, audits[0]!.id]));
+  expect(selected.messages.find(message => message.id === audits[0]!.id)!.parts).toEqual(audits[0]!.parts);
+}, 30_000);
+
+it.each(['merge','arrange'])('keeps an ancestor %s closed while preserving the member and its ownership context', async kind => {
+  const app = await createTestApp(), who = await actor(app);
+  const [focus, frame, ...siblings] = await seed(app, who.session.user.id, [
+    [body('当前正文')], [body('所属组织'), relation(kind,{})],
+    ...Array.from({length:601}, (_,n) => [body(`另一成员 ${n}`)]),
+  ]);
+  const [join] = await seed(app, who.session.user.id, [[relation('member-of', {member:[{messageId:focus!.id}],parent:[{messageId:frame!.id}]})]]);
+  await seed(app,who.session.user.id,[[relation('reference',{source:[{messageId:frame!.id}],target:[{messageId:siblings[0]!.id}]})]]);
+  await app.store.transaction(async () => {
+    const tx = new Mutation(app.store);
+    focus!.parts.push({...relation('member-of',{parent:[{messageId:frame!.id}]}),id:'placement'});
+    await tx.put(focus!); await tx.commit();
+    // Legacy placements may name the parent itself as the membership source.
+    for (const member of [focus!, ...siblings]) await app.store.db.prepare('INSERT INTO memberships("memberId","parentId","sourceId") VALUES($1,$2,$3)').run(member.id,frame!.id,member === focus && kind === 'merge' ? join!.id : frame!.id);
+  });
+  const result = await page(who,{focusId:focus!.id});
+  expect(new Set(result.messages.map(message => message.id))).toEqual(new Set([focus!.id,frame!.id,join!.id]));
+  expect(result.discussion!.memberCounts[frame!.id]).toEqual({direct:602,total:602});
+}, 30_000);
+
+it('keeps referenced discussions closed and opens their own references only when selected', async () => {
+  const app = await createTestApp(), who = await actor(app);
+  const [category, ...bodies] = await seed(app, who.session.user.id, [
+    [body('当前分类'), relation('classify',{})], ...Array.from({length:45}, (_,n) => [body(`引用链 ${n}`)]),
+  ]);
+  const links = await seed(app, who.session.user.id, bodies.slice(0,-1).map((source,index) => [
+    relation('reference',{source:[{messageId:source.id}],target:[{messageId:bodies[index+1]!.id}]}),
+  ]));
+  await app.store.transaction(async()=>{
+    await app.store.db.prepare('INSERT INTO memberships("memberId","parentId","sourceId") VALUES($1,$2,$2)').run(bodies[0]!.id,category!.id);
+    for(const message of bodies) await recordStance(app.store,message,{target:{messageId:message.id},side:'pro'});
+  });
+  const result = await page(who,{focusId:category!.id});
+  expect(new Set(result.messages.map(message => message.id))).toEqual(new Set([category!.id,bodies[0]!.id,bodies[1]!.id,links[0]!.id]));
+  expect(new Set(result.discussion!.expandedIds)).toEqual(new Set([category!.id,bodies[0]!.id]));
+  const expanded = await page(who,{focusId:category!.id,extraIds:[bodies[1]!.id]});
+  expect(new Set(expanded.messages.map(message => message.id))).toEqual(new Set([category!.id,...bodies.slice(0,3).map(message=>message.id),...links.slice(0,2).map(message=>message.id)]));
+  expect(expanded.discussion!.expandedIds).toContain(bodies[1]!.id);
+});
+
+it('pages direct replies without treating placement or review context as discussion links', async () => {
+  const app = await createTestApp(), who = await actor(app);
+  const [focus, parent, auditTrigger] = await seed(app,who.session.user.id,[[body('正文')],[body('父级'),relation('merge',{})],[body('审核触发')]]);
+  const replies = await seed(app,who.session.user.id,Array.from({length:45},(_,index)=>[
+    body(`回复 ${index}`),relation('reply',{target:[{messageId:focus!.id}]}),
+  ]));
+  const [reviewReply] = await seed(app,who.session.user.id,[[
+    body('审核区讨论'),{...relation('review-context',{target:[{messageId:focus!.id}]}),id:'context'},
+    relation('reply',{target:[{messageId:auditTrigger!.id}]}),
+  ]]);
+  await app.store.transaction(async()=>{
+    const tx=new Mutation(app.store);
+    focus!.parts.push({...relation('member-of',{parent:[{messageId:parent!.id}]}),id:'placement'});
+    await tx.put(focus!);await tx.commit();
+    await app.store.db.prepare('INSERT INTO memberships("memberId","parentId","sourceId") VALUES($1,$2,$2)').run(focus!.id,parent!.id);
+  });
+  const seen=new Set<string>();let cursor:string|undefined;
+  for(const size of [20,20,5]){
+    const result=await page(who,{focusId:focus!.id,cursor});
+    expect(result.discussion!.pageIds).toHaveLength(size);
+    expect(new Set(result.messages.map(message=>message.id))).toEqual(new Set([focus!.id,parent!.id,...result.discussion!.pageIds]));
+    for(const id of result.discussion!.pageIds){expect(seen.has(id)).toBe(false);seen.add(id);}
+    cursor=result.discussion!.nextCursor??undefined;
+  }
+  expect(cursor).toBeUndefined();expect(seen).toEqual(new Set(replies.map(message=>message.id)));
+  const selected=await page(who,{focusId:reviewReply!.id});
+  expect(selected.messages.map(message=>message.id)).toEqual(expect.arrayContaining([reviewReply!.id,auditTrigger!.id,focus!.id]));
+});
+
+it('preserves complete decisions for corrections, annotations and edited membership history', async () => {
+  const app=await createTestApp(),who=await actor(app);
+  const [focus,firstParent,nextParent,reason,unrelated,editedTarget]=await seed(app,who.session.user.id,[
+    [body('原文')],[body('原归属'),relation('classify',{})],[body('候选归属'),relation('merge',{})],
+    [body('注释依据')],[body('修改后的成员')],[body('修改后的表态目标')],
+  ]);
+  const [correction,annotation,originalJoin,editedJoin]=await seed(app,who.session.user.id,[
+    [body('更正正文'),relation('correct',{target:[{messageId:focus!.id}]})],
+    [body('注释'),relation('annotation',{source:[{messageId:reason!.id}],target:[{messageId:focus!.id}]})],
+    [relation('member-of',{member:[{messageId:focus!.id}],parent:[{messageId:firstParent!.id}]})],
+    // Its raw target has changed, but the original executed history still
+    // competes for focus. It must be found through the membership index.
+    [relation('member-of',{member:[{messageId:unrelated!.id}],parent:[{messageId:nextParent!.id}]})],
+  ]);
+  const stances=await seed(app,who.session.user.id,[
+    [relation('disagree',{target:[{messageId:correction!.id}]})],
+    [relation('disagree',{target:[{messageId:annotation!.id}]})],
+    [relation('disagree',{target:[{messageId:nextParent!.id}]})],
+  ]);
+  const [counter]=await seed(app,who.session.user.id,[[relation('disagree',{target:[{messageId:stances[0]!.id}]})]]);
+  const [editedStance]=await seed(app,who.session.user.id,[[relation('agree',{target:[{messageId:editedTarget!.id}]})]]);
+  await app.store.transaction(async()=>{
+    const tx=new Mutation(app.store);
+    for(const [index,join] of [originalJoin!,editedJoin!].entries()){
+      const history={id:join.id,memberId:focus!.id,parentId:index?nextParent!.id:firstParent!.id,
+        previousId:index?originalJoin!.id:null,previousParentId:index?firstParent!.id:null,order:index+1,
+        sourcePartId:'relation',bindingId:((originalJoin!.parts[0] as Extract<Part,{type:'relation'}>).roles.member![0]!).id,sourceRevision:1};
+      join.parts.push({id:'membership-history',type:'data',value:{membershipHistory:history}});
+      await tx.put(join);
+      await app.store.db.prepare('INSERT INTO membership_actions(id,body,disabled) VALUES($1,$2,$3)').run(join.id,JSON.stringify(history),!!index);
+    }
+    await tx.commit();
+    const target={messageId:correction!.id,revision:1};
+    await app.store.db.prepare('INSERT INTO execution_stances("sourceId",revision,"partId",target,side) VALUES($1,1,$2,$3,$4)')
+      .run(editedStance!.id,'relation',JSON.stringify(target),'pro');
+    await recordStance(app.store,editedStance!,{target,side:'pro'});
+    await app.store.db.prepare('INSERT INTO memberships("memberId","parentId","sourceId") VALUES($1,$2,$3)').run(focus!.id,firstParent!.id,originalJoin!.id);
+  });
+  const window=await page(who,{focusId:focus!.id});
+  expect(window.messages.map(message=>message.id)).toEqual(expect.arrayContaining([focus,firstParent,nextParent,reason,correction,annotation,originalJoin,editedJoin,...stances,counter,editedStance].map(message=>message!.id)));
+  const fullViews=await app.store.read(async()=>viewsFor(app.store,(await app.store.db.prepare('SELECT body FROM messages').all()).map(row=>JSON.parse(String(row.body)))));
+  const fullRelations=fullViews.filter(isRelationView);
+  const full=convertMessagesToDemoModel(fullViews,fullRelations),scoped=convertMessagesToDemoModel(window.messages,window.relations);
+  for(const username of [null,who.session.user.name]){
+    expect(computeEffectiveSuppressedRelIds(scoped.edges,scoped.messages,username)).toEqual(computeEffectiveSuppressedRelIds(full.edges,full.messages,username));
+    expect(computeCorrectionVersions(scoped.messages,scoped.edges,new Set(),username).get(focus!.id))
+      .toEqual(computeCorrectionVersions(full.messages,full.edges,new Set(),username).get(focus!.id));
+    expect(computeCorrectionVersions(scoped.messages,scoped.edges,new Set(),username).get(focus!.id)?.versions.map(version=>version.correctionId)).toEqual([correction!.id]);
+    const scopedEffect=deriveContainerEffect({...scoped,relations:window.relations,username});
+    const fullEffect=deriveContainerEffect({...full,relations:fullRelations,username});
+    expect(scopedEffect.joinByTarget.get(focus!.id)).toBe(fullEffect.joinByTarget.get(focus!.id));
+    expect(scopedEffect.joinByTarget.get(focus!.id)).toBe(originalJoin!.id);
+    expect(scopedEffect.effectiveJoinIds).toEqual(fullEffect.effectiveJoinIds);
+  }
+});
+
+it('finishes a necessary semantic chain beyond forty waves without truncation', async () => {
+  const app = await createTestApp(), who = await actor(app);
+  const messages = await app.store.transaction(async () => {
+    const tx = new Mutation(app.store), result = [await tx.create(who.session.user.id,[body('原文')])];
+    for(let index=0;index<45;index++) result.push(await tx.create(who.session.user.id,[relation('disagree',{target:[{messageId:result.at(-1)!.id}]})]));
+    await tx.commit(); return result;
+  });
+  const result = await page(who,{focusId:messages[0]!.id});
+  expect(new Set(result.messages.map(message=>message.id))).toEqual(new Set(messages.map(message=>message.id)));
+});
 
 it('loads references owned by paged category members without opening other members or incoming discussions', async () => {
   const app = await createTestApp(), who = await actor(app);

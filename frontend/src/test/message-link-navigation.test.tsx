@@ -3,8 +3,23 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { BrowserRouter, HashRouter } from 'react-router-dom';
 import { useMessageLinkNavigation } from '../hooks/useMessageLinkNavigation';
 import { messageNavigationUrl } from '../utils/messageLink';
+import { fullWorkbenchPath } from '../utils/messageRoutes';
 
 afterEach(() => { cleanup(); window.history.replaceState(null, '', '/'); });
+
+it.each(['/messages', '/messages/category'])('preserves the destination and filters when opening the full workbench from %s', pathname => {
+  const location = { pathname, search: '?msg=original&locate=1&view=list&sender=%E7%94%B2', hash: '' };
+  const route = new URL(fullWorkbenchPath(location, '消息:一 & 二'), 'https://example.com');
+  expect(route.pathname).toBe(pathname);
+  expect(Object.fromEntries(route.searchParams)).toEqual({ msg: '消息:一 & 二', locate: '1', view: 'list', sender: '甲', catalog: 'full' });
+  expect(new URL(fullWorkbenchPath(location), route).searchParams.get('msg')).toBe('original');
+});
+
+it('keeps the linked member when the oversized snapshot is focused on its route category', () => {
+  const route = new URL(fullWorkbenchPath({ pathname: '/messages/category', search: '?msg=member&locate=1' }, 'category'), 'https://example.com');
+  expect(route.pathname).toBe('/messages/category');
+  expect(Object.fromEntries(route.searchParams)).toEqual({ msg: 'member', locate: '1', catalog: 'full' });
+});
 
 it.each(['https://example.com/messages?sender=甲&locate=1', 'file:///app/index.html#/messages?sender=甲&locate=1'])('keeps the route and other parameters when entering and leaving a category: %s', address => {
   const entered = new URL(messageNavigationUrl(address, '分类:一 & 二'));

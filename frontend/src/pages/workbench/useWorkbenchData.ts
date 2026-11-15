@@ -26,6 +26,7 @@ import { createScopedProjectionCache } from '../../utils/scopedProjectionCache';
 import { hydrateOnlineStructure, onlineSourceSnapshot, onlineStructuralSource } from '../../utils/onlineStructuralSource';
 import { startWorkbenchTiming } from '../../utils/workbenchTiming';
 import type { DiscussionClient, DiscussionPageState } from '../../data/discussionClient';
+import { fullWorkbenchPath } from '../../utils/messageRoutes';
 
 export const VIEWER_USERNAME_KEY = 'export-viewer-username';
 
@@ -122,6 +123,8 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
   const location = useLocation();
   const locationRef = useRef(location);
   locationRef.current = location;
+  const userIdRef = useRef(user?.id);
+  userIdRef.current = user?.id;
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const isViewerRoute = location.pathname === '/viewer';
@@ -413,6 +416,24 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
         if (cancelled) return;
         const client = createDiscussionClient(scopeMessageId === 'root' ? entryFocus : scopeMessageId, {
           username: user.username, load: api.getDiscussionSnapshot, baseClassificationId: scopeMessageId === 'root' ? undefined : scopeMessageId,
+          async openFull(query, scope) {
+            const pathname = locationRef.current.pathname;
+            const destination = fullWorkbenchPath(locationRef.current, query.focusId);
+            const targetId = new URL(destination, 'https://gonglun.invalid').searchParams.get('msg')!;
+            viewerScope.current = { ...scope, extraIds: [...new Set([...scope.extraIds ?? [], query.focusId])] };
+            setLoading(true);
+            setLoadError(null);
+            // Register before navigating: the replacement source releases this
+            // waiter only after its complete projection has committed.
+            const ready = new Promise<void>((resolve, reject) => { sourceWaiters.current.add({ resolve, reject }); });
+            navigate(destination, { replace: true });
+            await ready;
+            const params = new URLSearchParams(locationRef.current.search);
+            if (userIdRef.current !== user.id || locationRef.current.pathname !== pathname
+              || params.get('catalog') !== 'full' || params.get('msg') !== targetId)
+              throw new DOMException('工作台已切换', 'AbortError');
+            await ensureMessages([targetId, ...query.extraIds ?? []]);
+          },
           status: status => { if (!cancelled) { setDiscussionPage(status); if ((!hasPage || status.restricted) && status.error) { setLoadError(status.error); setLoading(false); } } },
           publish({ snapshot, projected, index, scope }) {
             if (cancelled) return;

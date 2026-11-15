@@ -16,6 +16,7 @@ export function createDiscussionClient(initialFocus: string, options: {
   publish(value: { snapshot: WorkbenchSnapshot; projected: ReturnType<typeof projectWorkbenchSnapshot>;
     index: ReturnType<typeof createZhihuStructuralViewer>; scope: ZhihuViewerScope }): void;
   status(value: DiscussionPageState): void;
+  openFull?(query: DiscussionQuery, scope: ZhihuViewerScope): Promise<void>;
   username: string;
   baseClassificationId?: string;
 }) {
@@ -44,8 +45,9 @@ export function createDiscussionClient(initialFocus: string, options: {
     const sameScope = nextPageKey === pageKey;
     if (nextKey === key && pending) return pending;
     if (!force && nextKey === publishedKey && nextKey === key && snapshot) { activeScope = scope; return; }
+    const expandedIds = new Set(snapshot?.discussion?.expandedIds ?? snapshot?.messages.map(message=>message.id));
     const loadedContext = sameScope && snapshot && [...query.extraIds ?? [], ...query.recordIds ?? []]
-      .every(id => snapshot!.messages.some(message => message.id === id));
+      .every(id => expandedIds.has(id));
     // Selection and its subsequent background refresh share an in-flight append.
     if (loadedContext && pending && requestingScopeKey === nextPageKey) { activeScope = scope; return pending; }
     if (!force && loadedContext) {
@@ -129,6 +131,12 @@ export function createDiscussionClient(initialFocus: string, options: {
         report(false);
       } catch (error) {
         if (stopped || signal.aborted || ticket !== generation) return;
+        if ((error as { code?: string } | null)?.code === 'DISCUSSION_TOO_LARGE' && options.openFull) {
+          // The complete catalog owns the next publication. Keep callers waiting
+          // for it so a pending jump cannot mistake the old page for its result.
+          await options.openFull(query, activeScope);
+          return;
+        }
         const restricted = [401,403].includes((error as {status:number}).status);
         // A restored permission must publish even if its body matches the last
         // readable version, so the view can clear its access error.

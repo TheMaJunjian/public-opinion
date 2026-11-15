@@ -126,7 +126,8 @@ export async function contentView(store: Store, message: Message, context?: View
     const label = relation ? labels[relation.relation] ?? relationViewType(message) ?? relation.relation : '消息';
     // Presence only; no quoted target text or allocation-user descriptions.
     if (context?.structureOnly) return target || relation?.relation === 'follow' || relation?.relation === 'block' || label.trim() ? 'x' : '';
-    const targetMessage = target ? (await cachedMessage(store, target.messageId, target.revision, context)) : undefined;
+    const targetMessage = target && (!context?.boundedIds || context.boundedIds.has(target.messageId))
+        ? (await cachedMessage(store, target.messageId, target.revision, context)) : undefined;
     if (relation?.relation === 'follow' || relation?.relation === 'block') return `${relation.relation === 'follow' ? '关注' : '拉黑'}－${relation.reason === 'YES' ? '是' : '否'}${targetMessage ? `：「${textOf(targetMessage).slice(0,120)}」` : ''}`;
     return `${label}${targetMessage ? `：「${textOf(targetMessage).slice(0, 120) || relationViewType(targetMessage) || '消息'}」` : ''}`;
 }
@@ -135,8 +136,9 @@ export async function messageView(store: Store, message: Message, parent?: strin
     const sources = relation?.roles.source ?? relation?.roles.reason ?? (relation?.relation==='member-of'?relation.roles.parent:undefined) ?? [];
     let references = (relation?.roles.target ?? relation?.roles.members ?? relation?.roles.member ?? []).map(b => b.reference);
     // A discussion window keeps native parts intact, but only materializes
-    // organization edges belonging to this page. Unopened members stay remote.
-    if (context?.boundedIds && relation && ['classify', 'summary', 'merge', 'arrange'].includes(relation.relation))
+    // edges belonging to this page. A context-only body's own references stay
+    // remote just like unopened organization members; native parts retain them.
+    if (context?.boundedIds)
         references = references.filter(ref => context.boundedIds!.has(ref.messageId));
     const declaredTargetRefs = references;
     if (relation && ['classify', 'summary', 'merge', 'arrange'].includes(relation.relation)) {
@@ -232,7 +234,7 @@ export async function viewsFor(store: Store, messages: Message[], parent?: strin
         const bindings = structureOnly ? relation?.roles.target ?? relation?.roles.members ?? relation?.roles.member ?? []
             : relations(message).flatMap(part => Object.values(part.roles).flat());
         for (const binding of bindings) {
-            if (boundedIds && relation && ['classify', 'summary', 'merge', 'arrange'].includes(relation.relation) && !boundedIds.has(binding.reference.messageId)) continue;
+            if (boundedIds && !boundedIds.has(binding.reference.messageId)) continue;
             refs.set(`${binding.reference.messageId}:${binding.reference.revision ?? 'current'}`, binding.reference);
         }
     }

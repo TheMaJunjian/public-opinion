@@ -6,6 +6,7 @@ type Marker = { owner: string; id: string; index: number };
 type Entry<T> = { id: string; snapshot?: T; handledUrl?: string };
 type Session<T> = {
   key: unknown; owner: string; entries: Entry<T>[]; index: number;
+  hasRouteBack: boolean;
   recorded: boolean; restoring: boolean; moving: boolean; branching: boolean; branchUrl?: string; urlChanged?: boolean;
 };
 
@@ -40,6 +41,7 @@ export function useBrowserBrowsingHistory<T>(key: unknown, capture: () => T, res
   const [, update] = useState(0);
   if (enabled && (!session.current || session.current.key !== key)) {
     session.current = { key, owner: crypto.randomUUID(), entries: [{ id: crypto.randomUUID() }], index: 0,
+      hasRouteBack: Number.isSafeInteger(window.history.state?.idx) && window.history.state.idx > 0,
       recorded: false, restoring: false, moving: false, branching: false };
   }
 
@@ -49,7 +51,10 @@ export function useBrowserBrowsingHistory<T>(key: unknown, capture: () => T, res
     const pop = (event: PopStateEvent) => {
       const destination = marker(event.state);
       if (!destination || destination.owner !== current.owner
-        || current.entries[destination.index]?.id !== destination.id) return;
+        || current.entries[destination.index]?.id !== destination.id) {
+        if (current.moving) { current.moving = false; update(value => value + 1); }
+        return;
+      }
       // These entries belong to the same mounted route. Preserve its live route
       // payload before the router reads history.state: native traversal clones
       // it, which must not be mistaken for opening another local file.
@@ -133,8 +138,12 @@ export function useBrowserBrowsingHistory<T>(key: unknown, capture: () => T, res
 
   const move = useCallback((delta: number) => {
     const current = session.current;
-    if (!enabled || !current || current.moving || !current.entries[current.index + delta]
+    if (!enabled || !current || current.moving
       || window.history.state?.[ABOUT_HISTORY_KEY]) return;
+    // The first workbench view may have been opened from the recommendation
+    // page. Its router entry is a real Back destination, outside our snapshots.
+    const routeBack = delta === -1 && current.index === 0 && current.hasRouteBack;
+    if (!current.entries[current.index + delta] && !routeBack) return;
     anchorEntry(current);
     if (!current.restoring) current.entries[current.index].snapshot = callbacks.current.capture();
     current.moving = true;
@@ -151,7 +160,7 @@ export function useBrowserBrowsingHistory<T>(key: unknown, capture: () => T, res
   }, [enabled]);
   const current = enabled ? session.current : undefined;
   return { record, back, forward, handlesCurrentLocation,
-    canGoBack: !!current && !current.moving && current.index > 0,
+    canGoBack: !!current && !current.moving && (current.index > 0 || current.hasRouteBack),
     canGoForward: !!current && !current.moving && current.index < current.entries.length - 1,
     backSnapshot: current?.entries[current.index - 1]?.snapshot,
     forwardSnapshot: current?.entries[current.index + 1]?.snapshot };

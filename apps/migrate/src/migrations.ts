@@ -130,7 +130,10 @@ export function migrationsFor(store: Store): Migration[] {
   {version:42,name:'review-guarantees-as-sided-self-stakes',up:()=>migrateReviewSelfStakes(store).then(()=>{})},
   {version:43,name:'stake-weighted-review-arbitration',up:()=>migrateStakeWeightedReview(store)},
   {version:44,name:'ledger-operation-groups',up:()=>migrateLedgerOperations(store)},
-  {version:45,name:'lightweight-discovery-feed',up:()=>migrateDiscoveryFeed(store)}];
+  {version:45,name:'lightweight-discovery-feed',up:()=>migrateDiscoveryFeed(store)},
+  // Early v45 databases were stamped before the correction index was added.
+  // Rebuild derived feed data without replaying messages or resetting preferences.
+  {version:46,name:'complete-discovery-feed-index',up:()=>migrateDiscoveryFeed(store)}];
 }
 
 /** Runs under the cross-process write lock. Failed upgrades roll back together. */

@@ -1,4 +1,5 @@
 import type { DemoMessage, UnitSelection } from '../utils/modelBridge';
+import DiscussionReplies from './DiscussionReplies';
 import { isContentKind } from '../utils/modelBridge';
 import HomeFilterBadge from './HomeFilterBadge';
 import { getPresentationSpec } from '../types';
@@ -287,6 +288,7 @@ export default function MessageCard({
       {/* Overlays */}
       {relatedMessages}
       {overlays}
+      <DiscussionReplies messageId={msg.id} />
     </div>
   );
 }

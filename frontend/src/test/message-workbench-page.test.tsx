@@ -394,6 +394,153 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     } finally { view.unmount(); viewerRoute.query = ''; graphRendering.actual = false; geometry.mockRestore(); }
   });
 
+  it('keeps a linked message visible after later content changes its layout', async () => {
+    mockApi.getScope.mockResolvedValue({ messageId: 'classification-1', title: '推荐讨论' });
+    mockApi.getMessages.mockResolvedValue({ data: [makeMessage('linked-target', '推荐的消息')] });
+    mockApi.getRelations.mockResolvedValue({ data: [] });
+    viewerRoute.query = 'msg=linked-target&locate=1'; graphRendering.actual = true;
+    let y = 220;
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.hasAttribute('data-workbench-left-panel')) return new DOMRect(0, 120, 600, 400);
+      if (this.dataset.msgid === 'linked-target') {
+        const panel = this.closest<HTMLElement>('[data-workbench-left-panel]');
+        return new DOMRect(20, y - (panel?.scrollTop ?? 0), 300, 100);
+      }
+      return new DOMRect(0, 120, 600, 400);
+    });
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitFor(() => expect(document.querySelector('[data-message-jump-target="linked-target"]')).not.toBeNull());
+      await waitForWorkbenchIdle();
+      await waitFor(() => expect(document.querySelector('[data-message-jump-target="linked-target"]')).toBeNull());
+      const panel = document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      Object.defineProperties(panel, { clientHeight: {configurable:true,value:400}, scrollHeight: {configurable:true,value:8000} });
+      const card = panel.querySelector<HTMLElement>('[data-msgid="linked-target"]')!;
+      const originalTop = card.getBoundingClientRect().top;
+      y += 1200; card.style.marginTop = '1200px';
+      await waitFor(() => expect(card.getBoundingClientRect().top).toBe(originalTop));
+      expect(panel.scrollTop).toBe(1200);
+      panel.scrollTop += 50; fireEvent.scroll(panel);
+      y += 300; card.style.marginTop = '1500px';
+      await waitFor(() => expect(card.getBoundingClientRect().top).toBe(originalTop - 50));
+    } finally { view.unmount(); viewerRoute.query = ''; graphRendering.actual = false; geometry.mockRestore(); }
+  });
+
+  it('loads more members from a direct category route', async () => {
+    const original=mockApi.getDiscussionSnapshot.getMockImplementation()!;
+    const first=makeMessage('route-first','路由分类第一批'),second=makeMessage('route-second','路由分类下一批');
+    const response=(more=false)=>{
+      const relation:Relation={...makeRelation(),id:'route-category',relationType:'CLASSIFY',sourceMessageId:null,
+        targetRefs:[{kind:'message',messageId:more?second.id:first.id}],payload:{title:'路由分类'}};
+      const category={...makeMessage(relation.id,'路由分类'),kind:'RELATION',relationType:'CLASSIFY',targetRefs:relation.targetRefs,relationPayload:relation.payload};
+      return {regionId:'route-test',sequence:1,scope:{messageId:null,title:'当前讨论'},
+        messages:[category,more?second:first],relations:[relation],users:[makeUser()],stakes:{},tagCounts:{},attentionUsers:{},
+        discussion:{focusId:category.id,pageIds:[more?second.id:first.id],cursor:more?'older':'head',nextCursor:more?null:'older',memberCounts:{[category.id]:{direct:2,total:2}}}};
+    };
+    mockApi.getDiscussionSnapshot.mockImplementation(async(query:{cursor?:string})=>response(query.cursor==='older'));
+    const previousUrl=window.location.href;
+    window.history.replaceState(null,'','/messages/route-category');viewerRoute.nativeRouter=true;graphRendering.actual=true;
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    const view=render(<BrowserRouter><Routes><Route path="/messages/:messageId" element={<MessageWorkbenchPage/>}/></Routes></BrowserRouter>);
+    try{
+      await waitForWorkbenchIdle();
+      fireEvent.click(await screen.findByRole('button',{name:'加载更多消息'}));
+      await screen.findByText('消息已全部加载');
+      fireEvent.doubleClick(document.querySelector<HTMLElement>('[data-msgid="route-category"]:not([data-rel-overlay])')!);
+      await waitFor(()=>expect(messageCanvas().getByText('路由分类下一批')).toBeInTheDocument());
+      expect(messageCanvas().getByText('路由分类第一批')).toBeInTheDocument();
+    }finally{view.unmount();mockApi.getDiscussionSnapshot.mockImplementation(original);viewerRoute.nativeRouter=false;window.history.replaceState(null,'',previousUrl);graphRendering.actual=false;geometry.mockRestore();}
+  });
+
+  it('waits for the root scope before highlighting an exited category, then appends root messages below the canvas', async () => {
+    const original = mockApi.getDiscussionSnapshot.getMockImplementation()!;
+    const focus=makeMessage('exit-child','分类内消息'),first=makeMessage('root-first','根目录第一批'),second=makeMessage('root-second','根目录下一批');
+    const relation:Relation={...makeRelation(),id:'exit-category',relationType:'CLASSIFY',sourceMessageId:null,
+      targetRefs:[{kind:'message',messageId:focus.id}],payload:{title:'退出测试分类'}};
+    const category={...makeMessage(relation.id,'退出测试分类'),kind:'RELATION',relationType:'CLASSIFY',targetRefs:relation.targetRefs,relationPayload:relation.payload};
+    const response=(root=false,more=false)=>({regionId:'exit-test',sequence:1,scope:{messageId:null,title:'当前讨论'},
+      messages:[focus,category,...root?[more?second:first]:[]],relations:[relation],users:[makeUser()],stakes:{},tagCounts:{},attentionUsers:{},
+      discussion:{focusId:focus.id,pageIds:root?[more?second.id:first.id]:[focus.id],cursor:more?'older':'head',nextCursor:root&&!more?'older':null,memberCounts:{[category.id]:{direct:1,total:1}}}});
+    let release!:(value:ReturnType<typeof response>)=>void,holdRoot=true;
+    mockApi.getDiscussionSnapshot.mockImplementation(async (query:{classificationId?:string|null;cursor?:string})=>{
+      if(query.classificationId==='root'&&holdRoot){holdRoot=false;return new Promise(resolve=>{release=resolve;});}
+      return response(query.classificationId==='root',query.cursor==='older');
+    });
+    const previousUrl=window.location.href;
+    window.history.replaceState(null,'',`/messages?msg=${focus.id}&locate=1`);
+    viewerRoute.nativeRouter=true;graphRendering.actual=true;
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    const view=render(<BrowserRouter><Routes><Route path="/messages" element={<MessageWorkbenchPage/>}/></Routes></BrowserRouter>);
+    try{
+      await screen.findByRole('button',{name:'退出分类'});
+      await waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      await waitFor(()=>expect(document.querySelector('[data-message-jump-target]')).toBeNull());
+      const right=screen.getByRole('region',{name:'发言与关系操作'}),left=document.querySelector('[data-workbench-left-panel]')!;
+      expect(right.contains(screen.getByRole('button',{name:'退出分类'}))).toBe(false);
+      expect(document.querySelector('[data-workbench-view-toolbar] .workbench-scope-header')).not.toBeNull();
+      fireEvent.click(screen.getByRole('button',{name:'讨论状态'}));
+      expect(screen.getByRole('dialog',{name:'讨论状态'})).toHaveTextContent('已加载 1 条关联消息');
+      expect(right.contains(screen.getByRole('region',{name:'当前讨论范围'}))).toBe(false);
+      fireEvent.keyDown(screen.getByRole('dialog',{name:'讨论状态'}),{key:'Escape'});
+      expect(screen.getByRole('button',{name:'讨论状态'})).toHaveFocus();
+      fireEvent.click(screen.getByRole('button',{name:'退出分类'}));
+      await waitFor(()=>expect(release).toBeTypeOf('function'));
+      expect(document.querySelector('[data-message-jump-target="exit-category"]')).toBeNull();
+      await act(async()=>{release(response(true));});
+      await waitFor(()=>expect(document.querySelector('[data-message-jump-target="exit-category"]')).not.toBeNull());
+      await waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      const more=screen.getByRole('button',{name:'加载更多消息'});
+      expect(left.contains(more)).toBe(true);
+      fireEvent.click(more);
+      await waitFor(()=>expect(messageCanvas().getByText('根目录下一批')).toBeInTheDocument());
+      expect(messageCanvas().getByText('根目录第一批')).toBeInTheDocument();
+      expect(messageCanvas().getByText('消息已全部加载')).toBeInTheDocument();
+    }finally{view.unmount();mockApi.getDiscussionSnapshot.mockImplementation(original);viewerRoute.nativeRouter=false;window.history.replaceState(null,'',previousUrl);graphRendering.actual=false;geometry.mockRestore();}
+  });
+
+  it.each(['graph','list'])('appends replies below their original message in %s view and preserves its position', async mode => {
+    const original = mockApi.getDiscussionSnapshot.getMockImplementation()!;
+    const focus=makeMessage('reply-origin','原消息'),first=makeMessage('reply-first','已加载的回复'),second=makeMessage('reply-second','新加载的回复');
+    const response=(more:boolean)=>({regionId:'append-test',sequence:1,scope:{messageId:null,title:'当前讨论'},
+      messages:[focus,more?second:first],relations:[],users:[makeUser()],stakes:{},tagCounts:{},attentionUsers:{},
+      discussion:{focusId:focus.id,pageIds:[more?second.id:first.id],cursor:more?'older':'head',nextCursor:more?null:'older',memberCounts:{}}});
+    mockApi.getDiscussionSnapshot.mockImplementation(async (query:{cursor?:string})=>response(query.cursor==='older'));
+    const previousUrl=window.location.href;
+    window.history.replaceState(null,'',`/messages?msg=${focus.id}&locate=1&view=${mode}`);
+    viewerRoute.nativeRouter=true;graphRendering.actual=true;
+    let x=120,y=220;
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockImplementation(function(this:HTMLElement){
+      if(this.hasAttribute('data-workbench-left-panel'))return new DOMRect(0,100,600,400);
+      if(this.dataset.msgid===focus.id){const panel=this.closest<HTMLElement>('[data-workbench-left-panel]');return new DOMRect(x-(panel?.scrollLeft??0),y-(panel?.scrollTop??0),300,100);}
+      return new DOMRect(0,100,600,400);
+    });
+    const view=render(<BrowserRouter><Routes><Route path="/messages" element={<MessageWorkbenchPage/>}/></Routes></BrowserRouter>);
+    try{
+      await screen.findByRole('button',{name:'加载更多回复'});
+      await waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      await waitFor(()=>expect(document.querySelector('[data-message-jump-target]')).toBeNull());
+      const panel=document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      Object.defineProperties(panel,{clientHeight:{configurable:true,value:400},clientWidth:{configurable:true,value:600},scrollHeight:{configurable:true,value:8000}});
+      const card=panel.querySelector<HTMLElement>(`[data-msgid="${focus.id}"]`)!;
+      expect(card.querySelector('[data-discussion-replies]')).not.toBeNull();
+      expect(screen.queryByRole('button',{name:'下一页'})).not.toBeInTheDocument();
+      const before=card.getBoundingClientRect();
+      let finish!:(value:ReturnType<typeof response>)=>void;
+      mockApi.getDiscussionSnapshot.mockImplementation(async (query:{cursor?:string})=>query.cursor==='older'?new Promise(resolve=>{finish=resolve;}):response(false));
+      fireEvent.click(screen.getByRole('button',{name:'加载更多回复'}));
+      await waitFor(()=>expect(finish).toBeTypeOf('function'));
+      expect(screen.getByRole('button',{name:'正在加载回复…'})).toBeDisabled();
+      await act(async()=>{x+=180;y+=900;finish(response(true));});
+      await waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      expect(messageCanvas().getByText('已加载的回复')).toBeInTheDocument();
+      expect(messageCanvas().getByText('新加载的回复')).toBeInTheDocument();
+      await waitFor(()=>{expect(card.getBoundingClientRect().top).toBe(before.top);expect(card.getBoundingClientRect().left).toBe(before.left);});
+      expect(messageCanvas().getByText('回复已全部加载')).toBeInTheDocument();
+      y+=150;card.style.marginTop='150px';
+      await waitFor(()=>expect(card.getBoundingClientRect().top).toBe(before.top));
+    }finally{view.unmount();mockApi.getDiscussionSnapshot.mockImplementation(original);viewerRoute.nativeRouter=false;window.history.replaceState(null,'',previousUrl);graphRendering.actual=false;geometry.mockRestore();}
+  });
+
   it('loads an initially absent linked message before entering its category', async () => {
     const original = mockApi.getWorkbenchSnapshot.getMockImplementation()!;
     const child = makeMessage('cold-child', '链接指定的分类内消息');
@@ -1031,7 +1178,11 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     const full = await original({ parent: 'classification-1' });
     mockApi.getWorkbenchSnapshot.mockImplementation(async () => worker ? { ...full, windowed: true, messages: [], relations: [] } : full);
     graphRendering.actual = true;
-    const geometry = trace ? vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400)) : undefined;
+    const geometry = trace ? vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this:HTMLElement){
+      // Scrolling moves card bounds while the viewport itself stays fixed.
+      const panel=this.hasAttribute('data-workbench-left-panel')?null:this.closest<HTMLElement>('[data-workbench-left-panel]');
+      return new DOMRect(-(panel?.scrollLeft??0),120-(panel?.scrollTop??0),600,400);
+    }) : undefined;
     const view = render(<><style>{readingPresentationCss}</style><MessageWorkbenchPage /></>);
     try {
       if (worker) {
@@ -3234,6 +3385,52 @@ describe('directed reading and continuous traces',()=>{
       expect(mockApi.markReading).not.toHaveBeenCalled();
     }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;mockApi.getReadingState.mockResolvedValue({marks:[]});}
   });
+  it.each([false,true])('highlights the original trace entry after continuous reading and restores its viewport (group: %s)',async group=>{
+    const dimensions=[vi.spyOn(HTMLElement.prototype,'scrollHeight','get').mockReturnValue(5000),vi.spyOn(HTMLElement.prototype,'scrollWidth','get').mockReturnValue(3000),
+      vi.spyOn(HTMLElement.prototype,'clientHeight','get').mockReturnValue(400),vi.spyOn(HTMLElement.prototype,'clientWidth','get').mockReturnValue(600)];
+    const {view,geometry}=await setup();
+    try{
+      await waitForWorkbenchIdle();
+      const left=document.querySelector<HTMLElement>('[data-workbench-left-panel]')!,right=document.querySelector<HTMLElement>('.workbench-right-panel')!;
+      await act(async()=>latest().onMessageClick({button:0,stopPropagation:vi.fn()},'B'));
+      if(group)await act(async()=>latest().onMessageClick({button:0,stopPropagation:vi.fn()},'F'));
+      left.scrollTop=480;left.scrollLeft=90;right.scrollTop=140;
+      fireEvent.click(screen.getByRole('button',{name:'设为追溯消息'}));await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button',{name:'下一条'}));await waitForWorkbenchIdle();
+      expect(view.container.querySelector('[data-reading-current-id]')).not.toHaveAttribute('data-reading-current-id','B');
+      left.scrollTop=800;left.scrollLeft=160;right.scrollTop=260;
+      fireEvent.click(screen.getByRole('button',{name:'退出追溯'}));
+      await waitFor(()=>expect(document.querySelector('[data-message-jump-target="B"]')).not.toBeNull());
+      expect([left.scrollTop,left.scrollLeft,right.scrollTop]).toEqual([480,90,140]);
+      await waitForWorkbenchIdle();
+      expect([left.scrollTop,left.scrollLeft,right.scrollTop]).toEqual([480,90,140]);
+      expect(screen.queryByRole('button',{name:'退出追溯'})).toBeNull();
+    }finally{view.unmount();geometry.mockRestore();dimensions.forEach(spy=>spy.mockRestore());graphRendering.actual=false;mockApi.getReadingState.mockResolvedValue({marks:[]});}
+  });
+  it('highlights each trace entry when returning through nested traces after reading another message',async()=>{
+    const dimensions=[vi.spyOn(HTMLElement.prototype,'scrollHeight','get').mockReturnValue(5000),vi.spyOn(HTMLElement.prototype,'scrollWidth','get').mockReturnValue(3000),
+      vi.spyOn(HTMLElement.prototype,'clientHeight','get').mockReturnValue(400),vi.spyOn(HTMLElement.prototype,'clientWidth','get').mockReturnValue(600)];
+    const {view,geometry}=await setup();
+    try{
+      await waitForWorkbenchIdle();
+      const left=document.querySelector<HTMLElement>('[data-workbench-left-panel]')!,right=document.querySelector<HTMLElement>('.workbench-right-panel')!;
+      left.scrollTop=480;left.scrollLeft=90;right.scrollTop=140;
+      await traceB();
+      fireEvent.click(screen.getByRole('button',{name:'清空'}));
+      await act(async()=>latest().onMessageClick({button:0,stopPropagation:vi.fn()},'N'));
+      left.scrollTop=620;left.scrollLeft=40;right.scrollTop=90;
+      fireEvent.click(screen.getByRole('button',{name:'设为追溯消息'}));await waitForWorkbenchIdle();
+      await visitReading('P');
+      fireEvent.click(screen.getByRole('button',{name:'返回上一层追溯'}));
+      await waitFor(()=>expect(document.querySelector('[data-message-jump-target="N"]')).not.toBeNull());
+      expect([left.scrollTop,left.scrollLeft,right.scrollTop]).toEqual([620,40,90]);
+      expect(readingCurrentMessage('B')).toBeInTheDocument();
+      await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button',{name:'退出追溯'}));
+      await waitFor(()=>expect(document.querySelector('[data-message-jump-target="B"]')).not.toBeNull());
+      expect([left.scrollTop,left.scrollLeft,right.scrollTop]).toEqual([480,90,140]);
+    }finally{view.unmount();geometry.mockRestore();dimensions.forEach(spy=>spy.mockRestore());graphRendering.actual=false;mockApi.getReadingState.mockResolvedValue({marks:[]});}
+  });
   it('restores parent filters, direction, distance, reading order and focus after a child trace',async()=>{
     const {view,geometry}=await setup();
     try{
@@ -3809,6 +4006,61 @@ describe('MessageWorkbenchPage composer refresh', () => {
     expect(chosen).not.toBeNull();expect(within(chosen).getByTitle('真假仲裁')).toBeVisible();
     expect(screen.queryByRole('button',{name:'退出查看'})).toBeNull();
     expect(screen.getByText('当前未选择任何候选。')).toBeInTheDocument();
+  });
+
+  it.each(['records','join','correction'] as const)('highlights the entry message after leaving a %s temporary category without moving its saved viewport',async type=>{
+    const parent:Relation={...makeRelation(),id:'joined-frame',relationType:'MERGE',sourceMessageId:null,targetRefs:[],payload:{independentMemberships:true}};
+    const record:Relation={...makeRelation(),id:'temporary-record',relationType:type==='join'?'JOIN':type==='correction'?'CORRECT':'AGREE',
+      sourceMessageId:type==='join'?parent.id:null,payload:type==='correction'?{correctionBeforeContent:'第一条',correctionAfterContent:'修订后的第一条'}:undefined};
+    mockApi.getRelations.mockResolvedValue({data:type==='join'?[parent,record]:[record]});
+    const origin=type==='join'?parent.id:type==='correction'?record.id:'msg-1';
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    const dimensions=[vi.spyOn(HTMLElement.prototype,'scrollHeight','get').mockReturnValue(5000),vi.spyOn(HTMLElement.prototype,'clientHeight','get').mockReturnValue(400),
+      vi.spyOn(HTMLElement.prototype,'scrollWidth','get').mockReturnValue(3000),vi.spyOn(HTMLElement.prototype,'clientWidth','get').mockReturnValue(600)];
+    graphRendering.actual=true;
+    const view=render(<MessageWorkbenchPage/>),latest=()=>mockGraphView.mock.lastCall![0];
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      const left=document.querySelector<HTMLElement>('[data-workbench-left-panel]')!,right=document.querySelector<HTMLElement>('.workbench-right-panel')!;
+      left.scrollTop=480;left.scrollLeft=90;right.scrollTop=140;
+      await act(async()=>{
+        const event={stopPropagation:vi.fn(),clientX:20,clientY:30};
+        if(type==='join')latest().onJoinFilterClick(parent.id,'outgoing');
+        else if(type==='correction')latest().onInlineBadgeDoubleClick(event,record.id);
+        else latest().onDecorationDoubleClick(event,'msg-1','agree');
+      });
+      await waitForWorkbenchIdle();
+      const row=left.querySelector<HTMLElement>(`[data-msgid="${record.id}"]:not([data-rel-overlay])`)!;
+      expect(row).not.toBeNull();fireEvent.click(row);
+      left.scrollTop=800;left.scrollLeft=160;right.scrollTop=260;
+      fireEvent.click(screen.getByRole('button',{name:'退出临时分类'}));
+      await waitFor(()=>expect(document.querySelector(`[data-message-jump-target="${origin}"]`)).not.toBeNull());
+      expect([left.scrollTop,left.scrollLeft,right.scrollTop]).toEqual([480,90,140]);
+      expect(screen.queryByRole('button',{name:'退出临时分类'})).toBeNull();
+    }finally{view.unmount();graphRendering.actual=false;geometry.mockRestore();dimensions.forEach(spy=>spy.mockRestore());}
+  });
+
+  it('highlights each saved entry when leaving nested temporary record categories',async()=>{
+    const first:Relation={...makeRelation(),id:'first-record',relationType:'AGREE',sourceMessageId:null};
+    const second:Relation={...first,id:'nested-record',relationType:'DISAGREE',targetRefs:[{kind:'relation',relationId:first.id}]};
+    mockApi.getRelations.mockResolvedValue({data:[first,second]});
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    graphRendering.actual=true;
+    const view=render(<MessageWorkbenchPage/>),latest=()=>mockGraphView.mock.lastCall![0],event=()=>({stopPropagation:vi.fn(),clientX:20,clientY:30});
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      await act(async()=>latest().onDecorationDoubleClick(event(),'msg-1','agree'));await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button',{name:'切换为消息图'}));await waitForWorkbenchIdle();
+      await act(async()=>latest().onDecorationDoubleClick(event(),first.id,'disagree'));await waitForWorkbenchIdle();
+      expect(screen.getByText('反对记录临时分类（1）')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button',{name:'退出临时分类'}));
+      await waitFor(()=>expect(document.querySelector('[data-message-jump-target="first-record"]')).not.toBeNull());
+      expect(screen.getByText('赞同记录临时分类（1）')).toBeInTheDocument();
+      await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button',{name:'退出临时分类'}));
+      await waitFor(()=>expect(document.querySelector('[data-message-jump-target="msg-1"]')).not.toBeNull());
+      expect(screen.queryByRole('button',{name:'退出临时分类'})).toBeNull();
+    }finally{view.unmount();graphRendering.actual=false;geometry.mockRestore();}
   });
 
   it.each(['agree','disagree','recommend','tag'] as const)('opens %s records in a temporary category and restores the previous view',async type=>{

@@ -45,4 +45,5 @@ export const DATABASE_MIGRATIONS = [
   'stake-weighted-review-arbitration',
   'ledger-operation-groups',
   'lightweight-discovery-feed',
+  'complete-discovery-feed-index',
 ] as const;

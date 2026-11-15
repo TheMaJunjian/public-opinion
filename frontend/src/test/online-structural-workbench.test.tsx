@@ -1,4 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
+import { useEffect } from 'react';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { structureSnapshot, type WorkbenchSnapshot } from '@gonglun/core';
 import { useWorkbenchData } from '../pages/workbench/useWorkbenchData';
@@ -9,9 +10,9 @@ import { bindRoles, type Part } from '@gonglun/core';
 import { createZhihuStructuralViewer } from '../utils/zhihuStructuralViewer';
 import { hydrateOnlineStructure, onlineStructuralSource } from '../utils/onlineStructuralSource';
 
-const harness = vi.hoisted(() => ({ ready: null as null | ((data: CatalogData) => void), get: vi.fn(), catchUp: vi.fn(), reload: vi.fn() }));
-vi.mock('react-router-dom', () => ({ useLocation: () => ({ pathname: '/messages', key: 'normal', state: null }) }));
-vi.mock('../api', () => ({ api: { getWorkbenchSnapshot: (query: SnapshotQuery) => harness.get(query),
+const harness = vi.hoisted(() => ({ ready: null as null | ((data: CatalogData) => void), get: vi.fn(), discussion: vi.fn(), search: '', catchUp: vi.fn(), reload: vi.fn() }));
+vi.mock('react-router-dom', () => ({ useLocation: () => ({ pathname: '/messages', search: harness.search, key: 'normal', state: null }) }));
+vi.mock('../api', () => ({ api: { getWorkbenchSnapshot: (query: SnapshotQuery) => harness.get(query), getDiscussionSnapshot: harness.discussion,
   subscribeChanges: () => ({ addEventListener: vi.fn(), close: vi.fn() }) } }));
 vi.mock('../data/catalogClient', () => ({ createCatalogClient: (_user: string, _parent: string, callbacks: { onReady(data: CatalogData): void }) => {
   harness.ready = callbacks.onReady;
@@ -29,7 +30,7 @@ function fixture(): WorkbenchSnapshot {
 }
 let full: WorkbenchSnapshot;
 beforeEach(() => {
-  vi.clearAllMocks(); localStorage.clear(); harness.ready = null; full = fixture();
+  vi.clearAllMocks(); localStorage.clear(); harness.ready = null; harness.search = ''; full = fixture();
   harness.get.mockImplementation(async (query: SnapshotQuery) => {
     const ids = new Set(query.ids ?? (query.after === undefined ? ['A', 'B'] : []));
     return { ...full, windowed: true, messages: full.messages.filter(row => ids.has(row.id)), relations: full.relations.filter(row => ids.has(row.id)) };
@@ -41,6 +42,29 @@ const publish = (update?: CatalogData['update']) => {
   const index = structureSnapshot(full);
   act(() => harness.ready!({ snapshot: index, index, ...(update ? { update } : {}), projected: projectWorkbenchSnapshot({ ...index, messages: [], relations: [] }) }));
 };
+
+it('waits for the new source when a message jump coincides with switching to the full workbench', async () => {
+  harness.search = '?msg=body-A';
+  harness.discussion.mockResolvedValue({ ...full, discussion: { focusId: 'body-A', pageIds: [], nextCursor: null, memberCounts: {} } });
+  let jump: Promise<void> | undefined, outcome: 'loaded' | Error | undefined;
+  const { result, rerender } = renderHook(() => {
+    const data = useWorkbenchData(input);
+    useEffect(() => {
+      if (harness.search.includes('catalog=full')) jump = data.ensureMessages(['body-B'])
+        .then(() => { outcome = 'loaded'; }, error => { outcome = error; });
+    }, [harness.search]);
+    return data;
+  });
+  await waitFor(() => expect(result.current.loading).toBe(false));
+  harness.search = '?catalog=full&msg=body-B'; rerender();
+  await waitFor(() => expect(harness.ready).not.toBeNull());
+  expect(outcome).toBeUndefined();
+  publish();
+  await act(async () => { await jump; });
+  expect(outcome).toBe('loaded');
+  expect(result.current.messages.find(message => message.id === 'body-B')?.content).toBe('分类 B 的完整原文');
+  await act(async () => { await expect(result.current.ensureMessages(['missing'])).rejects.toThrow('未找到该消息'); });
+});
 function largeCategory(count = 125) {
   const rows = Array.from({ length: count }, (_, i) => ({ ...text(`a-${String(i).padStart(3, '0')}`, `完整正文 ${i}`),
     createdAt: new Date(i * 1000).toISOString(), sequence: i + 1 }));

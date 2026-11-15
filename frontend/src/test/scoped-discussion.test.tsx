@@ -20,7 +20,7 @@ it('opens a cold message link with one scoped request and no global catalog or w
   await waitFor(()=>expect(result.current.loading).toBe(false));
   expect(result.current.messages.map(row=>row.content)).toEqual(['正文']);
   expect(t.load).toHaveBeenCalledOnce();expect(t.global).not.toHaveBeenCalled();expect(t.catalog).not.toHaveBeenCalled();
-  expect(result.current.discussionPage).toMatchObject({page:1,loading:false});
+  expect(result.current.discussionPage).toMatchObject({loadedCount:0,hasMore:false,loading:false});
   expect(result.current.viewerStructure?.has('focus')).toBe(true);
   unmount();expect(t.events.close).toHaveBeenCalled();
 });
@@ -62,4 +62,24 @@ it('keeps the same source when an in-place navigation changes its message query'
   t.search='?msg=remote';rerender();
   await act(async()=>{});
   expect(t.load).toHaveBeenCalledOnce();expect(t.catalog).not.toHaveBeenCalled();
+});
+
+it('reports a source loading failure to a message jump waiting for its index',async()=>{
+  let fail!:(error:Error)=>void;
+  t.load.mockImplementationOnce(()=>new Promise((_resolve,reject)=>{fail=reject;}));
+  const {result}=renderHook(()=>useWorkbenchData(input));
+  const jump=result.current.ensureMessages(['focus']).then(()=>null,error=>error);
+  await waitFor(()=>expect(fail).toBeTypeOf('function'));
+  await act(async()=>{fail(new Error('连接中断'));});
+  expect(await jump).toMatchObject({message:'连接中断'});
+  expect(result.current.loadError).toBe('连接中断');
+});
+
+it('cancels a message jump waiting for its source when leaving the workbench',async()=>{
+  t.load.mockImplementationOnce(()=>new Promise(()=>{}));
+  const {result,unmount}=renderHook(()=>useWorkbenchData(input));
+  const jump=result.current.ensureMessages(['focus']).then(()=>null,error=>error);
+  await waitFor(()=>expect(t.load).toHaveBeenCalledOnce());
+  unmount();
+  expect(await jump).toMatchObject({name:'AbortError'});
 });

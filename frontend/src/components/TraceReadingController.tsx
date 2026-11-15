@@ -10,6 +10,7 @@ import {getMessageCardContent,getMessageTypeLabel,getOrganizationTitle} from '..
 import type {ReadingNavigationMarkers} from '../hooks/useViewedMessageHighlight';
 import {readingConfirmations} from '../pages/workbench/model/readingConfirmations';
 import RecentWorkbenchViews from './RecentWorkbenchViews';
+import {isReviewDiscussion} from '../utils/modelBridge';
 interface Props {
   scopeKey:string;scopeIds:ReadonlySet<string>;allowedIds:ReadonlySet<string>;direction:TraceDirection;order:ReadingOrder;onOrder:(order:ReadingOrder)=>void;
   placementOrder?:string[];path:string[][];focusId:string|null;focusLocated:boolean;incoming:ReadingTask[];ready:boolean;
@@ -40,12 +41,13 @@ function ReadingController(p:Props&{context:NonNullable<ReturnType<typeof useRea
   const tasks=useMemo(()=>{
     const values=new Map(model.tasks.map(task=>[task.key,task]));
     for(const task of p.incoming){
+      if(isReviewDiscussion(messagesById.get(task.destinationId)))continue;
       const pending=task.influence?(model.progress.pendingInfluences.get(task.targetId)??[]).some(item=>item.key===task.influence!.key&&item.eventId===task.influence!.eventId&&item.resultKey===task.influence!.resultKey)
         :model.progress.pendingBodies.has(task.destinationId);
       if(pending)values.set(task.key,{...task,location:'inside',outsideReason:undefined});
     }
     return [...values.values()];
-  },[model,p.incoming]);
+  },[model,p.incoming,messagesById]);
   const queue=useReadingQueue(p.scopeKey,tasks,p.ready,model.navigationIds),[busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null);
   const [navigationMode,setNavigationMode]=useState<ReadingNavigationMode>('auto');
   const structure=useMemo(()=>indexReadingStructure(context.readingInput.messages,context.readingInput.edges,context.readingInput.suppressedIds),

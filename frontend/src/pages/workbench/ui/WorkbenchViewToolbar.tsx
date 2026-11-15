@@ -35,6 +35,7 @@ interface ComparisonControls {
 interface Props {
   onJump: (id: string) => void;
   scopeHeader?: ReactNode;
+  discussionStatus?: ReactNode;
   top: number; scopeMessageId: string; exportTitle: string; showAlert: (message: string) => void;
   exportData?: ExportData | null; exportUsername?: string | null;
   onLocalExport?: (view: NonNullable<ExportData['view']>) => void;
@@ -79,7 +80,7 @@ function LayoutSettings({ value, onChange }: NonNullable<Props['discussion']>) {
     </div>}
   </div>;
 }
-export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId, exportTitle, exportData, exportUsername, onLocalExport, discussion, home, clean, filter, view, comparison, correctionFilterTargetId, onLeaderboard, history, onJump }: Props) {
+export default function WorkbenchViewToolbar({ top, scopeHeader, discussionStatus, scopeMessageId, exportTitle, exportData, exportUsername, onLocalExport, discussion, home, clean, filter, view, comparison, correctionFilterTargetId, onLeaderboard, history, onJump }: Props) {
   const {layout}=useThemeSettings();
   const [exportOpen, setExportOpen] = useState(false);
   const nativeZhihuExport = isNativeZhihuView(exportData);
@@ -102,6 +103,7 @@ export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId,
           </div>
         </div>
         <div className="workbench-view-actions" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {discussionStatus}
           <button className="workbench-toolbar-action" onClick={() => onLocalExport && !nativeZhihuExport ? onLocalExport(exportView) : setExportOpen(true)} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--line-666)", background: "var(--surface-333)", color: "var(--ink-fff)", fontSize: 12, cursor: "pointer", fontWeight: 400 }}>
             {onLocalExport || nativeZhihuExport ? '下载阅览文件' : '导出'}
           </button>

@@ -24,8 +24,10 @@ export function feedEntry(message: Message) {
 /** The transaction which publishes content also refreshes its bounded preview. */
 export async function indexFeedMessages(store: Store, messages: Message[]) {
   if (!messages.length) return;
-  // Historical upgrades can execute messages before this derived index exists.
-  if (!(await store.db.prepare("SELECT to_regclass('feed_entries') AS name").get())?.name) return;
+  // Historical upgrades can execute messages before the complete index exists.
+  // Its migration backfills both tables once their schema is ready.
+  const schema = await store.db.prepare("SELECT to_regclass('feed_entries') AS entries,to_regclass('feed_corrections') AS corrections").get();
+  if (!schema?.entries || !schema.corrections) return;
   for (let offset = 0; offset < messages.length; offset += 250) {
     const batch = messages.slice(offset, offset + 250), entries = batch.flatMap(message => { const entry = feedEntry(message); return entry ? [entry] : []; });
     await store.db.prepare('DELETE FROM feed_corrections WHERE "sourceId"=ANY($1::text[])').run(batch.map(message => message.id));

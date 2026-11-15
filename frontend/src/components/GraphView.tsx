@@ -1,4 +1,5 @@
 import { comparisonChanges } from '../pages/workbench/projections/comparisonChanges';
+import DiscussionReplies from './DiscussionReplies';
 import { focusComparisonDifference } from '../pages/workbench/projections/comparisonFocus';
 import { useEffect } from 'react';
 import { annotationAtReference, oppositeAnnotation } from '@gonglun/core';
@@ -1473,6 +1474,7 @@ function GraphViewCanvas(props: GraphViewProps) {
               <RelatedMessages rows={relatedByTarget.get(msg.id)} selectedUnits={draftUnits} onNavigate={props.onRelatedMessageNavigate??onNavigateToMessage}/>
               {renderRelatedConnections(msg.id)}
               {renderJoinRecords(msg.id, ['classify','summary','merge','arrange'].includes(msg.relationType ?? ''))}
+              <DiscussionReplies messageId={msg.id} />
               {(notifyUsersByRelationMsg.get(msg.id)?.length ?? 0) > 0 && (
                 <div style={{ marginTop: 6, fontSize: 11, color: 'var(--ink-67e8f9)' }}>
                   通知与会者：

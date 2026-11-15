@@ -211,6 +211,8 @@ export function isRelationView(view: NativeMessageView): view is NativeMessageVi
 export interface WorkbenchSnapshot {
   /** A complete semantic context for one bounded discussion page, not a global catalog. */
   discussion?: { focusId: string; pageIds: string[]; nextCursor: string | null;
+    /** Stable start of this batch, used to revalidate already loaded replies. */
+    cursor?: string;
     memberCounts: Record<string, { direct: number; total: number }> };
   /** Contains topology and body-presence placeholders, never displayable body text. */
   structureOnly?: boolean;
@@ -233,6 +235,7 @@ export interface WorkbenchSnapshot {
 }
 export interface DiscussionQuery {
   focusId: string;
+  /** "root" explicitly selects root messages; null/omitted selects the focus discussion. */
   classificationId?: string | null;
   cursor?: string;
   extraIds?: string[];

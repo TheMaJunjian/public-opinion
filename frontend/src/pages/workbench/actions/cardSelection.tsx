@@ -184,7 +184,7 @@ interface HandleMessageDoubleClickDependencies {
   viewMode: ViewMode;
   setComparisonPopup: React.Dispatch<React.SetStateAction<{ relMsgId: string; x: number; y: number; reversePreview?: { before: string; after: string; target: UnitSelection; mode?: "direct"; label?: string; value?: Json; }; } | null>>;
   edges: DemoEdge[];
-  enterTemporaryCategory: (force?: boolean) => void;
+  enterTemporaryCategory: (force?: boolean, originMessageId?: string) => void;
   setJoinFilterTargetId: React.Dispatch<React.SetStateAction<string | null>>;
   setCorrectionFilterTargetId: React.Dispatch<React.SetStateAction<string | null>>;
   setViewMode: React.Dispatch<React.SetStateAction<ViewMode>>;
@@ -224,7 +224,7 @@ export function handleMessageDoubleClick(dependencies: HandleMessageDoubleClickD
       }
       const targetId = edges.find(edge => edge.relationMessageId === messageId)?.to.messageId;
       if (targetId) {
-        enterTemporaryCategory(true);
+        enterTemporaryCategory(true, messageId);
         setJoinFilterTargetId(null);
         setCorrectionFilterTargetId(targetId);
         setViewMode("list");

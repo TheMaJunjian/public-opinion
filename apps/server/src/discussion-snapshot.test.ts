@@ -30,6 +30,46 @@ async function page(who: Awaited<ReturnType<typeof actor>>, query: object): Prom
   return response.body;
 }
 
+it('pages root messages after leaving a category without reopening its members', async () => {
+  const app = await createTestApp(), who = await actor(app);
+  const [category, child] = await seed(app, who.session.user.id, [[body('退出的分类'), relation('classify', {})], [body('分类内正文')]]);
+  const roots = await seed(app, who.session.user.id, Array.from({length:45}, (_, n) => [body(`根目录 ${n}`)]));
+  await app.store.transaction(async () => {
+    await app.store.db.prepare('INSERT INTO memberships("memberId","parentId","sourceId") VALUES($1,$2,$2)').run(child!.id,category!.id);
+  });
+  const seen = new Set<string>(); let cursor: string | undefined;
+  for (const size of [20,20,5]) {
+    const result = await page(who,{focusId:category!.id,classificationId:'root',cursor});
+    expect(result.discussion!.pageIds).toHaveLength(size);
+    expect(result.messages.some(row=>row.id===category!.id)).toBe(true);
+    expect(result.messages.some(row=>row.id===child!.id)).toBe(false);
+    for (const id of result.discussion!.pageIds) { expect(seen.has(id)).toBe(false); seen.add(id); }
+    cursor = result.discussion!.nextCursor ?? undefined;
+  }
+  expect(cursor).toBeUndefined();
+  expect(seen).toEqual(new Set(roots.map(row=>row.id)));
+});
+
+it.each(['merge','arrange'])('includes effective inline %s members but keeps nested classifications closed', async kind => {
+  const app = await createTestApp(), who = await actor(app);
+  const [category, frame, nested, hidden, moved, ...members] = await seed(app, who.session.user.id, [
+    [body('分类'),relation('classify',{})], [body('行内组织'),relation(kind,{})],
+    [body('关闭的分类'),relation('classify',{})], [body('关闭的分类内正文')], [body('已移出的成员')],
+    ...Array.from({length:4},(_,n)=>[body(`成员 ${n}`)]),
+  ]);
+  await app.store.transaction(async()=>{
+    for(const [member,parent] of [[frame!,category!],[nested!,frame!],[hidden!,nested!],[moved!,category!],...members.map(row=>[row,frame!] as const)])
+      await app.store.db.prepare('INSERT INTO memberships("memberId","parentId","sourceId") VALUES($1,$2,$2)').run(member.id,parent.id);
+  });
+  const result = await page(who,{focusId:category!.id});
+  expect(result.discussion!.pageIds).toEqual(expect.arrayContaining([frame!.id,moved!.id]));
+  expect(result.messages.map(row=>row.id)).toEqual(expect.arrayContaining(members.map(row=>row.id)));
+  expect(result.messages.some(row=>row.id===hidden!.id)).toBe(false);
+  expect(result.messages.find(row=>row.id===frame!.id)!.targetRefs!.map(ref=>ref.kind==='relation'?ref.relationId:ref.messageId))
+    .toEqual(expect.arrayContaining([...members.map(row=>row.id),nested!.id]));
+  expect(result.discussion!.memberCounts[frame!.id]).toEqual({direct:5,total:6});
+});
+
 it('loads a direct message independently of unrelated records and writes no reading or public state', async () => {
   const app = await createTestApp(), who = await actor(app);
   const [focus, ...unrelated] = await seed(app, who.session.user.id, Array.from({length:150}, (_, n) => [body(`讨论 ${n}`)]));
@@ -73,6 +113,11 @@ it('pages a wide classification without loading unopened descendants, and binds 
   expect(seen.size).toBe(66);
   expect((await other.agent.post('/api/ui/snapshot/discussion').send({focusId:category!.id,cursor:first.discussion!.nextCursor})).status).toBe(409);
   expect((await who.agent.post('/api/ui/snapshot/discussion').send({focusId:nested!.id,cursor:first.discussion!.nextCursor})).status).toBe(409);
+  const [newest] = await seed(app, who.session.user.id, [[body('分页后新到的消息')]]);
+  await app.store.transaction(() => app.store.db.prepare('INSERT INTO memberships("memberId","parentId","sourceId") VALUES($1,$2,$2)').run(newest!.id, category!.id));
+  const refreshed = await page(who, {focusId:category!.id,cursor:first.discussion!.cursor});
+  expect(refreshed.discussion!.pageIds).toEqual(first.discussion!.pageIds);
+  expect((await page(who, {focusId:category!.id})).discussion!.pageIds).toContain(newest!.id);
   const inside = await page(who,{focusId:category!.id,classificationId:nested!.id});
   expect(inside.messages.some(row => row.id === hidden!.id)).toBe(true);
 });
@@ -87,6 +132,71 @@ it('includes complete correction and stance chains plus competing membership rec
   expect(new Set(result.messages.map(row=>row.id))).toEqual(new Set([focus,category,correction,stance,against,join].map(row=>row!.id)));
   expect(result.messages.some(row=>row.id===unrelated!.id)).toBe(false);
   expect(result.messages.find(row=>row.id===focus!.id)?.parts).toEqual((await app.store.message(focus!.id)).parts);
+});
+
+it('does not treat effects stored in a category or citing it as effects on the category', async () => {
+  const app = await createTestApp(), who = await actor(app);
+  const [category, focus, outside] = await seed(app, who.session.user.id, [
+    [body('当前分类'), relation('classify', {})], [body('本页正文')], [body('另一段讨论')],
+  ]);
+  const kinds = ['agree', 'disagree', 'correct', 'amend', 'annotation', 'tag', 'recommend', 'archive', 'low-quality', 'follow', 'unfollow', 'block', 'unblock', 'read', 'unread'];
+  const unrelated = await seed(app, who.session.user.id, Array.from({ length: kinds.length * 3 }, (_, index) => [
+    relation(kinds[index % kinds.length]!, {
+      target: [{ messageId: outside!.id }],
+      // A reason/source binding is not the target of a stance or correction.
+      ...(index % 3 === 0 ? { reason: [{ messageId: category!.id }] } : {}),
+      ...(index % 3 === 1 && kinds[index % kinds.length] !== 'annotation' ? { source: [{ messageId: category!.id }] } : {}),
+    }),
+    { ...relation('member-of', { parent: [{ messageId: category!.id }] }), id: 'placement' },
+  ]));
+  const [correction] = await seed(app, who.session.user.id, [[body('本页更正'), relation('correct', { target: [{ messageId: focus!.id }] })]]);
+  const [stance] = await seed(app, who.session.user.id, [[relation('disagree', { target: [{ messageId: correction!.id }] })]]);
+  await app.store.transaction(async () => {
+    for (const member of [focus!, ...unrelated]) await app.store.db.prepare('INSERT INTO memberships("memberId","parentId","sourceId") VALUES($1,$2,$2)').run(member.id, category!.id);
+  });
+  const result = await page(who, { focusId: category!.id });
+  expect(result.discussion!.pageIds).toEqual([focus!.id]);
+  expect(new Set(result.messages.map(message => message.id))).toEqual(new Set([category, focus, correction, stance].map(message => message!.id)));
+});
+
+it('refuses genuinely oversized effect chains instead of publishing incomplete semantics', async () => {
+  const app = await createTestApp(), who = await actor(app);
+  const [focus] = await seed(app, who.session.user.id, [[body('当前消息')]]);
+  await seed(app, who.session.user.id, Array.from({ length: 601 }, () => [relation('agree', { target: [{ messageId: focus!.id }] })]));
+  const response = await who.agent.post('/api/ui/snapshot/discussion').send({ focusId: focus!.id });
+  expect(response.status).toBe(422);
+  expect(response.body.code).toBe('DISCUSSION_TOO_LARGE');
+  expect(response.body.messages).toBeUndefined();
+}, 30_000);
+
+it('loads references owned by paged category members without opening other members or incoming discussions', async () => {
+  const app = await createTestApp(), who = await actor(app);
+  const [source, target, outside, nested, hidden] = await seed(app, who.session.user.id, [
+    [body('分类正文')], [body('引用原文')], [body('另一段讨论')],
+    [body('未打开的分类'), relation('classify', {})], [body('未打开的分类正文')],
+  ]);
+  const [category] = await seed(app, who.session.user.id, [[body('分类'), relation('classify', {
+    members: [source!, target!, nested!].map(message => ({ messageId: message.id })),
+  })]]);
+  const [reference, reply, incoming, hiddenJoin] = await seed(app, who.session.user.id, [
+    [relation('reference', { source: [{messageId:source!.id}], target: [{messageId:target!.id}] })],
+    [relation('reply', { source: [{messageId:target!.id}], target: [{messageId:source!.id}] })],
+    [relation('reference', { source: [{messageId:outside!.id}], target: [{messageId:target!.id}] })],
+    [relation('member-of', { parent: [{messageId:nested!.id}], member: [{messageId:hidden!.id}] })],
+  ]);
+  const [stance] = await seed(app, who.session.user.id, [[relation('disagree', {target:[{messageId:reference!.id}]})]]);
+  await app.store.transaction(async () => {
+    for (const member of [source, target, nested]) await app.store.db.prepare('INSERT INTO memberships("memberId","parentId","sourceId") VALUES($1,$2,$2)').run(member!.id, category!.id);
+    await app.store.db.prepare('INSERT INTO memberships("memberId","parentId","sourceId") VALUES($1,$2,$3)').run(hidden!.id, nested!.id, hiddenJoin!.id);
+  });
+  const result = await page(who, {focusId:category!.id});
+  const ids = result.messages.map(message => message.id);
+  expect(result.discussion!.pageIds.sort()).toEqual([source!.id, target!.id, nested!.id].sort());
+  expect(ids).toEqual(expect.arrayContaining([reference!.id, reply!.id, stance!.id]));
+  for (const absent of [outside, incoming, hidden, hiddenJoin]) expect(ids).not.toContain(absent!.id);
+  expect(result.relations.find(message => message.id === reference!.id)).toMatchObject({
+    sourceMessageId: source!.id, targetRefs: [expect.objectContaining({messageId:target!.id})],
+  });
 });
 
 it('traces each direction from the selected message without crossing into sibling discussions', async () => {

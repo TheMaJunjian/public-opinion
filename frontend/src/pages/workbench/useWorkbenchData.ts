@@ -45,7 +45,15 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
   const startProjection = useWorkbenchDrawingTask('projection');
   const graphViewRef = useRef(viewMode === 'graph');
   graphViewRef.current = viewMode === 'graph';
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoadingState] = useState(true);
+  const sourceLoadingRef = useRef(true);
+  const sourceWaiters = useRef(new Set<{ resolve(): void; reject(error: Error): void }>());
+  const setLoading = useCallback((value: boolean) => {
+    // A route effect can start a new source before the linked-message effect
+    // from the same render runs. Mark it pending synchronously.
+    if (value) sourceLoadingRef.current = true;
+    setLoadingState(value);
+  }, []);
   const edgesRef = useRef<DemoEdge[]>([]);
   const [relatedTraceContext, setRelatedTraceContext] = useState<RelatedTraceContext | null>(null);
   const viewMessages = useMemo(() => relatedTraceContext
@@ -55,12 +63,25 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
   const viewRelations = useMemo(() => relatedTraceContext
     ? [...new Map([...relatedTraceContext.relations, ...relations].map(relation => [relation.id, relation])).values()] : relations, [relations, relatedTraceContext]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    if (loading) return;
+    sourceLoadingRef.current = false;
+    const waiting = [...sourceWaiters.current]; sourceWaiters.current.clear();
+    for (const request of waiting) {
+      if (loadError) request.reject(new Error(loadError));
+      else request.resolve();
+    }
+  });
+  useEffect(() => () => {
+    for (const request of sourceWaiters.current) request.reject(new DOMException('工作台已关闭', 'AbortError'));
+    sourceWaiters.current.clear();
+  }, []);
   const [showUnauthenticatedNotice, setShowUnauthenticatedNotice] = useState(false);
   const [showRegistrationGuide, setShowRegistrationGuide] = useState(false);
   const syncRef = useRef<ReturnType<typeof syncWorkbench> | null>(null);
   const discussionRef = useRef<DiscussionClient | null>(null);
   const [discussionPage, setDiscussionPage] = useState<DiscussionPageState | null>(null);
-  const turnDiscussionPage = useCallback((direction: -1 | 1) => discussionRef.current?.turn(direction) ?? Promise.resolve(), []);
+  const loadMoreDiscussion = useCallback(() => discussionRef.current?.loadMore() ?? Promise.resolve(), []);
   const refreshDiscussion = useCallback(() => discussionRef.current?.refresh() ?? Promise.resolve(), []);
   const [onDemand, setOnDemand] = useState(false);
   const [catalog, setCatalog] = useState<CatalogClient | null>(null);
@@ -77,8 +98,13 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     && relations === publishedCatalog.current.projected.relations && stakeCounts === publishedCatalog.current.projected.counts
     && messageBettorCounts === publishedCatalog.current.projected.bettors;
   const viewerEnsure = useRef<((ids: string[]) => Promise<void>) | null>(null);
-  const ensureMessages = useCallback((ids: string[]) => discussionRef.current?.ensure(ids) ?? viewerEnsure.current?.(ids)
-    ?? syncRef.current?.ensureMessages(ids) ?? Promise.reject(new Error('讨论尚未载入')), []);
+  const ensureMessages = useCallback(async (ids: string[]) => {
+    // Only the committed source can decide that an ID is missing. During a
+    // transition the previous viewer closure may still exist with an empty index.
+    while (sourceLoadingRef.current) await new Promise<void>((resolve, reject) => { sourceWaiters.current.add({ resolve, reject }); });
+    return discussionRef.current?.ensure(ids) ?? viewerEnsure.current?.(ids)
+      ?? syncRef.current?.ensureMessages(ids) ?? Promise.reject(new Error('讨论尚未载入'));
+  }, []);
   const [isPreloaded, setIsPreloaded] = useState(false);
   const [viewerUser, setViewerUser] = useState<User | null>(() => {
     const username = localStorage.getItem(VIEWER_USERNAME_KEY)?.trim();
@@ -209,8 +235,13 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
   const loadViewerScope = useCallback(async (scope: ZhihuViewerScope, bodyLimit?: number) => {
     if (discussionRef.current) {
       viewerScope.current = scope;
-      await discussionRef.current.select(scope);
-      if (viewerScope.current === scope) { appliedViewerScopeKey.current = structuralScopeKey(scope); setAppliedScopeKey(appliedViewerScopeKey.current); }
+      // Restoring a category's viewport/highlight must wait for its async scope,
+      // just as it waits for the full-catalog projection below.
+      const task = startProjection();
+      try {
+        await discussionRef.current.select(scope);
+        if (viewerScope.current === scope) { appliedViewerScopeKey.current = structuralScopeKey(scope); setAppliedScopeKey(appliedViewerScopeKey.current); }
+      } finally { task.complete(); }
       return;
     }
     const index = viewerIndex.current;
@@ -590,7 +621,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     viewerNavigation,
     viewingExport, viewerStructure, unloadedViewerContainers, loadViewerScope, viewerBodyPage, loadMoreViewerBodies,
     appliedScopeKey,
-    discussionPage, turnDiscussionPage, refreshDiscussion,
+    discussionPage, loadMoreDiscussion, refreshDiscussion,
     tagCounts,
     onDemand, ensureMessages,
     catalog, catalogReady, catalogVersion, catalogComputationsCurrent,

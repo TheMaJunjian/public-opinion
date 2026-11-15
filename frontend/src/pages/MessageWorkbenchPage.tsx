@@ -1,4 +1,6 @@
 import {useReadingViewportAnchor} from '../hooks/useReadingViewportAnchor';
+import DiscussionReplies, { DiscussionRepliesContext } from '../components/DiscussionReplies';
+import DiscussionStatusControl from '../components/DiscussionStatusControl';
 import type {ReadingTask,ReadingOrder} from './workbench/model/readingTasks';
 import {exitTrace as runExitTrace} from './workbench/actions/viewHistory';
 import {DEFAULT_TRACE_DEPTHS,traceDepths as legacyTraceDepths,type TraceDirection,type TraceDepths} from '../utils/traceRange';
@@ -207,7 +209,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     onDemand, ensureMessages,
     catalog, catalogReady, catalogVersion, catalogComputationsCurrent, globalRows,
     viewingExport, viewerStructure, unloadedViewerContainers, loadViewerScope, appliedScopeKey, viewerBodyPage, loadMoreViewerBodies,
-    discussionPage, turnDiscussionPage, refreshDiscussion,
+    discussionPage, loadMoreDiscussion, refreshDiscussion,
     captureTransient, showSendPreview, clearSendPreview, confirmSendPreview, liveSequence, sendPreviewPages, sendPreviewMessageIds,
   } = useWorkbenchData({ user, authLoading, scopeMessageId, navigate, viewMode });
   const [currentRecordCategory,setRecordCategory]=useState<{targetId:string;label:string;recordIds:string[];revision?:number}|null>(null);
@@ -368,6 +370,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     setFrameViewRestoreKey(key=>key+1);
   }
   const temporaryCategoryStackRef = useRef<Array<{
+    originMessageId?: string;
     snapshot: TraceSnapshot;
     hideJoin: boolean;
     joinFilterTargetId: string | null;
@@ -636,6 +639,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const changeReadingNavigation=useCallback((next:ReadingNavigationMarkers)=>setReadingNavigation(previous=>
     JSON.stringify(previous)===JSON.stringify(next)?previous:next),[]);
   const [readingAnchorId,setReadingAnchorId]=useState<string|null>(null);
+  const [restoringMessageId,setRestoringMessageId]=useState<string|null>(null);
   const [temporaryReadingIds,setTemporaryReadingIds]=useState<Set<string>>(()=>new Set());
   const changeTraceDepth = useCallback((side:keyof TraceDepths,value:number) => {
     setTraceDepths(current=>({...current,[side]:Math.max(0,Math.min(8,Math.floor(value)||0))}));
@@ -919,7 +923,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const requestedViewerScope = {
     classificationId: classifyRelMsgId,
     ...(onDemand && !isPreloaded ? { viewMode, bodyPaging: !recordCategory && !joinFilterTargetId && !correctionFilterTargetId } : {}),
-    ...(onDemand && !isPreloaded ? { pinnedIds: [...(lastClickedMessageId ? [lastClickedMessageId] : []), ...sendPreviewMessageIds ?? []] } : {}),
+    ...(onDemand && !isPreloaded ? { pinnedIds: [...(lastClickedMessageId ? [lastClickedMessageId] : []), ...(restoringMessageId ? [restoringMessageId] : []), ...sendPreviewMessageIds ?? []] } : {}),
     ...(traceEntries.length ? { trace: { ids: traceEntries.at(-1)!.ids, depths: traceDepths,
       expandedIds: [...traceExpandedFrameIds].sort() } } : {}),
     full: cleanMode || homeFilterMode !== null || comparisonMode || comparisonReviewed
@@ -1572,6 +1576,19 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   );
   const { leftPanelRef, rightPanelRef, viewModeScrollRef, TOTAL_FLEX, MIN_LEFT_PX, MIN_RIGHT_PX, MAX_RIGHT_PX, leftFlex, effectiveContainerWidth, splitterActive, panelContainerRef, handleSplitterPointerDown, handleLeftPanelTouchStart, handleLeftPanelTouchMove, handleLeftPanelTouchEnd } = useWorkbenchViewport({ loading });
   useReadingViewportAnchor(leftPanelRef,readingAnchorId);
+  const handleLoadMoreDiscussion = useCallback((messageId: string) => {
+    const panel = leftPanelRef.current;
+    const bounds = panel?.getBoundingClientRect();
+    const visible = (element: HTMLElement) => {
+      const rect = element.getBoundingClientRect();
+      return bounds && rect.bottom > bounds.top && rect.top < bounds.bottom && rect.right > bounds.left && rect.left < bounds.right;
+    };
+    const anchor = panel && ([messageId, readingAnchorId, lastClickedMessageId].filter((id): id is string => !!id)
+      .find(id => findMessageElements(panel, id).some(visible))
+      ?? [...panel.querySelectorAll<HTMLElement>('[data-msgid]:not([data-rel-overlay])')].find(visible)?.dataset.msgid);
+    if (anchor) flushSync(() => setReadingAnchorId(anchor));
+    return loadMoreDiscussion();
+  }, [leftPanelRef, readingAnchorId, lastClickedMessageId, loadMoreDiscussion]);
   const [messagePulse, setMessagePulse] = useState<{ messageId: string; element: HTMLElement; rect: DOMRect } | null>(null);
   const messagePulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagePulseRafRef = useRef<number | null>(null);
@@ -1676,7 +1693,16 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
 
 
   function scrollMsgToCenter(msgId: string, options?: ScrollMessageOptions): void {
-    return runScrollMsgToCenter({ startPositioning, scrollRequestIdRef, pendingScrollMsgIdRef, MAX_SCROLL_ATTEMPTS, pendingScrollDependencyIdsRef, leftPanelRef, scrollRafRef, findMessageElements, relationsRef, edgesRef, showMessagePulse, cancelScrollRafs }, msgId, options);
+    // Deep links and ordinary jumps need the same protection as trace reading:
+    // later bodies, relations and measurements can move the located card.
+    setReadingAnchorId(null);
+    return runScrollMsgToCenter({ startPositioning, scrollRequestIdRef, pendingScrollMsgIdRef, MAX_SCROLL_ATTEMPTS, pendingScrollDependencyIdsRef, leftPanelRef, scrollRafRef, findMessageElements, relationsRef, edgesRef, showMessagePulse, cancelScrollRafs }, msgId, {
+      ...options,
+      onComplete: (...result) => {
+        if (result[0]) setReadingAnchorId(msgId);
+        options?.onComplete?.(...result);
+      },
+    });
   }
 
   function hasTraceOverlay(category=recordCategory):boolean{
@@ -1827,6 +1853,8 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
 
   function restoreSnapshot(s: TraceSnapshot | null, opts?: RestoreSnapshotOptions): void {
     if (!s) return;
+    setReadingAnchorId(null);
+    setRestoringMessageId(opts?.pulseMessageId ?? s.readingViewportAnchor?.messageId ?? null);
     graphFrameViewStateRef.current={...s.graphFrameViewState};
     setFrameViewRestoreKey(value=>value+1);
     displayHintWindow.clear();
@@ -1837,6 +1865,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     const onRestored = () => {
       if (pendingViewportRestoreRef.current === pending) {
         pendingViewportRestoreRef.current = null;
+        setRestoringMessageId(null);
         displayHintWindow.restore(s.displayHintWindow??null);
         setReadingAnchorId(s.readingAnchorId??null);
       }
@@ -1931,18 +1960,18 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     }
   }
 
-  function enterTemporaryCategory(force = false): void {
+  function enterTemporaryCategory(force = false, originMessageId?: string): void {
     recordBrowsingNavigation();
     cancelViewNavigation();
     cancelScrollRafs();
-    runEnterTemporaryCategory({ joinFilterTargetId, correctionFilterTargetId, comparisonMode, comparisonReviewed, temporaryCategoryStackRef, captureSnapshot, msgFilter, joinFilterDirection, comparisonTargetId, comparisonSide, comparisonReviewBaseMessages, comparisonReviewBaseEdges }, force);
+    runEnterTemporaryCategory({ originMessageId, joinFilterTargetId, correctionFilterTargetId, comparisonMode, comparisonReviewed, temporaryCategoryStackRef, captureSnapshot, msgFilter, joinFilterDirection, comparisonTargetId, comparisonSide, comparisonReviewBaseMessages, comparisonReviewBaseEdges }, force);
     setRecordCategory(null);
     pendingViewportRestoreRef.current = null;
   }
 
   function handleJoinRecords(messageId: string, direction: 'incoming' | 'outgoing'): void {
     if (joinFilterTargetId === messageId && joinFilterDirection === direction) { exitTemporaryCategory(); return; }
-    enterTemporaryCategory(joinFilterTargetId === null && (comparisonMode || comparisonReviewed || correctionFilterTargetId !== null));
+    enterTemporaryCategory(joinFilterTargetId === null && (comparisonMode || comparisonReviewed || correctionFilterTargetId !== null), messageId);
     setMsgFilter(previous => ({ ...previous, hideJoin: false }));
     setComparisonMode(false); setComparisonReviewed(false); setCorrectionFilterTargetId(null);
     setJoinFilterDirection(direction); setJoinFilterTargetId(messageId);
@@ -2253,6 +2282,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     cancelViewNavigation();
     if (viewMode === 'graph') beginWorkbenchDrawing();
     runEnterClassification({ captureSnapshot, cancelScrollRafs, scrollRequestIdRef, leftPanelRef, classifyStackRef, setClassifyRelMsgId, setClassifyKey }, relMsgId);
+    setReadingAnchorId(null);
     setRecordCategory(current=>current?.label==='审核'&&sameReviewContext(activeReviewContext,reviewContextOf(msgMap.get(relMsgId)))?current:null);
     graphFrameViewStateRef.current={};
     pendingViewportRestoreRef.current = null;
@@ -2862,7 +2892,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
 
   function openRecordCategory(targetId:string,label:string,recordIds:string[],revision?:number):void{
     if(!recordIds.length&&label!=='审核')return;
-    recordBrowsingNavigation();enterTemporaryCategory(true);
+    recordBrowsingNavigation();enterTemporaryCategory(true,targetId);
     setJoinFilterTargetId(null);setCorrectionFilterTargetId(null);setContainerPreviewId(null);
     setComparisonMode(false);setComparisonReviewed(false);setComparisonPopup(null);setTagPopup(null);setDecorationPopup(null);
     closeSettlement();setRecordCategory({targetId,label,recordIds:[...new Set(recordIds)],revision});setViewMode(label==='审核'?'graph':'list');
@@ -3206,7 +3236,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     if(changed)recordReadingNavigation();
     if(changed&&options?.recordHistory!==false)recordBrowsingNavigation();
     cancelViewNavigation();cancelScrollRafs();pendingViewportRestoreRef.current=null;setAutoClassifyMsgId(null);
-    if(correctionFilterTargetId!==targetId)enterTemporaryCategory(true);
+    if(correctionFilterTargetId!==targetId)enterTemporaryCategory(true,messageId);
     if((traceEntries.length||options?.readingContext)&&!(traceEntries.at(-1)?.ids.length===1&&traceEntries.at(-1)?.ids[0]===messageId))alignReadingTrace([messageId],options?.readingContext??[]);
     setJoinFilterTargetId(null);setContainerPreviewId(null);setComparisonMode(false);setComparisonReviewed(false);
     setCorrectionFilterTargetId(targetId);setViewMode('list');
@@ -3585,7 +3615,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                   </span>
                 </span>:undefined}
                 comparisonTargetCount={comparisonViewIds?.size ?? 0} correctionCount={correctionTemporaryViewIds?.size ?? 0} temporaryJoinCount={temporaryJoinCount} classificationTitle={isRouteScope ? (correctionVersions.get(scopeMessageId)?.current?.content ?? scope?.title ?? '分类') : classificationTitle} classifyKindLabel={classifyKindLabel}
-                comparisonTargetId={comparisonTargetId} joinFilterTargetId={joinFilterTargetId} joinFilterDirection={joinFilterDirection} currentClassifyRelMsg={currentClassifyRelMsg}
+                comparisonTargetId={comparisonTargetId} joinFilterTargetId={joinFilterTargetId} joinFilterDirection={joinFilterDirection} currentClassifyRelMsg={isRouteScope ? msgMap.get(scopeMessageId) : currentClassifyRelMsg}
                 classifyTargetCount={isRouteScope ? messages.filter(message => message.kind !== 'relation').length : classifyTargetCount} classifyExitLabel={classifyExitLabel} onExitTemporary={comparisonMode?exitComparison:exitTemporaryCategory} onExitClassify={isRouteScope ? () => navigate('/messages') : handleExitClassification} /></DeferredWorkbench>:null;
 
   return (
@@ -3593,6 +3623,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     <DeferredWorkbench label="显示提示" blocksDrawing>
     <CardWidthContext.Provider value={cardWidthContext}>
     <ReadingTextLinksContext.Provider value={readingTextLinks}>
+    <DiscussionRepliesContext.Provider value={discussionPage ? { state: discussionPage, onMore: handleLoadMoreDiscussion } : null}>
     <MessageDisplayHintsProvider input={displayHintsInput} onView={viewDisplayHint} onMarkRead={async (...args)=>{if(!sendPreview.active)await readingState.markRead?.(...args);}} readingError={readingState.error} onReadNavigate={(id,tasks)=>void navigateReading(id,tasks,traceEntries.length===0).catch(error=>{if(error.name!=='AbortError')showAlert(error.message);})}
       windowState={displayHintWindow} currentContainerId={hintContainerId} versionHistory={readingVersionHistory}>
       <AuthoredReadingBackfill enabled={!discussionPage&&!sendPreview.active&&!isPreloaded&&!loading&&readingState.ready} userId={user?.id}/>
@@ -3610,19 +3641,15 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
               保留页面边界传递和快捷符入口。 */}
           <div ref={panelContainerRef} className="workbench-panels" style={{ display: "flex", flex: "1 0 auto", width: "100%", minWidth: 0 }}>
             <div className="workbench-message-pane" data-workbench-panel-surface="true" style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: MIN_LEFT_PX, alignSelf: 'flex-start', position: 'sticky', top: panelStickyTop, overflow: "visible", paddingBottom: 8 }}>
-              {discussionPage && <div aria-label="当前讨论范围" style={{ padding: '10px 16px', background: 'var(--surface-card)', borderBottom: '1px solid var(--border-default)', fontSize: 12, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
-                <span>当前讨论 · 第 {discussionPage.page} 页 · 每页最多 20 条关联消息</span>
-                <button disabled={!discussionPage.previous || discussionPage.loading} onClick={() => void turnDiscussionPage(-1).catch(error => showAlert(error.message))}>上一页</button>
-                <button disabled={!discussionPage.next || discussionPage.loading} onClick={() => void turnDiscussionPage(1).catch(error => showAlert(error.message))}>下一页</button>
-                <button disabled={discussionPage.loading} onClick={() => void refreshDiscussion().catch(error => showAlert(error.message))}>{discussionPage.loading ? '正在更新…' : '刷新讨论'}</button>
-                <button onClick={() => navigate('/messages?catalog=full')}>打开完整工作台</button>
-                <span style={{ color: 'var(--text-secondary)' }}>筛选与对比作用于本页及必要上下文</span>
-                {discussionPage.error && <span role="alert">{discussionPage.error}</span>}
-              </div>}
               <DeferredWorkbench label="视图工具栏" blocksDrawing><WorkbenchViewToolbar top={panelStickyTop}
                 onJump={confirmMessageIdNavigation}
                 history={browsingHistory}
                 scopeHeader={!containerPreview && !comparisonReviewed ? classificationHeader : undefined}
+                discussionStatus={!isPreloaded && <DiscussionStatusControl state={discussionPage}
+                  onRefresh={() => {
+                    if (discussionPage) void refreshDiscussion().catch(error => showAlert(error.message));
+                    else window.dispatchEvent(new Event('gonglun:reload'));
+                  }} onOpenFull={() => navigate('/messages?catalog=full')} />}
                 scopeMessageId={scopeMessageId} exportTitle={scope?.title ?? 'export'} showAlert={showAlert}
                 exportData={loadedExport ?? preloadedData} exportUsername={displayUser?.username ?? null}
                 discussion={discussion}
@@ -3792,9 +3819,10 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                   </DeferredWorkbench>
                 )}
                 </RecentWorkbenchViews>
-                {!isPreloaded && onDemand && <React.Suspense fallback={null}>
+                {discussionPage?.classificationId === 'root' && <DiscussionReplies messageId="root" />}
+                {!isPreloaded && onDemand && !discussionPage && <React.Suspense fallback={null}>
                   {!globalFilterPending && <MessagePagination parent={activePageParent} loadedCount={messageWindow.messages.length}
-                    hasMore={messageWindow.hasMore} loading={messageWindow.loading} showLoadingNotice={false} pagedScope={!!discussionPage}
+                    hasMore={messageWindow.hasMore} loading={messageWindow.loading} showLoadingNotice={false}
                     panelRef={leftPanelRef} onMore={messageWindow.more} onError={showAlert} />}
                 </React.Suspense>}
                 <div aria-hidden="true" style={{ height: 96, flexShrink: 0 }} />
@@ -4002,7 +4030,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       />
 
       <LeaderboardController ref={leaderboardRef}
-        scopeLabel={discussionPage ? '当前页' : undefined}
+        scopeLabel={discussionPage ? '已加载的消息' : undefined}
         catalogVersion={catalogVersion} useCatalogRows={catalogComputationsCurrent}
         catalog={catalog} globalReady={!onDemand || isPreloaded || catalogReady} globalRows={onDemand && !isPreloaded ? globalRows : undefined}
         onRefresh={refreshLeaderboard}
@@ -4046,6 +4074,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
         </DeferredWorkbench>
       )}
     </MessageDisplayHintsProvider>
+    </DiscussionRepliesContext.Provider>
     </ReadingTextLinksContext.Provider>
     </CardWidthContext.Provider>
     </DeferredWorkbench>

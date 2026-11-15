@@ -1,4 +1,4 @@
-import {isCardMessage,isSettlementRecord,type DemoMessage} from '../../../utils/modelBridge';
+import {isCardMessage,isReviewDiscussion,isSettlementRecord,type DemoMessage} from '../../../utils/modelBridge';
 import {chronologicalOrder,discussionForest} from '../../../utils/discussionOrder';
 import type {TraceDirection} from '../../../utils/traceRange';
 import {deriveReadingProgress,influenceReadingMarks,readingMarksFor,type ReadingInput,type ReadingInfluence} from './readingProgress';
@@ -22,7 +22,7 @@ const readable=(message:DemoMessage)=>isCardMessage(message)||['classify','summa
 /** These records are inspected through their affected message, unless opened explicitly. */
 function statusReadingRecord(message:DemoMessage|undefined){
   if(!message)return false;
-  return ['join','round','round_result'].includes(message.kind)||message.relationPayload?.operationType==='TERMINATE_SETTLEMENT'
+  return isReviewDiscussion(message)||['join','round','round_result'].includes(message.kind)||message.relationPayload?.operationType==='TERMINATE_SETTLEMENT'
     ||['decoration','decoration-label','inline-badge'].includes(getPresentationSpec(message.relationType??'').kind)
     ||message.kind==='relation'&&!readable(message);
 }
@@ -30,13 +30,14 @@ export function readingTasks(input:ReadingInput,scope:ReadonlySet<string>,allowe
   const progress=providedProgress??deriveReadingProgress(input),map=new Map(input.messages.map(message=>[message.id,message]));
   // Rendering a record in the semantic range must not recursively enroll its
   // own body and influences in the reading queue. Keep its private marks intact.
-  const readingScope=new Set([...scope].filter(id=>!isSettlementRecord(map.get(id))&&(entryIds.has(id)||!statusReadingRecord(map.get(id)))));
+  const readingScope=new Set([...scope].filter(id=>!isSettlementRecord(map.get(id))&&!isReviewDiscussion(map.get(id))&&(entryIds.has(id)||!statusReadingRecord(map.get(id)))));
   const byRelation=new Map<string,string[]>();
   for(const edge of input.edges)if(!edge.from.messageId.startsWith('anon:')&&edge.from.messageId!==edge.relationMessageId){
     const values=byRelation.get(edge.relationMessageId)??[];values.push(edge.from.messageId);byRelation.set(edge.relationMessageId,values);
   }
   const destination=(id:string,affectedId:string):string=>{
     const message=map.get(id),sources=[...new Set(byRelation.get(id)??[])];
+    if(isReviewDiscussion(message))return affectedId;
     if(statusReadingRecord(message)){
       // A reply/reference can introduce a genuinely separate source body.
       // Badges and system records are already presented in the target's status.
@@ -48,7 +49,7 @@ export function readingTasks(input:ReadingInput,scope:ReadonlySet<string>,allowe
     return message&&!isCardMessage(message)&&sources.length===1?sources[0]:id;
   };
   const tasks:ReadingTask[]=[],keys=new Set<string>();
-  const add=(task:ReadingTask)=>{if(map.has(task.destinationId)&&!keys.has(task.key)){keys.add(task.key);tasks.push(task);}};
+  const add=(task:ReadingTask)=>{if(map.has(task.destinationId)&&!isReviewDiscussion(map.get(task.destinationId))&&!keys.has(task.key)){keys.add(task.key);tasks.push(task);}};
   for(const message of input.messages){
     if(!readingScope.has(message.id))continue;
     if((readable(message)||entryIds.has(message.id))&&progress.pendingBodies.has(message.id))add({key:JSON.stringify(['body',message.id,message.revision??1]),destinationId:message.id,targetId:message.id,

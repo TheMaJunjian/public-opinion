@@ -1,4 +1,5 @@
 import StakeTierBadge, { SkinOrnament } from '../../theme/StakeTierBadge';
+import DiscussionReplies from '../DiscussionReplies';
 import type { MouseEvent, ReactNode } from 'react';
 import type { DemoMessage, UnitSelection } from '../../utils/modelBridge';
 import { getRelationTitle } from '../../types';
@@ -55,6 +56,7 @@ export default function OrganizationFrameHeader({ message, messageId, kind, dept
     <div className="organization-frame-members" style={{marginTop:4,display:'flex',flexWrap:'wrap',alignItems:'center',gap:8}}>{joinBadges}
       <MessageMemberCount total={memberCount} direct={directMemberCount} style={{marginLeft:'auto',fontSize:'max(var(--badge-min-size), 10px)',color:'var(--ink-9ca3af)'}} />
     </div>
+    <DiscussionReplies messageId={messageId} />
   </>;
   return <><SkinOrnament />
     <CardWidthHandle messageId={messageId} />
@@ -75,5 +77,6 @@ export default function OrganizationFrameHeader({ message, messageId, kind, dept
     <div className="organization-frame-members" style={{ marginTop: 4, fontSize: 10, color: 'var(--ink-9ca3af)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
       <MessageMemberCount total={memberCount} direct={directMemberCount} style={{ flexShrink: 0 }} showEnterHint={canEnter} />
     </div>
+    <DiscussionReplies messageId={messageId} />
   </>;
 }

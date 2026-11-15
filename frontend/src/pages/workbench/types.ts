@@ -38,6 +38,8 @@ export type ClassifyStackEntry = {
 export type TraceEntry = {
   readingContext?: import('./model/readingTasks').ReadingTask[];
   ids: string[];
+  /** The return target stays fixed while reading navigation changes ids. */
+  originMessageId?: string;
   snapshot: TraceSnapshot | null;
   mode: "trace" | "scope";
   relatedView?: boolean;

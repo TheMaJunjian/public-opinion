@@ -2,9 +2,11 @@ import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { afterEach, expect, it } from 'vitest';
 import { bindRoles, type Message, type Part, type Session, type FeedPage } from '@gonglun/core';
-import { createTestApp, cleanupTestDatabases, testInvitation, withTestContribution } from './test-database.js';
-import { Mutation } from './db.js';
+import { createTestApp, cleanupTestDatabases, testDatabaseUrl, testInvitation, withTestContribution } from './test-database.js';
+import { Mutation, Store } from './db.js';
 import { migrateDiscoveryFeed } from '../../migrate/src/discovery-feed.js';
+import { financialFingerprint } from '../../migrate/src/financial-fingerprint.js';
+import { indexFeedMessages } from './feed-index.js';
 
 afterEach(cleanupTestDatabases);
 type App = Awaited<ReturnType<typeof createTestApp>>;
@@ -125,4 +127,52 @@ it('rebuilds the derived index idempotently without changing public history or b
   expect((await page(alice, { mode: 'latest' })).items.map(item => item.id)).toEqual([original.id]);
   expect(await app.store.message(original.id)).toEqual(original);
   expect(await app.store.account(alice.session.user.id)).toEqual(balance); expect(await app.store.latestSequence()).toBe(sequence);
+});
+
+it('repairs an already stamped version 45 missing its correction index on concurrent startup', async () => {
+  const app = await createTestApp(), alice = await actor(app, 'alice');
+  const original = await send(alice, [text('原文')]);
+  const correction = await app.store.transaction(async () => {
+    const tx = new Mutation(app.store);
+    const value = await tx.create(alice.session.user.id, [text('更正内容'), rel('correct', original.id)]);
+    await tx.commit();
+    await app.store.db.prepare('INSERT INTO feed_hidden VALUES($1,$2)').run(alice.session.user.id, value.id);
+    return value;
+  });
+  const before = {
+    messages: await app.store.db.prepare('SELECT * FROM messages ORDER BY id').all(),
+    history: await app.store.db.prepare('SELECT * FROM changes ORDER BY sequence').all(),
+    finances: await financialFingerprint(app.store.db),
+    hidden: await app.store.db.prepare('SELECT * FROM feed_hidden').all(),
+  };
+  await app.store.transaction(async () => {
+    await app.store.db.exec('DROP TABLE feed_corrections');
+    await app.store.db.prepare('DELETE FROM schema_migrations WHERE version>45').run();
+  });
+  const stores = await Promise.all([Store.open(testDatabaseUrl(), {schema:app.store.db.schema}), Store.open(testDatabaseUrl(), {schema:app.store.db.schema})]);
+  try {
+    const repaired = stores[0]!;
+    expect((await repaired.db.prepare("SELECT to_regclass('feed_corrections') AS name").get())?.name).toBe('feed_corrections');
+    expect(await repaired.db.prepare('SELECT * FROM feed_corrections').all()).toEqual([{sourceId:correction.id,targetId:original.id}]);
+    expect(await repaired.db.prepare('SELECT * FROM messages ORDER BY id').all()).toEqual(before.messages);
+    expect(await repaired.db.prepare('SELECT * FROM changes ORDER BY sequence').all()).toEqual(before.history);
+    expect(await financialFingerprint(repaired.db)).toBe(before.finances);
+    expect(await repaired.db.prepare('SELECT * FROM feed_hidden').all()).toEqual(before.hidden);
+    const migration = await repaired.db.prepare('SELECT * FROM schema_migrations WHERE version=46').all();
+    expect(migration).toHaveLength(1);
+    const reopened = await Store.open(testDatabaseUrl(), {schema:app.store.db.schema});
+    try { expect(await reopened.db.prepare('SELECT * FROM schema_migrations WHERE version=46').all()).toEqual(migration); }
+    finally { await reopened.close(); }
+    expect((await page(alice, {mode:'latest'})).items.find(item => item.id === original.id)?.hasCorrections).toBe(true);
+    await send(alice, [text('修复后正常提交')]);
+  } finally { await Promise.all(stores.map(store => store.close())); }
+});
+
+it('skips an incomplete feed index while historical migrations are still running', async () => {
+  const app = await createTestApp(), alice = await actor(app, 'alice');
+  const message = await send(alice, [text('迁移前的消息')]);
+  await app.store.transaction(async () => {
+    await app.store.db.exec('DROP TABLE feed_corrections');
+    await expect(indexFeedMessages(app.store, [message])).resolves.toBeUndefined();
+  });
 });

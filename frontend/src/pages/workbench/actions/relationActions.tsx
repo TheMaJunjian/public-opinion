@@ -360,7 +360,7 @@ export function handleCrossRefTagClick(dependencies: HandleCrossRefTagClickDepen
 interface HandleInlineBadgeDoubleClickDependencies {
   edges: DemoEdge[];
   setTagPopup: React.Dispatch<React.SetStateAction<{ messageId: string; tagLabel: string; relMsgIds: string[]; x: number; y: number; subDetails?: Array<{ subType: string; customLabel?: string; count: number; }>; } | null>>;
-  enterTemporaryCategory: (force?: boolean) => void;
+  enterTemporaryCategory: (force?: boolean, originMessageId?: string) => void;
   setJoinFilterTargetId: React.Dispatch<React.SetStateAction<string | null>>;
   setCorrectionFilterTargetId: React.Dispatch<React.SetStateAction<string | null>>;
   setViewMode: React.Dispatch<React.SetStateAction<ViewMode>>;
@@ -385,7 +385,7 @@ export function handleInlineBadgeDoubleClick(dependencies: HandleInlineBadgeDoub
   } else if (relType === 'correct') {
     const targetId = relEdges[0]?.to.messageId;
     if (!targetId) return;
-    enterTemporaryCategory(true);
+    enterTemporaryCategory(true, relMsgId);
     setJoinFilterTargetId(null);
     setCorrectionFilterTargetId(targetId);
     setViewMode("list");

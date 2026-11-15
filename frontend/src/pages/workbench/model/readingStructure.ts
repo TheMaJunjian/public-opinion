@@ -1,6 +1,6 @@
 import { getPresentationSpec } from '../../../types';
 import { chronologicalOrder } from '../../../utils/discussionOrder';
-import { isCardMessage, isSettlementRecord, type DemoEdge, type DemoMessage } from '../../../utils/modelBridge';
+import { isCardMessage, isReviewDiscussion, isSettlementRecord, type DemoEdge, type DemoMessage } from '../../../utils/modelBridge';
 import { nextReadingVisit, type ReadingTask } from './readingTasks';
 
 export type ReadingStructureDirection = 'up' | 'peer' | 'down';
@@ -30,7 +30,7 @@ export function indexReadingStructure(messages: readonly DemoMessage[], edges: r
     const owner = messagesById.get(edge.relationMessageId), type = edge.relationType;
     if (getPresentationSpec(type).isContainer || ['read', 'unread', 'join'].includes(type)
       || owner?.kind === 'join' || suppressedIds?.has(edge.relationMessageId)
-      || [owner, messagesById.get(edge.from.messageId), messagesById.get(edge.to.messageId)].some(isSettlementRecord)) continue;
+      || [owner, messagesById.get(edge.from.messageId), messagesById.get(edge.to.messageId)].some(message => isSettlementRecord(message) || isReviewDiscussion(message))) continue;
     const source = edge.from.messageId.startsWith('anon:') ? edge.relationMessageId : edge.from.messageId;
     connect(source, edge.to.messageId, type);
     if (source !== edge.relationMessageId) {

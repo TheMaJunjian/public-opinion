@@ -146,11 +146,12 @@ export function restoreSnapshot(dependencies: RestoreSnapshotDependencies, s: Tr
 }
 
 interface EnterTemporaryCategoryDependencies {
+  originMessageId?: string;
   joinFilterTargetId: string | null;
   correctionFilterTargetId: string | null;
   comparisonMode: boolean;
   comparisonReviewed: boolean;
-  temporaryCategoryStackRef: React.MutableRefObject<{ snapshot: TraceSnapshot; hideJoin: boolean; joinFilterTargetId: string | null; joinFilterDirection: "incoming" | "outgoing"; correctionFilterTargetId: string | null; comparisonMode: boolean; comparisonReviewed: boolean; comparisonTargetId: string | null; comparisonSide: "agree" | "disagree"; comparisonReviewBaseMessages: DemoMessage[] | null; comparisonReviewBaseEdges: DemoEdge[] | null; }[]>;
+  temporaryCategoryStackRef: React.MutableRefObject<{ originMessageId?: string; snapshot: TraceSnapshot; hideJoin: boolean; joinFilterTargetId: string | null; joinFilterDirection: "incoming" | "outgoing"; correctionFilterTargetId: string | null; comparisonMode: boolean; comparisonReviewed: boolean; comparisonTargetId: string | null; comparisonSide: "agree" | "disagree"; comparisonReviewBaseMessages: DemoMessage[] | null; comparisonReviewBaseEdges: DemoEdge[] | null; }[]>;
   captureSnapshot: () => TraceSnapshot;
   msgFilter: MessageFilterSettings;
   joinFilterDirection: "incoming" | "outgoing";
@@ -168,6 +169,7 @@ export function enterTemporaryCategory(dependencies: EnterTemporaryCategoryDepen
     || comparisonReviewed;
   if (isTemporaryCategoryActive && !force) return;
   temporaryCategoryStackRef.current.push({
+    originMessageId: dependencies.originMessageId,
     snapshot: captureSnapshot(),
     hideJoin: msgFilter.hideJoin,
     joinFilterTargetId,
@@ -183,7 +185,7 @@ export function enterTemporaryCategory(dependencies: EnterTemporaryCategoryDepen
 }
 
 interface ExitTemporaryCategoryDependencies {
-  temporaryCategoryStackRef: React.MutableRefObject<{ snapshot: TraceSnapshot; hideJoin: boolean; joinFilterTargetId: string | null; joinFilterDirection: "incoming" | "outgoing"; correctionFilterTargetId: string | null; comparisonMode: boolean; comparisonReviewed: boolean; comparisonTargetId: string | null; comparisonSide: "agree" | "disagree"; comparisonReviewBaseMessages: DemoMessage[] | null; comparisonReviewBaseEdges: DemoEdge[] | null; }[]>;
+  temporaryCategoryStackRef: React.MutableRefObject<{ originMessageId?: string; snapshot: TraceSnapshot; hideJoin: boolean; joinFilterTargetId: string | null; joinFilterDirection: "incoming" | "outgoing"; correctionFilterTargetId: string | null; comparisonMode: boolean; comparisonReviewed: boolean; comparisonTargetId: string | null; comparisonSide: "agree" | "disagree"; comparisonReviewBaseMessages: DemoMessage[] | null; comparisonReviewBaseEdges: DemoEdge[] | null; }[]>;
   setMsgFilter: React.Dispatch<React.SetStateAction<MessageFilterSettings>>;
   setJoinFilterTargetId: React.Dispatch<React.SetStateAction<string | null>>;
   setJoinFilterDirection: React.Dispatch<React.SetStateAction<"incoming" | "outgoing">>;
@@ -213,11 +215,11 @@ export function exitTemporaryCategory(dependencies: ExitTemporaryCategoryDepende
   setComparisonSide(entry.comparisonSide);
   setComparisonReviewBaseMessages(entry.comparisonReviewBaseMessages);
   setComparisonReviewBaseEdges(entry.comparisonReviewBaseEdges);
-  restoreSnapshot(entry.snapshot, { restoreMessageFilter: options?.restoreMessageFilter });
+  restoreSnapshot(entry.snapshot, { restoreMessageFilter: options?.restoreMessageFilter, pulseMessageId: entry.originMessageId });
 }
 
 interface ExitAllTemporaryCategoriesDependencies {
-  temporaryCategoryStackRef: React.MutableRefObject<{ snapshot: TraceSnapshot; hideJoin: boolean; joinFilterTargetId: string | null; joinFilterDirection: "incoming" | "outgoing"; correctionFilterTargetId: string | null; comparisonMode: boolean; comparisonReviewed: boolean; comparisonTargetId: string | null; comparisonSide: "agree" | "disagree"; comparisonReviewBaseMessages: DemoMessage[] | null; comparisonReviewBaseEdges: DemoEdge[] | null; }[]>;
+  temporaryCategoryStackRef: React.MutableRefObject<{ originMessageId?: string; snapshot: TraceSnapshot; hideJoin: boolean; joinFilterTargetId: string | null; joinFilterDirection: "incoming" | "outgoing"; correctionFilterTargetId: string | null; comparisonMode: boolean; comparisonReviewed: boolean; comparisonTargetId: string | null; comparisonSide: "agree" | "disagree"; comparisonReviewBaseMessages: DemoMessage[] | null; comparisonReviewBaseEdges: DemoEdge[] | null; }[]>;
   restoreSnapshot: (s: TraceSnapshot | null, options?: RestoreSnapshotOptions) => void;
   setMsgFilter: React.Dispatch<React.SetStateAction<MessageFilterSettings>>;
   setJoinFilterTargetId: React.Dispatch<React.SetStateAction<string | null>>;
@@ -265,7 +267,7 @@ export function enterTrace(dependencies: EnterTraceDependencies, messageId: stri
   operationLog(`进入${options?.mode === 'scope' ? '分类' : '追溯'}`, `message=${messageId}`);
   const snapshot = captureSnapshot();
   const entry: TraceEntry = {
-    ids: [messageId], snapshot, mode: options?.mode ?? "trace", scopeRelationMessageId: options?.scopeRelationMessageId, relatedView: options?.relatedView,
+    ids: [messageId], originMessageId: messageId, snapshot, mode: options?.mode ?? "trace", scopeRelationMessageId: options?.scopeRelationMessageId, relatedView: options?.relatedView,
     classifyRelMsgId, classifyStack: [...classifyStackRef.current],
   };
   setTraceExpandedFrameIds(new Set());
@@ -307,7 +309,7 @@ export function enterTraceMultiple(dependencies: EnterTraceMultipleDependencies,
   operationLog(`进入${options?.mode === 'scope' ? '分类' : '追溯'}`, `messages=${messageIds.join(',')}`);
   const snapshot = captureSnapshot();
   const entry: TraceEntry = {
-    ids: messageIds, snapshot, mode: options?.mode ?? "trace", scopeRelationMessageId: options?.scopeRelationMessageId,
+    ids: messageIds, originMessageId: messageIds[0], snapshot, mode: options?.mode ?? "trace", scopeRelationMessageId: options?.scopeRelationMessageId,
     classifyRelMsgId, classifyStack: [...classifyStackRef.current],
   };
   setTraceExpandedFrameIds(new Set());
@@ -340,7 +342,7 @@ interface ExitTraceDependencies {
   classifyStackRef: React.MutableRefObject<ClassifyStackEntry[]>;
   setClassifyRelMsgId: React.Dispatch<React.SetStateAction<string | null>>;
   setClassifyKey: React.Dispatch<React.SetStateAction<number>>;
-  restoreSnapshot: (s: TraceSnapshot | null) => void;
+  restoreSnapshot: (s: TraceSnapshot | null, options?: RestoreSnapshotOptions) => void;
 }
 
 export function exitTrace(dependencies: ExitTraceDependencies): void {
@@ -359,7 +361,7 @@ export function exitTrace(dependencies: ExitTraceDependencies): void {
   classifyStackRef.current = entry?.classifyStack ?? [];
   setClassifyRelMsgId(entry?.classifyRelMsgId ?? null);
   setClassifyKey(key => key + 1);
-  if (snapshot) restoreSnapshot(snapshot);
+  if (snapshot) restoreSnapshot(snapshot, { pulseMessageId: entry?.originMessageId ?? entry?.ids[0] });
 }
 
 interface ExitAllTraceDependencies {
@@ -370,7 +372,7 @@ interface ExitAllTraceDependencies {
   classifyStackRef: React.MutableRefObject<ClassifyStackEntry[]>;
   setClassifyRelMsgId: React.Dispatch<React.SetStateAction<string | null>>;
   setClassifyKey: React.Dispatch<React.SetStateAction<number>>;
-  restoreSnapshot: (s: TraceSnapshot | null) => void;
+  restoreSnapshot: (s: TraceSnapshot | null, options?: RestoreSnapshotOptions) => void;
 }
 
 export function exitAllTrace(dependencies: ExitAllTraceDependencies): void {
@@ -386,7 +388,7 @@ export function exitAllTrace(dependencies: ExitAllTraceDependencies): void {
   classifyStackRef.current = traceEntries.length > 0 ? traceEntries[0].classifyStack : [];
   setClassifyRelMsgId(traceEntries.length > 0 ? traceEntries[0].classifyRelMsgId : null);
   setClassifyKey(key => key + 1);
-  if (snapshot) restoreSnapshot(snapshot);
+  if (snapshot) restoreSnapshot(snapshot, { pulseMessageId: traceEntries[0].originMessageId ?? traceEntries[0].ids[0] });
 }
 
 interface EnterClassificationDependencies {

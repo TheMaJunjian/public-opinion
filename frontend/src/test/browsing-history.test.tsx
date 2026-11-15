@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useBrowsingHistory } from '../pages/workbench/useBrowsingHistory';
-import { BrowserRouter, HashRouter, useLocation } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Link, Route, Routes, useLocation } from 'react-router-dom';
 import { useMessageLinkNavigation } from '../hooks/useMessageLinkNavigation';
 import { messageNavigationUrl } from '../utils/messageLink';
 
@@ -61,6 +61,28 @@ function LinkedWorkbench({ onLink }: { onLink: (id: string) => void }) {
     <button onClick={history.forward} disabled={!history.canGoForward}>前进</button>
   </>;
 }
+
+it.each([false, true])('推荐入口可用工具栏返回，并由浏览器前进回到消息（hash=%s）', async hash => {
+  window.history.replaceState({ key: 'feed', idx: 0 }, '', hash ? '/#/' : '/');
+  const Router = hash ? HashRouter : BrowserRouter, onLink = vi.fn();
+  render(<Router><Routes>
+    <Route path="/" element={<Link to="/messages?msg=recommended&locate=1">推荐消息</Link>} />
+    <Route path="/messages" element={<LinkedWorkbench onLink={onLink} />} />
+  </Routes></Router>);
+  fireEvent.click(screen.getByRole('link', { name: '推荐消息' }));
+  expect(screen.getByLabelText('分类')).toHaveTextContent('recommended');
+  expect(screen.getByRole('button', { name: '返回' })).toBeEnabled();
+  expect(screen.getByRole('button', { name: '前进' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: 'C' }));
+  fireEvent.click(screen.getByRole('button', { name: '返回' }));
+  await waitFor(() => expect(screen.getByLabelText('分类')).toHaveTextContent('recommended'));
+  expect(screen.getByRole('button', { name: '前进' })).toBeEnabled();
+  fireEvent.click(screen.getByRole('button', { name: '返回' }));
+  await screen.findByRole('link', { name: '推荐消息' });
+  await traverse(1);
+  expect(screen.getByLabelText('分类')).toHaveTextContent('recommended');
+  expect(screen.getByRole('button', { name: '返回' })).toBeEnabled();
+});
 
 it.each([false, true])('分类网址同步路由、浏览器历史和刷新入口，保留草稿与浏览位置（hash=%s）', async hash => {
   window.history.replaceState({ key: 'linked', idx: 0 }, '', `${hash ? '/#' : ''}/messages?view=graph&locate=1`);

@@ -5,6 +5,7 @@ import { DomainError, type Store } from './db.js';
 import { primaryRelationSql, displayAttachmentSql, isDependentMessageSql, isReviewDiscussionSql, isSettlementRecordSql } from './display-dependencies.js';
 import { attentionUsers, primaryRelation, stakesFor, tagCountsFor, usersFor, viewsFor } from './ui-projections.js';
 import { assertMessageReadable } from './moderation-visibility.js';
+import { recommendedClassificationPath } from './recommended-memberships.js';
 
 const id = z.string().min(1).max(100);
 const querySchema = z.object({ focusId: id, classificationId: id.nullable().optional(), cursor: z.string().max(1000).optional(),
@@ -71,7 +72,9 @@ export async function discussionSnapshot(store: Store, raw: unknown, userId: str
   }
   const params: unknown[] = [traceIds ?? category ?? focus.id, cursor.through, cursor.sequence, cursor.id, PAGE_SIZE + 1, focus.id];
   const selectionSql = traceIds ? 'm.id=ANY($1::text[])'
-    : category ? `COALESCE((SELECT mm."parentId" FROM memberships mm WHERE mm."memberId"=m.id),'root')=$1 AND NOT ${isDependentMessageSql('m')}`
+    : category ? `((COALESCE((SELECT mm."parentId" FROM memberships mm WHERE mm."memberId"=m.id),'root')=$1)
+      OR EXISTS(SELECT 1 FROM membership_actions a WHERE a.body->>'memberId'=m.id AND a.body->>'parentId'=$1 AND NOT a.disabled))
+      AND NOT ${isDependentMessageSql('m')}`
     : `m.id IN (SELECT "sourceId" FROM refs WHERE "targetId"=$1)
       AND COALESCE(${primaryRelationSql('m')}->>'relation','') NOT IN ('${[...effects,...containers,'member-of','join'].join("','")}')
       AND NOT ${isReviewDiscussionSql('m')}
@@ -181,6 +184,7 @@ export async function discussionSnapshot(store: Store, raw: unknown, userId: str
   return { regionId, sequence, scope: { messageId: null, title: '当前讨论' }, messages: views, relations: views.filter(isRelationView), users,
     stakes: await stakesFor(store, ids, users), tagCounts: await tagCountsFor(store, ids), attentionUsers: await attentionUsers(store, ids),
     discussion: { focusId: focus.id, pageIds: page.map(message => message.id), nextCursor,
+      recommendedPath: await recommendedClassificationPath(store, focus.id, userId),
       expandedIds: [...requested].filter(([id,level])=>level === body && records.has(id)).map(([id])=>id),
       cursor: Buffer.from(JSON.stringify(cursor)).toString('base64url'), memberCounts } };
 }

@@ -17,6 +17,21 @@ beforeEach(async () => {
 });
 afterEach(() => { resetRequestOperations(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
+it('refreshes a retained feed as a bounded read without a signing key or command operation', async () => {
+  localStorage.removeItem('privateKey:device:alice');
+  vi.mocked(signPayloadWithPrivateJwk).mockClear();
+  const fetcher = vi.fn(async () => new Response(JSON.stringify({ mode: 'recommended', items: [], nextCursor: null })));
+  vi.stubGlobal('fetch', fetcher);
+  const controller = new AbortController();
+  await api.getFeed('recommended', undefined, controller.signal, { limit: 40, retain: ['a', 'b'] });
+  const [url, options] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+  expect(url).toBe('/api/ui/feed/refresh');
+  expect(JSON.parse(String(options.body))).toEqual({ mode: 'recommended', limit: 40, retain: ['a', 'b'] });
+  expect(options.headers).not.toHaveProperty('X-Signature');
+  expect(signPayloadWithPrivateJwk).not.toHaveBeenCalled();
+  expect(getOperations()).toEqual([]);
+});
+
 it('sends administrator actions to the private API with CSRF and no message signature', async () => {
   localStorage.removeItem('privateKey:device:alice');
   vi.mocked(signPayloadWithPrivateJwk).mockClear();

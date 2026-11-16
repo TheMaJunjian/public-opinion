@@ -20,6 +20,9 @@
 .feed-list { display: grid; gap: 16px; }
 .feed-card { background: var(--surface-card); border: 1px solid var(--border-default); border-radius: 12px; padding: 22px 24px 12px; min-width: 0; }
 .feed-reason { color: var(--text-secondary); font-size: 12px; margin-bottom: 16px; }
+.feed-reason { display: flex; justify-content: space-between; gap: 12px; }
+.feed-rank-change { color: var(--text-primary); white-space: nowrap; }
+.feed-live-notice { position: sticky; top: 8px; z-index: 2; background: var(--surface-card); }
 .feed-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; color: var(--text-secondary); font-size: 12px; margin-bottom: 9px; }
 .feed-meta span:first-child { border: 1px solid var(--border-default); border-radius: 4px; padding: 1px 5px; }
 .feed-meta time { margin-left: auto; }

@@ -11,7 +11,7 @@ import { executeBatch, executeCommand, previewBatch } from './ui-commands.js';
 import { sendSnapshot } from './snapshot-response.js';
 import { windowSnapshot } from './window-snapshot.js';
 import { discussionSnapshot } from './discussion-snapshot.js';
-import { feedPage, feedQuerySchema, feedHiddenSchema, hideFeedMessage } from './feed.js';
+import { feedPage, feedQuerySchema, feedRefreshSchema, feedHiddenSchema, hideFeedMessage } from './feed.js';
 import { measureQueries } from './query-timing.js';
 import {bodyVersionSchema} from './reference-schema.js';
 import {validateBodyVersion} from './validation.js';
@@ -37,16 +37,21 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
     });
     const get=(path:string,handler:(req:Request,res:Response,next:NextFunction)=>Promise<unknown>)=>
         router.get(path,(req,res,next)=>{void store.read(()=>handler(req,res,next)).catch(next);});
-    get('/feed',async(req,res)=>{
+    const respondFeed = async(req: Request,res: Response,query: Parameters<typeof feedPage>[2])=>{
         const started = performance.now();
         const measured = await measureQueries(async()=>{
             const session=await requireSession(store,req);
-            const page=await feedPage(store,session.user.id,feedQuerySchema.parse(req.query));
+            const page=await feedPage(store,session.user.id,query);
             return res.locals.reviewSanitize ? await res.locals.reviewSanitize(page) : page;
         });
         res.set('Cache-Control','private, no-store')
             .set('Server-Timing',`feed;dur=${(performance.now()-started).toFixed(1)}, db;dur=${measured.ms.toFixed(1)};desc="${measured.count} queries"`)
             .type('json').send(JSON.stringify(measured.value));
+    };
+    get('/feed',async(req,res)=>respondFeed(req,res,feedQuerySchema.parse(req.query)));
+    // A bounded read body avoids putting hundreds of retained IDs into a URL.
+    router.post('/feed/refresh',(req,res,next)=>{
+        void store.read(()=>respondFeed(req,res,feedRefreshSchema.parse(req.body))).catch(next);
     });
     router.post('/feed/hidden',async(req,res,next)=>{
         try {

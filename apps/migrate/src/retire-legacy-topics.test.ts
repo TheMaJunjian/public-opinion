@@ -165,12 +165,12 @@ it('preserves private notification data when the maintenance CLI retires Topics 
   const { store } = await fixture();
   await store.transaction(() => migrateNotificationMemberships(store));
   expect(await store.db.prepare('SELECT 1 FROM notification_membership_states WHERE active').get()).toBeDefined();
-  const run = (file: string, args: string[], input?: string) => {
+  const run = (file: string, args: string[], input?: string, expectedStatus = 0) => {
     const result = spawnSync(process.execPath, [resolve('node_modules/tsx/dist/cli.mjs'), resolve(`apps/migrate/src/${file}.ts`), ...args], {
       encoding: 'utf8', input, maxBuffer: 16 * 1024 * 1024,
       env: { ...process.env, DATABASE_URL: testDatabaseUrl(), DATABASE_SCHEMA: store.db.schema },
     });
-    expect(result.status, `${file}: ${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.status, `${file}: ${result.stdout}\n${result.stderr}`).toBe(expectedStatus);
     return JSON.parse(result.stdout);
   };
   const before = run('topic-retirement-audit', ['capture', '-']);
@@ -181,4 +181,11 @@ it('preserves private notification data when the maintenance CLI retires Topics 
   expect(report.verified).toBe(true);
   expect(report.checks['unchanged:notifications']).toBe(true);
   expect(report.checks['unchanged:notification_membership_states']).toBe(true);
+  expect(report.checks.noRetiredRecommendedMembershipRemaining).toBe(true);
+  expect(report.checks.recommendedMembershipSourcesValid).toBe(true);
+  await store.transaction(() => store.db.prepare('UPDATE recommended_memberships SET "parentId"=$1 WHERE "memberId"=$2').run('topic-a', 'leaf'));
+  const invalid = run('topic-retirement-audit', ['verify', '-', '-'], JSON.stringify(before), 1);
+  expect(invalid.verified).toBe(false);
+  expect(invalid.checks.noRetiredRecommendedMembershipRemaining).toBe(false);
+  expect(invalid.checks.recommendedMembershipSourcesValid).toBe(false);
 });

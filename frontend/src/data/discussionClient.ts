@@ -7,6 +7,7 @@ import { mergeDiscussionSnapshots } from './mergeDiscussionSnapshots';
 
 export interface DiscussionPageState {
   focusId: string; classificationId: string | null; loadedCount: number; hasMore: boolean;
+  recommendedPath?: NonNullable<WorkbenchSnapshot['discussion']>['recommendedPath'];
   expanded: boolean; loading: boolean; loadingMore: boolean; error?: string; restricted?: boolean;
 }
 
@@ -30,6 +31,7 @@ export function createDiscussionClient(initialFocus: string, options: {
   const queryFor = (scope: ZhihuViewerScope): DiscussionQuery => ({ focusId, classificationId: scope.classificationId ?? options.baseClassificationId ?? (!scope.trace && rootScope ? 'root' : null),
     extraIds: [...new Set([...scope.extraIds ?? [], ...scope.pinnedIds ?? []])].sort(), recordIds: [...new Set(scope.recordIds ?? [])].sort(), trace: scope.trace });
   const report = (loading: boolean, error?: string, restricted?: boolean) => options.status({ focusId,
+    recommendedPath: snapshot?.discussion?.recommendedPath,
     classificationId: queryFor(activeScope).classificationId
       ?? (['CLASSIFY','SUMMARY','MERGE','ARRANGE'].includes(snapshot?.messages.find(message => message.id === focusId)?.relationType ?? '') ? focusId : null),
     loadedCount: snapshot?.discussion?.pageIds.length ?? 0, hasMore: !!nextCursor, expanded, loading, loadingMore: loading && loadingMore, error, restricted });

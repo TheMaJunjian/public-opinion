@@ -46,6 +46,7 @@ import {migrateReviewEnrollmentAttachments} from './review-enrollment-attachment
 import {migrateReviewSelfStakes} from './review-self-stakes.js';
 import {migrateLedgerOperations} from './ledger-operations.js';
 import {migrateDiscoveryFeed} from './discovery-feed.js';
+import { indexRecommendedMemberships, recommendedMembershipSchema } from '../../server/src/recommended-memberships.js';
 
 export interface Migration { version: number; name: string; changesFinances?: boolean; up(): Promise<void> }
 
@@ -133,7 +134,9 @@ export function migrationsFor(store: Store): Migration[] {
   {version:45,name:'lightweight-discovery-feed',up:()=>migrateDiscoveryFeed(store)},
   // Early v45 databases were stamped before the correction index was added.
   // Rebuild derived feed data without replaying messages or resetting preferences.
-  {version:46,name:'complete-discovery-feed-index',up:()=>migrateDiscoveryFeed(store)}];
+  {version:46,name:'complete-discovery-feed-index',up:()=>migrateDiscoveryFeed(store)},
+  {version:47,name:'content-only-discovery-feed',up:()=>migrateDiscoveryFeed(store)},
+  {version:48,name:'statistical-discovery-memberships',up:async()=>{await store.db.exec(recommendedMembershipSchema);await indexRecommendedMemberships(store);}}];
 }
 
 /** Runs under the cross-process write lock. Failed upgrades roll back together. */

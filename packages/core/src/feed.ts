@@ -1,5 +1,6 @@
 /** Lightweight discovery views; reading a preview never confirms a message as read. */
 export type FeedMode = 'recommended' | 'following' | 'latest';
+export interface ClassificationPathEntry { id: string; title: string }
 export interface FeedPreview {
   id: string;
   revision: number;

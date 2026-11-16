@@ -46,4 +46,6 @@ export const DATABASE_MIGRATIONS = [
   'ledger-operation-groups',
   'lightweight-discovery-feed',
   'complete-discovery-feed-index',
+  'content-only-discovery-feed',
+  'statistical-discovery-memberships',
 ] as const;

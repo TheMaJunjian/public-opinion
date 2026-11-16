@@ -67,7 +67,7 @@ export function getPrivateKeyForUser(username: string): string | null {
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (path === '/points/activity' || path.startsWith('/notifications') || path === '/feed/hidden') return requestCore<T>(path, options);
-  const readOnly=['/snapshot/query','/snapshot/discussion','/body-versions/resolve'].includes(path.split('?')[0]);
+  const readOnly=['/snapshot/query','/snapshot/discussion','/body-versions/resolve','/feed/refresh'].includes(path.split('?')[0]);
   const queued = options.method && options.method !== 'GET' && path !== '/reading-state'&&!readOnly ? queueCommand(path, options) : null;
   if (queued) return queued as T;
   const writes = !!options.method && options.method !== 'GET'&&!readOnly;
@@ -110,7 +110,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 export const getReadingState = () => request<{marks:ReadingMark[]}>('/reading-state');
-export const getFeed = (mode: FeedMode, cursor?: string, signal?: AbortSignal) => {
+export const getFeed = (mode: FeedMode, cursor?: string, signal?: AbortSignal, window?: { limit: number; retain: string[] }) => {
+  if (window) return request<FeedPage>('/feed/refresh', { method: 'POST', body: JSON.stringify({ mode, ...window }), signal });
   const query = new URLSearchParams({ mode, limit: '20' });
   if (cursor) query.set('cursor', cursor);
   return request<FeedPage>(`/feed?${query}`, { signal });
@@ -142,7 +143,7 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
   const privateReading=path==='/reading-state';
   const privateActivity=path==='/points/activity'||path==='/moderation/presence';
   const privateNotifications=path.startsWith('/notifications') || path.startsWith('/admin/') || path === '/feed/hidden';
-  const readOnlySnapshot = ['/snapshot/query','/snapshot/discussion','/body-versions/resolve'].includes(path.split('?')[0]);
+  const readOnlySnapshot = ['/snapshot/query','/snapshot/discussion','/body-versions/resolve','/feed/refresh'].includes(path.split('?')[0]);
   let identityKey: string | undefined;
   const checkOwner = () => { if (requestOwner() !== owner) throw new DOMException('账户已切换，请重新操作', 'AbortError'); };
   if (path === '/auth/signing-key' || path === '/logout' || (privateReading||privateActivity||privateNotifications)&&options.method==='POST') {

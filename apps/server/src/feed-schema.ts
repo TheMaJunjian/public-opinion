@@ -1,4 +1,11 @@
 /** Derived previews and private discovery preferences are separate from the public journal. */
+export const recommendedMembershipSchema = `
+CREATE TABLE IF NOT EXISTS recommended_memberships (
+  "memberId" TEXT PRIMARY KEY, "parentId" TEXT NOT NULL, "sourceId" TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS recommended_membership_parent ON recommended_memberships("parentId");
+CREATE INDEX IF NOT EXISTS membership_action_parent ON membership_actions((body->>'parentId'));
+`;
 export const feedSchema = `
 CREATE TABLE IF NOT EXISTS feed_entries (
   id TEXT PRIMARY KEY, "authorId" TEXT NOT NULL, revision INTEGER NOT NULL,

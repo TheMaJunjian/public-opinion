@@ -8,6 +8,7 @@ import { upgradeDatabase } from './database-upgrade.js';
 import { recordNotifications } from './notifications.js';
 import { indexModerationDependencies, affectModerationDependents } from './moderation-visibility.js';
 import { indexFeedMessages } from './feed-index.js';
+import { indexRecommendedMemberships } from './recommended-memberships.js';
 
 class DatabaseUpgradeRequired extends Error {}
 
@@ -199,6 +200,7 @@ export class Mutation {
     await indexFeedMessages(this.store, messages);
     const ledger = this.store.db.ledger.slice(this.ledgerStart);
     await affectModerationDependents(this.store,this.affected);
+    await indexRecommendedMemberships(this.store, this.affected);
     const change: Change = { sequence,previousSequence,messages:[...this.messages.values()],memberships:[...this.memberships.values()],removedMemberships:[...this.removed],states:await statesFor(this.store,[...this.affected]),ledger,treasury:{operating:await this.store.setting<number>('operating'),issued:await this.store.setting<number>('minted')} };
     if (this.pointsReset) change.pointsReset = this.pointsReset;
     if (this.createdAccountIds) change.createdAccountIds = this.createdAccountIds;

@@ -3,6 +3,7 @@ export * from './usage-rewards.js';
 export * from './model.js';
 export * from './replay.js';
 export * from './membership.js';
+export * from './recommended-membership.js';
 export * from './snapshot-transport.js';
 export * from './workbench.js';
 export * from './archive-update.js';

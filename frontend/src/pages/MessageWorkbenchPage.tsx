@@ -90,6 +90,7 @@ import { useHomeFilterReadingMarks } from '../hooks/useHomeFilterReadingMarks';
 import { deriveMessagesToShow } from './workbench/projections/messagesToShow';
 import { deriveNormalGraphProjection } from './workbench/projections/normalGraphProjection';
 import {deriveContainerEffect,isContainerType} from './workbench/model/containerEffect';
+import DiscussionNavigation from '../components/DiscussionNavigation';
 import { deriveReclassificationJoinCount } from './workbench/projections/reclassificationJoinCount';
 import { deriveSendValidationLabel } from './workbench/projections/sendValidationLabel';
 import { deriveSingleButtonEnabled } from './workbench/projections/singleButtonEnabled';
@@ -3604,6 +3605,20 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const relationSpringWidth = Math.max(0, effectiveContainerWidth - relationBarMinWidth);
   const panelStickyTop = relationBarHeight;
   const isRouteScope = scopeMessageId !== 'root' && !isInsideClassify && traceEntries.length === 0;
+  const personalClassificationPath: Array<{id:string;title:string}> = [];
+  if (discussionPage) {
+    const seen = new Set<string>([discussionPage.focusId]);
+    let member = discussionPage.focusId;
+    for (;;) {
+      const join = containerEffect.joinByTarget.get(member);
+      const parent = join ? containerEffect.relationById.get(join)?.sourceMessageId : null;
+      if (!parent || seen.has(parent)) break;
+      seen.add(parent);
+      personalClassificationPath.unshift({ id: msgMap.get(parent)?.restricted ? '' : parent,
+        title: (correctionVersions.get(parent)?.current?.content ?? msgMap.get(parent)?.content ?? '分类').replace(/\s+/g, ' ').slice(0, 100) });
+      member = parent;
+    }
+  }
   const classificationHeader = (recordCategory||isInsideClassify||isRouteScope||isTemporaryJoinCategory||correctionFilterTargetId!==null||comparisonMode)?<DeferredWorkbench label="分类标题" blocksDrawing><ClassificationHeader recordCategory={recordCategory} reviewFolder={!!reviewFolderIds} isTemporaryFrameCategory={isTemporaryFrameCategory} isInsideClassify={isInsideClassify || isRouteScope} isRouteScope={isRouteScope} isTemporaryJoinCategory={isTemporaryJoinCategory} correctionFilterTargetId={correctionFilterTargetId} comparisonMode={comparisonMode}
                 zhihuQuestion={currentZhihuQuestion ? { description: currentQuestionFields?.body ?? currentClassifyRelMsg?.content ?? '', known: currentZhihuQuestion.descriptionKnown === true,
                   completeness: currentZhihuQuestion.descriptionCompleteness ?? 'unknown', createdAt: currentZhihuQuestion.createdAt, createdAtText: currentZhihuQuestion.createdAtText,
@@ -3646,7 +3661,12 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
               <DeferredWorkbench label="视图工具栏" blocksDrawing><WorkbenchViewToolbar top={panelStickyTop}
                 onJump={confirmMessageIdNavigation}
                 history={browsingHistory}
-                scopeHeader={!containerPreview && !comparisonReviewed ? classificationHeader : undefined}
+                scopeHeader={!containerPreview && !comparisonReviewed ? <>
+                  {discussionPage?.recommendedPath && <DiscussionNavigation recommended={discussionPage.recommendedPath} personal={personalClassificationPath}
+                    onCategory={id => handleNavigateToMessage(id, { select: false, enterCategory: true })}
+                    onRelated={() => enterTrace(discussionPage.focusId, { relatedView: true })} />}
+                  {classificationHeader}
+                </> : undefined}
                 discussionStatus={!isPreloaded && <DiscussionStatusControl state={discussionPage}
                   onRefresh={() => {
                     if (discussionPage) void refreshDiscussion().catch(error => showAlert(error.message));

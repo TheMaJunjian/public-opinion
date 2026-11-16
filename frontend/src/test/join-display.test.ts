@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest';
+import { resolveRecommendedMemberships } from '@gonglun/core';
 import type { Message, Relation } from '../types';
 import { convertMessagesToDemoModel } from '../utils/modelBridge';
 import { deriveContainerEffect } from '../pages/workbench/model/containerEffect';
@@ -86,6 +87,27 @@ it('uses support amounts for viewers without choices, with a stable tie and no i
   t.check('C', null);
   t.stakes['join-C'].truth.con = 200;
   t.check('B', null);
+});
+
+it('shares the same public fallback when competing classifications form a cycle, independent of input order', () => {
+  const t = fixture();
+  for (const [id, memberId, support] of [['A', 'B', 200], ['B', 'A', 180], ['C', 'B', 50], ['D', 'A', 40]] as const) {
+    t.relations.find(relation => relation.id === `join-${id}`)!.targetRefs = [{ kind: 'relation', relationId: memberId }];
+    t.stakes[`join-${id}`].truth.pro = support;
+  }
+  for (const reversed of [false, true]) {
+    if (reversed) t.relations.reverse();
+    const effect = t.effect(null);
+    const candidates = t.relations.filter(relation => relation.relationType === 'JOIN').flatMap(join => join.targetRefs.map(ref => ({
+      id: join.id, memberId: ref.kind === 'relation' ? ref.relationId : ref.messageId,
+      parentId: join.sourceMessageId!, support: t.stakes[join.id].truth.pro, createdAt: join.createdAt,
+      sequence: join.sequence ?? 0, order: join.payload!.membershipHistory!.order,
+    })));
+    const shared = resolveRecommendedMemberships(candidates, effect.suppressed);
+    expect(new Map([...shared].map(([id, value]) => [id, value.sourceId]))).toEqual(effect.joinByTarget);
+    expect(shared.get('A')?.parentId === 'B' && shared.get('B')?.parentId === 'A').toBe(false);
+    expect(shared.size).toBe(2);
+  }
 });
 
 it('assumed agreement uses the same latest-choice rules without mutating the source', () => {

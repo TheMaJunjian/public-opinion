@@ -1,19 +1,25 @@
 import { hasModeratedContent, hasReviewContext, messageDisplayDependency, relationLabelPart, relations, textOf, type Message } from '@gonglun/core';
 import type { Store } from './db.js';
 
-const allowed = new Set(['reply', 'reference', 'annotation', 'classify', 'summary', 'merge', 'arrange', 'proposal', 'rule-change', 'operations', 'delegate', 'release']);
-const labels: Record<string, string> = { reply: '回复', reference: '引用', annotation: '注释', classify: '分类', summary: '总结', merge: '归并', arrange: '排列', proposal: '提案', 'rule-change': '提案', operations: '公告', delegate: '委托', release: '代码' };
+const labels: Record<string, string> = { classify: '分类', summary: '总结', proposal: '提案', 'rule-change': '提案', operations: '公告', delegate: '委托', release: '代码' };
 
 export function feedEntry(message: Message) {
   const actions = relations(message);
   const primary = actions.find(part => !(part.relation === 'member-of' && !part.roles.member?.length)
     && !((part.id === 'self-stance' || part.id.startsWith('minimum-self-stance-')) && ['agree', 'disagree'].includes(part.relation)
       && part.roles.target?.length === 1 && part.roles.target[0]!.reference.messageId === message.id));
-  // Relation labels, moderation, accounting and pure structural operations are not reading cards.
-  if (message.authorId === 'system' || hasReviewContext(message) || primary && !allowed.has(primary.relation) || relationLabelPart(message.parts)) return null;
+  // Only content types belong in discovery, even when a relation record has authored text.
+  if (message.authorId === 'system' || hasReviewContext(message) || primary && !Object.hasOwn(labels, primary.relation) || relationLabelPart(message.parts)) return null;
   const data = Object.assign({}, ...message.parts.flatMap(part => part.type === 'data' && part.value && typeof part.value === 'object' && !Array.isArray(part.value) ? [part.value] : []));
   if (!hasModeratedContent(message, actions, data)) return null;
-  const excerpt = textOf(message).replace(/\s+/g, ' ').trim().slice(0, 420);
+  const savedText = (value: unknown) => typeof value === 'string' ? value.trim() : '';
+  // Old organization records store their card text in data alongside a generated body.
+  // Test each part without payload text so a saved title cannot make that description readable.
+  const body = textOf({ ...message, parts: message.parts.filter(part => hasModeratedContent({ parts: [part] }, actions, {})) });
+  const content = primary && ['classify', 'summary'].includes(primary.relation)
+    ? savedText(data.title) || savedText(data.content) || body
+    : body || savedText(data.content) || savedText(data.title);
+  const excerpt = content.replace(/\s+/g, ' ').trim().slice(0, 420);
   if (!excerpt) return null;
   return { id: message.id, authorId: message.authorId, revision: message.revision, sequence: message.sequence,
     createdAt: message.createdAt, updatedAt: message.updatedAt, excerpt,

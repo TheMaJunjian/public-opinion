@@ -211,6 +211,7 @@ export function isRelationView(view: NativeMessageView): view is NativeMessageVi
 export interface WorkbenchSnapshot {
   /** A complete semantic context for one bounded discussion page, not a global catalog. */
   discussion?: { focusId: string; pageIds: string[]; nextCursor: string | null;
+    recommendedPath?: import('./feed.js').ClassificationPathEntry[];
     /** Stable start of this batch, used to revalidate already loaded replies. */
     cursor?: string;
     /** Bodies whose owned links/inline members are open, excluding background context. */

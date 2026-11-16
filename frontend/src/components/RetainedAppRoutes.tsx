@@ -13,18 +13,19 @@ function PageRoutes({ location, navigationType, children }: {
   return <Routes location={route}>{children}</Routes>;
 }
 
-/** Keep workbenches and their portals alive while ordinary pages use the same browser history. */
+/** Keep home history entries and workbenches alive while sharing browser navigation. */
 export default function RetainedAppRoutes({ children }: { children: ReactNode }) {
   const location = useLocation();
   const navigationType = useNavigationType();
   const { user } = useAuth();
   const viewKey = location.pathname === '/viewer'
     ? `viewer:${location.state?.viewerInstanceKey ?? location.key}`
-    : /^\/messages(\/|$)/.test(location.pathname) ? `online:${location.pathname}` : 'page';
+    : /^\/messages(\/|$)/.test(location.pathname) ? `online:${location.pathname}`
+      : location.pathname === '/' ? `home:${location.key}` : 'page';
   return <>
     <RecentWorkbenchViews viewKey={viewKey} ownerKey={user?.id ?? null}
       exclusiveGroup={location.pathname === '/viewer' ? 'viewer' : undefined}
-      retainOnLeave={location.pathname !== '/viewer' || location.state?.viewerRetain !== false} deferParking preserveScroll>
+      retainOnLeave={location.pathname !== '/viewer' || location.state?.viewerRetain !== false} deferParking preserveScroll preserveDocumentScroll>
       {viewKey !== 'page' && <PageRoutes location={location} navigationType={navigationType}>{children}</PageRoutes>}
     </RecentWorkbenchViews>
     {viewKey === 'page' && <Routes location={location}>{children}</Routes>}

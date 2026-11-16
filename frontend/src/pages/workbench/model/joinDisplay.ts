@@ -1,4 +1,4 @@
-import { resolveMemberships, type MembershipAction, type Reference } from '@gonglun/core';
+import { compareMembershipSupport, rejectsMembership, resolveMemberships, type MembershipAction, type Reference } from '@gonglun/core';
 import type { Relation } from '../../../types';
 import { buildStanceTargetMap, computePublicStanceStats, resolveDisplayedStance, type DemoEdge, type DemoMessage } from '../../../utils/modelBridge';
 
@@ -29,7 +29,7 @@ export function resolveJoinDisplay(input: {
     const score = stakes[relation.id];
     if (!score) continue;
     const pro=score.truth.pro+score.value.pro,con=score.truth.con+score.value.con;
-    if (con>pro||con===pro&&publicStances.get(relation.id)?.latest?.type==='disagree') excluded.add(relation.id);
+    if (rejectsMembership(pro,con,publicStances.get(relation.id)?.latest?.type)) excluded.add(relation.id);
     else excluded.delete(relation.id);
   }
   const events: Event[] = [];
@@ -106,10 +106,9 @@ export function resolveJoinDisplay(input: {
     }
   }
   const pro = (join: Relation) => (stakes[join.id]?.truth.pro ?? 0) + (stakes[join.id]?.value.pro ?? 0);
-  for (const list of recommended.values()) list.sort((a, b) => pro(b) - pro(a)
-    || (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0)
-    || (b.sequence??0)-(a.sequence??0)
-    || (b.payload?.membershipHistory?.order ?? 0) - (a.payload?.membershipHistory?.order ?? 0) || b.id.localeCompare(a.id));
+  const support = (join: Relation) => ({ id: join.id, support: pro(join), createdAt: join.createdAt,
+    sequence: join.sequence ?? 0, order: join.payload?.membershipHistory?.order ?? 0 });
+  for (const list of recommended.values()) list.sort((a, b) => compareMembershipSupport(support(a), support(b)));
   const actions: MembershipAction[] = [], joinForAction = new Map<string, string>();
   const sourceForAction = new Map<string, JoinEffectSource>();
   for (const memberId of new Set([...heads.keys(), ...recommended.keys()])) {

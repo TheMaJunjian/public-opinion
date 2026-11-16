@@ -29,3 +29,5 @@ Object.defineProperty(window, 'ResizeObserver', {
 });
 
 Element.prototype.scrollIntoView = () => {};
+// jsdom has no layout viewport; scrolling tests supply their own coordinate mock.
+window.scrollTo = () => {};

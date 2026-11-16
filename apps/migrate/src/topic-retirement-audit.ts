@@ -72,7 +72,20 @@ try {
         schemaVersionRecorded: rows.schema_migrations.some(row => row.version === 3 && row.name === 'retire-converted-topic-containers'),
         priorSchemaVersionsPreserved: hash(sorted(rows.schema_migrations.filter(row => row.version <= before.tables.schema_migrations.count))) === before.tables.schema_migrations.digest,
       };
-      const allowed = new Set(['schema_migrations', 'settings', 'memberships', 'membership_actions', 'changes']);
+      // Retirement refreshes this derived index too. Check its source records and
+      // retired boundaries instead of requiring the old placements to survive.
+      if (before.tables.recommended_memberships || rows.recommended_memberships) {
+        const recommended = rows.recommended_memberships ?? [];
+        const retired = new Set<string>(JSON.parse(rows.settings.find(row => row.key === 'retired-organizations')?.value ?? '[]'));
+        const activeActions = new Map(rows.membership_actions.filter(row => !row.disabled).map(row => [row.id, row.body]));
+        checks.recommendedMembershipIndexPresent = !!rows.recommended_memberships;
+        checks.noRetiredRecommendedMembershipRemaining = recommended.every(row => !retired.has(row.memberId) && !retired.has(row.parentId));
+        checks.recommendedMembershipSourcesValid = recommended.every(row => {
+          const source = activeActions.get(row.sourceId);
+          return source?.memberId === row.memberId && source?.parentId === row.parentId;
+        });
+      }
+      const allowed = new Set(['schema_migrations', 'settings', 'memberships', 'membership_actions', 'changes', 'recommended_memberships']);
       for (const [table, fingerprint] of Object.entries(before.tables)) if (!allowed.has(table)) checks[`unchanged:${table}`] = same(fingerprint, snapshot.tables[table]);
       const report = { verified: Object.values(checks).every(Boolean), database: snapshot.database, schema, checks,
         retiredTopics: before.topicIds.length, releasedDirectMembers: expectedRemoved.filter(row => ids.has(row.parentId)).length,

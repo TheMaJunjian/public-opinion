@@ -5,7 +5,7 @@ import { DEFAULT_VIEW_CACHE_LIMIT, useViewCacheSettings } from '../context/ViewC
 
 export const RECENT_WORKBENCH_VIEW_LIMIT = DEFAULT_VIEW_CACHE_LIMIT;
 type ScrollPosition = { element: HTMLElement; top: number; left: number };
-type Entry = { key: string; exclusiveGroup?: string; retainOnLeave?: boolean; host: HTMLDivElement; overlays: HTMLDivElement; content: ReactNode; scroll: { positions: ScrollPosition[] } };
+type Entry = { key: string; exclusiveGroup?: string; retainOnLeave?: boolean; host: HTMLDivElement; overlays: HTMLDivElement; content: ReactNode; scroll: { positions: ScrollPosition[]; document?: { top: number; left: number } } };
 
 /** Suspension retains component state and disconnects layout effects while parked. */
 function RetainedView({ active, children }: { active: boolean; children: ReactNode }) {
@@ -15,8 +15,8 @@ function RetainedView({ active, children }: { active: boolean; children: ReactNo
 }
 
 /** Only the active portal is attached, so navigation never measures a cached scene. */
-export default function RecentWorkbenchViews({ viewKey: requestedKey, children, limit, ownerKey, exclusiveGroup, retainOnLeave = true, deferParking = false, preserveScroll = false, pending = false }: {
-  viewKey: string; children: ReactNode; limit?: number; ownerKey?:unknown; exclusiveGroup?: string; retainOnLeave?: boolean; deferParking?: boolean; preserveScroll?: boolean; pending?: boolean;
+export default function RecentWorkbenchViews({ viewKey: requestedKey, children, limit, ownerKey, exclusiveGroup, retainOnLeave = true, deferParking = false, preserveScroll = false, preserveDocumentScroll = false, pending = false }: {
+  viewKey: string; children: ReactNode; limit?: number; ownerKey?:unknown; exclusiveGroup?: string; retainOnLeave?: boolean; deferParking?: boolean; preserveScroll?: boolean; preserveDocumentScroll?: boolean; pending?: boolean;
 }) {
   const attached = useRef<Entry>();
   const viewKey = pending && attached.current ? attached.current.key : requestedKey;
@@ -48,6 +48,9 @@ export default function RecentWorkbenchViews({ viewKey: requestedKey, children, 
   useLayoutEffect(() => { committed.current = entries; owner.current=ownerKey; });
   // This ref precedes portal layout effects, including on the first mount.
   const attach = useCallback((node: HTMLDivElement | null) => {
+    if (preserveDocumentScroll && attached.current) {
+      attached.current.scroll.document = { top: window.scrollY, left: window.scrollX };
+    }
     if (preserveScroll && attached.current) {
       attached.current.scroll.positions = [...attached.current.host.querySelectorAll<HTMLElement>('*')]
         .filter(element => element.scrollTop !== 0 || element.scrollLeft !== 0)
@@ -56,7 +59,13 @@ export default function RecentWorkbenchViews({ viewKey: requestedKey, children, 
     attached.current?.overlays.remove();
     attached.current = node ? current : undefined;
     if (node) { node.replaceChildren(current.host); document.body.appendChild(current.overlays); }
-  }, [current.host, preserveScroll]);
+  }, [current.host, preserveScroll, preserveDocumentScroll]);
+  useLayoutEffect(() => {
+    if (!preserveDocumentScroll) return;
+    const previous = window.history.scrollRestoration;
+    window.history.scrollRestoration = 'manual';
+    return () => { window.history.scrollRestoration = previous; };
+  }, [preserveDocumentScroll]);
   useLayoutEffect(() => {
     if (!preserveScroll) return;
     // Detaching a native scroll box clears its used offsets. Restore after the
@@ -65,6 +74,11 @@ export default function RecentWorkbenchViews({ viewKey: requestedKey, children, 
       element.scrollTop = top; element.scrollLeft = left;
     }
   }, [current.host, preserveScroll]);
+  useLayoutEffect(() => {
+    if (!preserveDocumentScroll) return;
+    const position = current.scroll.document;
+    window.scrollTo({ top: position?.top ?? 0, left: position?.left ?? 0, behavior: 'instant' });
+  }, [current.host, preserveDocumentScroll]);
   return <>
     <div ref={attach} data-workbench-view-cache data-cached-view-count={entries.size} style={{ display: 'contents' }} />
     {[...entries.values()].map(entry => createPortal(

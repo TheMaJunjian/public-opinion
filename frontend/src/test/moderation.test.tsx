@@ -14,6 +14,7 @@ import {ReviewDetailContext,useReviewDetail} from '../hooks/useReviewDetail';
 import RecentWorkbenchViews from '../components/RecentWorkbenchViews';
 import {convertMessagesToDemoModel} from '../utils/modelBridge';
 import MessageCard from '../components/MessageCard';
+import {useMessageWindow} from '../hooks/useMessageWindow';
 
 const api=vi.hoisted(()=>({getReview:vi.fn(),sendReviewAction:vi.fn()}));
 vi.mock('../api',()=>({api}));
@@ -312,6 +313,32 @@ it.each([false,true])('confirms review settlement before sending the finalize=%s
   expect(api.sendReviewAction).toHaveBeenCalledExactlyOnceWith(value,finalizedPhase?'review-finalize':'review-settle','',undefined,undefined);
   expect(screen.queryByRole('dialog',{name:'确认结算'})).not.toBeInTheDocument();
 });
+it('hands the confirmed rejection back to the workbench after refreshing the settlement result',async()=>{
+  const onSettled=vi.fn(),value={...detail,summary:{...summary,pass:10,reject:16}};
+  const completed={...value,canReview:false,canSettle:false,canAppeal:false,
+    summary:{...value.summary,status:'rejected' as const,finalized:true}};
+  let finish!:(value:ReviewDetail)=>void;
+  api.getReview.mockResolvedValueOnce(value).mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+  render(<ModerationContext.Provider value={{summaries:new Map(),open:vi.fn(),arbitrate:vi.fn(),onSettled}}><ReviewPanel messageId="m"/></ModerationContext.Provider>);
+  fireEvent.click(await screen.findByRole('button',{name:'结算'}));
+  fireEvent.click(within(screen.getByRole('dialog',{name:'确认结算'})).getByRole('button',{name:'确认结算'}));
+  await waitFor(()=>expect(api.getReview).toHaveBeenCalledTimes(2));
+  expect(onSettled).not.toHaveBeenCalled();
+  await act(()=>finish(completed));
+  expect(onSettled).toHaveBeenCalledExactlyOnceWith(completed.summary);
+  expect(screen.getByRole('status')).toHaveTextContent('结算完成：审核不通过');
+  expect(screen.getByRole('button',{name:'已结算'})).toBeDisabled();
+});
+it.each(['submit','refresh'] as const)('keeps the current review open when settlement %s fails',async failure=>{
+  const onSettled=vi.fn();
+  if(failure==='submit')api.sendReviewAction.mockRejectedValueOnce(new Error('提交失败'));
+  else api.getReview.mockResolvedValueOnce(detail).mockRejectedValueOnce(new Error('网络中断'));
+  render(<ModerationContext.Provider value={{summaries:new Map(),open:vi.fn(),arbitrate:vi.fn(),onSettled}}><ReviewPanel messageId="m"/></ModerationContext.Provider>);
+  fireEvent.click(await screen.findByRole('button',{name:'结算'}));
+  fireEvent.click(within(screen.getByRole('dialog',{name:'确认结算'})).getByRole('button',{name:'确认结算'}));
+  expect(await screen.findByText(failure==='submit'?'提交失败':'操作已获服务器确认，但最新数据读取失败。请刷新查看，勿重复提交。')).toBeVisible();
+  expect(onSettled).not.toHaveBeenCalled();
+});
 it('explains tied stake refunds and lets an undecided review be appealed on the selected side',async()=>{
   const value={...detail,canReview:false,canSettle:false,available:100,
     summary:{...summary,status:'unknown' as const,pass:10,reject:10,finalized:true,passReviewers:0,rejectReviewers:1}};
@@ -370,6 +397,17 @@ it('keeps a restricted review record navigable without drawing its private edges
   const projected=convertMessagesToDemoModel([hidden],[hidden]);
   expect(projected.messages).toEqual([expect.objectContaining({id:'settlement',restricted:true,content:'',targetRefs:hidden.targetRefs})]);
   expect(projected.edges).toEqual([]);
+});
+it('renders a category with whole-message addresses for redacted members after switching accounts',()=>{
+  const category={...record('category','author','pass','公开分类'),relationType:'CLASSIFY',payload:{title:'公开分类'},parts:[],
+    targetRefs:[{kind:'message',messageId:'m',restricted:true,reference:{messageId:'m'}},{kind:'message',messageId:'visible'}]};
+  const snapshot={scope:{messageId:null,title:'公论'},sequence:1,users:[],stakes:{},tagCounts:{},attentionUsers:{},
+    messages:[category],relations:[category]} as unknown as WorkbenchSnapshot;
+  const projected=projectWorkbenchSnapshot(snapshot);
+  const view=renderHook(()=>useMessageWindow(projected.messages,projected.edges,true,'redacted-members',[]));
+  expect(projected.edges.map(edge=>edge.to.messageId)).toEqual(['m','visible']);
+  expect(view.result.current.messages.map(message=>message.id)).toContain('category');
+  expect(view.result.current.edges.every(edge=>typeof edge.to.messageId==='string')).toBe(true);
 });
 it.each([{messageId:'m',restricted:true},{messageId:'m',restricted:true,stakes:[{id:'s',restricted:true}]}])('loads previously cached restricted stake records without assuming their fields survived redaction',restricted=>{
   const snapshot={scope:{messageId:null,title:'公论'},sequence:1,relations:[],users:[],tagCounts:{},attentionUsers:{},

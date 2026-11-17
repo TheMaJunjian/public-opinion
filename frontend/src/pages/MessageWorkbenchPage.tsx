@@ -2911,6 +2911,16 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     openRecordCategory(id,'审核',[],revision);
   }
   reviewNavigator.current=openReviewSummary;
+  function handleReviewSettled(summary:import('@gonglun/core').ModerationSummary):void{
+    if(settlementOpenType!=='REVIEW'||settlementOpenMsgId!==summary.messageId)return;
+    closeSettlement();
+    const rejected=summary.status==='rejected';
+    const returnToParent=rejected&&currentRecordCategory?.label==='审核'&&currentRecordCategory.targetId===summary.messageId
+      &&(!currentRecordCategory.revision||currentRecordCategory.revision===summary.revision);
+    if(returnToParent)exitTemporaryCategory({recordHistory:false});
+    showAlert(rejected?`审核不通过，已完成结算并限制传播。${returnToParent?'已返回上一级。':''}作者可从审核入口申请复核。`
+      :summary.status==='approved'?'审核通过，已完成结算。':'审核结果未定，已退还双方押注本金并结清审核参与报酬。');
+  }
   useEffect(()=>{
     const update=(event:Event)=>{const data=(event as CustomEvent<{messageId:string;summary:import('@gonglun/core').ModerationSummary}>).detail;
       if(data?.summary)setMessages(previous=>{
@@ -3636,7 +3646,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                 classifyTargetCount={isRouteScope ? messages.filter(message => message.kind !== 'relation').length : classifyTargetCount} classifyExitLabel={classifyExitLabel} onExitTemporary={comparisonMode?exitComparison:exitTemporaryCategory} onExitClassify={isRouteScope ? () => navigate('/messages') : handleExitClassification} /></DeferredWorkbench>:null;
 
   return (
-    <ReviewDetailContext.Provider value={review}><ModerationContext.Provider value={isPreloaded?null:{summaries:new Map([...messages,...reviewedMessage?[reviewedMessage]:[]].flatMap(m=>m.moderation?[[m.id,m.moderation] as const]:[])),open:id=>openReviewSummary(id,reviewedMessage?.id===id?reviewedMessage.revision:undefined),arbitrate:id=>settlementOpenMsgId===id&&settlementOpenType==='REVIEW'?closeSettlement():openSettlement(id,'REVIEW'),activeId:settlementOpenType==='REVIEW'?settlementOpenMsgId??undefined:undefined}}>
+    <ReviewDetailContext.Provider value={review}><ModerationContext.Provider value={isPreloaded?null:{summaries:new Map([...messages,...reviewedMessage?[reviewedMessage]:[]].flatMap(m=>m.moderation?[[m.id,m.moderation] as const]:[])),open:id=>openReviewSummary(id,reviewedMessage?.id===id?reviewedMessage.revision:undefined),arbitrate:id=>settlementOpenMsgId===id&&settlementOpenType==='REVIEW'?closeSettlement():openSettlement(id,'REVIEW'),onSettled:handleReviewSettled,activeId:settlementOpenType==='REVIEW'?settlementOpenMsgId??undefined:undefined}}>
     <DeferredWorkbench label="显示提示" blocksDrawing>
     <CardWidthContext.Provider value={cardWidthContext}>
     <ReadingTextLinksContext.Provider value={readingTextLinks}>

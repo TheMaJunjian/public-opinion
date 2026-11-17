@@ -65,7 +65,7 @@ export type RelationType =
   | 'JOIN'         // 加入（内部成员关系记录）
   | string;
 
-export type TargetRef = ({ reference?: Reference } & (
+export type TargetRef = ({ reference?: Reference; restricted?: boolean } & (
   | { kind: 'message'; messageId: string }
   | {
       kind: 'text-fragment';

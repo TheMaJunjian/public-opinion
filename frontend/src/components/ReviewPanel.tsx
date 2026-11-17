@@ -1,7 +1,7 @@
 import {useContext,useEffect,useMemo,useRef,useState} from 'react';
 import {reviewEconomy,reviewResult,type ReviewVerdict,type NativeMessageView,type ReviewEligibility} from '@gonglun/core';
 import {api} from '../api';
-import {reviewStatusLabel} from './ModerationContext';
+import {ModerationContext,reviewStatusLabel} from './ModerationContext';
 import ThemeIcon from '../theme/ThemeIcon';
 import {ReviewDetailContext,useReviewDetail} from '../hooks/useReviewDetail';
 import ArbitrationVoteForm from './ArbitrationVoteForm';
@@ -21,6 +21,8 @@ interface Props {
 }
 export default function ReviewPanel({messageId,revision,onRecords}:Props){
   const user=useOptionalAuth()?.user;
+  const moderation=useContext(ModerationContext);
+  const settledCallback=useRef(moderation?.onSettled);settledCallback.current=moderation?.onSettled;
   const shared=useContext(ReviewDetailContext);
   const sharedCase=shared?.messageId===messageId&&(revision===undefined||shared.revision===undefined||shared.revision===revision);
   const local=useReviewDetail(sharedCase?undefined:messageId,revision);
@@ -50,7 +52,13 @@ export default function ReviewPanel({messageId,revision,onRecords}:Props){
       window.dispatchEvent(new CustomEvent('relation-created',{detail:result}));window.dispatchEvent(new Event('points-refresh'));
       window.dispatchEvent(new CustomEvent('stakes-refresh',{detail:{messageId}}));
       setReason('');setAmount(String(minimum));setConfirmSettle(false);setNotice(action==='review'?'投票已记录':'已记录本次审核操作');
-      try{await load();}catch{setNotice('操作已获服务器确认，但最新数据读取失败。请刷新查看，勿重复提交。');}
+      try{
+        const updated=await load();
+        if((action==='review-settle'||action==='review-finalize')&&updated?.summary.finalized){
+          setNotice(`结算完成：${reviewStatusLabel[updated.summary.status]}`);
+          settledCallback.current?.(updated.summary);
+        }
+      }catch{setNotice('操作已获服务器确认，但最新数据读取失败。请刷新查看，勿重复提交。');}
     }catch(e){setError(e instanceof Error?e.message:'提交失败');}finally{mutationPending.current=false;setPendingAction(null);}
   }
   const summary=detail?.summary,settled=summary?.status==='approved'||summary?.status==='rejected'||summary?.status==='unknown';

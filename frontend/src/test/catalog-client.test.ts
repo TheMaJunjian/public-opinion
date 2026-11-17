@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createCatalogClient } from '../data/catalogClient';
+import {IDBFactory,IDBKeyRange} from 'fake-indexeddb';
+import {createGlobalCatalogCache} from '../data/globalCatalogCache';
+import {createCatalogEngine,type CatalogOptions} from '../data/catalogEngine';
+import type {WorkbenchSnapshot} from '@gonglun/core';
 
 class TestWorker {
   static latest: TestWorker;
@@ -18,6 +22,26 @@ function start() {
 }
 beforeEach(() => { vi.useFakeTimers(); vi.stubGlobal('Worker', TestWorker); vi.stubGlobal('requestIdleCallback', undefined); });
 afterEach(() => { clients.splice(0).forEach(client => client.stop()); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+it('rebuilds the global catalog from the server after the restricted-reference cache version changes',async()=>{
+  vi.useRealTimers();vi.stubGlobal('indexedDB',new IDBFactory());vi.stubGlobal('IDBKeyRange',IDBKeyRange);
+  const {worker}=start(),options=worker.postMessage.mock.calls[0][0].options as CatalogOptions;
+  const user={id:'u',username:'用户',createdAt:''};
+  const message=(id:string)=>({id,kind:'TEXT',contentType:'TEXT' as const,content:id,createdBy:user,createdAt:''});
+  const old:WorkbenchSnapshot={regionId:'region',sequence:10,structureOnly:true,scope:{messageId:null,title:'公论'},
+    messages:[message('old')],relations:[],users:[user],stakes:{},tagCounts:{},attentionUsers:{}};
+  await createGlobalCatalogCache(JSON.stringify(['structure-v4',options.baseUrl,'user','root'])).save({
+    boundary:10,after:10,pages:1,phase:'changes',complete:true,nextCursor:null,snapshot:old});
+  const fetch=vi.fn(async(url:string)=>new Response(JSON.stringify({...old,sequence:20,
+    messages:new URL(url).searchParams.has('after')?[]:[message('fresh')]})));
+  vi.stubGlobal('fetch',fetch);
+  const ready=vi.fn(),engine=createCatalogEngine(options,{idle:async()=>{},onReady:ready,onProgress:vi.fn()});
+  try{
+    await vi.waitFor(()=>expect(ready).toHaveBeenCalledOnce());
+    expect(new URL(fetch.mock.calls[0][0]).searchParams.has('after')).toBe(false);
+    expect(ready.mock.lastCall![0].index.messages.map((record:{id:string})=>record.id)).toEqual(['fresh']);
+  }finally{engine.stop();}
+});
 
 it('pauses background batches while hidden, resumes with an idle budget, and prioritizes requested global features', async () => {
   let hidden = true;

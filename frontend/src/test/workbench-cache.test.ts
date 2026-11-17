@@ -15,6 +15,30 @@ const events = () => ({ close: vi.fn() }) as unknown as EventSource;
 beforeEach(() => vi.stubGlobal('indexedDB', new IDBFactory()));
 afterEach(() => { running.splice(0).forEach(sync => sync.stop()); vi.unstubAllGlobals(); });
 
+it('reloads online messages instead of restoring snapshots from before the restricted-reference fix', async () => {
+  const baseUrl = new URL('/api', location.href).href;
+  await new Promise<void>((resolve, reject) => {
+    const opening = indexedDB.open('gonglun-workbench', 1);
+    opening.onupgradeneeded = () => opening.result.createObjectStore('snapshots');
+    opening.onerror = () => reject(opening.error);
+    opening.onsuccess = () => {
+      const db = opening.result, tx = db.transaction('snapshots', 'readwrite');
+      tx.objectStore('snapshots').put(page(10, ['old']), JSON.stringify([7, baseUrl, 'u', 'root']));
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    };
+  });
+  const cache = createWorkbenchCache('u', 'root');
+  expect(await cache.load()).toBeNull();
+  const updated = vi.fn(), load = vi.fn<(query:SnapshotQuery)=>Promise<WorkbenchSnapshot>>(async () => page(20, ['fresh']));
+  start({ parent: 'root', cache, load, events, onSnapshot: updated, onError: vi.fn() });
+  await vi.waitFor(() => expect(updated).toHaveBeenCalledOnce());
+  expect(load.mock.calls[0]).toEqual([expect.objectContaining({ parent: 'root' })]);
+  expect((load.mock.calls[0][0] as SnapshotQuery).after).toBeUndefined();
+  expect(updated.mock.lastCall![0].messages.map((record: {id:string}) => record.id)).toEqual(['fresh']);
+  expect((await cache.load())?.messages.map(record => record.id)).toEqual(['fresh']);
+});
+
 it('restores every record after a browser reload and fetches only paged changes, including edits and removals', async () => {
   const cache = createWorkbenchCache('u', 'root');
   const original = { ...page(10, ['old', 'moved']), tagCounts: { old: { 标签: 2 } }, attentionUsers: { old: ['u'] } };

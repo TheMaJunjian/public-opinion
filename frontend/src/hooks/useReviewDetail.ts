@@ -3,19 +3,22 @@ import {api} from '../api';
 import type {ReviewDetail} from '../api/client';
 import {applyReviewSnapshots,recordsForReview,reviewTargetPlaceholder} from '../utils/reviewRecords';
 import type {WorkbenchSnapshot} from '@gonglun/core';
+import {useOptionalAuth} from '../context/AuthContext';
 
 /** One active case owns its data; cached canvases must not keep background pollers. */
 export function useReviewDetail(messageId?:string,revision?:number,previewPages?:WorkbenchSnapshot[]){
-  const key=messageId?`${messageId}:${revision??'current'}`:null;
+  const viewerId=useOptionalAuth()?.user?.id;
+  const key=messageId?JSON.stringify([viewerId??null,messageId,revision??'current']):null;
   const [state,setState]=useState<{key:string;detail:ReviewDetail}|null>(null);
   const [error,setError]=useState(''),[clock,setClock]=useState(Date.now);
-  const generation=useRef(0),active=useRef<AbortController>();
+  const generation=useRef(0),active=useRef<{key:string;controller:AbortController}>();
   const lastSummary=useRef('');
   const refresh=useCallback(async()=>{
-    if(!messageId||!key||!active.current||active.current.signal.aborted)return;
-    const controller=active.current,version=++generation.current;
+    if(!messageId||!key||active.current?.key!==key||active.current.controller.signal.aborted)return;
+    const controller=active.current.controller,version=++generation.current;
     const value=await api.getReview(messageId,controller.signal,revision);
-    if(controller.signal.aborted||version!==generation.current)return;
+    if(controller.signal.aborted)return;
+    if(version!==generation.current)return value;
     setState(previous=>{
       if(previous?.key!==key)return {key,detail:value};
       const before=previous.detail;
@@ -31,10 +34,11 @@ export function useReviewDetail(messageId?:string,revision?:number,previewPages?
       lastSummary.current=summary;
       window.dispatchEvent(new CustomEvent('review-summary',{detail:{messageId,summary:value.summary}}));
     }
+    return value;
   },[messageId,revision,key]);
   useLayoutEffect(()=>{
-    if(!messageId)return;
-    const controller=new AbortController();active.current=controller;setError('');setClock(Date.now());
+    if(!messageId||!key)return;
+    const controller=new AbortController();active.current={key,controller};lastSummary.current='';setError('');setClock(Date.now());
     const load=()=>void refresh().catch(error=>{if(!controller.signal.aborted)setError(error.message);});
     const changed=(event:Event)=>{if((event as CustomEvent).detail?.messageId===messageId)load();};
     const committed=(event:Event)=>{

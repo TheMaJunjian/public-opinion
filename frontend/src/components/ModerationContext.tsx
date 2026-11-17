@@ -7,5 +7,6 @@ export const ModerationContext=createContext<{
   summaries:ReadonlyMap<string,ModerationSummary>;
   open:(id:string)=>void;
   arbitrate:(id:string)=>void;
+  onSettled?:(summary:ModerationSummary)=>void;
   activeId?:string;
 }|null>(null);

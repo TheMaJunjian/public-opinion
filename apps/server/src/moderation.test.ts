@@ -7,6 +7,7 @@ import { migrateModeration } from '../../migrate/src/moderation.js';
 import { Mutation } from './db.js';
 import { enrollModeration } from './moderation.js';
 import { moderationCase } from './moderation.js';
+import { sanitizeModeration } from './moderation-visibility.js';
 
 afterEach(cleanupTestDatabases);
 
@@ -482,6 +483,33 @@ it('publishes pending content, then hides a final rejection across APIs, exports
   expect((await t.action(t.observer,'review',m.id,{verdict:'pass'},2)).status).toBe(403);
   await conserve(t.app);
 });
+it('keeps category member addresses valid when rejection redacts text and relation members',async()=>{
+  const t=await setup(),target=await t.publish('PRIVATE-MEMBER');
+  const classify=async(title:string,ids:string[])=>{
+    const response=await t.author.agent.post('/api/ui/relations').set('x-csrf-token',t.author.csrf).set('x-request-id',randomUUID())
+      .send({relationType:'CLASSIFY',targetRefs:ids.map(messageId=>({kind:'message',messageId})),payload:{title},recommendation:1});
+    expect(response.status,response.text).toBe(201);return response.body;
+  };
+  const child=await classify('PRIVATE-CATEGORY',[]),category=await classify('公开分类',[target.id,child.id]);
+  for(const id of [target.id,child.id]){
+    for(const actor of [t.one,t.two])expect((await t.action(actor,'review',id,{verdict:'reject'},8)).status).toBe(201);
+    expect((await t.action(t.one,'review-settle',id)).status).toBe(201);
+  }
+  for(const actor of [t.one,t.observer])for(const format of ['', '?format=compact-v1']){
+    const response=await actor.agent.get(`/api/ui/snapshot${format}`);
+    expect(response.status,response.text).toBe(200);expect(response.text).not.toContain('PRIVATE-');
+    const snapshot=decodeWorkbenchSnapshot<WorkbenchSnapshot>(response.body);
+    const group=snapshot.relations.find(relation=>relation.id===category.id)!;
+    expect(group).toBeTruthy();expect(group.restricted).not.toBe(true);
+    expect(group.declaredTargetRefs).toEqual([target.id,child.id].map(messageId=>({kind:'message',messageId,restricted:true,reference:{messageId}})));
+    expect(group.targetRefs.every(ref=>ref.reference?.messageId??(ref.kind==='relation'?ref.relationId:ref.messageId))).toBe(true);
+  }
+  const quoted={targetRefs:[{kind:'text-fragment',messageId:target.id,text:'PRIVATE-QUOTE',hash:'PRIVATE-HASH',
+    reference:{messageId:target.id,revision:1,partId:'body',range:{start:0,end:3},context:{quote:'PRIVATE-CONTEXT'}}}]};
+  const clean=await sanitizeModeration(t.app.store,quoted,t.observer.user.id);
+  expect(clean).toEqual({targetRefs:[{kind:'message',messageId:target.id,restricted:true,reference:{messageId:target.id,revision:1}}]});
+  expect(await sanitizeModeration(t.app.store,clean,t.observer.user.id)).toEqual(clean);
+});
 it('keeps fee rewards separate from the shared self-stake and review pool; repeated records do not multiply rewards',async()=>{
   const t=await setup(),before=await t.app.store.account(t.author.user.id),m=await t.publish();
   expect(m.spending).toMatchObject({reviewFee:6,reviewDeposit:10,wager:0,recommendation:1});
@@ -699,6 +727,17 @@ it('keeps a rejected historical revision hidden when a newer revision is public'
   expect(oldReview.body.target).toMatchObject({id:m.id,revision:1,content:'OLD-PRIVATE-BODY'});expect(JSON.stringify(oldReview.body.target)).not.toContain('NEW-PUBLIC-BODY');
   const hiddenReview=await t.observer.agent.get(`/api/moderation/messages/${m.id}?revision=1`);
   expect(hiddenReview.body.target).toMatchObject({id:m.id,revision:1,restricted:true});expect(hiddenReview.text).not.toContain('OLD-PRIVATE-BODY');expect(JSON.stringify(hiddenReview.body.target)).not.toContain('NEW-PUBLIC-BODY');
+  const oldTargetRefs=[
+    {kind:'message',messageId:m.id,reference:{messageId:m.id,revision:1}},
+    {kind:'text-fragment',messageId:m.id,text:'OLD-PRIVATE-BODY',hash:'PRIVATE-HASH',reference:{messageId:m.id,revision:1,partId:'body',range:{start:0,end:3}}},
+    {kind:'relation',relationId:m.id,part:'label',reference:{messageId:m.id,revision:1,partId:'private-part'}},
+  ];
+  const publicTarget={kind:'text-fragment',messageId:m.id,text:'NEW-PUBLIC-BODY',hash:'public-hash',reference:{messageId:m.id,revision:2,partId:'body',range:{start:0,end:3}}};
+  const references={targetRefs:[...oldTargetRefs,publicTarget]};
+  const redacted=await sanitizeModeration(t.app.store,references,t.observer.user.id);
+  expect(redacted).toEqual({targetRefs:[...oldTargetRefs.map(()=>({kind:'message',messageId:m.id,restricted:true,reference:{messageId:m.id,revision:1}})),publicTarget]});
+  expect(await sanitizeModeration(t.app.store,redacted,t.observer.user.id)).toEqual(redacted);
+  expect(await sanitizeModeration(t.app.store,references,t.author.user.id)).toEqual(references);
   const oldReference=await t.send(t.observer,[{id:'relation',type:'relation',relation:'reference',roles:{target:[{id:'target',reference:{messageId:m.id,revision:1}}]}}],{recommendation:1});
   expect(oldReference.status).toBe(409);
   expect((await t.observer.agent.post('/api/ui/body-versions/resolve').send({format:2,messageId:m.id,revision:1,corrections:[]})).status).toBe(403);

@@ -108,9 +108,18 @@ export async function sanitizeModeration<T>(store:Store,value:T,userId=moderatio
     if(!item||typeof item!=='object')return item;
     if(Array.isArray(item))return item.map(walk);
     const notification=typeof item.sourceId==='string'&&typeof item.actorId==='string'&&Array.isArray(item.references);
+    const targetId=['message','text-fragment'].includes(item.kind)?item.messageId:item.kind==='relation'?item.relationId:undefined;
+    const targetRevision=metadataRevision(item.reference?.revision);
     const restricted=Object.entries(item).some(([k,v])=>identityKeys.has(k)&&typeof v==='string'&&blockedReference(v,identityRevision(item,k)))
+      ||typeof targetId==='string'&&blockedReference(targetId,targetRevision)
       ||notification&&[...item.references,item.excerptReference,item.targetExcerptReference].some(ref=>ref&&typeof ref.messageId==='string'&&blockedReference(ref.messageId,metadataRevision(ref.revision)));
     if(restricted){
+      // A public category may still name a hidden member. Keep a whole-message
+      // address, never its quoted text, part selection or reading context, even
+      // when only the pinned historical revision is hidden.
+      if(typeof targetId==='string'){
+        return {kind:'message',messageId:targetId,restricted:true,reference:{messageId:targetId,...(targetRevision?{revision:targetRevision}:{})}};
+      }
       const clean=Object.fromEntries(Object.entries(item).filter(([k,v])=>safeKeys.has(k)&&(typeof v!=='object'||v===null||k==='spending')));
       // Preserve the statistics contract while hiding individual stakes and reference contexts.
       if(Array.isArray(item.stakes)&&item.pool&&item.counts)return {...clean,restricted:true,stakes:[],contexts:{},

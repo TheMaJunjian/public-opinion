@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { afterEach, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { Mutation } from './db.js';
@@ -26,7 +27,7 @@ it('queued ledger writers leave connections available for readers',async()=>{
 
 it('login and an idle settlement tick do not wait for another process ledger writer',async()=>{
   const schema=newTestSchema(),app=await createTestApp({databaseSchema:schema}),other=await createTestStore(schema);
-  expect((await request(app).post('/api/register').send({name:'independent-session',password:'test-password'})).status).toBe(201);
+  expect((await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'independent-session',password:'test-password'})).status).toBe(201);
   const entered=deferred(),release=deferred();
   const held=other.transaction(async()=>{entered.resolve();await release.promise;});await entered.promise;
   const login=request(app).post('/api/login').send({name:'independent-session',password:'test-password'}).then(result=>{expect(result.status).toBe(200);});
@@ -80,7 +81,7 @@ it('reads stable settings once per transaction and restores its cache after a sa
 
 it('reuses committed message state and avoids a redundant batch savepoint',async()=>{
   const app=await createTestApp();
-  const registered=await request(app).post('/api/register').send({name:'projection-work',password:'test-password'});
+  const registered=await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'projection-work',password:'test-password'});
   expect(registered.status).toBe(201);
   const queries=vi.spyOn(app.store.db,'prepare'),commands=vi.spyOn(app.store.db,'exec');
   await executeBatch(app.store,registered.body.user,{requestId:randomUUID(),commands:[{id:randomUUID(),method:'POST',path:'/messages',body:{content:'only compute once',recommendation:1}}]});

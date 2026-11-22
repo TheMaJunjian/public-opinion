@@ -7,6 +7,7 @@ import { isNativeZhihuView, mergeNativeZhihuUpdate, nativeZhihuIdentity } from '
 import { appendNativeJournal, nativeJournalSignature, restoreNativeJournal } from './nativeZhihuJournal';
 import { readViewerFile } from './readViewerFile';
 import { pagedArchiveSource } from './pagedZhihuArchive';
+import { pickWritableDirectory, supportsDirectoryPicker } from './directoryPicker';
 
 // The exporter owns gonglun.json. Gonglun alone owns this append-only sidecar.
 export const ZHIHU_LOCAL_JOURNAL = 'gonglun-local.ndjson';
@@ -15,12 +16,10 @@ type PermissionHandle = FileSystemDirectoryHandle & {
   queryPermission(options: { mode: 'readwrite' }): Promise<PermissionState>;
   requestPermission(options: { mode: 'readwrite' }): Promise<PermissionState>;
 };
-type DirectoryPicker = (options: { mode: 'readwrite'; id: string }) => Promise<FileSystemDirectoryHandle>;
-export function canLinkZhihuDirectory(): boolean { return typeof (window as unknown as { showDirectoryPicker?: DirectoryPicker }).showDirectoryPicker === 'function'; }
+export const canLinkZhihuDirectory = supportsDirectoryPicker;
 export async function chooseZhihuDirectory(): Promise<FileSystemDirectoryHandle> {
-  const picker = (window as unknown as { showDirectoryPicker?: DirectoryPicker }).showDirectoryPicker;
-  if (!picker) throw new Error('当前浏览器不支持关联目录，请使用 Chrome 或 Edge 打开阅览。');
-  return picker.call(window, { mode: 'readwrite', id: 'gonglun-zhihu-export' });
+  if (!canLinkZhihuDirectory()) throw new Error('当前浏览器不支持关联目录，请使用 Chrome 或 Edge 打开阅览。');
+  return pickWritableDirectory('gonglun-zhihu-export');
 }
 const connectionKey = (id: string) => `__zhihu_directory__:${id}`;
 const connections = new Map<string, LinkedDirectory>();

@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
@@ -13,7 +14,7 @@ import { minimumContributionCandidates } from './backfill-minimum-contributions.
 afterEach(cleanupTestDatabases);
 async function legacy() {
   const app = await createTestApp(), agent = request.agent(app);
-  const { body: session } = await agent.post('/api/register').send({ name: '旧账户', password: 'password' });
+  const { body: session } = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  name: '旧账户', password: 'password' });
   const response = await agent.post('/api/messages').set('x-csrf-token', session.csrf).send({ requestId: randomUUID(), wager: 3, recommendation: 2, selfStance: 'pro', parts: [{ id: 'body', type: 'text', text: '保留原始内容' }] });
   expect(response.status, response.text).toBe(201);
   await app.store.db.prepare("DELETE FROM settings WHERE key='usage-points-start'").run();

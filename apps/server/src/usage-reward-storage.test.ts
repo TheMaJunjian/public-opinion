@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { afterEach, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { replayArchive } from '@gonglun/core';
@@ -12,7 +13,7 @@ import { validateExportForViewing } from '../../../frontend/src/utils/exportArch
 afterEach(async () => { vi.restoreAllMocks(); await cleanupTestDatabases(); });
 async function setup() {
   const app = await createTestApp({ initialGrant: 0 }), agent = request.agent(app);
-  const { body: session } = await agent.post('/api/register').send({ name: '存储优化', password: 'password' });
+  const { body: session } = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  name: '存储优化', password: 'password' });
   return { app, store: app.store, userId: session.user.id as string };
 }
 const base = Date.parse('2026-11-01T00:00:00+08:00');

@@ -22,6 +22,30 @@ button:enabled:active, [role="button"]:active { filter: brightness(1.2); }
 
 .workbench-relation-types { align-items: center; }
 
+.workbench-view-bar {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+}
+.workbench-view-heading { flex: none; white-space: nowrap; font-weight: 600; }
+.workbench-view-actions {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-flow: row-reverse wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.workbench-view-action-group {
+  display: inline-flex;
+  flex-direction: row-reverse;
+  align-items: center;
+  flex: none;
+  gap: 4px;
+}
+.workbench-view-history { display: flex; gap: 4px; }
+
 .workbench-history-button {
   display: inline-flex;
   align-items: center;

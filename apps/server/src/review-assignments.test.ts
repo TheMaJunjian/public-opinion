@@ -3,7 +3,8 @@ import type {Response} from 'express';
 import request from 'supertest';
 import {afterEach,expect,it} from 'vitest';
 import {register} from './auth.js';
-import {createTestApp,cleanupTestDatabases,testInvitation} from './test-database.js';
+import {PARTICIPATION_AGREEMENT_VERSION} from '@gonglun/core';
+import {createTestApp,cleanupTestDatabases} from './test-database.js';
 import {moderationCase,reviewVotes,summarizeReview} from './moderation.js';
 import {reviewDeposits} from './review-finances.js';
 import {assignmentCounts,processReviewAssignments,REVIEW_ONLINE_WINDOW_MS,type ReviewAssignment} from './review-assignments.js';
@@ -15,8 +16,8 @@ async function setup(count:number){
   for(let i=0;i<count;i++){
     let cookie='';
     const res={req:{secure:false},cookie:(name:string,value:string)=>{cookie=`${name}=${value}`;}} as unknown as Response;
-    // Use the actual invitation/session path without the HTTP auth rate limit on a large jury fixture.
-    const {session}=await register(app.store,{name:`juror-${i}`,password:'test-password',inviteCode:await testInvitation(app)},res);
+    // Use the registration/session path without the HTTP auth rate limit on a large jury fixture.
+    const {session}=await register(app.store,{name:`juror-${i}`,password:'test-password',acceptedAgreementVersion:PARTICIPATION_AGREEMENT_VERSION},res);
     users.push({id:session.user.id,csrf:session.csrf,cookie});
   }
   type Actor=typeof users[number];
@@ -65,6 +66,9 @@ it('draws and replaces only recently online users, while retaining their existin
   await t.get(offline!,'/api/session');await t.get(offline!,'/api/moderation/queue');
   expect((await request(t.app).post('/api/moderation/presence')).status).toBe(401);
   expect((await presence(offline!,'wrong-csrf')).status).toBe(403);
+  // An active timestamp from before the participation-agreement upgrade cannot enter a new draw.
+  await t.app.store.db.prepare('UPDATE sessions SET "agreementVersion"=NULL,"lastActiveAt"=$2 WHERE "userId"=$1').run(offline!.id,Date.now());
+  expect((await presence(offline!)).status).toBe(401);
   const m=await t.publish();expect(await t.assignments(m.id)).toHaveLength(0);
   for(const actor of [one!,two!,three!])expect((await presence(actor)).status).toBe(200);
   // An expired session cannot renew presence or enter the draw, even with a recent timestamp.
@@ -118,7 +122,7 @@ it('revokes only the timed-out message assignment, replaces randomly and respect
   await t.app.store.db.prepare('UPDATE moderation_assignments SET "expiresAt"=$3 WHERE "caseId"=$1 AND "userId"=$2').run(current.id,victim.id,'2000-01-01T00:00:00.000Z');
   expect((await t.get(victim,`/api/messages/${m.id}`)).text).toContain('RANDOM-REVIEW-PRIVATE');
   expect((await t.get(victim,`/api/moderation/messages/${m.id}`)).body).toMatchObject({canReview:true,reviewEligibility:'eligible',readableWithoutAssignment:true});
-  expect((await t.get(victim,'/api/moderation/queue')).body.items.some((item:{messageId:string})=>item.messageId===m.id)).toBe(false);
+  expect((await t.get(victim,'/api/moderation/queue')).body.items.some((item:{messageId:string})=>item.messageId===m.id)).toBe(true);
   expect((await t.get(victim,`/api/moderation/messages/${other.id}`)).text).toContain('OTHER-MESSAGE-PRIVATE');
   expect((await t.action(victim,other.id,'review','pass')).status).toBe(201);
   const process=async()=>{await t.app.store.db.prepare('UPDATE moderation_cases SET "assignmentCheckAt"=0 WHERE id=$1').run(current.id);await processReviewAssignments(t.app.store);};
@@ -141,6 +145,7 @@ it('revokes only the timed-out message assignment, replaces randomly and respect
 
 it('does not give an administrator or a historical reviewer privileged access after content is hidden',async()=>{
   const t=await setup(6),creator=t.users[1]!;
+  await t.app.store.db.prepare('UPDATE users SET founder=1 WHERE id=$1').run(t.author.id);
   expect((await request(t.app).put('/api/moderation/availability').set('Cookie',t.author.cookie).set('x-csrf-token',t.author.csrf).send({enabled:false})).status).toBe(200);
   await t.app.store.db.prepare('INSERT INTO moderation_reviewers VALUES($1,$2,$3)').run(t.author.id,'old-authorization',new Date().toISOString());
   const res=await t.send(creator,[{id:'body',type:'text',text:'PRIVATE-FROM-ADMIN'}],{recommendation:1});

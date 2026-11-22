@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
 import { cleanupTestDatabases, createTestApp } from '../../server/src/test-database.js';
@@ -8,7 +9,7 @@ import { financialFingerprint } from './financial-fingerprint.js';
 afterEach(cleanupTestDatabases);
 it('将早期计时记录备份并转换到每日规则，保留新积分、递增次数和等待进度，不重复转换', async () => {
   const app = await createTestApp({ initialGrant: 0 }), agent = request.agent(app), store = app.store;
-  const { body: session } = await agent.post('/api/register').send({ name: '早期计时', password: 'password' });
+  const { body: session } = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  name: '早期计时', password: 'password' });
   const at = Date.now(), first = await updateUsagePoints(store, session.user.id, { action: 'start' }, at);
   await updateUsagePoints(store, session.user.id, { action: 'tick', roundId: first.roundId }, at + 1000);
   await store.db.exec(`DROP TABLE usage_points;

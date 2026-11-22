@@ -1,4 +1,4 @@
-import { testInvitation } from './test-database.js';
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import {withTestCommandContributions} from './test-database.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
@@ -11,7 +11,7 @@ import * as projections from './ui-projections.js';
 const apps:Awaited<ReturnType<typeof createApp>>[]=[];
 const make=async ()=>{const app=(await createTestApp());apps.push(app);return app;};
 afterEach(async ()=>{vi.restoreAllMocks();for(const app of apps.splice(0))(await app.close());await cleanupTestDatabases();});
-async function actor(app:Awaited<ReturnType<typeof make>>,username:string,extra:Record<string,unknown>={}) {const agent=request.agent(app);const response=await agent.post('/api/register').send({inviteCode:await testInvitation(app),username,password:'a-test-password',...extra});expect(response.status,response.text).toBe(201);return {agent,session:response.body};}
+async function actor(app:Awaited<ReturnType<typeof make>>,username:string,extra:Record<string,unknown>={}) {const agent=request.agent(app);const response=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, username,password:'a-test-password',...extra});expect(response.status,response.text).toBe(201);return {agent,session:response.body};}
 const post=(user:Awaited<ReturnType<typeof actor>>,path:string,body:Record<string,unknown>={})=>user.agent.post(`/api/ui${path}`).set('x-csrf-token',user.session.csrf).set('x-request-id',(body as {requestId?:string}).requestId??randomUUID()).send(withTestCommandContributions(path,body as Record<string,unknown>));
 const good=async(response:PromiseLike<request.Response>)=>{const value=await response;expect(value.status,value.text).toBe(201);return value.body;};
 async function expectStructuralProjection(user: Awaited<ReturnType<typeof actor>>, query: Record<string, string | number> = {}) {
@@ -352,13 +352,13 @@ describe('保留操作方式的消息 API',()=>{
     for(const path of ['/points/balance','/points/transactions','/revenue/pool','/revenue/distributions','/audit-logs',`/users/${user.session.user.id}/stances`,'/export']){const response=await user.agent.get(`/api/ui${path}`);expect(response.status,response.text).toBe(200);}
     const exported=(await user.agent.get('/api/ui/export')).body;expect(exported.messages.some((m:any)=>m.id===rounds[0].id)).toBe(true);expect(replayArchive(exported).accounts.get(user.session.user.id)).toEqual((await app.store.account(user.session.user.id)));expect(exported.ruleHistory).toHaveLength(1);expect(JSON.stringify(exported)).not.toContain('a-test-password');
   });
-  it('充值分账及收入注入须授权且资金守恒',async()=>{
+  it('个人不能授权充值或收入注入，资金守恒',async()=>{
     const app=(await make()),founder=await actor(app,'发起人'),other=await actor(app,'参与者');
     const recharge=await good(post(other,'/relations',{relationType:'PROPOSAL',targetRefs:[],payload:{operationType:'RECHARGE',content:'已确认的付款',amount:100,revenuePoolShare:20,recipientUserId:other.session.user.id}}));
     const before=(await app.store.account(other.session.user.id)).available;
-    await good(post(founder,'/relations',{relationType:'AUTHORIZE',targetRefs:[{kind:'relation',relationId:recharge.id}]}));expect((await app.store.account(other.session.user.id)).available).toBe(before+80);
+    expect((await post(founder,'/relations',{relationType:'AUTHORIZE',targetRefs:[{kind:'relation',relationId:recharge.id}]})).status).toBe(403);expect((await app.store.account(other.session.user.id)).available).toBe(before);
     const injection=await good(post(other,'/relations',{relationType:'PROPOSAL',targetRefs:[],payload:{operationType:'REVENUE_INJECTION',content:'会议赞助',amount:25,source:'赞助'}}));
-    await good(post(founder,'/relations',{relationType:'AUTHORIZE',targetRefs:[{kind:'relation',relationId:injection.id}]}));
+    expect((await post(founder,'/relations',{relationType:'AUTHORIZE',targetRefs:[{kind:'relation',relationId:injection.id}]})).status).toBe(403);
     const balances=Number((await app.store.db.prepare('SELECT SUM(available+locked) AS total FROM accounts').get())!.total);expect(balances+(await app.store.setting<number>('operating'))).toBe((await app.store.setting('minted')));
   });
   it('签名绑定到设备、请求路径和幂等编号，历史保留签名',async()=>{

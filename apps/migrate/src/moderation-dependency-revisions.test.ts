@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -12,7 +13,7 @@ afterEach(async()=>{vi.restoreAllMocks();await cleanupTestDatabases();});
 it('repairs the early review index that breaks login without charging content again',async()=>{
   const app=await createTestApp({moderation:true}),agent=request.agent(app);
   const credentials={name:'migration-login',password:'test-password'};
-  const registration=await agent.post('/api/register').send(credentials);
+  const registration=await agent.post('/api/register').send({ ...credentials, acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION });
   expect(registration.status,registration.text).toBe(201);
   const target=await agent.post('/api/messages').set('x-csrf-token',registration.body.csrf).send({requestId:randomUUID(),recommendation:1,parts:[{id:'body',type:'text',text:'PRIVATE-REVIEW-CONTENT'}]});
   expect(target.status,target.text).toBe(201);

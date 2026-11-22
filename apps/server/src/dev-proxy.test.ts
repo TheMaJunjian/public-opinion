@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, type ViteDevServer } from 'vite';
 import { expect, it } from 'vitest';
-import type { Session } from '@gonglun/core';
+import { PARTICIPATION_AGREEMENT_VERSION, type Session } from '@gonglun/core';
 import webConfig from '../../../frontend/vite.config.js';
 import { createApp } from './app.js';
 import { createTestApp, cleanupTestDatabases, newTestSchema } from './test-database.js';
@@ -34,7 +34,7 @@ it('registers, logs in and sends through the actual development proxy while reje
     const post = (path: string, body: unknown, headers: Record<string, string> = {}) => fetch(`${origin}/api${path}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin, ...headers }, body: JSON.stringify(body),
     });
-    const registration = await post('/register', credentials);
+    const registration = await post('/register', { ...credentials, acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION });
     const registrationBody = await registration.json() as Session;
     expect(registration.status, JSON.stringify(registrationBody)).toBe(201);
     const login = await post('/login', credentials);

@@ -1,8 +1,9 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { afterEach, expect, it } from 'vitest';
 import { bindRoles, isRelationView, type Message, type Part, type Session, type WorkbenchSnapshot } from '@gonglun/core';
-import { createTestApp, cleanupTestDatabases, testInvitation, withTestContribution } from './test-database.js';
+import { createTestApp, cleanupTestDatabases, withTestContribution } from './test-database.js';
 import { Mutation } from './db.js';
 import { viewsFor } from './ui-projections.js';
 import { recordStance } from './projections.js';
@@ -13,7 +14,7 @@ afterEach(cleanupTestDatabases);
 type App = Awaited<ReturnType<typeof createTestApp>>;
 async function actor(app: App, name = 'window-reader') {
   const agent = request.agent(app);
-  const response = await agent.post('/api/register').send({ name, password: 'test-password', inviteCode: await testInvitation(app) });
+  const response = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  name, password: 'test-password' });
   expect(response.status).toBe(201);
   return { agent, session: response.body as Session };
 }

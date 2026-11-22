@@ -2,8 +2,10 @@ import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { afterEach, expect, it } from 'vitest';
 import { replayArchive, messageDisplayDependency, reviewContextPart, decodeWorkbenchSnapshot, structureSnapshot, type WorkbenchSnapshot, type Part, type ReviewStakeItem } from '@gonglun/core';
-import { cleanupTestDatabases, createTestApp, testInvitation } from './test-database.js';
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
+import { cleanupTestDatabases, createTestApp } from './test-database.js';
 import { migrateModeration } from '../../migrate/src/moderation.js';
+import { migrateAppealVisibility } from '../../migrate/src/appeal-visibility.js';
 import { Mutation } from './db.js';
 import { enrollModeration } from './moderation.js';
 import { moderationCase } from './moderation.js';
@@ -137,7 +139,7 @@ async function setup(stageSize=3){
   await app.store.transaction(async()=>app.store.set('rules',{...await app.store.rules(),moderation:{...(await app.store.rules()).moderation!,stages:[stageSize]}}));
   const users=[];
   for(const name of ['author','reviewer-one','reviewer-two','observer','reviewer-three']){
-    const agent=request.agent(app),res=await agent.post('/api/register').send({name,password:'password',inviteCode:await testInvitation(app)});
+    const agent=request.agent(app),res=await agent.post('/api/register').send({name,password:'password',acceptedAgreementVersion:PARTICIPATION_AGREEMENT_VERSION});
     expect(res.status,res.text).toBe(201);users.push({agent,user:res.body.user,csrf:res.body.csrf});
   }
   const [author,one,two,observer,three]=users as [typeof users[number],typeof users[number],typeof users[number],typeof users[number],typeof users[number]];
@@ -223,19 +225,114 @@ it('settles equal weighted stakes as UNKNOWN, refunds both principals and allows
   await conserve(t.app);
 });
 
-it('lets the author settle their own publication self stake without an assignment or extra review',async()=>{
+it.each(['pass','unknown','reject'] as const)('preserves the %s result’s reading boundary during appeal, including upgraded cases',async previous=>{
+  const t=await setup(),text=`复核正文-${previous}`,message=await t.publish(text);
+  if(previous!=='pass')expect((await t.action(t.one,'review',message.id,{verdict:'reject'},previous==='unknown'?10:12)).status).toBe(201);
+  expect((await t.action(t.author,'review-settle',message.id)).status).toBe(201);
+  const appeal=await t.action(t.author,'review-appeal',message.id,{},undefined,'核对前次判断');
+  expect(appeal.status,appeal.text).toBe(201);
+  const check=async()=>{
+    const detail=await t.observer.agent.get(`/api/moderation/messages/${message.id}`);
+    const visible=previous!=='reject';
+    expect(detail.body).toMatchObject({restricted:!visible,canReview:visible,canSettle:visible,assignment:null});
+    const queue=await t.observer.agent.get('/api/moderation/queue');
+    expect(queue.body.items.some((row:{messageId:string})=>row.messageId===message.id)).toBe(visible);
+    expect((await request(t.app).get(`/api/messages/${message.id}`)).text.includes(text)).toBe(visible);
+    expect((await t.observer.agent.get('/api/export')).text.includes(text)).toBe(visible);
+  };
+  await check();
+  // Before migration 49 the case held only "appeal", while its system ledger
+  // recorded the preceding verdict. Unverified provenance stays private.
+  await t.app.store.db.exec('ALTER TABLE moderation_cases DROP COLUMN "appealFrom"');
+  expect((await t.observer.agent.get(`/api/messages/${message.id}`)).text).not.toContain(text);
+  await t.app.store.transaction(()=>migrateAppealVisibility(t.app.store));
+  expect((await moderationCase(t.app.store,message.id))?.appealFrom).toBe(previous);
+  const recoveredSequence=await t.app.store.latestSequence();
+  await t.app.store.transaction(()=>migrateAppealVisibility(t.app.store));
+  expect(await t.app.store.latestSequence()).toBe(recoveredSequence);
+  await check();
+  const visible=previous!=='reject';
+  const citation=await t.send(t.observer,[{id:'ref',type:'relation',relation:'reference',
+    roles:{target:[{id:'target',reference:{messageId:message.id,revision:1}}]}}],{recommendation:1});
+  expect(citation.status,citation.text).toBe(visible?201:409);
+  const vote=await t.action(t.observer,'review',message.id,{verdict:'pass'},2);
+  expect(vote.status,vote.text).toBe(visible?201:403);
+  if(previous==='reject'){
+    // A case without its historical reversal link cannot be made public by
+    // the presence of an appeal deposit alone.
+    await t.app.store.db.prepare('DELETE FROM refs WHERE "targetId"=$1').run(appeal.body.message.id);
+    await t.app.store.db.prepare('UPDATE moderation_cases SET "appealFrom"=NULL WHERE "messageId"=$1').run(message.id);
+    await t.app.store.transaction(()=>migrateAppealVisibility(t.app.store));
+    expect((await moderationCase(t.app.store,message.id))?.appealFrom).toBeNull();
+    await check();
+  }
+},45000);
+
+it('keeps a legacy same-round reopening private after an earlier public appeal',async()=>{
+  const t=await setup(),text='同轮重开的临时否决',message=await t.publish(text);
+  expect((await t.action(t.author,'review-settle',message.id)).status).toBe(201);
+  expect((await t.action(t.author,'review-appeal',message.id,{},undefined,'重新核对')).status).toBe(201);
+  const vote=await t.action(t.one,'review',message.id,{verdict:'reject'},2);
+  expect(vote.status).toBe(201);
+  // Older releases allowed another vote before a provisional payout.
+  const pending={verdict:'reject',payouts:[],fund:0,finalized:false,voteIds:[vote.body.message.id],messageId:vote.body.message.id};
+  await t.app.store.db.prepare(`UPDATE moderation_cases SET status='rejected',"releaseAt"=$2,settlement=$3::jsonb WHERE "messageId"=$1`)
+    .run(message.id,new Date(Date.now()+86_400_000).toISOString(),JSON.stringify(pending));
+  expect((await t.action(t.author,'review',message.id,{verdict:'pass'},4)).status).toBe(201);
+  expect(await moderationCase(t.app.store,message.id)).toMatchObject({status:'appeal',round:2,appealFrom:'reject'});
+  await t.app.store.db.exec('ALTER TABLE moderation_cases DROP COLUMN "appealFrom"');
+  await t.app.store.transaction(()=>migrateAppealVisibility(t.app.store));
+  const detail=await t.observer.agent.get(`/api/moderation/messages/${message.id}`);
+  expect(detail.status).toBe(200);
+  expect(detail.body).toMatchObject({restricted:true,canReview:false});
+  expect(detail.text).not.toContain(text);
+});
+
+it('paginates every readable pending version for an opted-out reader and excludes rejected originals and their quotations',async()=>{
+  const t=await setup(),target=await t.publish('仍待审核的原文');
+  const quote=await t.send(t.author,[{id:'body',type:'text',text:'引用原文的内容'},
+    {id:'source',type:'relation',relation:'reference',roles:{target:[{id:'t',reference:{messageId:target.id,revision:1}}]}}],{recommendation:1});
+  expect(quote.status,quote.text).toBe(201);
+  const firstQueue=await t.observer.agent.get('/api/moderation/queue');
+  expect(firstQueue.body.items.map((row:{messageId:string})=>row.messageId)).toEqual([quote.body.message.id,target.id]);
+  expect(firstQueue.body.enabled).toBe(false);
+  expect((await request(t.app).get('/api/moderation/queue')).status).toBe(401);
+  expect((await t.action(t.one,'review',target.id,{verdict:'reject'},12)).status).toBe(201);
+  expect((await t.action(t.one,'review-settle',target.id)).status).toBe(201);
+  expect((await t.observer.agent.get('/api/moderation/queue')).body.items).toEqual([]);
+  expect((await t.action(t.author,'review-appeal',target.id,{},undefined,'重新核对')).status).toBe(201);
+  expect((await t.observer.agent.get('/api/moderation/queue')).body.items).toEqual([]);
+  expect((await t.observer.agent.get(`/api/moderation/messages/${target.id}`)).body).toMatchObject({canReview:false,canSettle:false});
+
+  const ids:string[]=[];
+  await t.app.store.transaction(async()=>{
+    const tx=new Mutation(t.app.store);
+    for(let i=0;i<31;i++){
+      const message=await tx.create(t.author.user.id,[{id:'body',type:'text',text:`公开审核 ${i}`}]);
+      await enrollModeration(tx,message);ids.push(message.id);
+    }
+    await tx.commit();
+  });
+  const first=await t.observer.agent.get('/api/moderation/queue');
+  expect(first.body.items.map((row:{messageId:string})=>row.messageId)).toEqual(ids.slice(1).reverse());
+  expect(first.body.nextCursor).toBeTruthy();
+  const last=await t.observer.agent.get('/api/moderation/queue').query({before:first.body.nextCursor});
+  expect(last.body).toMatchObject({items:[{messageId:ids[0]}],nextCursor:null});
+},45000);
+
+it('lets an unassigned reader settle the publication self stake without an extra review',async()=>{
   const t=await setup(),m=await t.publish();
   expect((await t.author.agent.get(`/api/moderation/messages/${m.id}`)).body).toMatchObject({canSettle:true,summary:{pass:10,reviewerCount:0}});
-  expect((await t.observer.agent.get(`/api/moderation/messages/${m.id}`)).body.canSettle).toBe(false);
-  expect((await t.action(t.observer,'review-settle',m.id)).status).toBe(403);
+  expect((await t.observer.agent.get(`/api/moderation/messages/${m.id}`)).body).toMatchObject({canSettle:true,assignment:null});
+  expect((await request(t.app).get(`/api/moderation/messages/${m.id}`)).body).toMatchObject({canReview:false,canSettle:false});
   const before=await t.app.store.account(t.author.user.id);
-  const settled=await t.action(t.author,'review-settle',m.id);
+  const settled=await t.action(t.observer,'review-settle',m.id);
   expect(settled.status,settled.text).toBe(201);
   await assertFinalized(t,m.id);
   expect((await t.author.agent.get(`/api/moderation/messages/${m.id}`)).body).toMatchObject({canSettle:false,summary:{status:'approved',finalized:true,reviewerCount:0}});
   const after=await t.app.store.account(t.author.user.id);
   expect(after.locked-before.locked).toBe(-16);
-  expect(after.available-before.available).toBe(15); // 16 returned, minus the settlement protocol fee.
+  expect(after.available-before.available).toBe(16); // The reader initiating settlement paid its protocol fee.
   expect((await t.action(t.author,'review-settle',m.id)).status).toBe(409);
   expect(await t.app.store.account(t.author.user.id)).toEqual(after);
   await conserve(t.app);

@@ -2,7 +2,7 @@ import {querySchema} from './query-schema.js';
 import {readingStateSchema} from './reading-state.js';
 import {usagePointsSchema} from './usage-points.js';
 import {notificationSchema} from './notification-schema.js';
-import {accessSchema} from './access-schema.js';
+import {accessSchema, agreementSchema} from './access-schema.js';
 import {moderationSchema} from './moderation-schema.js';
 import {ledgerOperationSchema} from './ledger-operation-schema.js';
 import {feedSchema,recommendedMembershipSchema} from './feed-schema.js';
@@ -43,4 +43,4 @@ CREATE TABLE IF NOT EXISTS requests("userId" TEXT NOT NULL,"requestId" TEXT NOT 
 CREATE TABLE IF NOT EXISTS command_requests("userId" TEXT NOT NULL,"requestId" TEXT NOT NULL,input TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY("userId","requestId"));
 CREATE TABLE IF NOT EXISTS effects(key TEXT PRIMARY KEY,body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS escrows("messageId" TEXT PRIMARY KEY,"ownerId" TEXT NOT NULL,amount BIGINT NOT NULL,"recipientId" TEXT,"fulfillmentId" TEXT);
-` + querySchema + readingStateSchema + usagePointsSchema + accessSchema + moderationSchema + feedSchema + recommendedMembershipSchema;
+` + querySchema + readingStateSchema + usagePointsSchema + accessSchema + agreementSchema + moderationSchema + feedSchema + recommendedMembershipSchema;

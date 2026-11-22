@@ -2,9 +2,11 @@
 
 三个风格选项共用组件、操作状态和业务逻辑：`gpt`（原版）、`gpt-arena`（gpt6astra-max · 议事厅·卡牌）、`opus-paper`（opus5.5-high · 案卷·印信）。两种 Opus 已合并；旧 `opus` 偏好自动归入 `opus-paper`。`html[data-appearance]` 保存完整选项，`html[data-theme]` 仍为 `gpt` / `opus`，提供覆盖所有窗口的基础颜色。导航“风格”弹窗保存到 `gonglun.theme`，默认 Opus；切换不重建工作台。
 
-两套新风格的跳转入口位于“导出”右侧。`MessageJumpControl` 在点击时读取剪贴板，识别完整消息 ID 后沿用原跳转流程；其他文本全选以便编辑，剪贴板不可用时可手动输入。旧风格保留原来的内联输入框。消息标题旁不再显示 L0–L3 数字标记，投入外观仍由原来的档位规则控制。
+视图工具栏从右向左依次放置视图切换、浏览历史、可选的跳转、讨论详情、布局设置、对比、过滤、主页、排行榜及导出。两个历史箭头中，返回在左，前进在右。按钮组用间距区分，换行后每行仍靠右对齐。分组名称仅供屏幕阅读器使用。
 
-三种风格只改变显示，功能及交互共用实现。控件布局统一在 `theme.ts` 的 `THEMES[].layout` 中设置：`messageJump` 的 `toolbar` 为顶部，`view` 为视图工具栏的导出右侧；两处均使用 `MessageJumpControl`，支持剪贴板跳转及手动输入。`relationControls` 的 `toolbar` 为顶部，`desk` 为右侧操作台，均使用 `RelationChoices`。组件通过 `useThemeSettings()` 读取位置配置；不要根据风格名称切换业务行为。新增风格时保留 `ThemeDefinition` 的类型检查，配色和材质继续放在相应 CSS 中。
+三种风格共用交互实现，控件位置由 `theme.ts` 的 `THEMES[].layout` 配置。`messageJump` 取 `toolbar` 时跳转入口位于顶部，取 `view` 时位于视图工具栏的“浏览”组。两处均使用 `MessageJumpControl`，点击后读取剪贴板，识别完整消息 ID 时跳转，其他文本全选以便编辑，也支持手动输入。`relationControls` 取 `toolbar` 时位于顶部，取 `desk` 时位于右侧操作台，两处均使用 `RelationChoices`。组件通过 `useThemeSettings()` 读取位置配置。新增风格时保留 `ThemeDefinition` 的类型检查，配色和材质继续放在相应 CSS 中。
+
+消息标题旁不再显示 L0–L3 数字标记，投入外观仍由原来的档位规则控制。
 
 左右区域保持独立滚动，不提供冻结开关。当前区域到达边界后只把剩余距离交给整页，不自动滚动另一侧；手机缩放后的页面移动仍由原来的页面边界处理。
 

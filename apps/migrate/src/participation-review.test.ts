@@ -1,7 +1,8 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import {randomUUID} from 'node:crypto';
 import request from 'supertest';
 import {afterEach,expect,it} from 'vitest';
-import {createTestApp,cleanupTestDatabases,testDatabaseUrl,testInvitation} from '../../server/src/test-database.js';
+import {createTestApp,cleanupTestDatabases,testDatabaseUrl} from '../../server/src/test-database.js';
 import {Store} from '../../server/src/db.js';
 import {moderationCase} from '../../server/src/moderation.js';
 import {financialFingerprint} from './financial-fingerprint.js';
@@ -16,7 +17,7 @@ it('opens old pending content and restores unused draws without changing balance
   });
   const people:Array<{agent:ReturnType<typeof request.agent>;csrf:string;id:string}>=[];
   for(const name of ['migration-author','first-reviewer','second-reviewer','third-reviewer']){
-    const agent=request.agent(app),res=await agent.post('/api/register').send({name,password:'password',inviteCode:await testInvitation(app)});
+    const agent=request.agent(app),res=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name,password:'password'});
     expect(res.status,res.text).toBe(201);people.push({agent,csrf:res.body.csrf,id:res.body.user.id});
   }
   const [author,one,two]=people;

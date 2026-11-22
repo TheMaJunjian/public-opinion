@@ -36,12 +36,13 @@ import {fundResetMessageContributions} from './reset-message-contributions.js';
 import {migratePrivateNotifications} from './private-notifications.js';
 import {notificationDeletionSchema} from '../../server/src/notification-schema.js';
 import {migrateNotificationMemberships} from './notification-memberships.js';
-import {accessSchema} from '../../server/src/access-schema.js';
+import {accessSchema, agreementSchema} from '../../server/src/access-schema.js';
 import {migrateModeration} from './moderation.js';
 import {migrateModerationDependencyRevisions} from './moderation-dependency-revisions.js';
 import {migrateStakeWeightedReview} from './stake-weighted-review.js';
 import {migrateRandomReviewAssignments} from './random-review-assignments.js';
 import {migrateParticipationReview} from './participation-review.js';
+import {migrateAppealVisibility} from './appeal-visibility.js';
 import {migrateReviewEnrollmentAttachments} from './review-enrollment-attachments.js';
 import {migrateReviewSelfStakes} from './review-self-stakes.js';
 import {migrateLedgerOperations} from './ledger-operations.js';
@@ -136,7 +137,11 @@ export function migrationsFor(store: Store): Migration[] {
   // Rebuild derived feed data without replaying messages or resetting preferences.
   {version:46,name:'complete-discovery-feed-index',up:()=>migrateDiscoveryFeed(store)},
   {version:47,name:'content-only-discovery-feed',up:()=>migrateDiscoveryFeed(store)},
-  {version:48,name:'statistical-discovery-memberships',up:async()=>{await store.db.exec(recommendedMembershipSchema);await indexRecommendedMemberships(store);}}];
+  {version:48,name:'statistical-discovery-memberships',up:async()=>{await store.db.exec(recommendedMembershipSchema);await indexRecommendedMemberships(store);}},
+  {version:49,name:'participant-agreement-acceptance',up:async()=>{
+    await store.db.exec(agreementSchema);
+    await migrateAppealVisibility(store);
+  }}];
 }
 
 /** Runs under the cross-process write lock. Failed upgrades roll back together. */

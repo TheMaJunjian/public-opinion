@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import express from 'express';
 import request from 'supertest';
-import type { Message, Session } from '@gonglun/core';
+import { PARTICIPATION_AGREEMENT_VERSION, type Message, type Session } from '@gonglun/core';
 import { createTestApp, cleanupTestDatabases } from '../apps/server/src/test-database.js';
 import { Mutation } from '../apps/server/src/db.js';
 
@@ -17,7 +17,9 @@ if (!output) throw new Error('--output needs a filename');
 const app = await createTestApp({ moderation: true });
 try {
   const agent = request.agent(app);
-  const registration = await agent.post('/api/register').send({ name: '首页体验', password: 'feed-local-preview' });
+  const registration = await agent.post('/api/register').send({
+    name: '首页体验', password: 'feed-local-preview', acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,
+  });
   if (registration.status !== 201) throw new Error(registration.text);
   const session = registration.body as Session;
   const samples = [

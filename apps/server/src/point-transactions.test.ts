@@ -1,4 +1,4 @@
-import { testInvitation } from './test-database.js';
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
 import { Mutation } from './db.js';
@@ -12,7 +12,7 @@ import {randomUUID} from 'node:crypto';
 afterEach(cleanupTestDatabases);
 it('keeps the reviewed version for native reviews of a category',async()=>{
   const app=await createTestApp({moderation:true}),agent=request.agent(app),store=app.store;
-  const {body:owner}=await agent.post('/api/register').send({name:'分类审核者',password:'password'});
+  const {body:owner}=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'分类审核者',password:'password'});
   const post=(path:string,body:Record<string,unknown>)=>agent.post(`/api${path}`).set('x-csrf-token',owner.csrf)
     .set('x-request-id',randomUUID()).send(body);
   const child=await post('/ui/messages',{content:'分类成员',recommendation:1});
@@ -38,8 +38,8 @@ it('keeps the reviewed version for native reviews of a category',async()=>{
 
 it.each([false,true])('includes reviewed message identities and Chinese audit types without exposing restricted content (%s)',async restricted=>{
   const app=await createTestApp({moderation:true}),agent=request.agent(app),store=app.store;
-  const {body:owner}=await agent.post('/api/register').send({name:'审核收支查看者',password:'password'});
-  const {body:author}=await request(app).post('/api/register').send({inviteCode:await testInvitation(app),name:'被审核作者',password:'password'});
+  const {body:owner}=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'审核收支查看者',password:'password'});
+  const {body:author}=await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'被审核作者',password:'password'});
   const kinds=[['review','审核'],['review-appeal','复核申请'],['review-settle','审核结算'],['review-finalize','审核资金划转'],
     ['review-record','审核记录'],['review-enrollment','纳入审核'],['reviewer-authorize','审核资格授权']];
   let targetId='';
@@ -77,7 +77,7 @@ it.each([false,true])('includes reviewed message identities and Chinese audit ty
 
 it('orders message groups and their details by latest record time before pagination',async()=>{
   const app=await createTestApp(),agent=request.agent(app),store=app.store;
-  const {body:owner}=await agent.post('/api/register').send({name:'倒序记录用户',password:'password'});
+  const {body:owner}=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'倒序记录用户',password:'password'});
   let messageId='',otherId='';
   await store.transaction(async()=>{
     await store.db.prepare('UPDATE ledger SET "createdAt"=$2 WHERE "userId"=$1').run(owner.user.id,'2026-11-08T00:00:00Z');
@@ -99,8 +99,8 @@ it('orders message groups and their details by latest record time before paginat
 });
 it.each([false,true])('groups the same message before pagination and retains every ledger entry when restricted=%s',async restricted=>{
   const app=await createTestApp({moderation:true}),agent=request.agent(app),store=app.store;
-  const {body:owner}=await agent.post('/api/register').send({name:'资金记录用户',password:'password'});
-  const {body:author}=await request(app).post('/api/register').send({inviteCode:await testInvitation(app),name:'正文作者',password:'password'});
+  const {body:owner}=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'资金记录用户',password:'password'});
+  const {body:author}=await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'正文作者',password:'password'});
   let messageId='',otherId='';
   await store.transaction(async()=>{
     const tx=new Mutation(store),message=await tx.create(author.user.id,[{id:'body',type:'text',text:'PRIVATE-LEDGER-CONTENT'}]);
@@ -149,8 +149,8 @@ it.each([false,true])('groups the same message before pagination and retains eve
 });
 it('既有逐点奖励与新的累计奖励按北京时间归并，在合并后分页，保留普通收支余额和账户隔离', async () => {
   const app = await createTestApp({ initialGrant: 0 }), agent = request.agent(app), store = app.store;
-  const { body: session } = await agent.post('/api/register').send({ name: '奖励汇总', password: 'password' });
-  await request(app).post('/api/register').send({inviteCode:await testInvitation(app), name: '另一用户', password: 'password' });
+  const { body: session } = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  name: '奖励汇总', password: 'password' });
+  await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name: '另一用户', password: 'password' });
   const sourceIds: string[] = [];
   await store.transaction(async () => {
     const tx = new Mutation(store), message = await tx.create('system', [{ id: 'body', type: 'text', text: '历史奖励' }]);
@@ -196,7 +196,7 @@ it('既有逐点奖励与新的累计奖励按北京时间归并，在合并后�
 
 it('关系消息摘要沿用正文投影，结算流水包含结算记录和原版本目标', async () => {
   const app = await createTestApp(), agent = request.agent(app), store = app.store;
-  const { body: session } = await agent.post('/api/register').send({ name: '消息入口', password: 'password' });
+  const { body: session } = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  name: '消息入口', password: 'password' });
   let relationId = '', resultId = '', targetId = '';
   await store.transaction(async () => {
     const tx = new Mutation(store);
@@ -226,7 +226,7 @@ it('关系消息摘要沿用正文投影，结算流水包含结算记录和原�
 
 it('groups one text-and-reference send with its protocol, stakes and review funding, retaining retries and account isolation',async()=>{
   const app=await createTestApp({moderation:true}),agent=request.agent(app),store=app.store;
-  const {body:session}=await agent.post('/api/register').send({name:'操作汇总用户',password:'password'});
+  const {body:session}=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'操作汇总用户',password:'password'});
   const post=(path:string,body:{requestId?:string;[key:string]:unknown})=>agent.post(`/api/ui${path}`).set('x-csrf-token',session.csrf).set('x-request-id',body.requestId??randomUUID()).send(body);
   const target=await post('/messages',{content:'引用目标',wager:1,selfAgree:true});expect(target.status,target.text).toBe(201);
   const fullText='一键发送正文，详情应完整展示。'.repeat(20)+'完整末尾。';
@@ -272,6 +272,6 @@ it('groups one text-and-reference send with its protocol, stakes and review fund
   broken.commands[1].body.targetRefs=[{kind:'message',messageId:'missing-target'}];
   expect((await post('/commands',broken)).status).toBeGreaterThanOrEqual(400);
   expect(await mappings()).toEqual(beforeFailure);expect(await store.account(session.user.id)).toEqual(balanceBeforeFailure);
-  const other=request.agent(app);await other.post('/api/register').send({inviteCode:await testInvitation(app),name:'其他操作用户',password:'password'});
+  const other=request.agent(app);await other.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'其他操作用户',password:'password'});
   expect((await other.get('/api/ui/points/transactions').query({mode:'summary',operationId:operation.operationId})).body.data).toEqual([]);
 });

@@ -1,8 +1,9 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { afterEach, expect, it } from 'vitest';
 import { bindRoles, type Message, type Part, type Session, type FeedPage } from '@gonglun/core';
-import { createTestApp, cleanupTestDatabases, testDatabaseUrl, testInvitation, withTestContribution } from './test-database.js';
+import { createTestApp, cleanupTestDatabases, testDatabaseUrl, withTestContribution } from './test-database.js';
 import { Mutation, Store } from './db.js';
 import { migrateDiscoveryFeed } from '../../migrate/src/discovery-feed.js';
 import { financialFingerprint } from '../../migrate/src/financial-fingerprint.js';
@@ -15,7 +16,7 @@ afterEach(cleanupTestDatabases);
 type App = Awaited<ReturnType<typeof createTestApp>>;
 async function actor(app: App, name: string) {
   const agent = request.agent(app);
-  const response = await agent.post('/api/register').send({ name, password: 'feed-password', inviteCode: await testInvitation(app) });
+  const response = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  name, password: 'feed-password' });
   expect(response.status, response.text).toBe(201);
   return { agent, session: response.body as Session };
 }

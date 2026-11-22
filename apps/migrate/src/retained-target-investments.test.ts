@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import {afterEach,expect,it,vi} from 'vitest';
 import request from 'supertest';
 import {bindRoles,referenceKey,replayArchive,type Message,type Part} from '@gonglun/core';
@@ -13,7 +14,7 @@ import {stakesFor} from '../../server/src/ui-projections.js';
 afterEach(cleanupTestDatabases);
 async function setup(){
   const app=await createTestApp(),agent=request.agent(app);
-  const session=(await agent.post('/api/register').send({name:'保留合同核对',password:'test-password'})).body;
+  const session=(await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'保留合同核对',password:'test-password'})).body;
   return {store:app.store,userId:session.user.id};
 }
 const relation=(name:string,target:string):Part=>({id:'relation',type:'relation',relation:name,roles:bindRoles({target:[{messageId:target}]})});

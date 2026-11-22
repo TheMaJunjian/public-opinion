@@ -98,7 +98,7 @@ export default function DiscussionRegions({ regions, onToggle, clipFor, summaryC
       {summaryCount > 0 && onToggleSummary && <button type="button" data-discussion-summary-toggle={region.key}
         data-rel-overlay="true" aria-pressed={summaryVisible}
         aria-label={`${summaryVisible ? '隐藏' : '显示'}${labels[region.type]}汇总关系 ${region.targetId}`}
-        title={`${summaryVisible ? '隐藏' : '显示'}汇总${labels[region.type]}消息和连线（${summaryCount}条关系）；原关系可在关联消息中选择和查看`}
+        title={`${summaryVisible ? '隐藏' : '显示'}汇总${labels[region.type]}消息和连线（${summaryCount}条关系），点击汇总关系可查看原记录`}
         onClick={event => { event.stopPropagation(); onToggleSummary(region.key); }}
         onDoubleClick={stop} onMouseDown={stop} onMouseUp={stop} onPointerDown={stop} onKeyDown={stop}
         style={{ position: 'absolute', left: 4, top: 2, width: 22, height: region.headerHeight - 6,

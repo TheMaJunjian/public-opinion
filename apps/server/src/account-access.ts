@@ -5,5 +5,5 @@ export async function assertActiveAccount(store: Store, userId: string, lock = f
   if (lock && !await store.db.prepare('SELECT id FROM users WHERE id=$1 FOR SHARE').get(userId))
     throw new DomainError('用户不存在', 404);
   if (await store.db.prepare('SELECT 1 FROM disabled_accounts WHERE "userId"=$1').get(userId))
-    throw new DomainError('账号已停用，请联系管理员', 403, 'ACCOUNT_DISABLED');
+    throw new DomainError('该账号已停用', 403, 'ACCOUNT_DISABLED');
 }

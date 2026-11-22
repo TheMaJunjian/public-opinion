@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import {afterEach,expect,it} from 'vitest';
 import request from 'supertest';
 import {randomUUID} from 'node:crypto';
@@ -8,7 +9,7 @@ afterEach(cleanupTestDatabases);
 const relation=(name:string,target:Reference):Part=>({id:'relation',type:'relation',relation:name,roles:bindRoles({target:[target]})});
 async function setup(){
   const app=await createTestApp(),agent=request.agent(app);
-  const {body:session}=await agent.post('/api/register').send({name:'目标投入',password:'test-password'});
+  const {body:session}=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'目标投入',password:'test-password'});
   const post=(parts:Part[],spending:object,requestId=randomUUID())=>agent.post('/api/messages').set('x-csrf-token',session.csrf).send({requestId,parts,...spending});
   const send=async(parts:Part[],spending:object)=>{const result=await post(parts,spending);expect(result.status,result.text).toBe(201);return result.body.message;};
   const target=await send([{id:'body',type:'text',text:'被评价的消息'}],{recommendation:1});

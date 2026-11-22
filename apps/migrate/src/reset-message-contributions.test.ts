@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { randomUUID } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
 import request from 'supertest';
@@ -16,7 +17,7 @@ afterEach(async () => { vi.restoreAllMocks(); await cleanupTestDatabases(); });
 
 async function setup(paidJoin = false) {
   const app = await createTestApp(), agent = request.agent(app), store = app.store;
-  const { body: session } = await agent.post('/api/register').send({ name: '旧消息补扣', password: 'password' });
+  const { body: session } = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  name: '旧消息补扣', password: 'password' });
   const send = async (parts: Part[], extra: object = { recommendation: 4 }) => {
     const result = await agent.post('/api/messages').set('x-csrf-token', session.csrf)
       .send({ requestId: randomUUID(), parts, ...extra });

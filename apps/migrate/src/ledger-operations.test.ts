@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import {afterEach,expect,it} from 'vitest';
 import request from 'supertest';
 import {randomUUID} from 'node:crypto';
@@ -11,7 +12,7 @@ afterEach(cleanupTestDatabases);
 
 it('recovers complete batches from historical receipts without changing money, journals or request data',async()=>{
   const app=await createTestApp(),store=app.store;
-  const {body:{user}}=await request(app).post('/api/register').send({name:'迁移操作分组',password:'password'});
+  const {body:{user}}=await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'迁移操作分组',password:'password'});
   const target=await executeCommand({store,user,requestId:randomUUID()},'POST','/messages',{content:'原目标',recommendation:1});
   const batches=[];
   for(let i=0;i<2;i++){

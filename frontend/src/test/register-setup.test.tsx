@@ -1,66 +1,78 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
+import { PARTICIPATION_AGREEMENT_PATH, PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
+import { ApiError } from '../api/client';
 import RegisterPage from '../pages/RegisterPage';
+import LoginPage from '../pages/LoginPage';
 
-const { getSetup, register } = vi.hoisted(() => ({ getSetup: vi.fn(), register: vi.fn() }));
-vi.mock('../api/client', () => ({ getSetup, storePrivateKeyForUser: vi.fn() }));
-vi.mock('../context/AuthContext', () => ({ useAuth: () => ({ register }) }));
-vi.mock('../utils/signature', () => ({ generateSigningKeyPair: vi.fn(async () => ({ privateKey: {}, publicKey: {} })) }));
-beforeEach(() => { vi.clearAllMocks(); });
-afterEach(() => { vi.unstubAllGlobals(); });
+const { login, register } = vi.hoisted(() => ({ login: vi.fn(), register: vi.fn() }));
+vi.mock('../context/AuthContext', () => ({ useAuth: () => ({ login, register }) }));
+beforeEach(() => { vi.resetAllMocks(); });
 
-describe('initial founder registration', () => {
-  it.each([{ length: 1, password: '1' }, { length: 200, password: '密码'.repeat(100) }])('submits a $length character password without a length limit', async ({ password }) => {
-    getSetup.mockResolvedValue({ initialized: true, founderKeyRequired: false });
-    vi.stubGlobal('crypto', { subtle: { exportKey: vi.fn().mockResolvedValue({ kty: 'OKP', crv: 'Ed25519' }) } });
-    render(<MemoryRouter><RegisterPage /></MemoryRouter>);
-    await waitFor(() => expect(getSetup).toHaveBeenCalledOnce());
-    fireEvent.change(screen.getByPlaceholderText('2-30位字母、数字、下划线或汉字'), { target: { value: 'newuser' } });
-    fireEvent.change(screen.getByPlaceholderText('请输入密码'), { target: { value: password } });
-    fireEvent.change(screen.getByLabelText('邀请码'), { target: { value: ' one-time-invite ' } });
-    fireEvent.click(screen.getByRole('button', { name: '注册账户' }));
-    await waitFor(() => expect(register).toHaveBeenCalledWith('newuser', password, expect.any(String), undefined, 'one-time-invite'));
-  });
+function fill(username: string, password: string) {
+  fireEvent.change(screen.getByLabelText('与会者名'), { target: { value: username } });
+  fireEvent.change(screen.getByLabelText('密码'), { target: { value: password } });
+}
+const required = () => new ApiError('请阅读并确认当前版本的《公论参与协议》', {status:428,code:'AGREEMENT_REQUIRED',path:'/login'});
 
-  it('asks for the founder key only when an uninitialized site requires it', async () => {
-    getSetup.mockResolvedValue({ initialized: false, founderKeyRequired: true });
-    render(<MemoryRouter><RegisterPage /></MemoryRouter>);
-    expect(await screen.findByLabelText('初始发起人密钥')).toHaveAttribute('type', 'password');
-    expect(screen.queryByLabelText('邀请码')).not.toBeInTheDocument();
-  });
-  it.each([
-    { initialized: true, founderKeyRequired: true },
-    { initialized: false, founderKeyRequired: false },
-  ])('keeps normal registration unchanged for %j', async setup => {
-    getSetup.mockResolvedValue(setup);
-    render(<MemoryRouter><RegisterPage /></MemoryRouter>);
-    await waitFor(() => expect(getSetup).toHaveBeenCalledOnce());
-    expect(screen.queryByLabelText('初始发起人密钥')).not.toBeInTheDocument();
-  });
+it.each(['1','密码'.repeat(100)])('requires explicit registration consent with a versioned document', async password => {
+  render(<MemoryRouter><RegisterPage /></MemoryRouter>);
+  expect(screen.queryByLabelText('邀请码')).toBeNull();
+  expect(screen.queryByLabelText('初始发起人密钥')).toBeNull();
+  fill('newuser', password);
+  const submit=screen.getByRole('button',{name:'注册账户'});
+  expect(submit).toBeDisabled();
+  expect(screen.getByRole('link',{name:'《公论参与协议》'})).toHaveAttribute('href',PARTICIPATION_AGREEMENT_PATH);
+  const consent=screen.getByRole('checkbox',{name:/我已阅读并同意.*公论参与协议/});
+  expect(consent).not.toBeChecked();
+  fireEvent.submit(submit.closest('form')!);
+  expect(register).not.toHaveBeenCalled();
+  fireEvent.click(consent);
+  fireEvent.click(submit);
+  await waitFor(() => expect(register).toHaveBeenCalledWith('newuser',password,PARTICIPATION_AGREEMENT_VERSION));
+});
 
-  it('requires an invitation for ordinary registration and displays server rejection', async () => {
-    getSetup.mockResolvedValue({initialized:true,founderKeyRequired:false,inviteRequired:true});
-    register.mockRejectedValueOnce(new Error('邀请码无效、已使用、已过期或已撤销'));
-    vi.stubGlobal('crypto', {subtle:{exportKey:vi.fn().mockResolvedValue({kty:'OKP',crv:'Ed25519'})}});
-    render(<MemoryRouter><RegisterPage /></MemoryRouter>);
-    await waitFor(() => expect(screen.getByRole('button',{name:'注册账户'})).toBeEnabled());
-    fireEvent.change(screen.getByLabelText('与会者名'),{target:{value:'invited'}});
-    fireEvent.change(screen.getByLabelText('密码'),{target:{value:'password'}});
-    fireEvent.click(screen.getByRole('button',{name:'注册账户'}));
-    expect(await screen.findByRole('alert')).toHaveTextContent('请填写管理员提供的邀请码');
-    expect(register).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByLabelText('邀请码'),{target:{value:'expired'}});
-    fireEvent.click(screen.getByRole('button',{name:'注册账户'}));
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('已过期或已撤销'));
-    expect(screen.getByLabelText('邀请码')).toHaveValue('expired');
-  });
+it('asks for consent on login only after valid credentials need a new agreement', async () => {
+  const success=vi.fn();
+  login.mockRejectedValueOnce(new ApiError('用户名或密码错误',{status:401,path:'/login'})).mockRejectedValueOnce(required()).mockResolvedValueOnce(undefined);
+  render(<MemoryRouter><LoginPage onSuccess={success} /></MemoryRouter>);
+  const submit=screen.getByRole('button',{name:'登录'});
+  fill('olduser','wrong'); fireEvent.click(submit);
+  expect(await screen.findByRole('alert')).toHaveTextContent('用户名或密码错误');
+  expect(screen.queryByRole('checkbox')).toBeNull();
+  fill('olduser','correct'); fireEvent.click(submit);
+  const consent=await screen.findByRole('checkbox');
+  expect(login).toHaveBeenLastCalledWith('olduser','correct',undefined);
+  expect(consent).not.toBeChecked();
+  expect(submit).toBeDisabled();
+  expect(success).not.toHaveBeenCalled();
+  fireEvent.click(consent); fireEvent.click(submit);
+  await waitFor(() => expect(success).toHaveBeenCalledOnce());
+  expect(login).toHaveBeenLastCalledWith('olduser','correct',PARTICIPATION_AGREEMENT_VERSION);
+});
 
-  it('does not submit when registration requirements cannot be loaded', async () => {
-    getSetup.mockRejectedValue(new Error('无法确认站点初始化状态'));
-    render(<MemoryRouter><RegisterPage /></MemoryRouter>);
-    expect(await screen.findByRole('alert')).toHaveTextContent('无法确认');
-    expect(screen.getByRole('button',{name:'注册账户'})).toBeDisabled();
-    expect(register).not.toHaveBeenCalled();
-  });
+it('resets consent if the server has published a newer registration agreement', async () => {
+  register.mockRejectedValueOnce(new ApiError('协议已更新',{status:428,code:'AGREEMENT_REQUIRED',path:'/register'}));
+  render(<MemoryRouter><RegisterPage /></MemoryRouter>);
+  fill('newuser','password');
+  const consent=screen.getByRole('checkbox');
+  const submit=screen.getByRole('button',{name:'注册账户'});
+  fireEvent.click(consent); fireEvent.click(submit);
+  expect(await screen.findByRole('alert')).toHaveTextContent('参与协议版本已更新');
+  expect(consent).not.toBeChecked();
+  expect(submit).toBeDisabled();
+});
+
+it('does not carry a previous account’s consent to another user', async () => {
+  login.mockRejectedValueOnce(required()).mockResolvedValueOnce(undefined);
+  const success=vi.fn();
+  render(<MemoryRouter><LoginPage onSuccess={success} /></MemoryRouter>);
+  fill('olduser','password'); fireEvent.click(screen.getByRole('button',{name:'登录'}));
+  fireEvent.click(await screen.findByRole('checkbox'));
+  fill('member','password');
+  expect(screen.queryByRole('checkbox')).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'登录'}));
+  await waitFor(() => expect(success).toHaveBeenCalledOnce());
+  expect(login).toHaveBeenLastCalledWith('member','password',undefined);
 });

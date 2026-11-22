@@ -1,4 +1,4 @@
-import { testInvitation } from './test-database.js';
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
@@ -30,7 +30,7 @@ function expectSamePresentation(preview: Parameters<typeof projectWorkbenchSnaps
 }
 async function setup() {
   const app = await createTestApp({ moderation: true }), agent = request.agent(app);
-  const registration = await agent.post('/api/register').send({ name:'preview-user', password:'preview-password' });
+  const registration = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  name:'preview-user', password:'preview-password' });
   expect(registration.status,registration.text).toBe(201);
   const session = registration.body;
   const post = (path:string, body:Record<string,unknown>) => agent.post(`/api/ui${path}`).set('x-csrf-token',session.csrf).send(body);
@@ -127,11 +127,22 @@ describe('unified send rehearsal',()=>{
   });
 
   it.each(['AUTHORIZE','FULFILL'])('previews the %s execution and generated result records',async type=>{
-    const {app,post,batch,create}=await setup();
-    const target=type==='AUTHORIZE'
-      ?await create('/relations',{relationType:'PROPOSAL',targetRefs:[],payload:{operationType:'REVENUE_INJECTION',amount:5,source:'测试',content:'注入提案'}})
-      :await create('/relations',{relationType:'DELEGATION',targetRefs:[],payload:{delegationKind:'CREATE',rewardAmount:5,content:'测试委托'}});
-    if(type==='AUTHORIZE')await app.store.db.prepare('UPDATE moderation_cases SET status=$1 WHERE "messageId"=$2').run('approved',target.id);
+    const {app,agent,session,post,batch,create}=await setup();
+    let target;
+    if (type === 'AUTHORIZE') {
+      const editable = await create('/messages', {content:'待修订的正文'});
+      const proposal = await agent.post('/api/messages').set('x-csrf-token',session.csrf).send({
+        requestId:randomUUID(), recommendation:1, parts:[
+          {id:'amend',type:'relation',relation:'amend',roles:{target:[{id:'target',reference:{messageId:editable.id}}]}},
+          {id:'data',type:'data',value:{expectedRevision:1,parts:[{id:'body',type:'text',text:'确认后的正文'}]}},
+        ],
+      });
+      expect(proposal.status,proposal.text).toBe(201);
+      target = proposal.body.message;
+      await app.store.db.prepare('UPDATE moderation_cases SET status=$1 WHERE "messageId"=$2').run('approved',target.id);
+    } else {
+      target = await create('/relations',{relationType:'DELEGATION',targetRefs:[],payload:{delegationKind:'CREATE',rewardAmount:5,content:'测试委托'}});
+    }
     const input=batch('/relations',{relationType:type==='FULFILL'?'DELEGATION':type,targetRefs:[{kind:'message',messageId:target.id}],
       ...(type==='FULFILL'?{payload:{delegationKind:'FULFILL',content:'完成说明'}}:{})});
     const preview=await post('/commands/preview',{batch:input});expect(preview.status,preview.text).toBe(200);
@@ -145,7 +156,7 @@ describe('unified send rehearsal',()=>{
     const reviewers:Array<{agent:ReturnType<typeof request.agent>;session:{csrf:string;user:{id:string}}}>=[];
     for(const name of ['preview-reviewer-one','preview-reviewer-two']){
       const reviewer=request.agent(app);
-      const registration=await reviewer.post('/api/register').send({name,password:'preview-password',inviteCode:await testInvitation(app)});
+      const registration=await reviewer.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name,password:'preview-password'});
       expect(registration.status,registration.text).toBe(201);
       const review=await reviewer.post('/api/ui/relations').set('x-csrf-token',registration.body.csrf).send({
         relationType:'REVIEW',targetRefs:[{kind:'message',messageId:target.id,reference:{messageId:target.id,revision:1}}],
@@ -194,7 +205,7 @@ describe('unified send rehearsal',()=>{
     const {app,session,post,batch,create}=await setup();
     const target=await create('/messages',{content:'预览的目标'});
     if(relationType==='NOTIFY'){
-      const follower=request.agent(app),registration=await follower.post('/api/register').send({inviteCode:await testInvitation(app),name:'通知预览接收者',password:'preview-password'});
+      const follower=request.agent(app),registration=await follower.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'通知预览接收者',password:'preview-password'});
       const follow=await follower.post('/api/ui/relations').set('x-csrf-token',registration.body.csrf)
         .send({relationType:'ATTENTION',recommendation:1,targetRefs:[{kind:'message',messageId:target.id}],payload:{subType:'YES'}});
       expect(follow.status,follow.text).toBe(201);

@@ -16,7 +16,7 @@ bash export-production.sh --online
 
 ## 2. 在新服务器恢复快照
 
-新服务器配置本仓库的 `deploy/.env.prod`，使用新数据库密码、发起人密钥和生产域名。先只启动 PostgreSQL，不启动新版 API：
+新服务器配置本仓库的 `deploy/.env.prod`，使用新数据库密码和生产域名。先只启动 PostgreSQL，不启动新版 API：
 
 ```sh
 cd deploy
@@ -42,7 +42,7 @@ LEGACY_DATABASE_URL=postgresql://gonglun:实际新库密码@127.0.0.1:54330/gong
 MIGRATION_TARGET_DATABASE_URL=postgresql://gonglun:实际新库密码@127.0.0.1:54330/gonglun
 ```
 
-用户名必须选定一位旧用户作为新版 founder，传旧 User.id。目标 schema 默认 public，必须没有表。迁移程序不使用生产 DATABASE_URL，源库查询全部位于只读一致快照事务内。
+旧 Prisma 迁移命令仍需通过 `--founder-id` 传入一个旧 `User.id`，用于标记历史创建者。迁移后该账号与其他账号权限相同。目标 schema 默认 public，必须没有表。迁移程序不使用生产 DATABASE_URL，源库查询全部位于只读一致快照事务内。
 
 ```sh
 mkdir -p migration-reports
@@ -115,7 +115,7 @@ npx tsx apps/migrate/src/verify-legacy-rehearsal-cli.ts migration-reports/verifi
 
 该组合生成 `settings.migration.mode=native-rehearsal`，允许隔离环境业务写入。`--read-only-rehearsal` 在此组合中是保留源锁定状态的显式安全选项，最终模式以报告为准。TRUTH 和 VALUE 使用不同目标键，活动本金导入 bets，VOTING 保持 open，没有截止计时，不自动结算。委托奖励导入 escrow，超出 rewardAmount 的原池积分继续锁定保留；只有之后的显式完成认定才能支付奖励。历史记录、签名、组织执行状态及所有源表原文继续保留。
 
-执行边界：之后的押注和结算使用新版规则；仅活动本金参与新结算，旧完成轮次及其支付不会被重放或跨检查点追回，旧累计权重仍可查询。未覆盖本金、UNKNOWN 有资金投票、轮次本金与池不一致或无法无歧义映射的委托会阻止可操作模式。此实现不是旧 Prisma 结算算法的逐行复制。原 RuleVersion 为空时采用新版默认规则，正式切换前须验收未来规则及 founder 权限。
+执行边界：之后的押注和结算使用新版规则；仅活动本金参与新结算，旧完成轮次及其支付不会被重放或跨检查点追回，旧累计权重仍可查询。未覆盖本金、UNKNOWN 有资金投票、轮次本金与池不一致或无法无歧义映射的委托会阻止可操作模式。此实现不是旧 Prisma 结算算法的逐行复制。原 RuleVersion 为空时采用新版默认规则，正式切换前须核对规则参数，并验证旧账号须重新认证和确认当前协议。历史 founder 标记不授予业务特权。
 
 真实备份演练使用 postgres.real_native_v5，验证通过：252 用户、1,356 原消息、13,923 原记录、536 轮次（478 个仍在投票）、763 押注、491 池、287 组织状态和 237 有效 JOIN。可用余额共转入锁定 101,000,271 点，最终 available=325,688,026、locked=102,048,590，逐账户总额及账本重放一致，剩余缺口 0。委托保留 1,000,000 奖励及额外 10 点原池锁定，不提前支付。
 

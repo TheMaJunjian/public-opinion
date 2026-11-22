@@ -12,7 +12,7 @@ npm run build
 
 `npm test` 使用 Vitest 运行共享模型、真实 PostgreSQL 后端集成和 React 工作台测试。`npm run db:up` 启动本地 PostgreSQL；每个后端测试使用随机独立 schema，结束后只清理本轮测试创建的 schema。
 
-`access-management.test.ts` 验证邀请制注册、管理员权限与 CSRF、到期与撤销、两个 API 实例争用同一邀请码、注册失败回滚、停用后的全部会话失效及写入拒绝、恢复后重新登录与完整等待时间，以及版本 34 到 35 的无损升级。已有多用户场景通过测试辅助函数生成真实的一次性邀请码，不绕过服务端邀请校验。前端测试覆盖邀请码提交、管理面板生成与撤销、账号停用确认和恢复，以及旧响应不会覆盖已退出或重新登录的会话。
+`access-management.test.ts` 验证注册须确认当前协议、普通账号权限相同、旧账号重新认证、旧会话失效、历史停用和协议记录的隐私。`moderation.test.ts` 和 `review-assignments.test.ts` 覆盖未分配任务的用户在公开队列中查找、审核和结算，以及受限版本的阅读边界。它们还分别验证通过、平局和不通过的版本进入复核时，队列、导出、引用与投稿审核权限如何变化，并覆盖前次结论的历史回填。前端测试覆盖注册和旧账号登录确认、失败后保留设备密钥，以及离线会议累计增量的导入和合并。
 
 使用其他测试数据库时设置 `TEST_DATABASE_URL`，账号需要创建和删除 schema 的权限。测试不会读取生产用的 `DATABASE_URL`。默认测试地址与本地开发 PostgreSQL 相同，但测试 schema 与应用数据隔离。
 
@@ -21,6 +21,7 @@ npm run build
 ```sh
 npx vitest run apps/server/src/ui.test.ts
 npx vitest run frontend/src/test/message-workbench-page.test.tsx
+npx vitest run --project web frontend/src/test/meeting- frontend/src/test/export-viewer-opening.test.tsx frontend/src/test/export-viewer-cache.test.ts
 npm run typecheck
 ```
 
@@ -49,7 +50,7 @@ IndexedDB 按 API 地址、账号与讨论范围分别保存已加载窗口和�
 `snapshot-transport.test.ts`、`snapshot-client.test.ts` 和 `migrate-legacy.test.ts` 覆盖无损还原、旧接口兼容、分页期间的变更、原押注池及旧数据完整性。大样本测试实际迁移 420 条旧文本消息及分类、JOIN 和跨页引用，以每页 100 条遍历所有普通与合并分页，逐字段比较最终消息、JOIN、引用、用户和附属状态，同时检查请求次数及传输字节减少。不同服务器上的实际耗时需要另行测量。
 # 生产容器验证
 
-运行 `npm run test:production`，需要 Docker Compose 2.24.4+ 和空闲的本机 54443、54331 端口。脚本使用独立随机 Compose 项目与临时凭据，验证 PostgreSQL、API、Caddy 内部 CA 的 HTTPS、前端静态页面、首位用户保护、Secure Cookie、CSRF、消息写入、API 重启后的持久化、会话及登录；随后运行实际迁移 CLI，将合成旧 Prisma 数据转换到新 schema，重建生产 API 验证 bcrypt 登录、旧消息及余额、新版写入。结束后删除本轮测试容器和卷。内部 CA 测试不替代真实域名的 DNS 与公网证书验收，合成数据不替代真实备份演练。
+运行 `npm run test:production`，需要 Docker Compose 2.24.4+ 和空闲的本机 54443、54331 端口。脚本使用独立随机 Compose 项目与临时凭据，验证 PostgreSQL、API、Caddy 内部 CA 的 HTTPS、前端静态页面、协议确认及平等注册、Secure Cookie、CSRF、消息写入、API 重启后的持久化、会话及登录；随后运行实际迁移 CLI，将合成旧 Prisma 数据转换到新 schema，重建生产 API 验证 bcrypt 登录、旧消息及余额、新版写入。结束后删除本轮测试容器和卷。内部 CA 测试不替代真实域名的 DNS 与公网证书验收，合成数据不替代真实备份演练。
 
 该验证显式合并仅供本地/CI 的 `docker-compose.build.yml`；生产 Compose 本身只有镜像引用。验证还将已迁移的数据切到镜像只读演练入口，检查错误目标不创建 schema、原 PostgreSQL 容器 ID/启动时间/数据卷不变，以及旧登录、余额、消息和禁止写入的行为。`test:deployment` 另行验证部署脚本在缺库、错误目标、镜像缺失或校验失败时不替换服务，并检查下载校验顺序、无构建更新、配置不改写及显式镜像回退。
 

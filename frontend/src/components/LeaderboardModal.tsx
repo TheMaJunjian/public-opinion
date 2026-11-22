@@ -339,7 +339,7 @@ function LeaderboardModal({
                   />
                 </label>
               )}
-              <span style={{ fontSize: 11, color: 'var(--ink-64748b)' }}>充值贡献按实际到账统计；累计使用贡献含计时获得和零点补发，消费或抵扣欠额不减少累计值。</span>
+              <span style={{ fontSize: 11, color: 'var(--ink-64748b)' }}>充值贡献按历史已入账金额统计。累计使用贡献含计时获得和零点补发，消费或抵扣欠额不减少累计值。</span>
             </div>
             <div ref={tableScrollRef} style={{ overflow: 'var(--leaderboard-table-overflow, visible)', padding: 12, flex: 'var(--leaderboard-table-flex, 0 0 auto)', minHeight: 'var(--leaderboard-table-min-height, 0px)' }}>
               <LeaderboardTable key="user" columns={USER_COLUMNS} widths={columnWidths.user} onResize={resizeColumn} stickyTop="var(--leaderboard-table-sticky-top, var(--leaderboard-header-height, 0px))">

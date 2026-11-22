@@ -1,7 +1,6 @@
 import type { DemoEdge, DemoMessage, UnitSelection } from './modelBridge';
 import type { DiscussionRegionGeometry } from './discussionLayout';
-import type { CrossCanvasRelationGroups } from './crossCanvasRelations';
-import { discussionLabels, hasDiscussionText, isDiscussionType } from './discussionTypes';
+import { hasDiscussionText, isDiscussionType } from './discussionTypes';
 import { projectStanceLayoutEdges } from './stanceLayout';
 import { hasActiveDisplayEffect } from './messageDisplay';
 import { getPresentationSpec } from '../types';
@@ -40,13 +39,6 @@ export function summarizeDiscussionEdges({ messages, edges, regions, ownerRegion
   const catalog = new Map(messages.map(message => [message.id, message]));
   const byKey = new Map(regions.map(region => [region.key, region]));
   const summaries = new Map<string, DiscussionSummary>(), hiddenEdgeIds = new Set<string>(), hiddenRecordIds = new Set<string>();
-  const related = new Map<string, CrossCanvasRelationGroups>();
-  const addRelated = (id: string, direction: 'incoming' | 'outgoing', type: string, record: string) => {
-    const own = related.get(id) ?? { incoming: {}, outgoing: {} };
-    const ids = own[direction][type] ??= [];
-    if (!ids.includes(record)) ids.push(record);
-    related.set(id, own);
-  };
   const placements = projectStanceLayoutEdges(messages, edges);
   // Membership and decoration records do not need the individual edge label
   // as an arrow endpoint. Keep it only for a genuinely directed dependency.
@@ -76,19 +68,6 @@ export function summarizeDiscussionEdges({ messages, edges, regions, ownerRegion
     if (!summary.recordIds.includes(original.relationMessageId)) summary.recordIds.push(original.relationMessageId);
     summaries.set(region.key, summary);
     hiddenEdgeIds.add(original.id); hiddenRecordIds.add(original.relationMessageId);
-    const label = discussionLabels[region.type];
-    addRelated(region.targetId, 'incoming', label, original.relationMessageId);
-    addRelated(source, 'outgoing', label, original.relationMessageId);
   }
-  return { summaries: [...summaries.values()], hiddenEdgeIds, hiddenRecordIds, related };
-}
-
-export function mergeRelatedGroups(a: CrossCanvasRelationGroups | undefined, b: CrossCanvasRelationGroups | undefined): CrossCanvasRelationGroups | undefined {
-  if (!a) return b;
-  if (!b) return a;
-  const result: CrossCanvasRelationGroups = { incoming: {}, outgoing: {} };
-  for (const direction of ['incoming', 'outgoing'] as const) for (const group of [a, b]) {
-    for (const [type, ids] of Object.entries(group[direction])) result[direction][type] = [...new Set([...(result[direction][type] ?? []), ...ids])];
-  }
-  return result;
+  return { summaries: [...summaries.values()], hiddenEdgeIds, hiddenRecordIds };
 }

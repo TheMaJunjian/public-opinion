@@ -4,15 +4,15 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useLocation } from 'react-router-dom';
 import App from '../App';
 
-const { auth, login, register, getSetup, mounted } = vi.hoisted(() => ({
+const { auth, login, register, mounted } = vi.hoisted(() => ({
   auth: { user: null as null | { id: string; username: string; createdAt: string }, loading: false },
-  login: vi.fn(), register: vi.fn(), getSetup: vi.fn(), mounted: vi.fn(),
+  login: vi.fn(), register: vi.fn(), mounted: vi.fn(),
 }));
 vi.mock('../context/AuthContext', () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => children,
   useAuth: () => ({ ...auth, login, register }), useOptionalAuth: () => null,
 }));
-vi.mock('../api/client', () => ({ getSetup, storePrivateKeyForUser: vi.fn(), getFeed: vi.fn(async () => ({ mode: 'recommended', items: [], nextCursor: null })) }));
+vi.mock('../api/client', async importOriginal => ({ ...await importOriginal<typeof import('../api/client')>(), getFeed: vi.fn(async () => ({ mode: 'recommended', items: [], nextCursor: null })) }));
 vi.mock('../components/Navbar', () => ({ default: () => <nav /> }));
 vi.mock('../components/AppUpdateNotice', () => ({ default: () => null }));
 vi.mock('../components/OperationFeedback', () => ({ default: () => null }));
@@ -71,7 +71,6 @@ it.each([false, true])('从首页介绍进入消息后，浏览器后退恢复�
 });
 beforeEach(() => {
   vi.clearAllMocks();auth.user = null;auth.loading = false;
-  getSetup.mockResolvedValue({ initialized: true, founderKeyRequired: false });
   window.history.replaceState(null, '', '/');
 });
 afterEach(() => { cleanup();vi.unstubAllEnvs();vi.restoreAllMocks(); });

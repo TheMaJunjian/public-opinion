@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
 import { bindRoles, relations, replayArchive, type Part, type Reference } from '@gonglun/core';
@@ -14,7 +15,7 @@ import { migrationsFor, runMigrations } from './migrations.js';
 afterEach(cleanupTestDatabases);
 async function fixture(name = 'recommend', payload: Record<string, string> = {}) {
   const app = await createTestApp(), store = app.store, agent = request.agent(app);
-  const registered = await agent.post('/api/register').send({ name: '标注迁移者', password: 'a-good-password' });
+  const registered = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  name: '标注迁移者', password: 'a-good-password' });
   expect(registered.status, registered.text).toBe(201);
   const user = registered.body.user;
   const relation = (name: string, reference: Reference): Part => ({ id: 'relation', type: 'relation', relation: name, roles: bindRoles({ target: [reference] }) });

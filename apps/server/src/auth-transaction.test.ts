@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { generateKeyPairSync } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
@@ -10,14 +11,14 @@ afterEach(async () => {
 
 const publicKey = () => JSON.stringify(generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }));
 const credentials = () => ({ username: 'transaction-test', password: 'transaction-password', deviceId: 'test-device', publicKey: publicKey() });
-const registrations = ['users', 'accounts', 'signing_keys', 'messages', 'revisions', 'ledger', 'changes', 'sessions'] as const;
+const registrations = ['users', 'accounts', 'signing_keys', 'messages', 'revisions', 'ledger', 'changes', 'sessions', 'participation_acceptances'] as const;
 
 describe('authentication transactions', () => {
   it('registers, reads its signed session, logs out and logs back in without repeating the initial grant', async () => {
     const app = await createTestApp(), agent = request.agent(app), input = credentials();
-    const registered = await agent.post('/api/register').send(input);
+    const registered = await agent.post('/api/register').send({ ...input, acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION });
     expect(registered.status, registered.text).toBe(201);
-    expect(registered.body.user).toMatchObject({ name: input.username, founder: true, publicKey: input.publicKey });
+    expect(registered.body.user).toMatchObject({ name: input.username, founder: false, publicKey: input.publicKey });
     expect(registered.headers['set-cookie']).toBeDefined();
     expect((await agent.get('/api/session')).body.user).toEqual(registered.body.user);
     const sequence = await app.store.latestSequence(), grant = (await app.store.rules()).initialGrant;
@@ -51,7 +52,7 @@ describe('authentication transactions', () => {
       FOR EACH ROW EXECUTE FUNCTION reject_session();
     `);
 
-    const rejected = await request(app).post('/api/register').send(input);
+    const rejected = await request(app).post('/api/register').send({ ...input, acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION });
     expect(rejected.status, rejected.text).toBe(500);
     expect(rejected.headers['set-cookie']).toBeUndefined();
     for (const table of registrations) {
@@ -62,9 +63,9 @@ describe('authentication transactions', () => {
     expect((await request(app).get('/api/setup')).body.initialized).toBe(false);
 
     await app.store.db.exec('DROP TRIGGER reject_session ON sessions');
-    const agent = request.agent(app), retry = await agent.post('/api/register').send(input);
+    const agent = request.agent(app), retry = await agent.post('/api/register').send({ ...input, acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION });
     expect(retry.status, retry.text).toBe(201);
-    expect(retry.body.user).toMatchObject({ founder: true, publicKey: input.publicKey });
+    expect(retry.body.user).toMatchObject({ founder: false, publicKey: input.publicKey });
     expect((await agent.get('/api/session')).body.user.id).toBe(retry.body.user.id);
     expect(retry.body.account.available).toBe((await app.store.rules()).initialGrant);
     expect(await app.store.setting<number>('minted')).toBe((await app.store.rules()).initialGrant);
@@ -73,7 +74,7 @@ describe('authentication transactions', () => {
 
   it('keeps the previous device key and expired sessions when login session creation fails', async () => {
     const app = await createTestApp(), agent = request.agent(app), input = credentials();
-    const registered = await agent.post('/api/register').send(input);
+    const registered = await agent.post('/api/register').send({ ...input, acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION });
     expect(registered.status, registered.text).toBe(201);
     const userId = registered.body.user.id, replacement = { ...input, publicKey: publicKey() };
     await app.store.db.prepare('INSERT INTO sessions(token,"userId",csrf,expires,"deviceId") VALUES ($1,$2,$3,0,$4)').run('expired-session', userId, 'expired-csrf', input.deviceId);

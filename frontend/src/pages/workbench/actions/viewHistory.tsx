@@ -393,6 +393,8 @@ export function exitAllTrace(dependencies: ExitAllTraceDependencies): void {
 
 interface EnterClassificationDependencies {
   captureSnapshot: () => TraceSnapshot;
+  /** A linked category has a real parent layer but no saved viewport in it. */
+  linkedParentOf?: (messageId: string) => string | null;
   cancelScrollRafs: () => void;
   scrollRequestIdRef: React.MutableRefObject<number>;
   leftPanelRef: React.MutableRefObject<HTMLDivElement | null>;
@@ -403,8 +405,7 @@ interface EnterClassificationDependencies {
 
 export function enterClassification(dependencies: EnterClassificationDependencies, relMsgId: string): void {
   const { captureSnapshot, cancelScrollRafs, scrollRequestIdRef, leftPanelRef, classifyStackRef, setClassifyRelMsgId, setClassifyKey } = dependencies;
-  // Save snapshot so we can restore on exit
-  const snapshot = captureSnapshot();
+  const snapshot = dependencies.linkedParentOf ? null : captureSnapshot();
   cancelScrollRafs();
   scrollRequestIdRef.current++;
   if (leftPanelRef.current) {
@@ -415,7 +416,17 @@ export function enterClassification(dependencies: EnterClassificationDependencie
     document.scrollingElement.scrollTop = 0;
     document.scrollingElement.scrollLeft = 0;
   }
-  classifyStackRef.current.push({ relMsgId, snapshot });
+  if (dependencies.linkedParentOf) {
+    const path = new Set([relMsgId]);
+    let parent = dependencies.linkedParentOf(relMsgId);
+    while (parent && !path.has(parent)) {
+      path.add(parent);
+      parent = dependencies.linkedParentOf(parent);
+    }
+    classifyStackRef.current = Array.from(path, id => ({ relMsgId: id, snapshot: null, locateOnExit: true })).reverse();
+  } else {
+    classifyStackRef.current.push({ relMsgId, snapshot });
+  }
   setClassifyRelMsgId(relMsgId);
   setClassifyKey(k => k + 1);
 }

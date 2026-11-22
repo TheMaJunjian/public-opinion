@@ -10,10 +10,6 @@ const { auth, login } = vi.hoisted(() => ({
   auth: { user: null, loading: false }, login: vi.fn(),
 }));
 vi.mock('../context/AuthContext', () => ({ useAuth: () => ({ ...auth, login, register: vi.fn() }) }));
-vi.mock('../api/client', () => ({
-  getSetup: vi.fn(async () => ({ initialized: true, founderKeyRequired: false })),
-  storePrivateKeyForUser: vi.fn(),
-}));
 
 function Entry({ tutorial = false, welfare = false }: { tutorial?: boolean; welfare?: boolean }) {
   return <MemoryRouter>

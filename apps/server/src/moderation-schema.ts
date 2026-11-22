@@ -30,6 +30,7 @@ export const moderationSchema = `
 CREATE TABLE IF NOT EXISTS moderation_cases(
   id TEXT PRIMARY KEY,"messageId" TEXT NOT NULL,revision INTEGER NOT NULL,"authorId" TEXT NOT NULL,
   snapshot JSONB NOT NULL,"ruleVersion" INTEGER NOT NULL,policy JSONB NOT NULL,
+  "appealFrom" TEXT CHECK ("appealFrom" IN ('pass','reject','unknown')),
   status TEXT NOT NULL DEFAULT 'pending',fee BIGINT NOT NULL,deposit BIGINT NOT NULL,
   "releaseAt" TEXT,settlement JSONB,"createdAt" TEXT NOT NULL,
   round INTEGER NOT NULL DEFAULT 1,stage INTEGER NOT NULL DEFAULT 0,"assignmentCheckAt" BIGINT NOT NULL DEFAULT 0,

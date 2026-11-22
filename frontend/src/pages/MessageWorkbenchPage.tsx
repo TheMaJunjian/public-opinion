@@ -78,11 +78,9 @@ import { captureSnapshot as runCaptureSnapshot, confirmMessageIdNavigation as ru
 import type { RestoreSnapshotOptions } from './workbench/actions/viewHistory';
 import { deriveComparisonGraphProjections, projectComparisonSide } from './workbench/projections/comparisonGraphProjections';
 import type { DeriveComparisonGraphProjectionsInput } from './workbench/projections/comparisonGraphProjections';
-import { deriveCrossCanvasRelations } from '../utils/crossCanvasRelations';
 import { loadRelatedTraceContext } from '../utils/relatedTraceContext';
 import { deriveGraphMessagesToRender } from './workbench/projections/graphMessagesToRender';
 import { comparisonViewMessageIds, hasComparisonDisplayEffect } from './workbench/projections/comparisonViewScope';
-import { projectGraphScene } from '../utils/graphProjection';
 import { deriveHiddenInGraphView } from './workbench/projections/hiddenInGraphView';
 import { deriveHomeFilterResult } from './workbench/projections/homeFilterResult';
 import { normalizeHomeFilter } from './workbench/model/homeFilter';
@@ -90,7 +88,6 @@ import { useHomeFilterReadingMarks } from '../hooks/useHomeFilterReadingMarks';
 import { deriveMessagesToShow } from './workbench/projections/messagesToShow';
 import { deriveNormalGraphProjection } from './workbench/projections/normalGraphProjection';
 import {deriveContainerEffect,isContainerType} from './workbench/model/containerEffect';
-import DiscussionNavigation from '../components/DiscussionNavigation';
 import { deriveReclassificationJoinCount } from './workbench/projections/reclassificationJoinCount';
 import { deriveSendValidationLabel } from './workbench/projections/sendValidationLabel';
 import { deriveSingleButtonEnabled } from './workbench/projections/singleButtonEnabled';
@@ -149,6 +146,7 @@ const GraphView = lazy(() => import('../components/GraphView'));
 const RelationToolbar = lazy(() => import('./workbench/ui/RelationToolbar'));
 const RelationChoices = lazy(() => import('./workbench/ui/RelationToolbar').then(module => ({ default: module.RelationChoices })));
 const WorkbenchViewToolbar = lazy(() => import('./workbench/ui/WorkbenchViewToolbar'));
+const OfflineMeetingExchange = lazy(() => import('../components/OfflineMeetingExchange'));
 const ClassificationHeader = lazy(() => import('./workbench/ui/ClassificationHeader'));
 const TraceReadingController = lazy(() => import('../components/TraceReadingController'));
 const ReadingCanvasPresentation = lazy(() => import('../components/ReadingCanvasPresentation'));
@@ -207,7 +205,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     showUnauthenticatedNotice, setShowUnauthenticatedNotice, showRegistrationGuide, setShowRegistrationGuide, stakeCounts,
     setStakeCounts, messageBettorCounts, setMessageBettorCounts, authorStakes, setAuthorStakes,
     refreshLeaderboard, registeredUsers, isPreloaded, viewerUser, setViewerUser,
-    displayUser, correctionVersions:personalCorrectionVersions, preloadedData, loadedExport, viewerUsers, loading, persistPreloadedExport, isViewerRoute, viewerNavigation,
+    displayUser, correctionVersions:personalCorrectionVersions, preloadedData, loadedExport, viewerUsers, loading, persistPreloadedExport, persistMeetingExport, isViewerRoute, viewerNavigation,
     tagCounts, setRelatedTraceContext, captureOptimisticRollback,
     onDemand, ensureMessages,
     catalog, catalogReady, catalogVersion, catalogComputationsCurrent, globalRows,
@@ -242,7 +240,11 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const localMessageData = isViewerRoute && loadedExport && !nativeZhihuData && !isZhihuViewingData(loadedExport) ? loadedExport : null;
   const zhihuData = useMemo(() => nativeZhihuData ? nativeZhihuEditingView(isNativeZhihuView(viewingExport) ? viewingExport : nativeZhihuData)
     : isZhihuViewingData(loadedExport) ? loadedExport : null, [loadedExport, nativeZhihuData, viewingExport]);
-  const discussion = useDiscussionView(loadedExport);
+  // Incoming speeches update the same open document; keep its layout, reading
+  // history and selection while the message/relation projections refresh.
+  const viewerDocument = loadedExport?.meeting
+    ? getExportCacheReference(loadedExport)?.viewCacheId ?? loadedExport.meeting.id : loadedExport;
+  const discussion = useDiscussionView(loadedExport, viewerDocument);
   const readingTextLinks = useMemo(() => isViewerRoute && zhihuData ? { linksForMessage: createZhihuReadingLinks(zhihuData) } : false, [isViewerRoute, zhihuData]);
   const [localRelationType, setLocalRelationType] = useState<LocalRelationType | null>('reply');
   const localDraftRef = useRef<LocalDiscussion | null>(null);
@@ -396,7 +398,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     const invalid=new Set([...personalCorrectionVersions.values()].flatMap(entry=>entry.versions.filter(version=>!version.valid).map(version=>version.correctionId)));
     return computeCorrectionVersions(messages,edges,invalid,displayUser?.username??null,{previewCorrectionId:correctionPreviewId});
   },[personalCorrectionVersions,correctionPreviewId,messages,edges,displayUser?.username]);
-  const readingVersionHistory=useMemo(createReadingVersionHistory,[scopeMessageId,loadedExport,displayUser?.username]);
+  const readingVersionHistory=useMemo(createReadingVersionHistory,[scopeMessageId,viewerDocument,displayUser?.username]);
   const readingVersions=useSyncExternalStore(readingVersionHistory.subscribe,readingVersionHistory.getSnapshot);
   const recommendedCorrectionVersions=useMemo(()=>computeCorrectionVersions(messages,edges,computeGloballySuppressedRelIds(edges,messages)),[messages,edges]);
   const correctionVersions=useMemo(()=>applyReadingVersions(availableCorrectionVersions,readingVersions,messages,recommendedCorrectionVersions,personalCorrectionVersions),[availableCorrectionVersions,readingVersions,messages,recommendedCorrectionVersions,personalCorrectionVersions]);
@@ -429,7 +431,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const readingState=useReadingState(user?.id,!isPreloaded && !isViewerRoute);
   const homeReadingStatus = normalizeHomeFilter(homeFilterMode).status;
   const homeFilterReadingMarks = useHomeFilterReadingMarks(homeFilterMode, JSON.stringify([user?.id, scopeMessageId, isPreloaded, viewMode, cleanFilters]), readingState.marks, readingState.ready);
-  const displayHintWindow=useMemo(()=>createDisplayHintWindow(),[scopeMessageId,loadedExport,displayUser?.username]);
+  const displayHintWindow=useMemo(()=>createDisplayHintWindow(),[scopeMessageId,viewerDocument,displayUser?.username]);
   const workerFilters = onDemand && !isPreloaded && !viewerStructure && (!catalogReady || catalogComputationsCurrent);
   const globalFilters = useCatalogFilters(workerFilters ? catalog : null, catalogVersion, catalogReady, { rules: cleanFilters, home: homeFilterMode, user: displayUser, readingMarks: homeReadingStatus === 'all' ? undefined : homeFilterReadingMarks });
   const globalFilterPending = workerFilters && globalFilters.pending;
@@ -470,10 +472,14 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   // Message type filter: hide settlement / join messages
   const [msgFilter, setMsgFilter] = useState<MessageFilterSettings>({ hideSettlement: true, hideJoin: true });
   const restoredExportView = useRef<typeof loadedExport>(null);
+  const restoredDocument = useRef<typeof viewerDocument>(null);
   useLayoutEffect(() => {
     if (!loadedExport) return;
     const previous = restoredExportView.current;
     restoredExportView.current = loadedExport;
+    const sameDocument = restoredDocument.current === viewerDocument;
+    restoredDocument.current = viewerDocument;
+    if (loadedExport.meeting && sameDocument) return;
     if (isNativeZhihuView(previous) && isNativeZhihuView(loadedExport)) {
       const previousCache = getExportCacheReference(previous), currentCache = getExportCacheReference(loadedExport);
       if (previousCache && currentCache && previousCache.viewCacheId === currentCache.viewCacheId) return;
@@ -503,7 +509,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       setClassifyRelMsgId(classificationId);
       task.complete();
     });
-  }, [loadedExport, clearCleanFilters, addCleanFilter, beginProjection]);
+  }, [loadedExport, viewerDocument, clearCleanFilters, addCleanFilter, beginProjection]);
   const previousViewerPosition = useRef({ data: loadedExport, classificationId: classifyRelMsgId });
   const saveViewerPosition = () => {
     if (loadedExport) void saveExportNavigation(loadedExport, { classificationId: classifyRelMsgId,
@@ -543,7 +549,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     // that group is deselected. Moving the reading cursor does not select it.
     if(added)setRecentSelectedMessageIds([...new Set(draftUnits.map(unit=>unit.messageId))]);
   },[draftUnits]);
-  useEffect(()=>setRecentSelectedMessageIds([]),[scopeMessageId,loadedExport]);
+  useEffect(()=>setRecentSelectedMessageIds([]),[scopeMessageId,viewerDocument]);
   useLayoutEffect(() => {
     if (!loading && viewMode === 'graph') reportWorkbenchDrawingDuration(performance.now() - renderStartedAt);
   });
@@ -1787,8 +1793,8 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     setTraceKey(key => key + 1);
   }
 
-  const browsingHistoryKey = useMemo(() => ({ scopeMessageId, loadedExport, username: displayUser?.username }),
-    [scopeMessageId, loadedExport, displayUser?.username]);
+  const browsingHistoryKey = useMemo(() => ({ scopeMessageId, document:viewerDocument, username: displayUser?.username }),
+    [scopeMessageId, viewerDocument, displayUser?.username]);
   const browsingHistory = useBrowsingHistory(browsingHistoryKey, captureBrowsingSnapshot, restoreBrowsingSnapshot, { browser: true, routeState });
   function recordBrowsingNavigation(url?: string): void { if (!loading) browsingHistory.record(url); }
   const readingHistory = useBrowsingHistory(browsingHistoryKey, captureSnapshot, restoreBrowsingSnapshot);
@@ -2280,11 +2286,11 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     return runHasCrossNonReferenceTextLinkForClassifyTargets({ effectiveTargetUnits, msgMap, relationTypeByRelMsgId, relationById, relations, edges, containerEffect }, targetTextIds, selectionUnits);
   }
 
-  function enterClassification(relMsgId: string, recordHistory = true): void {
+  function enterClassification(relMsgId: string, recordHistory = true, linkedParentOf?: (id: string) => string | null): void {
     if (recordHistory) recordBrowsingNavigation(messageNavigationUrl(window.location.href, relMsgId));
     cancelViewNavigation();
     if (viewMode === 'graph') beginWorkbenchDrawing();
-    runEnterClassification({ captureSnapshot, cancelScrollRafs, scrollRequestIdRef, leftPanelRef, classifyStackRef, setClassifyRelMsgId, setClassifyKey }, relMsgId);
+    runEnterClassification({ captureSnapshot, linkedParentOf, cancelScrollRafs, scrollRequestIdRef, leftPanelRef, classifyStackRef, setClassifyRelMsgId, setClassifyKey }, relMsgId);
     setReadingAnchorId(null);
     setRecordCategory(current=>current?.label==='审核'&&sameReviewContext(activeReviewContext,reviewContextOf(msgMap.get(relMsgId)))?current:null);
     graphFrameViewStateRef.current={};
@@ -2308,7 +2314,21 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   }
 
   function exitClassification(_options?: { restoreSnapshot?: boolean; clearSelectionOnRootExit?: boolean; preserveViewMode?: ViewMode }): void {
-    if (_options?.restoreSnapshot !== false) recordBrowsingNavigation(messageNavigationUrl(window.location.href, classifyStackRef.current.at(-2)?.relMsgId ?? null));
+    if (_options?.restoreSnapshot !== false) {
+      const entry = classifyStackRef.current.at(-1);
+      if (entry?.locateOnExit) {
+        // The parent viewport has never been visited. Pin the exited category
+        // through paging and locate its card once the parent layout commits.
+        recordBrowsingNavigation(messageNavigationUrl(window.location.href, entry.relMsgId, true));
+        setReadingAnchorId(null);
+        setLastClickedMessageId(entry.relMsgId);
+        pendingScrollMsgRef.current = entry.relMsgId;
+        pendingScrollDependencyIdsRef.current = [];
+        pendingScrollCompletionRef.current = undefined;
+      } else {
+        recordBrowsingNavigation(messageNavigationUrl(window.location.href, classifyStackRef.current.at(-2)?.relMsgId ?? null));
+      }
+    }
     if (viewMode === 'graph') beginWorkbenchDrawing();
     return runExitClassification({ classifyStackRef, setClassifyRelMsgId, setClassifyKey, setPreviewClassifyId, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setLastClickedMessageId, restoreSnapshot, setViewMode }, _options);
   }
@@ -2801,15 +2821,10 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
 
   const normalGraphProjection = useMemo(() => deriveNormalGraphProjection({ graphMessagesToRender, correctionVersions, cleanVisibleIds, homeFilterResult, msgFilter, edges, messages, displayUser, graphEdgesToRender, relations, effectiveJoinRelationIds }), [messages, graphMessagesToRender, graphEdgesToRender, correctionVersions, cleanVisibleIds, homeFilterResult, msgFilter, edges, displayUser?.username, relations, effectiveJoinRelationIds]);
 
-  // Use the rendered scope, including effective JOINs and expanded frames.
-  const { crossCanvasRelations, relatedEdges } = useMemo(() => {
-    const scene = projectGraphScene({ ...normalGraphProjection, traceExpandedFrameIds,
-      isTraceWindow: traceEntries.length > 0, rejectedContainerIds, hiddenMessageIds: hideMessageIds });
+  const relatedEdges = useMemo(() => {
     const allowed = new Set(applyMessageFilter(messages, msgFilter).map(message => message.id));
-    const relatedEdges = edges.filter(edge => !containerEffect.suppressed.has(edge.relationMessageId) && allowed.has(edge.relationMessageId));
-    return { relatedEdges, crossCanvasRelations: deriveCrossCanvasRelations({ edges: relatedEdges,
-      visibleMessageIds: new Set([...scene.normalIds, ...scene.frameBlocks.map(frame => frame.relMsgId)]), renderedEdges: scene.layoutEdges }) };
-  }, [normalGraphProjection, traceExpandedFrameIds, traceEntries, rejectedContainerIds, hideMessageIds, edges, containerEffect.suppressed, msgMap, messages, msgFilter]);
+    return edges.filter(edge => !containerEffect.suppressed.has(edge.relationMessageId) && allowed.has(edge.relationMessageId));
+  }, [edges, containerEffect.suppressed, messages, msgFilter]);
 
   const comparisonInput = useMemo<DeriveComparisonGraphProjectionsInput>(() => ({
     comparisonReviewed,comparisonTargetId,username:displayUser?.username??null,scopeId:currentClassifyRelMsgId,
@@ -3002,8 +3017,10 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       setContainerPreviewId(null); setComparisonMode(false); setComparisonReviewed(false);
       setCorrectionFilterTargetId(null); setHomeFilterMode(null); clearCleanView();
       setRecordCategory(null); setPreviewClassifyId(null);
-      classifyStackRef.current = [];
-      enterClassification(messageId, options.recordHistory !== false);
+      enterClassification(messageId, options.recordHistory !== false, id => {
+        const parent = findContainingClassification(id);
+        return parent === scopeMessageId ? null : parent;
+      });
       setDraftUnits([]); setActiveTextSelectId(null); setLastClickedMessageId(messageId);
       options.onComplete?.(true);
       return;
@@ -3163,7 +3180,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     pendingScrollMsgRef.current = messageId;
     pendingScrollCompletionRef.current = options?.onComplete;
     setScrollKey(k => k + 1);
-  }, [cleanMode, joinFilterTargetId, joinFilterDirection, recordCategory, correctionFilterTargetId, msgFilter, clearCleanView, showAlert, hiddenInGraphView, isPreloaded, onDemand, viewerStructure, ensureMessages, openSettlement, beginLoading]);
+  }, [cleanMode, joinFilterTargetId, joinFilterDirection, recordCategory, correctionFilterTargetId, msgFilter, clearCleanView, showAlert, hiddenInGraphView, isPreloaded, onDemand, viewerStructure, containerEffect, scopeMessageId, ensureMessages, openSettlement, beginLoading]);
   navigateToMessageRef.current=handleNavigateToMessage;
 
   const pendingRemoteNavigationRef = useRef<{ messageId: string; options?: { select?: boolean; preserveScope?: boolean; recordHistory?: boolean; enterCategory?: boolean; onComplete?: ScrollMessageOptions['onComplete'] } } | null>(null);
@@ -3199,12 +3216,14 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     return result;
   }
   async function saveLocalDiscussion(next: ExportData) {
-    await persistPreloadedExport({ ...next, view: {
+    const data = { ...next, view: {
       username: next.viewerUsername ?? null, mode: viewMode,
       messageFilter: { ...msgFilter }, homeFilter: homeFilterMode,
       cleanFilters: cleanFilters.map(rule => ({ ...rule })), classificationId: currentClassifyRelMsgId,
       discussion: copyDiscussionView(discussion.value),
-    } });
+    } };
+    if (localMessageData?.meeting) await persistMeetingExport(data, localMessageData, true);
+    else await persistPreloadedExport(data);
   }
 
   async function saveLocalEditingView(next: NonNullable<typeof zhihuData>) {
@@ -3615,6 +3634,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const relationSpringWidth = Math.max(0, effectiveContainerWidth - relationBarMinWidth);
   const panelStickyTop = relationBarHeight;
   const isRouteScope = scopeMessageId !== 'root' && !isInsideClassify && traceEntries.length === 0;
+  const headerMessageId = isRouteScope ? scopeMessageId : currentClassifyRelMsg?.id;
   const personalClassificationPath: Array<{id:string;title:string}> = [];
   if (discussionPage) {
     const seen = new Set<string>([discussionPage.focusId]);
@@ -3660,7 +3680,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
             top={0} springWidth={relationSpringWidth} rightOffset={relationControlsRightOffset} viewer={isPreloaded && !localMessageData}
             localMode={localRelationMode}
             knownIds={knownMessageIds} onJump={confirmMessageIdNavigation}
-            composer={{ relationType, secondaryRelationType, newMessageContent, subType, setRelationType, setSecondaryRelationType, setNewMessageContent, lastTagSecondaryRef, lastDelegationSecondaryRef, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, guideTargetIdRef }} /></DeferredWorkbench>
+            composer={{ meeting: !!localMessageData?.meeting, relationType, secondaryRelationType, newMessageContent, subType, setRelationType, setSecondaryRelationType, setNewMessageContent, lastTagSecondaryRef, lastDelegationSecondaryRef, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, guideTargetIdRef }} /></DeferredWorkbench>
 
           {/* 两侧内容必须自然展开，不得给内容层添加 height/maxHeight 等高度上限。
               滚动由独立悬浮视口承接，并跟随手机缩放后的实际可见范围，不能用 vh/dvh 截短内容。
@@ -3671,18 +3691,25 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
               <DeferredWorkbench label="视图工具栏" blocksDrawing><WorkbenchViewToolbar top={panelStickyTop}
                 onJump={confirmMessageIdNavigation}
                 history={browsingHistory}
-                scopeHeader={!containerPreview && !comparisonReviewed ? <>
-                  {discussionPage?.recommendedPath && <DiscussionNavigation recommended={discussionPage.recommendedPath} personal={personalClassificationPath}
-                    onCategory={id => handleNavigateToMessage(id, { select: false, enterCategory: true })}
-                    onRelated={() => enterTrace(discussionPage.focusId, { relatedView: true })} />}
-                  {classificationHeader}
-                </> : undefined}
+                scopeHeader={!containerPreview && !comparisonReviewed ? classificationHeader : undefined}
                 discussionStatus={!isPreloaded && <DiscussionStatusControl state={discussionPage}
+                  onLoadMore={!containerPreview && !comparisonReviewed && !recordCategory && !comparisonMode && headerMessageId
+                    && headerMessageId === (discussionPage?.classificationId ?? discussionPage?.focusId) ? handleLoadMoreDiscussion : undefined}
+                  navigation={!containerPreview && !comparisonReviewed && discussionPage?.recommendedPath ? {
+                    recommended: discussionPage.recommendedPath,
+                    personal: personalClassificationPath,
+                    onCategory: id => handleNavigateToMessage(id, { select: false, enterCategory: true }),
+                    onRelated: () => enterTrace(discussionPage.focusId, { relatedView: true }),
+                  } : undefined}
                   onRefresh={() => {
                     if (discussionPage) void refreshDiscussion().catch(error => showAlert(error.message));
                     else window.dispatchEvent(new Event('gonglun:reload'));
                   }} onOpenFull={() => navigate(fullWorkbenchPath(location, discussionPage?.error ? discussionPage.focusId : undefined))} />}
                 scopeMessageId={scopeMessageId} exportTitle={scope?.title ?? 'export'} showAlert={showAlert}
+                meetingExchange={localMessageData && <React.Suspense fallback={null}><OfflineMeetingExchange
+                  key={typeof viewerDocument === 'string' ? viewerDocument : undefined} data={localMessageData}
+                  viewerInstanceKey={location.state?.viewerInstanceKey}
+                  onSave={(next, expected = localMessageData) => persistMeetingExport(next, expected)} /></React.Suspense>}
                 exportData={loadedExport ?? preloadedData} exportUsername={displayUser?.username ?? null}
                 discussion={discussion}
                 onLocalExport={localMessageData ? view => {
@@ -3746,7 +3773,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                   <DeferredWorkbench label="消息列表" blocksDrawing>
                   <WorkbenchMessageList
                     highlightedMessageIds={viewTargetMessageIds}
-                    crossCanvasRelations={containerPreview?.context.crossCanvasRelations??crossCanvasRelations} onRelatedRelationView={viewRelatedRelation}
+                    relatedEdges={containerPreview?.context.relatedEdges??relatedEdges} onRelatedRelationView={viewRelatedRelation}
                     onRelatedNavigate={viewRelatedContainer} standaloneMessageIds={recordCategoryMessageIds??comparisonViewIds??correctionTemporaryViewIds??standaloneMessageIds}
                     showJoinRecords={comparisonMode||joinFilterTargetId!==null||recordCategory!==null}
                     visibleMessages={messageWindow.messages}
@@ -3840,7 +3867,6 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                     settlementOpenType={settlementOpenType}
                     stanceHighlight={stanceHighlight}
                     settlementEntryHighlight={settlementEntryHighlight}
-                    crossCanvasRelations={containerPreview?.context.crossCanvasRelations??crossCanvasRelations}
                     onNavigateToMessage={traceEntries.length?jumpWithinTrace:handleNavigateToMessage}
                     joinRelationsByTarget={joinRelationsByTarget}
                     joinRelationsBySource={joinRelationsBySource}
@@ -3873,7 +3899,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
 
 
             <DeferredWorkbench label="发言操作" blocksDrawing><WorkbenchPanel
-              relationChoices={<RelationChoices placement="desk" localMode={localRelationMode} composer={{ relationType, secondaryRelationType, newMessageContent, subType, setRelationType, setSecondaryRelationType, setNewMessageContent, lastTagSecondaryRef, lastDelegationSecondaryRef, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, guideTargetIdRef }} />}
+              relationChoices={<RelationChoices placement="desk" localMode={localRelationMode} composer={{ meeting: !!localMessageData?.meeting, relationType, secondaryRelationType, newMessageContent, subType, setRelationType, setSecondaryRelationType, setNewMessageContent, lastTagSecondaryRef, lastDelegationSecondaryRef, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, guideTargetIdRef }} />}
               rightPanelRef={rightPanelRef}
               leftPanelRef={leftPanelRef}
               TOTAL_FLEX={TOTAL_FLEX}
@@ -3909,6 +3935,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                 onSave={saveLocalEditingView} /></DeferredWorkbench> : undefined}
               viewerUsers={viewerUsers}
               viewerUsername={viewerUser?.username}
+              localMeetingTitle={localMessageData?.meeting ? localMessageData.scope.title : undefined}
               onViewerUsernameChange={username => {
                 const normalized = username.trim();
                 if (normalized) {
@@ -3956,7 +3983,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
               relationType={relationType}
               secondaryRelationType={secondaryRelationType}
               setSecondaryRelationType={setSecondaryRelationType}
-              hasSecondaryRelationSelector={hasSecondaryRelationSelector}
+              hasSecondaryRelationSelector={!localMessageData?.meeting && hasSecondaryRelationSelector}
               tagSecondaryOptions={tagSecondaryOptions}
               correctSecondaryOptions={correctSecondaryOptions}
               correctionWidth={composer.correctionWidth}

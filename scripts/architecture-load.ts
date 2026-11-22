@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { fork, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
@@ -18,6 +19,12 @@ url.searchParams.set('application_name', schema);
 if (process.argv.includes('--worker')) {
   const { createApp } = await import(process.env.LOAD_SERVER_SOURCE ?? '../apps/server/src/app.js');
   const app = await createApp({ databaseUrl: url.toString(), databaseSchema: schema, settlementTickMs: 1000 });
+  // Fund the synthetic participants through the registration journal. This
+  // benchmark times ordinary command batches without background review work.
+  await app.store.transaction(async () => {
+    const rules = await app.store.rules();
+    await app.store.set('rules', { ...rules, initialGrant: 1000, moderation: { ...rules.moderation, enabled: false } });
+  });
   const server = app.listen(0, '127.0.0.1');
   await once(server, 'listening');
   process.send?.({ port: (server.address() as { port: number }).port });
@@ -53,13 +60,11 @@ if (process.argv.includes('--worker')) {
     }
     const actors: { cookie: string; csrf: string; id: string }[] = [];
     for (let i = 0; i < 8; i++) {
-      let inviteCode: string | undefined;
-      if (i > 0) {
-        const invitation = await fetch(`${workers[0]}/api/admin/invites`, {method:'POST',headers:{'content-type':'application/json',cookie:actors[0].cookie,'x-csrf-token':actors[0].csrf},body:JSON.stringify({expiresInDays:1})});
-        assert.equal(invitation.status,200);
-        inviteCode = (await invitation.json() as {code:string}).code;
-      }
-      const response = await fetch(`${workers[i%2]}/api/register`, {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:`load-user-${i}`,password:'synthetic-load-password',inviteCode})});
+      const response = await fetch(`${workers[i%2]}/api/register`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: `load-user-${i}`, password: 'synthetic-load-password', acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION }),
+      });
       assert.equal(response.status,201); const data = await response.json() as any;
       actors.push({ cookie: response.headers.get('set-cookie')!.split(';')[0], csrf: data.csrf, id: data.user.id });
     }

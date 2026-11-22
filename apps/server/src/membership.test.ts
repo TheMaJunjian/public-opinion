@@ -1,4 +1,4 @@
-import { testInvitation } from './test-database.js';
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import {withTestCommandContributions} from './test-database.js';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
@@ -31,7 +31,7 @@ it.each(['SUMMARY','MERGE','ARRANGE'])('keeps an existing %s intact under every 
 },30000);
 async function setup() {
     const app = await createTestApp(), agent = request.agent(app);
-    const session = (await agent.post('/api/register').send({ name: 'membership-test', password: 'long-test-password' })).body;
+    const session = (await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  name: 'membership-test', password: 'long-test-password' })).body;
     async function post(path: string, body: Record<string, unknown>, requestId = randomUUID()) {
         const result = await agent.post(`/api/ui${path}`).set('x-csrf-token', session.csrf).set('x-request-id', requestId).send(withTestCommandContributions(path,body as Record<string,unknown>));
         expect(result.status, result.text).toBe(201); return result.body;
@@ -286,7 +286,7 @@ it('allows discussion of JOIN text while its container is rejected without resto
 it('keeps personal JOIN approval available when another viewer opposes the container', async () => {
     const t = await setup(), member = await t.content(), container = await t.group([member.id]);
     const joining = String((await t.membership(member.id))!.sourceId);
-    const other = request.agent(t.app), session = (await other.post('/api/register').send({inviteCode:await testInvitation(t.app), name: 'other-viewer', password: 'long-test-password' })).body;
+    const other = request.agent(t.app), session = (await other.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name: 'other-viewer', password: 'long-test-password' })).body;
     const response = await other.post('/api/ui/relations').set('x-csrf-token', session.csrf).set('x-request-id', randomUUID()).send({
         wager:1, relationType: 'DISAGREE', targetRefs: [{ kind: 'relation', relationId: container.id, part: 'decoration' }],
     });

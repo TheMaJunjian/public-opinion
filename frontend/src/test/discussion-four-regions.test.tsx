@@ -71,15 +71,15 @@ describe('four independent lightweight stance regions', () => {
     await waitFor(assertClear);
   });
 
-  it.each(['summary','related'] as const)('marks the trace relation green in the %s popup and follows changes to the current trace', async entry => {
+  it('keeps summarized replies out of the card popup and follows the current trace in the summary', async () => {
     const links=[relation('first','reply','one'),relation('second','reply','two')];
     const props={...handlers(),messages:[body('root'),body('one'),body('two'),...links.map(link=>link.record)],
       edges:links.map(link=>link.edge),discussionView:{mode:'discussion' as const,collapsed:[]}};
     const ui=render(<GraphView {...props} highlightedMessageIds={new Set(['first'])}/>);
-    await screen.findByRole('button',{name:'汇总回复：2'});
-    if(entry==='summary')fireEvent.click(screen.getByRole('button',{name:'汇总回复：2'}));
-    else fireEvent.click(within(ui.container.querySelector<HTMLElement>('.themed-message[data-msgid="root"]')!).getByRole('button',{name:/其他相关消息：2/}));
-    const row=(id:string)=>screen.getByRole('dialog').querySelector(`[data-related-relation-id="${id}"]`)!;
+    const summary = await screen.findByRole('button',{name:'汇总回复：2'});
+    expect(within(ui.container.querySelector<HTMLElement>('.themed-message[data-msgid="root"]')!).queryByRole('button',{name:/其他相关消息/})).toBeNull();
+    fireEvent.click(summary);
+    const row=(id:string)=>screen.getByRole('dialog',{name:'汇总回复：2'}).querySelector(`[data-related-relation-id="${id}"]`)!;
     expect(row('first')).toHaveAttribute('data-view-target','true');
     expect(row('second')).not.toHaveAttribute('data-view-target');
     ui.rerender(<GraphView {...props} highlightedMessageIds={new Set(['second'])}/>);
@@ -138,7 +138,7 @@ describe('four independent lightweight stance regions', () => {
     fireEvent.click(within(row).getByRole('button',{name:`隐藏原始${label}关系 first`}));
     await waitFor(()=>expect(original('first')).toBeNull());
     expect(within(row).getByRole('button',{name:`显示原始${label}关系 first`})).toHaveTextContent('汇 · 隐藏');
-    fireEvent.click(screen.getByRole('button',{name:'关闭其他相关消息'}));
+    fireEvent.click(screen.getByRole('button',{name:'关闭汇总明细'}));
     for(const part of selectedParts())expect(part).not.toHaveAttribute('data-label-selection');
     expect(path).not.toHaveAttribute('stroke','var(--edge-selection-accent, var(--selection-accent))');
   });

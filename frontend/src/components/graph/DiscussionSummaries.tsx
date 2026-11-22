@@ -72,7 +72,7 @@ export default function DiscussionSummaries({ summaries, boxes, labelObstacles =
           zIndex: 13, pointerEvents: 'auto' }}>
         <CrossCanvasRelatedMessages groups={{ outgoing: {}, incoming: { [discussionLabels[region.type]]: recordIds } }} messages={messages}
           selectedUnits={selectedUnits} highlightedMessageIds={highlightedMessageIds} onView={onView} summarizedRelationIds={new Set(recordIds)} hiddenRelationIds={hiddenRelationIds ?? new Set(recordIds)}
-          onToggleRelationVisibility={onToggleRelationVisibility} triggerLabel={`${text}：${recordIds.length}`} hideTriggerText
+          onToggleRelationVisibility={onToggleRelationVisibility} summaryLabel={`${text}：${recordIds.length}`}
           onExpandedChange={expanded => changeExpanded(region.key, expanded)}
           triggerClassName="graph-edge-label-hit" triggerStyle={{ position: 'absolute', inset: 0, width: '100%', height: '100%',
             background: 'transparent', border: '1px solid transparent', borderRadius: 6, boxShadow: 'none' }} />

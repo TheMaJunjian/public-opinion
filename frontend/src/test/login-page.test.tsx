@@ -35,7 +35,7 @@ it('disables submission while signing in and returns to the workspace after succ
   fireEvent.change(screen.getByLabelText('与会者名'), { target: { value: '  与会者  ' } });
   fireEvent.change(screen.getByLabelText('密码'), { target: { value: 'password' } });
   fireEvent.click(screen.getByRole('button', { name: '登录' }));
-  expect(login).toHaveBeenCalledExactlyOnceWith('与会者', 'password');
+  expect(login).toHaveBeenCalledExactlyOnceWith('与会者', 'password', undefined);
   expect(screen.getByRole('button', { name: '登录中…' })).toBeDisabled();
   await act(async () => { complete(); });
   expect(screen.getByText('工作区')).toBeInTheDocument();

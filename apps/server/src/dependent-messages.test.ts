@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { randomUUID } from 'node:crypto';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
@@ -8,7 +9,7 @@ import { bindRoles } from '@gonglun/core';
 afterEach(cleanupTestDatabases);
 it('附属消息不生成加入记录，引用随来源、更正随目标，所有组织均拒绝附属成员', async () => {
   const app = await createTestApp(), agent = request.agent(app);
-  const session = (await agent.post('/api/register').send({name:'附属关系测试',password:'test-password-123'})).body;
+  const session = (await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'附属关系测试',password:'test-password-123'})).body;
   const post = async (path:string,body:Record<string,unknown>) => agent.post(`/api/ui${path}`)
     .set('x-csrf-token',session.csrf).set('x-request-id',randomUUID()).send(withTestCommandContributions(path,body));
   const group = await post('/relations',{relationType:'CLASSIFY',targetRefs:[],payload:{title:'分类'}});

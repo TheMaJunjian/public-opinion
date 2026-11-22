@@ -1,8 +1,8 @@
 import { relations, replaceReference, targetInvestmentDimension, type Change, type Membership, type Message, type Part, type RelationPart, type SendResult, type User } from '@gonglun/core';
 import { DomainError, Mutation, now, Store } from './db.js';
 import { applyOrganization, reconcileOrganizationEffects, reconcileOrganizationRevision } from './organizations.js';
-import { dataOf, distributeOperations, grant, hasEffect, injectRevenue, lockDelegation, markEffect, oneTarget, openSettlement, placeMessageValueWager, placeValueWager, placeWager, relationTarget, settleDue, terminate } from './economy.js';
-import { parseSend, partsSchema, readReference, rulesSchema, validateReferences } from './validation.js';
+import { dataOf, distributeOperations, hasEffect, lockDelegation, markEffect, oneTarget, openSettlement, placeMessageValueWager, placeValueWager, placeWager, relationTarget, settleDue, terminate } from './economy.js';
+import { parseSend, partsSchema, readReference, validateReferences } from './validation.js';
 import { recordPersonal } from './personal-actions.js';
 import { notificationRecipients } from './notifications.js';
 import { normalizeAnnotationStance } from './annotation-stances.js';
@@ -17,70 +17,54 @@ import { hasReviewContext, reviewContextOf, sameReviewContext } from '@gonglun/c
 
 const actions=new Set(['agree','disagree','terminate','authorize','delegate','distribute','credit',...REVIEW_RELATIONS]);
 async function authorize(tx: Mutation, message: Message, user: User) {
-    if (!user.founder)
-        throw new DomainError('当前版本需要项目发起人授权', 403);
     const ref = oneTarget(message, 'authorize');
     if (ref.partId || ref.memberId || ref.path?.length || ref.range)
         throw new DomainError('授权须指向完整提案');
     const proposal = await tx.store.message(ref.messageId, ref.revision), key = `authorized:${proposal.id}:${proposal.revision}`;
-    if((await moderationPolicy(tx.store)).enabled){const review=await moderationCase(tx.store,proposal.id,proposal.revision);if(review&&review.status!=='approved')throw new DomainError('提案须先通过传播审核',409);}
-    if ((await hasEffect(tx.store, key)))
-        throw new DomainError('提案已生效', 409);
     const kinds = relations(proposal).filter(r => ['amend', 'rule-change', 'recharge', 'revenue-injection'].includes(r.relation));
     if (kinds.length !== 1)
         throw new DomainError('目标不是可授权提案');
+    if (kinds[0]!.relation !== 'amend')
+        throw new DomainError('个人账号无权执行规则、充值或收入注入提案', 403);
+    if((await moderationPolicy(tx.store)).enabled){const review=await moderationCase(tx.store,proposal.id,proposal.revision);if(review&&review.status!=='approved')throw new DomainError('提案须先通过传播审核',409);}
+    if ((await hasEffect(tx.store, key)))
+        throw new DomainError('提案已生效', 409);
     const data = dataOf(proposal);
-    if (kinds[0]!.relation === 'amend') {
-        const target = oneTarget(proposal, 'amend');
-        const current = await tx.store.message(target.messageId);
-        if(relations(current).some(p=>REVIEW_RELATIONS.has(p.relation)||['review-record','review-enrollment'].includes(p.relation)))throw new DomainError('审核记录不可改写，请追加新的关系消息',409);
-        if (data.expectedRevision !== current.revision || (target.revision !== undefined && target.revision !== current.revision))
-            throw new DomainError('目标内容已变更，请重新提交修改', 409);
-        const replacement = data.parts ?? data.value;
-        if (replacement === undefined)
-            throw new DomainError('缺少修改内容');
-        let parts: Part[];
-        try {
-            parts = partsSchema.parse(replaceReference(current, target, replacement)) as Part[];
-        }
-        catch (error) {
-            throw new DomainError(error instanceof Error ? error.message : '修改内容无效');
-        }
-        if(parts.some(p=>p.type==='relation'&&(REVIEW_RELATIONS.has(p.relation)||['review-record','review-enrollment'].includes(p.relation))))
-            throw new DomainError('审核记录只能通过审核操作新增，不能由修改消息生成',409);
-        for(const part of parts){
-            const refs=part.type==='relation'?Object.values(part.roles).flatMap(bindings=>bindings.map(b=>b.reference)):part.type==='display'&&part.target?[part.target]:[];
-            for(const ref of refs)await assertReferenceAllowed(tx.store,ref,user.id);
-        }
-        if (hasReviewContext(current) && !sameReviewContext(reviewContextOf(current), reviewContextOf({parts})))
-            throw new DomainError('审核讨论不能改为其他审核范围或移出审核临时分类',409);
-        await validateReferences(tx.store, parts);
-        // Placement execution history is immutable even when the message is edited.
-        const reserved = new Set(['membership-history', 'organization-memberships']);
-        parts = [...parts.filter(part => !reserved.has(part.id)), ...current.parts.filter(part => reserved.has(part.id))];
-        const updated = { ...current, parts, revision: current.revision + 1, updatedAt: now(), ruleVersion: (await tx.store.rules()).version };
-        await tx.put(updated);
-        // Only organization structure changes are executed when an edit becomes effective.
-        // A historical wager, credit, or authorization is never replayed by editing its content.
-        await enrollModeration(tx,updated);
-        await reconcileMemberships(tx, current, updated);
+    const target = oneTarget(proposal, 'amend');
+    const current = await tx.store.message(target.messageId);
+    if(relations(current).some(p=>REVIEW_RELATIONS.has(p.relation)||['review-record','review-enrollment'].includes(p.relation)))throw new DomainError('审核记录不可改写，请追加新的关系消息',409);
+    if (current.authorId !== user.id)
+        throw new DomainError('只有原消息作者可以确认自己的内容修改', 403);
+    if (data.expectedRevision !== current.revision || (target.revision !== undefined && target.revision !== current.revision))
+        throw new DomainError('目标内容已变更，请重新提交修改', 409);
+    const replacement = data.parts ?? data.value;
+    if (replacement === undefined)
+        throw new DomainError('缺少修改内容');
+    let parts: Part[];
+    try {
+        parts = partsSchema.parse(replaceReference(current, target, replacement)) as Part[];
     }
-    else if (kinds[0]!.relation === 'rule-change') {
-        const proposed = data.rules ?? data;
-        if (!proposed || typeof proposed !== 'object' || Array.isArray(proposed))
-            throw new DomainError('规则提案内容无效');
-        const currentRules = await tx.store.rules();
-        const proposedWeights = proposed.contributionWeights;
-        if (proposedWeights !== undefined && (!proposedWeights || typeof proposedWeights !== 'object' || Array.isArray(proposedWeights)))
-            throw new DomainError('贡献权重规则无效');
-        const next = rulesSchema.parse({ ...currentRules, ...proposed, contributionWeights: { ...currentRules.contributionWeights, ...(proposedWeights ?? {}) }, version: currentRules.version + 1 });
-        await tx.store.set('rules', next);
-        await tx.store.db.prepare(`INSERT INTO rule_versions(version,body,"authorizationId","createdAt") VALUES ($1,$2,$3,$4)`).run(next.version, JSON.stringify(next), message.id, now());
+    catch (error) {
+        throw new DomainError(error instanceof Error ? error.message : '修改内容无效');
     }
-    else if (kinds[0]!.relation === 'revenue-injection')
-        await injectRevenue(tx, proposal);
-    else
-        await grant(tx, proposal, { messageId: message.id });
+    if(parts.some(p=>p.type==='relation'&&(REVIEW_RELATIONS.has(p.relation)||['review-record','review-enrollment'].includes(p.relation))))
+        throw new DomainError('审核记录只能通过审核操作新增，不能由修改消息生成',409);
+    for(const part of parts){
+        const refs=part.type==='relation'?Object.values(part.roles).flatMap(bindings=>bindings.map(b=>b.reference)):part.type==='display'&&part.target?[part.target]:[];
+        for(const ref of refs)await assertReferenceAllowed(tx.store,ref,user.id);
+    }
+    if (hasReviewContext(current) && !sameReviewContext(reviewContextOf(current), reviewContextOf({parts})))
+        throw new DomainError('审核讨论不能改为其他审核范围或移出审核临时分类',409);
+    await validateReferences(tx.store, parts);
+    // Placement execution history is immutable even when the message is edited.
+    const reserved = new Set(['membership-history', 'organization-memberships']);
+    parts = [...parts.filter(part => !reserved.has(part.id)), ...current.parts.filter(part => reserved.has(part.id))];
+    const updated = { ...current, parts, revision: current.revision + 1, updatedAt: now(), ruleVersion: (await tx.store.rules()).version };
+    await tx.put(updated);
+    // Only organization structure changes are executed when an edit becomes effective.
+    // A historical wager, credit, or authorization is never replayed by editing its content.
+    await enrollModeration(tx,updated);
+    await reconcileMemberships(tx, current, updated);
     await markEffect(tx.store, key, { authorizationId: message.id, at: now() });
 }
 async function reconcileMemberships(tx: Mutation, before: Message, after: Message) {
@@ -141,6 +125,8 @@ export async function send(store: Store, user: User, raw: unknown, options: {
         }
         await validateReferences(store, input.parts);
         const actionParts = input.parts.filter(p => p.type === 'relation' && actions.has(p.relation));
+        if (actionParts.some(part => part.type === 'relation' && part.relation === 'credit'))
+            throw new DomainError('个人账号无权直接发放贡献点', 403);
         if (actionParts.length > 1)
             throw new DomainError('一条消息只能执行一个资金或授权操作');
         const wager = input.wager ?? 0, recommendation = input.recommendation ?? 0;
@@ -216,11 +202,6 @@ export async function send(store: Store, user: User, raw: unknown, options: {
                 await authorize(tx, message, user);
             if (part.relation === 'distribute')
                 await distributeOperations(tx, message);
-            if (part.relation === 'credit') {
-                if (!user.founder)
-                    throw new DomainError('仅项目发起人可以公开发放', 403);
-                await grant(tx, message, undefined);
-            }
         }
         await reconcileOrganizationEffects(tx);
         const change = await tx.commit();

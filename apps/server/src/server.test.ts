@@ -1,4 +1,4 @@
-import { testInvitation } from './test-database.js';
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import {withTestContribution} from './test-database.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
@@ -17,7 +17,7 @@ const app=async ()=>{const value=(await createTestApp());apps.push(value);return
 const text=(value:string):Part=>({id:'text',type:'text',text:value});
 const rel=(name:string,target?:Reference,role='target'):Part=>({id:'relation',type:'relation',relation:name,roles:bindRoles(target?{[role]:[target]}:{})});
 const data=(value:Record<string,any>):Part=>({id:'data',type:'data',value});
-async function actor(app:App,name:string):Promise<Actor>{const agent=request.agent(app);const response=await agent.post('/api/register').send({inviteCode:await testInvitation(app),name,password:'a-good-password'});expect(response.status,response.text).toBe(201);return {agent,session:response.body};}
+async function actor(app:App,name:string):Promise<Actor>{const agent=request.agent(app);const response=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name,password:'a-good-password'});expect(response.status,response.text).toBe(201);return {agent,session:response.body};}
 async function post(user:Actor,parts:Part[],spending:{wager?:number;recommendation?:number;requestId?:string}={}){
   return user.agent.post('/api/messages').set('x-csrf-token',user.session.csrf).send(withTestContribution({requestId:randomUUID(),parts,...spending}));
 }
@@ -139,27 +139,27 @@ describe('公论事务与经济',()=>{
     expect(attribution.find(item=>item.messageId===duplicate.id)!.weight).toBe(0);
     for(const group of [first,second])expect(attribution.filter(item=>item.scope===group.id&&item.userId===a.session.user.id).reduce((sum,item)=>sum+item.weight,0)).toBe(8);
     expect(output.value.inputs.parameters).toMatchObject({duplicate:0,earlyBonus:1,earlyWindow:20,unrecognizedAuthorCap:8});
-    const update=await message(a,[rel('rule-change'),data({rules:{contributionWeights:{unrecognizedAuthorCap:4}}})]);await message(a,[rel('authorize',{messageId:update.id})]);
-    expect((await server.store.rules()).contributionWeights).toMatchObject({content:3,agreement:1,unrecognizedAuthorCap:4});
+    const update=await message(a,[rel('rule-change'),data({rules:{contributionWeights:{unrecognizedAuthorCap:4}}})]);expect((await post(a,[rel('authorize',{messageId:update.id})])).status).toBe(403);
+    expect((await server.store.rules()).contributionWeights).toMatchObject({content:3,agreement:1,unrecognizedAuthorCap:8});
     expect((await a.agent.get('/api/rules?version=1')).body.contributionWeights.unrecognizedAuthorCap).toBe(8);(await conserved(server));
   });
 });
 
 describe('身份、组织和消息版本',()=>{
-  it('保护会话写入和发起人初始化，导出不包含认证资料',async()=>{
+  it('保护会话写入和公开注册，导出不包含认证资料',async()=>{
     const server=(await app()),a=await actor(server,'alice');
-    expect(a.session.user.founder).toBe(true);
+    expect(a.session.user.founder).toBe(false);
     expect((await a.agent.post('/api/messages').send({requestId:randomUUID(),parts:[text('无CSRF')]})).status).toBe(403);
     expect((await a.agent.post('/api/messages').set('Origin','https://evil.example').set('x-csrf-token',a.session.csrf).send({requestId:randomUUID(),parts:[text('跨站')]})).status).toBe(403);
     const exported=(await a.agent.get('/api/export')).body;
     expect(exported).toMatchObject({format:'gonglun-2',ledgerId:'local'});expect(exported).not.toHaveProperty('sessions');expect(exported).not.toHaveProperty('users');
     const cookie=(await a.agent.get('/api/session')).body;expect(cookie.user.id).toBe(a.session.user.id);
-    vi.stubEnv('NODE_ENV','production');vi.stubEnv('GONGLUN_FOUNDER_KEY','secret-bootstrap');
-    const production=(await app());expect((await request(production).get('/api/setup')).body).toEqual({initialized:false,founderKeyRequired:true,inviteRequired:false});
-    expect((await request(production).post('/api/register').send({name:'attacker',password:'long-password'})).status).toBe(403);
-    const first=await request(production).post('/api/register').send({name:'founder',password:'long-password',founderKey:'secret-bootstrap'});
-    expect(first.status).toBe(201);expect(first.body.user.founder).toBe(true);
-    expect((await request(production).post('/api/register').send({inviteCode:await testInvitation(production),name:'member',password:'long-password'})).body.user.founder).toBe(false);
+    vi.stubEnv('NODE_ENV','production');
+    const production=await app();
+    expect((await request(production).get('/api/setup')).body).toMatchObject({initialized:false,founderKeyRequired:false,inviteRequired:false});
+    const first=await request(production).post('/api/register').send({acceptedAgreementVersion:PARTICIPATION_AGREEMENT_VERSION,name:'first',password:'long-password'});
+    expect(first.status).toBe(201);expect(first.body.user.founder).toBe(false);
+    expect((await request(production).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'member',password:'long-password'})).body.user.founder).toBe(false);
   });
   it('组织保持单父树，拒绝循环，分组继承父，修改需要授权和正确版本',async()=>{
     const server=(await app()),a=await actor(server,'alice'),b=await actor(server,'bob');
@@ -211,7 +211,7 @@ describe('身份、组织和消息版本',()=>{
     expect(reversal.body.change.states.find((state:any)=>state.messageId===reversed.id)?.executedStance).toEqual({partId:'relation',sourceRevision:1,target:subject,side:'con'});
     const reasonReply=await message(a,[rel('disagree',{messageId:objection.id,partId:'text'})]);
     const amendment=await message(a,[rel('amend',{messageId:objection.id}),data({expectedRevision:1,parts:[text('修改后的理由'),{...rel('agree',{messageId:original.id}),id:'new-stance'}]})]);
-    await message(a,[rel('authorize',{messageId:amendment.id})]);
+    await message(b,[rel('authorize',{messageId:amendment.id})]);
     const page=(await a.agent.get('/api/messages?limit=100')).body;
     expect(page.states.find((state:any)=>state.messageId===objection.id)).toMatchObject({revision:2,executedStance:{partId:'relation',sourceRevision:1,target:{messageId:original.id,revision:1},side:'con'}});
     const context=(await a.agent.get(`/api/messages/${objection.id}/context`)).body;
@@ -233,14 +233,14 @@ describe('身份、组织和消息版本',()=>{
     expect((await server.store.db.prepare("SELECT \"parentId\" FROM memberships WHERE \"memberId\"=$1").get(b.id))?.parentId).toBe(group.id);
     expect((await server.store.db.prepare("SELECT \"parentId\" FROM memberships WHERE \"memberId\"=$1").get(group.id))?.parentId).toBe(parent.id);
   });
-  it('修改系统分配内容保留执行版本，账本与重放始终指向原始分配',async()=>{
+  it('个人不能修改系统分配内容，账本与重放始终指向原始分配',async()=>{
     const server=(await app()),a=await actor(server,'alice');
     const claim=await message(a,[text('单边消息')]);await message(a,[rel('agree',{messageId:claim.id})],{wager:2});await terminate(a,claim);
     const round=(await a.agent.get(`/api/messages/${claim.id}/context`)).body.rounds[0];
     const original=(await server.store.message(round.distributionId));
     const amendment=await message(a,[rel('amend',{messageId:original.id,partId:'allocation',path:['value','allocations',0,'amount']}),data({expectedRevision:1,value:9999})]);
-    await message(a,[rel('authorize',{messageId:amendment.id})]);
-    expect((await server.store.message(original.id)).revision).toBe(2);
+    expect((await post(a,[rel('authorize',{messageId:amendment.id})])).status).toBe(403);
+    expect((await server.store.message(original.id)).revision).toBe(1);
     expect((await server.store.message(original.id,1))).toEqual(original);
     const entries=(await server.store.db.prepare("SELECT * FROM ledger WHERE \"messageId\"=$1").all(original.id));
     expect(entries.every(row=>row.messageRevision===1)).toBe(true);expect(entries.reduce((sum,row)=>sum+Number(row.amount),0)).toBe(2);
@@ -257,7 +257,7 @@ describe('同步和结算时间',()=>{
     await message(a,[rel('agree',{messageId:original.id})],{wager:7});await message(b,[rel('disagree',{messageId:original.id})],{wager:4});await terminate(a,original);
     const quality=await message(b,[rel('low-quality',{messageId:original.id})]);await message(b,[rel('agree',{messageId:quality.id})],{wager:1});await terminate(b,quality);
     await message(a,[rel('distribute')]);
-    const rule=await message(a,[rel('rule-change'),data({rules:{protocolFee:2}})]);await message(a,[rel('authorize',{messageId:rule.id})]);
+    const rule=await message(a,[rel('rule-change'),data({rules:{protocolFee:2}})]);expect((await post(a,[rel('authorize',{messageId:rule.id})])).status).toBe(403);
     const requestId=randomUUID(),last=await post(a,[text('重试不重复')],{requestId});expect(last.status).toBe(201);
     let cursor=0;const archive:Change[]=[];
     while(true){const page=(await a.agent.get(`/api/export?after=${cursor}&limit=3`)).body;archive.push(...page.changes);cursor=page.nextCursor;if(!page.hasMore)break;}
@@ -269,7 +269,7 @@ describe('同步和结算时间',()=>{
     const savedAccount=(await server.store.account(a.session.user.id));(await server.close());
     const reopened=(await createTestApp({databaseSchema:schema}));apps.push(reopened);const agent=request.agent(reopened);
     const logged=await agent.post('/api/login').send({name:'alice',password:'a-good-password'});expect(logged.status).toBe(200);
-    const actorAgain={agent,session:logged.body};expect(logged.body.account).toEqual(savedAccount);expect(logged.body.rules.protocolFee).toBe(2);
+    const actorAgain={agent,session:logged.body};expect(logged.body.account).toEqual(savedAccount);expect(logged.body.rules.protocolFee).toBe(1);
     const duplicate=await post(actorAgain,[text('重试不重复')],{requestId});expect(duplicate.body).toEqual(last.body);(await conserved(reopened));
   });
   it('增量和消息分页不丢记录，SSE断线按Last-Event-ID恢复',async()=>{
@@ -294,8 +294,7 @@ describe('同步和结算时间',()=>{
   it('延时终止不会被重复请求重置，截止后只执行一次',async()=>{
     const server=(await app()),a=await actor(server,'alice');
     vi.useFakeTimers({toFake:['Date']});
-    const proposal=await message(a,[rel('rule-change'),data({rules:{settlementDelayMs:200}})]);
-    await message(a,[rel('authorize',{messageId:proposal.id})]);
+    await server.store.set('rules',{...await server.store.rules(),settlementDelayMs:200});
     const claim=await message(a,[text('延时结算')]);await message(a,[rel('agree',{messageId:claim.id})],{wager:10});
     await terminate(a,claim);const before=(await a.agent.get(`/api/messages/${claim.id}/context`)).body.rounds[0];
     await terminate(a,claim);const repeated=(await a.agent.get(`/api/messages/${claim.id}/context`)).body.rounds[0];

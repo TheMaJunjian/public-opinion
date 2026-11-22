@@ -9,17 +9,18 @@ import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import { hash } from 'bcryptjs';
 import { DATABASE_MIGRATIONS } from '../apps/server/src/database-version.ts';
+import { PARTICIPATION_AGREEMENT_PATH, PARTICIPATION_AGREEMENT_VERSION } from '../packages/core/src/participation-agreement.ts';
 import { decodeWorkbenchSnapshot } from '../packages/core/src/snapshot-transport.ts';
 
 // Own Compose project and volumes; never reads deployment credentials.
 const directory = mkdtempSync(join(tmpdir(), 'gonglun-release-'));
 const project = `gonglun-release-${randomBytes(4).toString('hex')}`;
 const password = randomBytes(32).toString('hex');
-const founder = randomBytes(32).toString('hex');
+const databaseUrl = `postgresql://gonglun:${password}@127.0.0.1:54331/gonglun`;
 const env = join(directory, '.env');
 const override = join(directory, 'compose.yml');
 const caddy = join(directory, 'Caddyfile');
-writeFileSync(env, `DOMAIN=localhost\nPOSTGRES_PASSWORD=${password}\nGONGLUN_FOUNDER_KEY=${founder}\nGONGLUN_IMAGE=${project}-api:latest\n`);
+writeFileSync(env, `DOMAIN=localhost\nPOSTGRES_PASSWORD=${password}\nGONGLUN_IMAGE=${project}-api:latest\n`);
 writeFileSync(caddy, 'localhost {\n tls internal\n reverse_proxy api:3000 {\n flush_interval -1\n }\n}\n');
 writeFileSync(override, `services:\n  postgres:\n    ports:\n      - "127.0.0.1:54331:5432"\n  caddy:\n    ports: !override\n      - "127.0.0.1:54443:443"\n    volumes: !override\n      - ${JSON.stringify(caddy.replaceAll('\\', '/') + ':/etc/caddy/Caddyfile:ro')}\n      - caddy_data:/data\n      - caddy_config:/config\n`);
 const args = ['compose', '-p', project, '-f', resolve('deploy/docker-compose.prod.yml'), '-f', resolve('deploy/docker-compose.build.yml'), '-f', override, '--env-file', env];
@@ -117,31 +118,42 @@ try {
   assert.equal(client.status,200);assert.ok(client.headers['cache-control'].includes('immutable'));
   assert.ok(client.body.includes(version.body.id),'Client and deployment manifest must identify the same build');
   assert.equal((await request('/assets/missing.js')).status,404);
-  assert.equal((await request('/api/setup')).body.founderKeyRequired,true);
-  assert.equal((await request('/api/register','POST',{name:'smoke-user',password:'smoke-password'})).status,403);
-  const registered=await request('/api/register','POST',{name:'smoke-user',password:'smoke-password',founderKey:founder});
+  const setup = (await request('/api/setup')).body;
+  assert.equal(setup.founderKeyRequired,false);
+  assert.equal(setup.agreementVersion,PARTICIPATION_AGREEMENT_VERSION);
+  const agreement = await request(PARTICIPATION_AGREEMENT_PATH);
+  assert.equal(agreement.status,200);
+  assert.ok(agreement.body.includes(PARTICIPATION_AGREEMENT_VERSION));
+  assert.equal((await request('/api/register','POST',{name:'smoke-user',password:'smoke-password'})).status,428);
+  const registered=await request('/api/register','POST',{name:'smoke-user',password:'smoke-password',acceptedAgreementVersion:setup.agreementVersion});
   assert.equal(registered.status,201);
   assert.ok(registered.headers['set-cookie'][0].includes('Secure'));
   const cookie=registered.headers['set-cookie'][0].split(';')[0];
   const headers={cookie,'x-csrf-token':registered.body.csrf};
+  assert.equal((await request('/api/admin/accounts','GET',undefined,headers)).status,404);
   assert.equal(registered.body.account.available,0);
-  let usage=await request('/api/ui/points/activity','POST',{action:'start'},headers);
-  for(let earned=0;earned<2;earned++){
-    await new Promise(resolve=>setTimeout(resolve,usage.body.remainingMs+50));
-    usage=await request('/api/ui/points/activity','POST',{action:'input',roundId:usage.body.roundId},headers);
-    assert.equal(usage.status,200);assert.equal(usage.body.awarded,true);
-  }
   assert.equal((await request('/api/messages','POST',{requestId:randomUUID(),parts:[{id:'text',type:'text',text:'blocked'}]},{cookie})).status,403);
-  // Fund the isolated founder through the real public grant action; publication
-  // now also freezes a review budget and self stake beyond its normal investment.
-  const funded=await request('/api/messages','POST',{requestId:randomUUID(),recommendation:1,parts:[
-    {id:'grant',type:'relation',relation:'credit',roles:{}},{id:'data',type:'data',value:{amount:100}},
-  ]},headers);
-  assert.equal(funded.status,201,JSON.stringify(funded.body));
+  const publicationCost=registered.body.rules.protocolFee+1+registered.body.rules.moderation.fee+registered.body.rules.moderation.deposit;
+  let usage = await request('/api/ui/points/activity', 'POST', {action:'start'}, headers);
+  assert.equal(usage.status, 200);
+  const timingFixture = new Pool({connectionString:databaseUrl});
+  try {
+    for (let earned = 0; earned < publicationCost; earned++) {
+      // Exercise the actual first wait. Make later rounds due in this test
+      // database so the API still performs every award and journal update.
+      if (earned === 0) await new Promise(resolve => setTimeout(resolve, usage.body.remainingMs + 100));
+      else {
+        const due = await timingFixture.query('UPDATE public.usage_points SET "readyAt"=0 WHERE "userId"=$1 AND "roundId"=$2', [registered.body.user.id, usage.body.roundId]);
+        assert.equal(due.rowCount, 1);
+      }
+      usage = await request('/api/ui/points/activity', 'POST', {action:'input', roundId:usage.body.roundId}, headers);
+      assert.equal(usage.status, 200, JSON.stringify(usage.body));
+      assert.equal(usage.body.totalEarned, earned + 1, JSON.stringify(usage.body));
+    }
+  } finally { await timingFixture.end(); }
   const created=await request('/api/messages','POST',{requestId:randomUUID(),recommendation:1,parts:[{id:'text',type:'text',text:'production smoke persistence'}]},headers);
   assert.equal(created.status,201,JSON.stringify(created.body));
-  const publicationCost=registered.body.rules.protocolFee+1+registered.body.rules.moderation.fee+registered.body.rules.moderation.deposit;
-  assert.equal(created.body.account.available,funded.body.account.available-publicationCost);
+  assert.equal(created.body.account.available,0);
   compose('restart','api');
   for(let attempt=0;;attempt++) {
     try { assert.equal((await request('/api/health')).status,200); break; }
@@ -152,10 +164,9 @@ try {
   assert.ok(context.body.messages.some(message=>message.id===created.body.message.id));
   assert.equal((await request('/api/session','GET',undefined,{cookie})).body.user.id,registered.body.user.id);
   assert.equal((await request('/api/login','POST',{name:'smoke-user',password:'smoke-password'})).status,200);
-  console.log('PASS: PostgreSQL → API → Caddy HTTPS, static page, founder protection, Secure cookie, CSRF, write, restart persistence, session and login');
+  console.log('PASS: PostgreSQL → API → Caddy HTTPS, static page, agreement acceptance, Secure cookie, CSRF, write, restart persistence, session and login');
   // Exercise the actual migration CLI and then run its result through the
   // built production image. All data is synthetic in this owned project.
-  const databaseUrl=`postgresql://gonglun:${password}@127.0.0.1:54331/gonglun`;
   const pool=new Pool({connectionString:databaseUrl});
   const time='2026-01-01T00:00:00.000Z';
   const fixture={
@@ -188,7 +199,7 @@ try {
     try {assert.equal((await request('/api/health')).status,200);break;}
     catch(error){if(attempt>=40)throw error;await new Promise(r=>setTimeout(r,500));}
   }
-  const oldLogin=await request('/api/login','POST',{name:'legacy-user',password:'old'});
+  const oldLogin=await request('/api/login','POST',{name:'legacy-user',password:'old',acceptedAgreementVersion:setup.agreementVersion});
   assert.equal(oldLogin.status,200);
   const reviewCheck=new Pool({connectionString:databaseUrl});
   try{
@@ -228,7 +239,7 @@ try {
     try{assert.equal((await request('/api/health')).status,200);break;}
     catch(error){if(attempt>=40)throw error;await new Promise(r=>setTimeout(r,500));}
   }
-  const afterUpgrade=await request('/api/login','POST',{name:'legacy-user',password:'old'});
+  const afterUpgrade=await request('/api/login','POST',{name:'legacy-user',password:'old',acceptedAgreementVersion:setup.agreementVersion});
   assert.equal(afterUpgrade.status,200);assert.equal(afterUpgrade.body.account.available,migratedWrite.body.account.available);
   const upgradedPool=new Pool({connectionString:databaseUrl});
   try{
@@ -267,7 +278,7 @@ try {
   compose('run','--rm','--no-deps','-T','api','node','scripts/start-existing.mjs','--check');
   compose('up','-d','--no-deps','--no-build','--pull','never','--wait','api');
   assert.equal(capturePostgres(),originalPostgres);
-  const preserved=await request('/api/login','POST',{name:'legacy-user',password:'old'});
+  const preserved=await request('/api/login','POST',{name:'legacy-user',password:'old',acceptedAgreementVersion:setup.agreementVersion});
   assert.equal(preserved.status,200);assert.equal(preserved.body.account.available,migratedWrite.body.account.available);
   assert.ok((await request('/api/ui/snapshot?parent=legacy-topic')).body.messages.some(message=>message.id==='legacy-message'));
   assert.equal((await request('/api/messages','POST',{requestId:randomUUID(),parts:[{id:'body',type:'text',text:'must remain read only'}]})).status,503);

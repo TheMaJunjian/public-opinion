@@ -1,4 +1,4 @@
-import { testInvitation } from './test-database.js';
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import {afterAll,beforeAll,expect,it,vi} from 'vitest';
 import request from 'supertest';
 import {randomUUID} from 'node:crypto';
@@ -25,9 +25,9 @@ let notificationAuthor:Awaited<ReturnType<typeof app.store.user>>;
 beforeAll(async()=>{
   vi.stubGlobal('window',Object.assign(new EventTarget(),{getSelection:()=>null,innerWidth:1024,innerHeight:768}));
   app=await createTestApp();
-  const registration=await request(app).post('/api/register').send({name:'逐类计费核验',password:'local-test-password'});
+  const registration=await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'逐类计费核验',password:'local-test-password'});
   user=await app.store.user(registration.body.user.id);
-  const recipient=await request(app).post('/api/register').send({inviteCode:await testInvitation(app),name:'通知目标作者',password:'local-test-password'});
+  const recipient=await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'通知目标作者',password:'local-test-password'});
   notificationAuthor=await app.store.user(recipient.body.user.id);
 });
 afterAll(async()=>{await cleanupTestDatabases();vi.unstubAllGlobals();});
@@ -56,7 +56,6 @@ const scenarios:Scenario[]=[
   {name:'创建委托',type:'delegation',secondary:'create',mode:'empty',content:'报酬数量=7\n委托内容=测试'},
   {name:'完成委托',type:'delegation',secondary:'fulfill',mode:'fulfill',content:'完成说明=已完成'},
   {name:'更正正文',type:'correct',content:'更正后的正文'},
-  {name:'授权规则提案',type:'authorize',mode:'empty',content:''},
   ...(['edit-members','edit-join','replace-structure','remove-structure'] as const).map(mode=>({name:'授权组织变更 '+mode,type:'authorize' as const,mode,content:''})),
 ];
 
@@ -96,23 +95,20 @@ for(const scope of ['root','inside'] as const)for(const scenario of scenarios)it
       targets.splice(0,targets.length,delegation);
     }
     if(scenario.type==='authorize'){
-      let proposal:ViewMessage;
-      if(scenario.mode?.includes('structure')||scenario.mode?.startsWith('edit-')){
-        const group=await invoke('/relations',{relationType:'CLASSIFY',targetRefs:targets.map(target=>({kind:'message',messageId:target.id})),payload:{title:'修改前分类'}});
-        let reference:Record<string,unknown>={messageId:group.id},value:unknown;
-        if(scenario.mode==='edit-members'){
-          reference.partId='relation';reference.path=['roles','members'];
-          value=bindRoles({members:[{messageId:targets[0]!.id},{messageId:sources[0]!.id}]}).members;
-        }else if(scenario.mode==='edit-join'){
-          const placement=await app.store.db.prepare('SELECT "sourceId" FROM memberships WHERE "memberId"=$1').get(targets[0]!.id);
-          reference={messageId:String(placement!.sourceId),partId:'relation',path:['roles','parent']};
-          value=bindRoles({parent:[{messageId:parent.id}]}).parent;
-        }else if(scenario.mode==='replace-structure'){
-          reference={messageId:sources[0]!.id};
-          value=[{id:'relation',type:'relation',relation:'classify',roles:bindRoles({members:targets.map(target=>({messageId:target.id}))})}];
-        }else value=[{id:'body',type:'text',text:'取消分类结构'}];
-        proposal=await invoke('/relations',{relationType:'CORRECT',targetRefs:[{kind:'message',messageId:reference.messageId,reference}],payload:{correctionValue:value}});
-      }else proposal=await invoke('/relations',{relationType:'PROPOSAL',payload:{content:'调整规则',proposedParameters:{}}});
+      const group=await invoke('/relations',{relationType:'CLASSIFY',targetRefs:targets.map(target=>({kind:'message',messageId:target.id})),payload:{title:'修改前分类'}});
+      let reference:Record<string,unknown>={messageId:group.id},value:unknown;
+      if(scenario.mode==='edit-members'){
+        reference.partId='relation';reference.path=['roles','members'];
+        value=bindRoles({members:[{messageId:targets[0]!.id},{messageId:sources[0]!.id}]}).members;
+      }else if(scenario.mode==='edit-join'){
+        const placement=await app.store.db.prepare('SELECT "sourceId" FROM memberships WHERE "memberId"=$1').get(targets[0]!.id);
+        reference={messageId:String(placement!.sourceId),partId:'relation',path:['roles','parent']};
+        value=bindRoles({parent:[{messageId:parent.id}]}).parent;
+      }else if(scenario.mode==='replace-structure'){
+        reference={messageId:sources[0]!.id};
+        value=[{id:'relation',type:'relation',relation:'classify',roles:bindRoles({members:targets.map(target=>({messageId:target.id}))})}];
+      }else value=[{id:'body',type:'text',text:'取消分类结构'}];
+      const proposal=await invoke('/relations',{relationType:'CORRECT',targetRefs:[{kind:'message',messageId:reference.messageId,reference}],payload:{correctionValue:value}});
       targets.splice(0,targets.length,proposal);
     }
     if(scenario.fee!==undefined)await app.store.set('rules',{...await app.store.rules(),protocolFee:scenario.fee});

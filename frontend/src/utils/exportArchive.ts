@@ -12,6 +12,11 @@ const cleanMessageTypes=new Set<string>(['CONTENT','RELATION',...CLEAN_MESSAGE_T
 export async function prepareExportForViewing(input:unknown){
   if (isZhihuInput(input) || isZhihuViewingData(input)) return validateExportForViewing(input);
   const archive=input as ExportData|null;
+  if (archive && typeof archive === 'object' && 'meeting' in archive) {
+    const prepared = validateExportForViewing(archive);
+    const { restoreMeetingDocument } = await import('./meetingExchange');
+    return { ...prepared, data: await restoreMeetingDocument(prepared.data) };
+  }
   if(archive&&archive.formatVersion>5)throw new Error('文件版本比当前程序更新，请更新程序后再打开');
   const historical=archive&&typeof archive==='object'&&(archive.formatVersion<5
     ||archive.format==='gonglun-2'&&!Array.isArray(archive.messages)&&Array.isArray((archive as unknown as Archive).changes)

@@ -102,6 +102,7 @@ interface WorkbenchPanelProps {
   hideViewerUser?: boolean;
   viewerUsers?: User[];
   viewerUsername?: string;
+  localMeetingTitle?: string;
   onViewerUsernameChange?: (username: string) => void;
   onExitViewer?: () => void;
 
@@ -439,7 +440,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
         title={p.canExitTrace ? '退出全部追溯并恢复进入第一次追溯前的现场' : '退出当前查看'}>{p.singleSideReview || p.isRelatedView ? '退出查看' : '退出追溯'}</button>}
       {p.isViewerMode && <div style={{ border: "1px solid var(--line-444)", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <span style={{ fontWeight: 600 }}>{p.localEditing ? '本地讨论记录' : p.localReplyEditor ? '知乎文档阅览' : '公论文档阅览'}</span>
+          <span style={{ fontWeight: 600, overflowWrap: 'anywhere' }}>{p.localMeetingTitle ?? (p.localEditing ? '本地讨论记录' : p.localReplyEditor ? '知乎文档阅览' : '公论文档阅览')}</span>
           {!p.localReplyEditor && !p.hideViewerUser && <label style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ink-cbd5e1)", fontSize: 12 }}>
             {p.localEditing ? '本地发言人' : '当前用户'}
             <input
@@ -455,7 +456,9 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           </label>}
         </div>
         <button className="workbench-action" onClick={p.onExitViewer} style={{ width: "100%", boxSizing: "border-box", padding: "5px 12px", borderRadius: 4, border: "1px solid var(--line-f59e0b)", background: "var(--surface-2a1a00)", color: "var(--ink-f59e0b)", fontSize: 12, cursor: "pointer" }}>退出阅览</button>
-        {p.localEditing && <p style={{ margin: 0, fontSize: 12 }}>可输入新发言人或选择已有参与者。编辑只保存在本机，下载阅览文件可保存或分享讨论记录。</p>}
+        {p.localEditing && <p style={{ margin: 0, fontSize: 12 }}>{p.localMeetingTitle
+          ? '填写自己的本地发言人即可发言和回复。在“会议交换”中查看同步状态。'
+          : '可输入新发言人或选择已有参与者。编辑只保存在本机，下载阅览文件可保存或分享讨论记录。'}</p>}
       </div>}
       {renderComparisonHeader()}
       {p.isPreviewMode && !p.singleSideReview && (

@@ -2,7 +2,7 @@ import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { afterEach, expect, it } from 'vitest';
-import type { Session, WorkbenchSnapshot } from '@gonglun/core';
+import { PARTICIPATION_AGREEMENT_VERSION, type Session, type WorkbenchSnapshot } from '@gonglun/core';
 import { cleanupTestDatabases, createTestApp } from './test-database.js';
 
 afterEach(cleanupTestDatabases);
@@ -14,7 +14,7 @@ it('notifies two independently signed sessions of the same user after preview co
   const device=async(deviceId:string,register=false)=>{
     const keys=generateKeyPairSync('ed25519');
     const response=await fetch(`${origin}/api/${register?'register':'login'}`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name:'two-device-user',password:'test-password',deviceId,publicKey:JSON.stringify(keys.publicKey.export({format:'jwk'}))})});
+      body:JSON.stringify({...(register ? {acceptedAgreementVersion:PARTICIPATION_AGREEMENT_VERSION} : {}),name:'two-device-user',password:'test-password',deviceId,publicKey:JSON.stringify(keys.publicKey.export({format:'jwk'}))})});
     expect(response.status).toBe(register?201:200);
     const session=await response.json() as Session,cookie=response.headers.getSetCookie().map(value=>value.split(';')[0]).join('; ');
     return {session,

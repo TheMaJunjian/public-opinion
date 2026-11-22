@@ -1,7 +1,8 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import {randomUUID} from 'node:crypto';
 import request from 'supertest';
 import {afterEach,expect,it} from 'vitest';
-import {createTestApp,cleanupTestDatabases,testDatabaseUrl,testInvitation} from '../../server/src/test-database.js';
+import {createTestApp,cleanupTestDatabases,testDatabaseUrl} from '../../server/src/test-database.js';
 import {Store} from '../../server/src/db.js';
 import {moderationCase} from '../../server/src/moderation.js';
 import {financialFingerprint} from './financial-fingerprint.js';
@@ -11,7 +12,7 @@ import {DATABASE_MIGRATIONS} from '../../server/src/database-version.js';
 afterEach(cleanupTestDatabases);
 it('migrates old login sessions without marking absent users online or changing their credentials and finances',async()=>{
   const app=await createTestApp({moderation:true}),agent=request.agent(app);
-  const registration=await agent.post('/api/register').send({name:'presence-migration',password:'password'});
+  const registration=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'presence-migration',password:'password'});
   expect(registration.status).toBe(201);
   // A second device must not receive the first device's foreground timestamp.
   expect((await request(app).post('/api/login').send({name:'presence-migration',password:'password'})).status).toBe(200);
@@ -37,11 +38,11 @@ it('migrates old login sessions without marking absent users online or changing 
 
 it('upgrades the fixed-role review schema without charging, clearing stakes, or publishing pending content',async()=>{
   const app=await createTestApp({moderation:true}),agent=request.agent(app);
-  const registration=await agent.post('/api/register').send({name:'migration-author',password:'password'});
+  const registration=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'migration-author',password:'password'});
   expect(registration.status).toBe(201);
   const reviewers=[];
   for(let i=0;i<3;i++){
-    const actor=request.agent(app),res=await actor.post('/api/register').send({name:`migration-reviewer-${i}`,password:'password',inviteCode:await testInvitation(app)});
+    const actor=request.agent(app),res=await actor.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:`migration-reviewer-${i}`,password:'password'});
     expect(res.status,res.text).toBe(201);reviewers.push({agent:actor,csrf:res.body.csrf});
   }
   const sent=await agent.post('/api/messages').set('x-csrf-token',registration.body.csrf)

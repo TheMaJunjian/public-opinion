@@ -1,5 +1,4 @@
 import type { DemoMessage } from '../../../utils/modelBridge';
-import DiscussionReplies from '../../../components/DiscussionReplies';
 import type { ReactNode } from 'react';
 import { MessageDisplayMarker } from '../../../components/LazyMessageDisplayHints';
 interface Props {
@@ -66,7 +65,6 @@ export default function ClassificationHeader({ recordCategory, reviewFolder=fals
               {question.completeness === 'partial' && <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--ink-fbbf24)' }}>{question.locallyCorrectedBody ? '原文件只取得部分问题描述；本地补充不改变原始完整性记录。' : '这里只取得部分问题描述，内容可能不完整。'}</p>}
               {question.description && question.completeness === 'unknown' && <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--ink-94a3b8)' }}>{question.locallyCorrectedBody ? question.known ? '原文件问题描述的完整性尚未确认；当前显示本地补充。' : '原文件未取得问题描述；当前显示本地补充。' : '问题描述的完整性尚未确认。'}</p>}
             </details>}
-            {!recordCategory && !comparisonMode && currentClassifyRelMsg && <DiscussionReplies messageId={currentClassifyRelMsg.id} />}
           </div>
           <button className="workbench-scope-exit" onClick={() => {
             if(reviewFolder){handleExitClassification();return;}

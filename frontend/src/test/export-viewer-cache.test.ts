@@ -12,6 +12,39 @@ const archive = (title: string): ExportData => ({
 beforeEach(() => { vi.resetModules(); sessionStorage.clear(); vi.stubGlobal('indexedDB', new IDBFactory()); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); sessionStorage.clear(); });
 
+it('reopens unpublished speech from the same shared meeting after another document and a reload', async () => {
+  const { webcrypto } = await vi.importActual<{ webcrypto: Crypto }>('node:crypto');
+  vi.stubGlobal('crypto', webcrypto);
+  const { createMeetingStart } = await import('../utils/meetingExchange');
+  const { createLocalMessageFile } = await import('../utils/localMessageFile');
+  const { LocalDiscussion } = await import('../utils/localDiscussion');
+  const cache = await import('../utils/exportViewerCache');
+  const start = await createMeetingStart(createLocalMessageFile());
+  const [host, secondTab] = await Promise.all([
+    cache.openFolderMeetingExport(start), cache.openFolderMeetingExport(structuredClone(start)),
+  ]);
+  const reference = cache.getExportCacheReference(host);
+  expect(reference).not.toBeNull();
+  expect(cache.getExportCacheReference(secondTab)).toEqual(reference);
+  const discussion = new LocalDiscussion(host, '甲');
+  await discussion.createMessage('root', { content: '尚未写入共享文件夹的发言' });
+  await discussion.commit(next => cache.saveLastExportPersistent(next, host));
+  await expect(cache.saveLastExportPersistent({ ...secondTab, viewerUsername: '乙' }, secondTab)).rejects.toBeInstanceOf(cache.ArchiveConflictError);
+
+  const other = await createMeetingStart(createLocalMessageFile());
+  expect(other.scope.title).toBe(start.scope.title);
+  const separate = await cache.openFolderMeetingExport(other);
+  expect(cache.getExportCacheReference(separate)).not.toEqual(reference);
+  expect(separate.messages).toEqual([]);
+  vi.resetModules();
+  const reloaded = await import('../utils/exportViewerCache');
+  const restored = await reloaded.openFolderMeetingExport(start);
+  expect(restored.messages.map(message => message.content)).toEqual(['尚未写入共享文件夹的发言']);
+  expect(restored.viewerUsername).toBe('甲');
+  expect(reloaded.getExportCacheReference(restored)).toEqual(reference);
+  expect(await reloaded.loadLastExportPreview()).toEqual({ reference, title: start.scope.title });
+});
+
 it('persists an owned immutable snapshot without a second full in-memory clone', async () => {
   const cache = await import('../utils/exportViewerCache');
   const data = archive('独占阅览快照');

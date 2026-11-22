@@ -100,7 +100,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       const cancelled = options.signal?.aborted || (typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError');
       // Leaving a scope cancels its reads intentionally. Release their progress
       // instead of leaving the browser's AbortError as a persistent toast.
-      if (explicitRead && cancelled) operation.discard();
+      if ((explicitRead && cancelled) || (path === '/login' && error instanceof ApiError && error.code === 'AGREEMENT_REQUIRED')) operation.discard();
       else operation.finish(error instanceof UncertainRequestError ? 'uncertain' : cancelled ? 'cancelled' : 'failed', error instanceof Error ? error.message : String(error));
       throw error;
     }
@@ -132,7 +132,7 @@ export async function markReading(marks:ReadingMark[]) {
 async function requestCore<T>(path: string, options: RequestInit, owner = requestOwner()): Promise<T> {
   const rehearsal = path === '/commands/preview';
   options.signal?.throwIfAborted();
-  const core = ['/setup', '/session', '/login', '/register', '/logout'].includes(path) || path.startsWith('/admin/') || path.startsWith('/moderation/');
+  const core = ['/session', '/login', '/register', '/logout'].includes(path) || path.startsWith('/moderation/');
   const url = `${core ? CORE_URL : BASE_URL}${path}`;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -142,7 +142,7 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
   const isAuthBootstrap = ['/login', '/register', '/logout', '/auth/signing-key'].includes(path);
   const privateReading=path==='/reading-state';
   const privateActivity=path==='/points/activity'||path==='/moderation/presence';
-  const privateNotifications=path.startsWith('/notifications') || path.startsWith('/admin/') || path === '/feed/hidden';
+  const privateNotifications=path.startsWith('/notifications') || path === '/feed/hidden';
   const readOnlySnapshot = ['/snapshot/query','/snapshot/discussion','/body-versions/resolve','/feed/refresh'].includes(path.split('?')[0]);
   let identityKey: string | undefined;
   const checkOwner = () => { if (requestOwner() !== owner) throw new DOMException('账户已切换，请重新操作', 'AbortError'); };
@@ -225,28 +225,6 @@ export async function getSession(): Promise<UiSession | null> {
   csrf = session?.csrf ?? '';
   return session;
 }
-export function getSetup() {
-  return request<{ initialized: boolean; founderKeyRequired: boolean; inviteRequired: boolean }>('/setup');
-}
-
-export function getAdminInvites(before?: string, signal?: AbortSignal) {
-  return request<import('@gonglun/core').AccessPage<import('@gonglun/core').RegistrationInvite>>(`/admin/invites${before ? `?before=${encodeURIComponent(before)}` : ''}`, {signal});
-}
-export function createAdminInvite(expiresInDays: number) {
-  return request<{code:string;invite:import('@gonglun/core').RegistrationInvite}>('/admin/invites', {method:'POST',body:JSON.stringify({expiresInDays})});
-}
-export function revokeAdminInvite(id: string) {
-  return request<{ok:true}>(`/admin/invites/${encodeURIComponent(id)}/revoke`, {method:'POST',body:'{}'});
-}
-export function getAdminAccounts(query = '', before?: string, signal?: AbortSignal) {
-  const params = new URLSearchParams({q:query});
-  if (before) params.set('before',before);
-  return request<import('@gonglun/core').AccessPage<import('@gonglun/core').ManagedAccount>>(`/admin/accounts?${params}`, {signal});
-}
-export function setAdminAccountDisabled(id: string, disabled: boolean) {
-  return request<{ok:true}>(`/admin/accounts/${encodeURIComponent(id)}/status`, {method:'POST',body:JSON.stringify({disabled})});
-}
-
 export function getNotifications(query: import('@gonglun/core').NotificationQuery = {}, signal?: AbortSignal) {
   const params = new URLSearchParams(Object.entries(query).filter(([,value]) => value !== undefined).map(([key,value]) => [key,String(value)]));
   return request<import('@gonglun/core').NotificationPage>(`/notifications?${params}`, {signal});
@@ -256,17 +234,17 @@ export const markNotificationsSeen = (input: import('@gonglun/core').Notificatio
 export const deleteNotifications = (input: import('@gonglun/core').NotificationDeleteInput) => request<{ok:true}>('/notifications/delete', {method:'POST',body:JSON.stringify(input)});
 export const muteNotifications = (targetId:string,muted:boolean) => request<{ok:true}>('/notifications/mute', {method:'POST',body:JSON.stringify({targetId,muted})});
 export const getNotificationRecipients = (ids:string[],signal?:AbortSignal) => request<{users:Array<{id:string;username:string}>}>(`/notifications/recipients?ids=${encodeURIComponent(ids.join(','))}`, {signal});
-export async function register(data: { username: string; password: string; publicKey?: string | null; founderKey?: string; inviteCode?: string }) {
+export async function register(data: { username: string; password: string; publicKey?: string; acceptedAgreementVersion: string }) {
   const session = await request<UiSession>('/register', {
     method: 'POST',
     body: JSON.stringify({ ...data, deviceId: getDeviceId() }),
   });
   sessionVersion++;
   csrf = session.csrf;
-  return { message: '注册成功', user: session.user };
+  return { message: '注册成功', token: 'session', user: session.user };
 }
 
-export async function login(data: { username: string; password: string; publicKey?: string }) {
+export async function login(data: { username: string; password: string; publicKey?: string; acceptedAgreementVersion?: string }) {
   const session = await request<UiSession>('/login', {
     method: 'POST',
     body: JSON.stringify({ ...data, deviceId: getDeviceId() }),
@@ -641,6 +619,7 @@ export function getMessageTagCounts(scopeMessageId: string) {
 // ============================================================
 
 export interface ExportData {
+  meeting?: { version: 1; id: string; baseIds: string[]; baseHash: string };
   format?: 'gonglun-2' | 'gonglun-view-3';
   journal?: import('@gonglun/core').JournalManifest;
   formatVersion: number;

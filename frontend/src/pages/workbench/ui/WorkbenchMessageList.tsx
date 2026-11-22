@@ -2,7 +2,7 @@ import React, {useMemo, type ComponentProps, type ReactNode } from 'react';
 import {formatCorrectionSummary} from '@gonglun/core';
 import RelatedMessages from '../../../components/RelatedMessages';
 import CrossCanvasRelatedMessages from '../../../components/CrossCanvasRelatedMessages';
-import type { CrossCanvasRelationGroups } from '../../../utils/crossCanvasRelations';
+import { deriveCrossCanvasRelations } from '../../../utils/crossCanvasRelations';
 import JoinRecordBadges from '../../../components/JoinRecordBadges';
 import JoinEndpointType from '../../../components/JoinEndpointType';
 import {indexRelatedMessages} from '../../../utils/relatedMessages';
@@ -86,7 +86,7 @@ interface Props {
   onJoinFilter: (messageId: string, direction: 'incoming' | 'outgoing') => void;
   onNavigate: (messageId: string) => void;
   onRelatedNavigate?:(messageId:string)=>void;
-  crossCanvasRelations?:Map<string,CrossCanvasRelationGroups>;
+  relatedEdges?: DemoEdge[];
   onRelatedRelationView?:(messageId:string)=>void;
   standaloneMessageIds?:ReadonlySet<string>;
   highlightedMessageIds?:ReadonlySet<string>;
@@ -126,6 +126,12 @@ export default function WorkbenchMessageList(props: Props) {
     rowIds.flatMap(id=>{const record=relationById.get(id);return record?[record]:[];}),props.joinRecordContext.effect):undefined,
   [props.joinRecordContext,rowIds,relationById]);
   const joinEntries=useMemo(()=>new Map([...(joinGroups?.adopted??[]),...(joinGroups?.unadopted??[])].map(entry=>[entry.id,entry])),[joinGroups]);
+  const relatedConnections = useMemo(() => {
+    // A list presents relation records as rows. Two endpoint rows alone do
+    // not display the connecting relation as a graph edge would.
+    const visibleMessageIds = new Set(joinGroups ? joinEntries.keys() : rowIds);
+    return deriveCrossCanvasRelations({ edges: props.relatedEdges ?? [], visibleMessageIds, renderedEdges: [] });
+  }, [rowIds, joinGroups, joinEntries, props.relatedEdges]);
   const pins = useMemo(() => new Set([lastClickedMessageId, activeTextSelectId, settlementOpenMsgId].filter((id): id is string => !!id)),
     [lastClickedMessageId, activeTextSelectId, settlementOpenMsgId]);
   const renderMessage=(id:string)=>{
@@ -233,7 +239,7 @@ export default function WorkbenchMessageList(props: Props) {
           return (
             <MessageCard
               relatedMessages={<><RelatedMessages rows={relatedByTarget.get(msg.id)} selectedUnits={draftUnits} onNavigate={props.onRelatedNavigate??handleNavigateToMessage}/>
-                <CrossCanvasRelatedMessages groups={props.crossCanvasRelations?.get(msg.id)} messages={msgMap} selectedUnits={draftUnits}
+                <CrossCanvasRelatedMessages groups={relatedConnections.get(msg.id)} messages={msgMap} selectedUnits={draftUnits}
                   highlightedMessageIds={props.highlightedMessageIds} onView={props.onRelatedRelationView??handleNavigateToMessage}/></>}
               selectedUnits={draftUnits}
               key={msg.id} msg={msg} ctx={ctx}

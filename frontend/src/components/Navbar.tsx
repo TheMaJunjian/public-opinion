@@ -7,7 +7,6 @@ import PointsBadge from './PointsBadge';
 import NotificationBell from './NotificationBell';
 import AboutLink from './AboutLink';
 import { useInterfaceZoom } from '../context/InterfaceZoomContext';
-const AccessManagementModal = lazy(() => import('./AccessManagementModal'));
 const ReviewQueueModal = lazy(() => import('./ReviewQueueModal'));
 
 interface NavbarProps {
@@ -29,7 +28,6 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
   const leftControlsRef = useRef<HTMLDivElement>(null);
   const rightControlsRef = useRef<HTMLDivElement>(null);
   const [rightControlsRightOffset, setRightControlsRightOffset] = useState(16);
-  const [accessOpen, setAccessOpen] = useState(false);
   const [reviewsOpen,setReviewsOpen]=useState(false);
 
   useEffect(() => {
@@ -120,7 +118,6 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
             <PointsBadge />
             <button type="button" className="text-sm font-medium hover:opacity-80" onClick={()=>setReviewsOpen(true)}>审核</button>
             <NotificationBell key={user.id} userId={user.id} />
-            {user.founder && <button type="button" className="text-sm font-medium hover:opacity-80" onClick={() => setAccessOpen(true)}>管理</button>}
             <span className="text-[color:var(--ink-c7d2fe)] text-sm">
               {user.username}
             </span>
@@ -153,7 +150,6 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
           </>
         )}
       </div>
-      {user?.founder && accessOpen && <Suspense fallback={<span role="status">正在加载管理面板…</span>}><AccessManagementModal onClose={() => setAccessOpen(false)} /></Suspense>}
       {user&&reviewsOpen&&<Suspense fallback={<span role="status">正在加载审核队列…</span>}><ReviewQueueModal onClose={()=>setReviewsOpen(false)}/></Suspense>}
     </nav>
   );

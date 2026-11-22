@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import {withTestCommandContributions} from '../../server/src/test-database.js';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
@@ -16,7 +17,7 @@ import {chargeMessage} from '../../server/src/message-spending.js';
 afterEach(cleanupTestDatabases);
 async function fixture() {
   const app = await createTestApp(), agent = request.agent(app);
-  const registered = await agent.post('/api/register').send({ name: '迁移投票者', password: 'a-good-password' });
+  const registered = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  name: '迁移投票者', password: 'a-good-password' });
   expect(registered.status, registered.text).toBe(201);
   const session = registered.body;
   const post = async (path: string, body: object) => {

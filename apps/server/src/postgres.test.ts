@@ -1,4 +1,4 @@
-import { testInvitation } from './test-database.js';
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { once } from 'node:events';
@@ -18,7 +18,7 @@ async function pair(tick = 60_000) {
   return Promise.all([createTestApp({databaseSchema,settlementTickMs:tick}), createTestApp({databaseSchema,settlementTickMs:tick})]);
 }
 async function register(app: App, name: string) {
-  const response = await request(app).post('/api/register').send({inviteCode:await testInvitation(app),name,password:'postgres-test-password'});
+  const response = await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name,password:'postgres-test-password'});
   expect(response.status,response.text).toBe(201);
   return {session: response.body as Session, cookie: (response.headers['set-cookie'] as unknown as string[]).map(value=>value.split(';')[0]).join('; ')};
 }
@@ -42,14 +42,8 @@ describe('PostgreSQL transactions across API instances', () => {
   it('initializes once and charges one fee for concurrent retries of the same request', async () => {
     const [first,second] = await pair();
     expect(await first.store.setting('region')).toBe(await second.store.setting('region'));
-    const names = ['alice','bob'];
-    const attempts = await Promise.all([first,second].map((app,index)=>request(app).post('/api/register').send({name:names[index],password:'postgres-test-password'})));
-    expect(attempts.map(response=>response.status).sort()).toEqual([201,403]);
-    const founderIndex = attempts.findIndex(response=>response.status===201), registered = attempts[founderIndex]!;
-    const founder = {session:registered.body as Session,cookie:(registered.headers['set-cookie'] as unknown as string[]).map(value=>value.split(';')[0]).join('; ')};
-    const invited = await register(founderIndex===0?second:first,names[1-founderIndex]!);
-    const identities = founderIndex===0 ? [founder,invited] : [invited,founder];
-    expect(identities.filter(actor=>actor.session.user.founder)).toHaveLength(1);
+    const identities = await Promise.all([register(first,'alice'),register(second,'bob')]);
+    expect(identities.every(actor=>!actor.session.user.founder)).toBe(true);
     const actor=identities[0], input={requestId:randomUUID(),parts:[text('并发重试')],recommendation:1};
     const responses=await Promise.all(Array.from({length:12},(_,index)=>request(index%2?first:second).post('/api/messages').set('Cookie',actor.cookie).set('x-csrf-token',actor.session.csrf).send(input)));
     for(const response of responses){expect(response.status,response.text).toBe(201);expect(response.body).toEqual(responses[0].body);}

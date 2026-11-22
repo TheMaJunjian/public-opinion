@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import GraphView, { type GraphViewProps } from '../components/GraphView';
 import { projectGraphScene } from '../utils/graphProjection';
@@ -1564,8 +1564,50 @@ it("renders each side's own cross-canvas relations and opens its relation trace"
   expect(disagree.querySelector('[data-cross-canvas-related-messages]')).toBeNull();
   fireEvent.click(within(agree as HTMLElement).getByRole('button',{name:/其他相关消息：1/}));
   const popup=within(screen.getByRole('dialog',{name:'其他相关消息：1'}));
-  expect(popup.getByRole('group',{name:'指向本消息的关联'})).toHaveTextContent('【引用】 R');
+  expect(within(popup.getByRole('group',{name:'指向本消息的关联'})).getByRole('button',{name:'选择相关引用消息'})).toHaveTextContent('R');
   fireEvent.click(popup.getByRole('button',{name:'查看'}));expect(open).toHaveBeenCalledWith('R');
+});
+
+it('filters precomputed related groups using the cards displayed by this graph page', () => {
+  const owner = message('owner'), record = message('record');
+  const crossCanvasRelations = new Map([[owner.id, { outgoing: { '引用': [record.id] }, incoming: {} }]]);
+  const shown = renderScene([owner, record], [], { crossCanvasRelations });
+  expect(shown.container.querySelector('[data-msgid="record"]')).toBeInTheDocument();
+  expect(shown.queryByRole('button', { name: /其他相关消息/ })).toBeNull();
+  shown.unmount();
+  const paged = renderScene([owner, record], [], { visibleMessageIds: new Set([owner.id]), crossCanvasRelations });
+  expect(paged.container.querySelector('[data-msgid="record"]')).toBeNull();
+  expect(paged.getByRole('button', { name: /其他相关消息：1/ })).toBeInTheDocument();
+});
+
+it('offers a related record in a folded frame and removes it when the frame displays its card again', async () => {
+  const frame: DemoMessage = { ...message('frame'), kind: 'relation', relationType: 'classify' };
+  const view = renderScene([message('owner'), frame, message('nested-record')], [
+    relation('frame', 'classify', 'anon:frame', 'nested-record'),
+  ], {
+    expandedFrameIds: new Set(['frame']),
+    crossCanvasRelations: new Map([['owner', { outgoing: { '引用': ['nested-record'] }, incoming: {} }]]),
+  });
+  const owner = within(view.container.querySelector<HTMLElement>('[data-msgid="owner"]')!);
+  expect(owner.queryByRole('button', { name: /其他相关消息/ })).toBeNull();
+  fireEvent.click(view.getByRole('button', { name: '收起下方框架 frame' }));
+  expect(await owner.findByRole('button', { name: /其他相关消息：1/ })).toBeVisible();
+  fireEvent.click(view.getByRole('button', { name: '展开下方框架 frame' }));
+  await waitFor(() => expect(owner.queryByRole('button', { name: /其他相关消息/ })).toBeNull());
+});
+
+it('excludes only the stance records represented by an expanded card badge', () => {
+  const owner = message('owner'), vote: DemoMessage = { ...message('vote'), kind: 'relation', relationType: 'agree' };
+  const shown = relation(vote.id, 'agree', 'outside', owner.id);
+  const other = relation('other', 'agree', 'elsewhere', owner.id);
+  const view = renderScene([owner, vote], [shown], { relatedEdges: [shown, other], discussionView: { mode: 'graph', collapsed: [] } });
+  const card = within(view.container.querySelector<HTMLElement>('[data-msgid="owner"]')!);
+  expect(card.getByRole('button', { name: /其他相关消息：2/ })).toBeVisible();
+  fireEvent.click(view.getByRole('button', { name: '显示装饰 owner' }));
+  const trigger = card.getByRole('button', { name: /其他相关消息：1/ });
+  expect(trigger).toHaveAttribute('data-jump-msgids', 'other');
+  fireEvent.click(view.getByRole('button', { name: '收起装饰 owner' }));
+  expect(card.getByRole('button', { name: /其他相关消息：2/ })).toBeVisible();
 });
 
 it.each(['reference','reply','annotation'] as const)('shows both endpoints of a cross-canvas %s and hides rows once its complete edge is rendered',type=>{

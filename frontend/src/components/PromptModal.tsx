@@ -17,6 +17,8 @@ interface PromptModalProps {
   cancelText?: string;
   danger?: boolean;
   hideActions?: boolean;
+  /** Use the header close button for both confirm and cancel shortcuts. */
+  closeOnly?: boolean;
   lockScroll?: boolean;
   guideSettlementConfirm?: boolean;
   zIndex?: number;
@@ -41,6 +43,7 @@ export default function PromptModal({
   cancelText = '取消',
   danger = false,
   hideActions = false,
+  closeOnly = false,
   lockScroll = true,
   guideSettlementConfirm = false,
   zIndex = 3000,
@@ -52,6 +55,7 @@ export default function PromptModal({
 }: PromptModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const footerRef = useRef<HTMLDivElement>(null);
+  const close = closeOnly ? onConfirm : onClose;
   const portalTarget=useWorkbenchPortalTarget();
   const [offsetY, setOffsetY] = useState(0);
   useLayoutEffect(() => {
@@ -120,9 +124,11 @@ export default function PromptModal({
           ...dialogProps?.style,
         }}
       >
-        <div data-dialog-header="true" style={{ ...dialogStyles.header, ...(onClose ? { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 } : {}) }}>
+        <div data-dialog-header="true" style={{ ...dialogStyles.header, ...(close ? { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 } : {}) }}>
           {title}
-          {onClose && <button type="button" aria-label={`关闭${title}`} data-dialog-close="true" data-shortcut-cancel="true" onClick={onClose} style={dialogStyles.button}>✕</button>}
+          {close && <button ref={closeOnly ? confirmButtonRef : undefined} type="button" aria-label={`关闭${title}`}
+            data-dialog-close="true" data-shortcut-cancel="true" data-shortcut-confirm={closeOnly || undefined}
+            onClick={close} style={dialogStyles.button}>✕</button>}
         </div>
 
         <div
@@ -136,7 +142,7 @@ export default function PromptModal({
           {message}
         </div>
 
-        {!hideActions && <div ref={footerRef} data-dialog-footer="true" style={dialogStyles.footer}>
+        {!hideActions && !closeOnly && <div ref={footerRef} data-dialog-footer="true" style={dialogStyles.footer}>
           {onCancel && (
             <button
               data-shortcut-cancel="true"

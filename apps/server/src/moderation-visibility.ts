@@ -17,21 +17,31 @@ const dependencyStep=`SELECT d.root,r."targetId",COALESCE(NULLIF(r."targetRevisi
   FROM dependencies d JOIN moderation_dependencies r ON r."sourceId"=d.id AND r."sourceRevision"=d.revision JOIN messages m ON m.id=r."targetId"`;
 const restrictedCase=`JOIN LATERAL (SELECT * FROM moderation_cases WHERE "messageId"=d.id ORDER BY revision DESC LIMIT 1) c ON TRUE
   LEFT JOIN moderation_cases historical ON historical."messageId"=d.id AND historical.revision=d.revision`;
-const needsReview=(alias:string)=>`(${alias}.status='appeal' OR ${alias}.status='rejected')`;
+// Migration-time projections also read schemas that predate the appealFrom column.
+const restrictedCaseSql=(alias:string)=>`(${alias}.status='rejected' OR (${alias}.status='appeal'
+  AND COALESCE(to_jsonb(${alias})->>'appealFrom','reject')='reject'))`;
+export const restrictedCurrentCasesSql=`SELECT "messageId" FROM (
+  SELECT DISTINCT ON ("messageId") "messageId",${restrictedCaseSql('c')} AS restricted
+  FROM moderation_cases c ORDER BY "messageId",revision DESC
+) latest WHERE restricted`;
 const finalRejection=(alias:string)=>`(${alias}.status='rejected' AND COALESCE(${alias}.settlement->>'finalized','true')='true')`;
-const unapproved=`(${needsReview('c')} OR ${needsReview('historical')})`;
-const assignedReviewer=(viewer:string,ignoreAssignments=false)=>`(NOT EXISTS(SELECT 1 FROM disabled_accounts disabled WHERE disabled."userId"=${viewer}) AND (
-  EXISTS(SELECT 1 FROM moderation_votes v WHERE v."caseId"=COALESCE(historical.id,c.id) AND v.round=COALESCE(historical.round,c.round) AND v."userId"=${viewer})
-  OR ${ignoreAssignments?'FALSE':`EXISTS(SELECT 1 FROM moderation_assignments a WHERE a."caseId"=COALESCE(historical.id,c.id)
-  AND a.round=COALESCE(historical.round,c.round) AND a."userId"=${viewer}
+const assignedReviewer=(alias:string,viewer:string,ignoreAssignments=false)=>`(NOT EXISTS(SELECT 1 FROM disabled_accounts disabled WHERE disabled."userId"=${viewer}) AND (
+  EXISTS(SELECT 1 FROM moderation_votes v WHERE v."caseId"=${alias}.id AND v.round=${alias}.round AND v."userId"=${viewer})
+  OR ${ignoreAssignments?'FALSE':`EXISTS(SELECT 1 FROM moderation_assignments a WHERE a."caseId"=${alias}.id
+  AND a.round=${alias}.round AND a."userId"=${viewer}
   AND ${assignmentValidSql('a',`'${new Date().toISOString()}'`)})`}))`;
+const unreadableCase=(alias:string,viewer:string,ignoreAssignments=false)=>`(${restrictedCaseSql(alias)}
+  AND (${viewer}::text IS NULL OR ${alias}."authorId"<>${viewer})
+  AND (${finalRejection(alias)} OR NOT ${assignedReviewer(alias,viewer,ignoreAssignments)}))`;
 /** Used before text matching, so search cannot probe the contents of restricted records. */
-export async function moderationReadSql(store:Store,alias:string,userId=moderationViewer()):Promise<string>{
+export async function moderationReadSql(store:Store,alias:string,userId=moderationViewer(),source:'message'|'case'='message'):Promise<string>{
   if(!/^[a-z_]+$/.test(alias))throw new Error('无效的查询别名');
   if(!await hasModerationTables(store)||!(await moderationPolicy(store)).enabled)return 'TRUE';
   const viewer=userId?`'${userId.replaceAll("'","''")}'`:'NULL';
-  return `NOT EXISTS(WITH RECURSIVE dependencies(root,id,revision) AS (SELECT ${alias}.id,${alias}.id,(${alias}.body::jsonb->>'revision')::integer UNION ${dependencyStep})
-    SELECT 1 FROM dependencies d ${restrictedCase} WHERE (${finalRejection('c')} OR ${finalRejection('historical')} OR ${unapproved} AND NOT ${assignedReviewer(viewer)}) AND (${viewer}::text IS NULL OR c."authorId"<>${viewer}))`;
+  const messageId=source==='case'?`${alias}."messageId"`:`${alias}.id`;
+  const revision=source==='case'?`${alias}.revision`:`(${alias}.body::jsonb->>'revision')::integer`;
+  return `NOT EXISTS(WITH RECURSIVE dependencies(root,id,revision) AS (SELECT ${messageId},${messageId},${revision} UNION ${dependencyStep})
+    SELECT 1 FROM dependencies d ${restrictedCase} WHERE ${unreadableCase('c',viewer)} OR ${unreadableCase('historical',viewer)})`;
 }
 export async function inaccessibleMessages(store:Store,ids:string[],userId=moderationViewer()):Promise<Set<string>> {
   const blocked=await inaccessibleReferences(store,ids.map(id=>({id})),userId);
@@ -42,7 +52,7 @@ export async function inaccessibleReferences(store:Store,refs:Array<{id:string;r
   const rows=await store.db.prepare(`WITH RECURSIVE dependencies(root,id,revision) AS (
     SELECT i.key,i.id,COALESCE(i.revision,(m.body::jsonb->>'revision')::integer) FROM jsonb_to_recordset($1::jsonb) AS i(key text,id text,revision integer) JOIN messages m ON m.id=i.id
     UNION ${dependencyStep}
-  ) SELECT DISTINCT d.root FROM dependencies d ${restrictedCase} WHERE (${finalRejection('c')} OR ${finalRejection('historical')} OR ${unapproved} AND NOT ${assignedReviewer('$2',ignoreAssignments)}) AND ($2::text IS NULL OR c."authorId"<>$2)`)
+  ) SELECT DISTINCT d.root FROM dependencies d ${restrictedCase} WHERE ${unreadableCase('c','$2',ignoreAssignments)} OR ${unreadableCase('historical','$2',ignoreAssignments)}`)
     .all<{root:string}>(JSON.stringify(refs.map(r=>({...r,key:referenceKey(r.id,r.revision)}))),userId??null);
   return new Set(rows.map(r=>r.root));
 }
@@ -56,7 +66,7 @@ export async function assertReferenceAllowed(store:Store,reference:import('@gong
   for(const ref of dependencies){
     const rejected=await store.db.prepare(`WITH RECURSIVE dependencies(root,id,revision) AS (
       SELECT m.id,m.id,COALESCE($2::integer,(m.body::jsonb->>'revision')::integer) FROM messages m WHERE m.id=$1 UNION ${dependencyStep}
-    ) SELECT 1 FROM dependencies d ${restrictedCase} WHERE c.status IN ('rejected','appeal') OR historical.status IN ('rejected','appeal') LIMIT 1`).get(ref.messageId,ref.revision??null);
+    ) SELECT 1 FROM dependencies d ${restrictedCase} WHERE ${restrictedCaseSql('c')} OR ${restrictedCaseSql('historical')} LIMIT 1`).get(ref.messageId,ref.revision??null);
     if(rejected)throw new DomainError('审核不通过的消息不能作为来源或目标，请从审核入口申请复核',409,'REJECTED_REFERENCE');
     await assertMessageReadable(store,ref.messageId,userId,ref.revision);
   }

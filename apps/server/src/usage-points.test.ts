@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { afterEach, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { replayArchive } from '@gonglun/core';
@@ -7,7 +8,7 @@ import { nextUsageRefresh, refreshUsagePoints, updateUsagePoints, usageDay } fro
 afterEach(async () => { vi.restoreAllMocks(); await cleanupTestDatabases(); });
 async function setup() {
   const app = await createTestApp({ initialGrant: 0 }), agent = request.agent(app);
-  const registered = await agent.post('/api/register').send({ name: '计时测试', password: 'password' });
+  const registered = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  name: '计时测试', password: 'password' });
   expect(registered.status, registered.text).toBe(201);
   return { app, agent, store: app.store, session: registered.body, userId: registered.body.user.id as string };
 }

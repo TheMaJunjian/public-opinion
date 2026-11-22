@@ -1,7 +1,8 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import {randomUUID} from 'node:crypto';
 import request from 'supertest';
 import {afterEach,expect,it} from 'vitest';
-import {createTestApp,cleanupTestDatabases,testInvitation} from './test-database.js';
+import {createTestApp,cleanupTestDatabases} from './test-database.js';
 import {Mutation} from './db.js';
 import {assignmentRecord,processReviewAssignments} from './review-assignments.js';
 import {recordNotifications} from './notifications.js';
@@ -12,7 +13,7 @@ async function setup(){
   const app=await createTestApp({moderation:true});
   const users=[];
   for(const name of ['author','first','second','observer']){
-    const agent=request.agent(app),response=await agent.post('/api/register').send({name,password:'password',inviteCode:await testInvitation(app)});
+    const agent=request.agent(app),response=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name,password:'password'});
     expect(response.status,response.text).toBe(201);users.push({agent,id:response.body.user.id,csrf:response.body.csrf});
   }
   const [author,first,second,observer]=users as [typeof users[number],typeof users[number],typeof users[number],typeof users[number]];

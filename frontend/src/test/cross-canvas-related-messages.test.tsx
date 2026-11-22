@@ -1,7 +1,7 @@
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import CrossCanvasRelatedMessages from '../components/CrossCanvasRelatedMessages';
-import { deriveCrossCanvasRelations } from '../utils/crossCanvasRelations';
+import { deriveCrossCanvasRelations, filterCrossCanvasRelations } from '../utils/crossCanvasRelations';
 import type { DemoEdge } from '../utils/modelBridge';
 import { loadRelatedTraceContext } from '../utils/relatedTraceContext';
 import type { Message, Relation } from '../types';
@@ -29,15 +29,25 @@ it.each(['agree', 'disagree'] as const)('does not add a separate related entry f
   expect(index([edge(type, 'vote', 'anon:vote')], ['target']).size).toBe(0);
 });
 
-it('deduplicates fragments and targets while retaining missing connections beside a complete local edge', () => {
+it('deduplicates fragments and omits an entire record when any of its edges is drawn', () => {
   const local = edge('reference', 'relation', 'source', 'local');
   const remote = edge('reference', 'relation', 'source', 'remote');
   const duplicate = { ...remote, id: 'fragment' };
-  const groups = index([local, remote, duplicate], ['source', 'local'], [local]);
-  expect(groups.get('source')?.outgoing).toEqual({ '引用': ['relation'] });
-  expect(groups.has('local')).toBe(false);
+  expect(index([local, remote, duplicate], ['source', 'local'], [local]).size).toBe(0);
+  expect(index([remote, duplicate], ['source'], []).get('source')?.outgoing).toEqual({ '引用': ['relation'] });
   expect(index([edge('reference')], ['source', 'target'], []).get('target')?.incoming).toEqual({ '引用': ['relation'] });
   expect(index([edge('agree'), edge('classify'), edge('join' as DemoEdge['relationType']), edge('reference', 'anonymous', 'anon:source')], ['source', 'target']).size).toBe(0);
+});
+
+it('excludes shown records and actual summary members while retaining missing records of the same type', () => {
+  const edges = [edge('reply', 'visible'), edge('agree', 'summarized'), edge('agree', 'outside')];
+  const groups = deriveCrossCanvasRelations({ edges, visibleMessageIds: new Set(['target', 'visible']),
+    renderedEdges: [], representedRecordIds: new Set(['summarized']) });
+  expect(groups.get('target')).toEqual({ outgoing: {}, incoming: { '赞同': ['outside'] } });
+
+  const source = index(edges, ['target'], []).get('target');
+  expect(filterCrossCanvasRelations(source, new Set(['visible', 'summarized']))).toEqual(groups.get('target'));
+  expect(filterCrossCanvasRelations(source, new Set(['visible', 'summarized', 'outside']))).toBeUndefined();
 });
 
 it('opens a separate popup without expanding the card, groups directions and opens the selected relation', () => {
@@ -56,8 +66,10 @@ it('opens a separate popup without expanding the card, groups directions and ope
   expect(within(view.container).queryByRole('group')).toBeNull();
   const outgoing = within(view.getByRole('group', { name: '发出的关联' }));
   const incoming = within(view.getByRole('group', { name: '指向本消息的关联' }));
-  expect(outgoing.getByRole('button', { name: '选择相关引用消息' })).toHaveTextContent('【引用】 out');
-  expect(incoming.getByRole('button', { name: '选择相关回复消息' })).toHaveTextContent('【回复】 in');
+  expect(outgoing.getByRole('button', { name: '引用（1）' })).toHaveAttribute('aria-expanded', 'true');
+  expect(outgoing.getByRole('button', { name: '选择相关引用消息' })).toHaveTextContent('out');
+  expect(incoming.getByRole('button', { name: '回复（1）' })).toHaveAttribute('aria-expanded', 'true');
+  expect(incoming.getByRole('button', { name: '选择相关回复消息' })).toHaveTextContent('in');
   fireEvent.click(outgoing.getByRole('button', { name: '查看' }));
   expect(open).toHaveBeenCalledWith('out');
   expect(view.queryByRole('dialog')).toBeNull();
@@ -97,7 +109,7 @@ it('selects the complete related message instead of its type or relation part', 
   const view = render(<CrossCanvasRelatedMessages {...props} />);
   fireEvent.click(view.getByRole('button', { name: /其他相关消息：1/ }));
   const entry = view.getByRole('button', { name: '选择相关回复消息' });
-  fireEvent.click(within(entry).getByText('【回复】'));
+  fireEvent.click(within(entry).getByText('reply'));
   expect(selection.mock.calls[0][0].detail.reference).toEqual({ messageId: 'reply', revision: 4 });
   fireEvent.keyDown(entry, { key: 'Enter' });
   expect(selection.mock.calls[1][0].detail.reference).toEqual({ messageId: 'reply', revision: 4 });
@@ -167,11 +179,35 @@ it('closes from its button, Escape or an outside click and keeps long lists insi
   expect(view.queryByRole('dialog')).toBeNull(); expect(toggle).toHaveAttribute('aria-expanded', 'false');
 });
 
-it('opens and highlights a requested summarized record past the first page without scrolling the canvas',async()=>{
+it('folds and pages each relation type independently within its direction', () => {
+  const outgoing = {
+    '回复': Array.from({ length: 6 }, (_, index) => `reply-${index}`),
+    '引用': Array.from({ length: 6 }, (_, index) => `ref-${index}`),
+  };
+  const view = render(<CrossCanvasRelatedMessages messages={new Map()}
+    groups={{ outgoing, incoming: { '回复': ['received'] } }} />);
+  fireEvent.click(view.getByRole('button', { name: /其他相关消息：13/ }));
+  const sent = within(view.getByRole('group', { name: '发出的关联' }));
+  const fold = sent.getByRole('button', { name: '回复（6）' });
+  fireEvent.click(fold);
+  expect(fold).toHaveAttribute('aria-expanded', 'false');
+  expect(sent.queryByText('reply-0')).toBeNull();
+  expect(view.getByText('received')).toBeVisible();
+  fireEvent.click(sent.getByRole('button', { name: '显示更多相关消息' }));
+  expect(sent.getByText('ref-5')).toBeVisible();
+  fireEvent.click(fold);
+  expect(sent.getByText('reply-0')).toBeVisible();
+  expect(sent.queryByText('reply-5')).toBeNull();
+});
+
+it('opens the folded type and highlights a requested record past the first page without scrolling the canvas',async()=>{
   const ids=Array.from({length:12},(_,index)=>`summary-${index}`),onLocated=vi.fn();
   const view=render(<CrossCanvasRelatedMessages messages={new Map()} groups={{outgoing:{},incoming:{'回复':ids}}}/>);
   const trigger=view.getByRole('button',{name:/其他相关消息：12/});
   const native=vi.spyOn(HTMLElement.prototype,'scrollIntoView');
+  fireEvent.click(trigger);
+  fireEvent.click(view.getByRole('button', { name: '回复（12）' }));
+  fireEvent.click(view.getByRole('button', { name: '关闭其他相关消息' }));
   const detail:RelatedMessageLocation={messageId:'summary-10',onLocated};
   act(()=>trigger.dispatchEvent(new CustomEvent(LOCATE_RELATED_MESSAGE,{detail})));
   const popup=view.getByRole('dialog'),row=popup.querySelector('[data-related-relation-id="summary-10"]');

@@ -1,4 +1,4 @@
-import { testInvitation } from './test-database.js';
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import {withTestCommandContributions} from './test-database.js';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
@@ -12,7 +12,7 @@ async function setup() {
   const app = await createTestApp(); apps.push(app);
   const actors = [];
   for (const username of ['原作者', '修订者', '判定者', '另一判定者']) {
-    const agent = request.agent(app), response = await agent.post('/api/register').send({inviteCode:await testInvitation(app), username, password: 'test-password-123' });
+    const agent = request.agent(app), response = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, username, password: 'test-password-123' });
     expect(response.status, response.text).toBe(201);
     const post = async (path: string, body: object = {}) => {
       const sent = await agent.post(`/api/ui${path}`).set('x-csrf-token', response.body.csrf).set('x-request-id', randomUUID()).send(withTestCommandContributions(path,body as Record<string,unknown>));

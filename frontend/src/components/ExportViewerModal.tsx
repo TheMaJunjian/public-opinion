@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ExportData } from '../api/client';
 import { validateExportForViewing,prepareExportForViewing } from '../utils/exportArchive';
-import { inheritExportCacheReference, loadCachedExport, loadCachedNativeExport, loadLastExport, loadLastExportPreview, loadReferencedExport, loadExportNavigation, saveLastExport, type ExportCacheReference } from '../utils/exportViewerCache';
+import { inheritExportCacheReference, loadCachedExport, loadCachedNativeExport, loadLastExport, loadLastExportPreview, loadReferencedExport, loadExportNavigation, openFolderMeetingExport, saveLastExport, type ExportCacheReference, type ExportNavigation } from '../utils/exportViewerCache';
 import { createExportViewerState } from '../utils/exportViewerSession';
 import { isZhihuViewingData } from '../utils/zhihuArchive';
 import { canLinkZhihuDirectory, chooseZhihuDirectory, readZhihuDirectory, rememberZhihuDirectory, type LinkedDirectory } from '../utils/zhihuDirectory';
@@ -15,6 +15,8 @@ import OfflineViewerStatus from './OfflineViewerStatus';
 import { conversionFailure } from '@gonglun/core';
 import { readViewerFile } from '../utils/readViewerFile';
 import { createLocalMessageFile } from '../utils/localMessageFile';
+import { handoffMeetingDirectory } from '../utils/meetingDirectoryHandoff';
+import MeetingFolderDialog from './MeetingFolderDialog';
 
 export { validateExportForViewing } from '../utils/exportArchive';
 
@@ -76,6 +78,25 @@ export default function ExportViewerModal({ open, onClose }: Props) {
     return () => { cancelled = true; fileRead.current?.abort(); cancelAnimationFrame(frame); cancelAnimationFrame(openingFrame.current); readingGeneration.current += 1; };
   }, [open]);
 
+  const enterViewer = (data: ExportData, navigation: ExportNavigation | null, directory?: FileSystemDirectoryHandle) => {
+    window.dispatchEvent(new Event('prepare-export-viewer'));
+    const state = createExportViewerState(data, navigation);
+    if (directory && data.meeting && state.viewerInstanceKey) handoffMeetingDirectory(state.viewerInstanceKey, data.meeting.id, directory);
+    navigate('/viewer', { state, replace: true });
+    onClose();
+  };
+
+  const openFolderMeeting = async (start: ExportData, directory: FileSystemDirectoryHandle, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
+    const generation = ++readingGeneration.current;
+    const cached = await openFolderMeetingExport(start);
+    signal?.throwIfAborted();
+    const data = inheritExportCacheReference((await prepareExportForViewing(cached)).data, cached);
+    const navigation = await loadExportNavigation(data).catch(() => null);
+    signal?.throwIfAborted();
+    if (generation === readingGeneration.current) enterViewer(data, navigation, directory);
+  };
+
   const openData = (data: ExportData | undefined, fromCache = false, reference?: ExportCacheReference) => {
     if (opening) return;
     const generation = ++readingGeneration.current;
@@ -100,9 +121,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
         })().then(async openedData => {
           const navigation = fromCache ? await loadExportNavigation(openedData).catch(() => null) : null;
           if (generation !== readingGeneration.current) return;
-          window.dispatchEvent(new Event('prepare-export-viewer'));
-          navigate('/viewer', { state: createExportViewerState(openedData, navigation), replace: true });
-          onClose();
+          enterViewer(openedData, navigation);
         }).catch(error => {
           if (generation !== readingGeneration.current) return;
           setError(`打开阅览文件失败\n${conversionFailure(error,'unconfirmed','打开未完成，原 JSON 文件未修改；缓存保存结果无法确认。').message}`);
@@ -206,6 +225,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
           </div>
           <button type="button" disabled={opening || processing} onClick={() => openData(createLocalMessageFile())}
             style={{ ...dialogStyles.button, width: '100%' }}>新建本地消息文件</button>
+          <MeetingFolderDialog onOpen={openFolderMeeting} disabled={opening || processing} />
 
           {lastExport && (
             <button disabled={opening} onClick={() => openData(lastExport.data, true, lastExport.reference)} style={{

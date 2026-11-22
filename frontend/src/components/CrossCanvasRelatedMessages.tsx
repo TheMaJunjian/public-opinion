@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type SyntheticEvent } from 'react';
+import { useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type SyntheticEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { CrossCanvasRelationGroups } from '../utils/crossCanvasRelations';
 import type { DemoMessage, UnitSelection } from '../utils/modelBridge';
@@ -14,7 +14,10 @@ const stopControlPropagation = (event: SyntheticEvent) => {
   if (event.target instanceof Element && event.target.closest('button,[data-message-reference]')) event.stopPropagation();
 };
 
-export default function CrossCanvasRelatedMessages({ groups, messages, selectedUnits, highlightedMessageIds, onView, hiddenRelationIds, summarizedRelationIds, onToggleRelationVisibility, triggerLabel, hideTriggerText, triggerStyle, triggerClassName, onExpandedChange }: {
+const pageSize = 5;
+const initialSection = { open: true, limit: pageSize };
+
+export default function CrossCanvasRelatedMessages({ groups, messages, selectedUnits, highlightedMessageIds, onView, hiddenRelationIds, summarizedRelationIds, onToggleRelationVisibility, summaryLabel, triggerStyle, triggerClassName, onExpandedChange }: {
   groups?: CrossCanvasRelationGroups;
   messages: ReadonlyMap<string, DemoMessage>;
   selectedUnits?: readonly UnitSelection[];
@@ -23,9 +26,8 @@ export default function CrossCanvasRelatedMessages({ groups, messages, selectedU
   hiddenRelationIds?: ReadonlySet<string>;
   summarizedRelationIds?: ReadonlySet<string>;
   onToggleRelationVisibility?: (messageId: string) => void;
-  triggerLabel?: string;
-  /** An SVG label can supply the visible text and use this transparent hit area. */
-  hideTriggerText?: boolean;
+  /** An SVG summary supplies the visible trigger text and the title for its records. */
+  summaryLabel?: string;
   triggerStyle?: CSSProperties;
   triggerClassName?: string;
   onExpandedChange?: (expanded: boolean) => void;
@@ -34,7 +36,7 @@ export default function CrossCanvasRelatedMessages({ groups, messages, selectedU
   const [expanded, setExpanded] = useState(false);
   const expandedChangeRef = useRef(onExpandedChange);
   expandedChangeRef.current = onExpandedChange;
-  const [limit, setLimit] = useState(5);
+  const [sectionStates, setSectionStates] = useState<Record<string, typeof initialSection>>({});
   const triggerRef = useRef<HTMLButtonElement>(null), popupRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
   const [location, setLocation] = useState<RelatedMessageLocation | null>(null);
@@ -42,35 +44,41 @@ export default function CrossCanvasRelatedMessages({ groups, messages, selectedU
   const pendingLocation = useRef<RelatedMessageLocation | null>(null);
   const popupId = useId();
   const [position, setPosition] = useState({ left: 8, top: 8 });
-  const directions = (['outgoing', 'incoming'] as const).map(direction => {
+  const directions = useMemo(() => (['outgoing', 'incoming'] as const).map(direction => {
     const seen = new Set<string>();
-    const rows = Object.entries(groups?.[direction] ?? {}).flatMap(([type, ids]) => ids.flatMap(id => {
-      if (seen.has(id)) return [];
-      seen.add(id);
-      return [{ id, type }];
-    }));
-    return { direction, rows };
-  });
-  const count = new Set(directions.flatMap(group => group.rows.map(row => row.id))).size;
-  const recordKey = JSON.stringify(directions.map(group => group.rows.map(row => row.id)));
+    const sections = Object.entries(groups?.[direction] ?? {}).map(([type, records]) => {
+      const ids = records.filter(id => {
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+      return { type, key: `${direction}:${type}`, ids };
+    }).filter(section => section.ids.length);
+    return { direction, sections };
+  }), [groups]);
+  const recordIds = new Set(directions.flatMap(group => group.sections.flatMap(section => section.ids)));
+  const count = recordIds.size;
+  const title = summaryLabel ?? `其他相关消息：${count}`;
   const popupOpen = expanded && count > 0;
   useLayoutEffect(() => {
     const trigger = triggerRef.current;
     if (!trigger) return;
     const locate = (event: Event) => {
       const detail = (event as CustomEvent<RelatedMessageLocation>).detail;
-      const indexes = (JSON.parse(recordKey) as string[][]).map(ids => ids.indexOf(detail.messageId));
-      const index = Math.max(...indexes);
-      if (index < 0) return;
+      const section = directions.flatMap(group => group.sections).find(group => group.ids.includes(detail.messageId));
+      if (!section) return;
       detail.handled = true;
       pendingLocation.current?.onLocated(null);
       pendingLocation.current = detail;
-      setLimit(previous => Math.max(previous, Math.ceil((index + 1) / 5) * 5));
+      const needed = Math.ceil((section.ids.indexOf(detail.messageId) + 1) / pageSize) * pageSize;
+      setSectionStates(previous => ({ ...previous, [section.key]: {
+        open: true, limit: Math.max(previous[section.key]?.limit ?? pageSize, needed),
+      } }));
       setLocation(detail); setExpanded(true);
     };
     trigger.addEventListener(LOCATE_RELATED_MESSAGE, locate);
     return () => trigger.removeEventListener(LOCATE_RELATED_MESSAGE, locate);
-  }, [recordKey]);
+  }, [directions]);
   useLayoutEffect(() => () => { pendingLocation.current?.onLocated(null); pendingLocation.current = null; }, []);
   useLayoutEffect(() => {
     expandedChangeRef.current?.(popupOpen);
@@ -137,17 +145,39 @@ export default function CrossCanvasRelatedMessages({ groups, messages, selectedU
       location.onLocated(row);
     });
     return () => cancelAnimationFrame(frame);
-  }, [popupOpen, location, limit, position]);
+  }, [popupOpen, location, sectionStates, position]);
   if (!count) return null;
-  return <div data-cross-canvas-related-messages style={{ marginTop: hideTriggerText ? 0 : 5, fontSize: 11, color: 'var(--ink-a5b4fc)' }}
+  const renderRow = (id: string, type: string) => {
+    const message = messages.get(id);
+    const reference = { messageId: id, revision: message?.revision };
+    return <div key={id} data-related-relation-id={id} data-view-target={highlightedMessageIds?.has(id) || location?.messageId === id || undefined}
+      style={{ border: '1px solid var(--line-373c70)', borderRadius: 4, padding: '2px 5px', overflowWrap: 'anywhere' }}>
+      <MessageElement reference={reference} selected={selectedUnits?.some(unit => isWholeMessageSelection(unit, id))} label={`相关${type}消息`}>
+        <span style={{ fontFamily: 'monospace' }}>{id}</span>
+      </MessageElement>
+      <MessageDisplayMarker messageId={id} compact />
+      <span data-related-relation-actions style={{ display: 'inline-flex', alignItems: 'center', gap: 12, marginLeft: 6 }}>
+        {(summarizedRelationIds?.has(id) || hiddenRelationIds?.has(id)) && (onToggleRelationVisibility
+          ? <button type="button" data-summarized-relation={id} aria-label={`${hiddenRelationIds?.has(id) ? '显示' : '隐藏'}原始${type}关系 ${id}`}
+              aria-pressed={!hiddenRelationIds?.has(id)} onClick={() => onToggleRelationVisibility(id)}
+              style={{ color: 'var(--ink-94a3b8)', background: 'none', border: 0, cursor: 'pointer', fontSize: 10, padding: 0 }}>
+              汇 · {hiddenRelationIds?.has(id) ? '隐藏' : '显示'}
+            </button>
+          : <span data-summarized-relation={id} style={{ color: 'var(--ink-94a3b8)', fontSize: 10 }}>汇 · {hiddenRelationIds?.has(id) ? '隐藏' : '显示'}</span>)}
+        <button type="button" onClick={() => { setExpanded(false); onView?.(id); }} title={`查看${type}消息 ${id} 的关联上下文`}
+          style={{ color: 'var(--ink-a5b4fc)', background: 'none', border: 0, cursor: 'pointer', fontSize: 10 }}>查看</button>
+      </span>
+    </div>;
+  };
+  return <div data-cross-canvas-related-messages style={{ marginTop: summaryLabel ? 0 : 5, fontSize: 11, color: 'var(--ink-a5b4fc)' }}
     onMouseDown={stopControlPropagation} onMouseUp={stopControlPropagation}
     onClick={stopControlPropagation} onDoubleClick={stopControlPropagation}>
-    <button ref={triggerRef} type="button" className={triggerClassName} aria-label={hideTriggerText ? triggerLabel : undefined}
-      data-related-messages-trigger="true" data-jump-msgids={directions.flatMap(group => group.rows.map(row => row.id)).join(' ')} data-rel-overlay="true" aria-expanded={expanded} aria-haspopup="dialog" aria-controls={expanded ? popupId : undefined} onClick={() => setExpanded(value => !value)}
+    <button ref={triggerRef} type="button" className={triggerClassName} aria-label={summaryLabel}
+      data-related-messages-trigger="true" data-jump-msgids={[...recordIds].join(' ')} data-rel-overlay="true" aria-expanded={expanded} aria-haspopup="dialog" aria-controls={expanded ? popupId : undefined} onClick={() => setExpanded(value => !value)}
       style={{ color: 'inherit', background: 'none', border: 0, cursor: 'pointer', padding: 0, fontSize: 'inherit', ...triggerStyle }}>
-      {!hideTriggerText && <>{expanded ? '▾' : '▸'} {triggerLabel ?? `其他相关消息：${count}`}</>}
+      {!summaryLabel && <>{expanded ? '▾' : '▸'} {title}</>}
     </button>
-    {expanded && createPortal(<div ref={popupRef} id={popupId} role="dialog" tabIndex={-1} aria-label={`其他相关消息：${count}`} data-related-messages-popup
+    {expanded && createPortal(<div ref={popupRef} id={popupId} role="dialog" tabIndex={-1} aria-label={title} data-related-messages-popup
       onMouseDown={event => event.stopPropagation()} onMouseUp={event => event.stopPropagation()}
       onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
       onKeyDown={event => { if (!(event.target instanceof Element && event.target.closest('[data-display-hint-mode]'))) event.stopPropagation(); }}
@@ -155,40 +185,33 @@ export default function CrossCanvasRelatedMessages({ groups, messages, selectedU
         maxHeight: 'min(420px, calc(100dvh - 16px))', display: 'flex', flexDirection: 'column', padding: '8px 10px', gap: 6,
         fontSize: 11, lineHeight: 1.6 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-        <span>其他相关消息：{count}</span>
-        <button type="button" className="workbench-popover-close" aria-label="关闭其他相关消息" onClick={() => { setExpanded(false); triggerRef.current?.focus({ preventScroll: true }); }}
+        <span>{title}</span>
+        <button type="button" className="workbench-popover-close" aria-label={summaryLabel ? '关闭汇总明细' : '关闭其他相关消息'} onClick={() => { setExpanded(false); triggerRef.current?.focus({ preventScroll: true }); }}
           style={{ color: 'var(--ink-bae6fd)', background: 'var(--surface-243448)', border: '1px solid var(--line-475569)', borderRadius: 3, cursor: 'pointer', fontSize: 10 }}>关闭</button>
       </div>
       <div style={{ color: 'var(--ink-94a3b8)', fontSize: 10 }}>点击消息选择整条，点击“查看”跳转。</div>
       <div ref={rowsRef} style={{ overflowY: 'auto', minHeight: 0, overscrollBehavior: 'contain', display: 'grid', gap: 6 }}>
-      {directions.filter(group => group.rows.length > 0).map(({ direction, rows }) => <div key={direction}
-      role="group" aria-label={direction === 'outgoing' ? '发出的关联' : '指向本消息的关联'}
-      style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
-      <div style={{ color: 'var(--ink-94a3b8)' }}>{direction === 'outgoing' ? '发出的关联' : '指向本消息的关联'}</div>
-      {rows.slice(0, limit).map(({ id, type }) => {
-        const message = messages.get(id);
-        const reference = { messageId: id, revision: message?.revision };
-        return <div key={id} data-related-relation-id={id} data-view-target={highlightedMessageIds?.has(id) || location?.messageId === id || undefined}
-          style={{ border: '1px solid var(--line-373c70)', borderRadius: 4, padding: '2px 5px', overflowWrap: 'anywhere' }}>
-          <MessageElement reference={reference} selected={selectedUnits?.some(unit => isWholeMessageSelection(unit, id))} label={`相关${type}消息`}>
-            <span style={{ color: 'var(--ink-94a3b8)' }}>【{type}】 </span><span style={{ fontFamily: 'monospace' }}>{id}</span>
-          </MessageElement>
-          <MessageDisplayMarker messageId={id} compact />
-          <span data-related-relation-actions style={{ display: 'inline-flex', alignItems: 'center', gap: 12, marginLeft: 6 }}>
-          {(summarizedRelationIds?.has(id) || hiddenRelationIds?.has(id)) && (onToggleRelationVisibility
-            ? <button type="button" data-summarized-relation={id} aria-label={`${hiddenRelationIds?.has(id) ? '显示' : '隐藏'}原始${type}关系 ${id}`}
-                aria-pressed={!hiddenRelationIds?.has(id)} onClick={() => onToggleRelationVisibility(id)}
-                style={{ color: 'var(--ink-94a3b8)', background: 'none', border: 0, cursor: 'pointer', fontSize: 10, padding: 0 }}>
-                汇 · {hiddenRelationIds?.has(id) ? '隐藏' : '显示'}
-              </button>
-            : <span data-summarized-relation={id} style={{ color: 'var(--ink-94a3b8)', fontSize: 10 }}>汇 · {hiddenRelationIds?.has(id) ? '隐藏' : '显示'}</span>)}
-          <button type="button" onClick={() => { setExpanded(false); onView?.(id); }} title={`追溯${type}消息 ${id}（距离 1）`}
-            style={{ color: 'var(--ink-a5b4fc)', background: 'none', border: 0, cursor: 'pointer', fontSize: 10 }}>查看</button>
-          </span>
-        </div>;
-      })}
-      {rows.length > limit && <button type="button" onClick={() => setLimit(value => value + 5)}>显示更多相关消息</button>}
-    </div>)}
+      {directions.filter(group => group.sections.length).map(({ direction, sections }) => <div key={direction}
+        role="group" aria-label={direction === 'outgoing' ? '发出的关联' : '指向本消息的关联'}
+        style={{ display: 'grid', gap: 4, marginTop: 4 }}>
+        {!summaryLabel && <div style={{ color: 'var(--ink-94a3b8)' }}>{direction === 'outgoing' ? '发出的关联' : '指向本消息的关联'}</div>}
+        {sections.map(({ type, key, ids }, index) => {
+          const state = sectionStates[key] ?? initialSection;
+          const sectionId = `${popupId}-${direction}-${index}`;
+          return <div key={key}>
+            {!summaryLabel && <button type="button" aria-expanded={state.open} aria-controls={state.open ? sectionId : undefined}
+              onClick={() => setSectionStates(previous => ({ ...previous, [key]: { ...state, open: !state.open } }))}
+              style={{ width: '100%', padding: '3px 0', textAlign: 'left', font: 'inherit', fontWeight: 600, color: 'inherit', background: 'none', border: 0, cursor: 'pointer' }}>
+              <span aria-hidden="true">{state.open ? '▾' : '▸'} </span>{type}（{ids.length}）
+            </button>}
+            {state.open && <div id={sectionId} style={{ display: 'grid', gap: 4 }}>
+              {ids.slice(0, state.limit).map(id => renderRow(id, type))}
+              {ids.length > state.limit && <button type="button"
+                onClick={() => setSectionStates(previous => ({ ...previous, [key]: { ...state, limit: state.limit + pageSize } }))}>显示更多相关消息</button>}
+            </div>}
+          </div>;
+        })}
+      </div>)}
       </div>
     </div>, portalTarget)}
   </div>;

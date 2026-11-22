@@ -71,7 +71,7 @@ describe('discussion graph with native cards and selection',()=>{
     expect(ui.container.querySelector('[data-directed-edge-label="reply-label"]')).not.toBeNull();
     expect(ui.container.querySelector('[data-graph-edge-layer="labels"] .graph-edge-label-text')).toHaveTextContent(label==='question'?'疑问':'回答');
     expect(ui.card('reply-label')).toBeNull();
-    fireEvent.click(screen.getByRole('button',{name:'关闭其他相关消息'}));
+    fireEvent.click(screen.getByRole('button',{name:'关闭汇总明细'}));
     fireEvent.click(control);
     await waitFor(()=>expect(ui.card('child')).toBeNull());
     expect(ui.card('root')).not.toBeNull();

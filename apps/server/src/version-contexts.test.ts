@@ -1,4 +1,4 @@
-import { testInvitation } from './test-database.js';
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import {afterEach,it,expect} from 'vitest';
 import request from 'supertest';
 import {randomUUID} from 'node:crypto';
@@ -15,12 +15,12 @@ const apps:Awaited<ReturnType<typeof createTestApp>>[]=[];
 afterEach(async()=>{for(const app of apps.splice(0))await app.close();await cleanupTestDatabases();});
 async function setup(receivedOriginal=false){
   const app=await createTestApp();apps.push(app);const agent=request.agent(app);
-  const session=(await agent.post('/api/register').send({username:'版本测试',password:'test-password-123'})).body;
+  const session=(await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, username:'版本测试',password:'test-password-123'})).body;
   const raw=(path:string,body:object)=>agent.post('/api/ui'+path).set('x-csrf-token',session.csrf).set('x-request-id',randomUUID()).send(body);
   const post=async(path:string,body:Record<string,unknown>)=>{const result=await raw(path,withTestCommandContributions(path,body));expect(result.status,result.text).toBe(201);return result.body;};
   let m;
   if(receivedOriginal){
-    const publisher=request.agent(app),owner=(await publisher.post('/api/register').send({inviteCode:await testInvitation(app),username:'原文发布者',password:'test-password-123'})).body;
+    const publisher=request.agent(app),owner=(await publisher.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, username:'原文发布者',password:'test-password-123'})).body;
     const sent=await publisher.post('/api/ui/messages').set('x-csrf-token',owner.csrf).set('x-request-id',randomUUID()).send(withTestCommandContributions('/messages',{content:'甲乙'}));
     expect(sent.status,sent.text).toBe(201);m=sent.body;
   }else m=await post('/messages',{content:'甲乙'});

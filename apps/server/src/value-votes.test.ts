@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import {withTestCommandContributions} from './test-database.js';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
@@ -12,7 +13,7 @@ afterEach(async () => { for (const app of apps.splice(0)) await app.close(); awa
 async function setup() {
   const app = await createTestApp(); apps.push(app);
   const agent = request.agent(app);
-  const registered = await agent.post('/api/register').send({ name: '投票者', password: 'a-good-password' });
+  const registered = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  name: '投票者', password: 'a-good-password' });
   expect(registered.status, registered.text).toBe(201);
   const session = registered.body;
   const post = async (path: string, body = {}, requestId = randomUUID()) => {
@@ -22,6 +23,24 @@ async function setup() {
   const message = await post('/messages', { content: '待仲裁的消息' });
   return { app, agent, session, post, message };
 }
+
+it.each([['TRUTH', 'TRUE'], ['VALUE', 'FALSE']] as const)('普通参与者可以向 %s 当前领先的一方继续投票', async (settlementType, vote) => {
+  const { app, post, message } = await setup();
+  const round = await post(`/messages/${message.id}/rounds`, { settlementType });
+  await post(`/rounds/${round.id}/votes`, { vote, amount: 3 });
+  const before = await roundView(app.store, round.id);
+  expect(before.weights[vote]).toBeGreaterThan(before.weights[vote === 'TRUE' ? 'FALSE' : 'TRUE']);
+
+  const participant = request.agent(app);
+  const registered = await participant.post('/api/register').send({
+    name: '另一位参与者', password: 'a-good-password', acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,
+  });
+  expect(registered.status, registered.text).toBe(201);
+  const result = await participant.post(`/api/ui/rounds/${round.id}/votes`).set('x-csrf-token', registered.body.csrf)
+    .set('x-request-id', randomUUID()).send({ vote, amount: 2 });
+  expect(result.status, result.text).toBe(201);
+  expect((await roundView(app.store, round.id)).weights[vote]).toBe(before.weights[vote] + 2);
+});
 
 it.each([['TRUE', 'recommend', 'pro'], ['FALSE', 'archive', 'con']] as const)(
   '价值仲裁 %s 直接保存 %s 消息，标注原消息，押注和重试只执行一次', async (vote, name, side) => {

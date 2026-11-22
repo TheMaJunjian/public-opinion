@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import request from 'supertest';
 import {afterEach,expect,it} from 'vitest';
 import {messageDisplayDependency,type Message} from '@gonglun/core';
@@ -5,7 +6,7 @@ import {Mutation,Store} from '../../server/src/db.js';
 import {enrollModeration,moderationCase} from '../../server/src/moderation.js';
 import {addReviewFunding} from '../../server/src/review-finances.js';
 import {assignmentRecord} from '../../server/src/review-assignments.js';
-import {cleanupTestDatabases,createTestApp,testDatabaseUrl,testInvitation} from '../../server/src/test-database.js';
+import {cleanupTestDatabases,createTestApp,testDatabaseUrl} from '../../server/src/test-database.js';
 import {financialFingerprint} from './financial-fingerprint.js';
 import {migrateReviewSelfStakes} from './review-self-stakes.js';
 
@@ -14,7 +15,7 @@ afterEach(cleanupTestDatabases);
 async function historicalDeposits(){
   const app=await createTestApp({moderation:true}),people=[];
   for(const name of ['old-author','old-challenger']){
-    const response=await request(app).post('/api/register').send({name,password:'password',inviteCode:await testInvitation(app)});
+    const response=await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name,password:'password'});
     expect(response.status,response.text).toBe(201);people.push(response.body.user.id as string);
   }
   const [author,challenger]=people as [string,string],targets:Message[]=[],appeals:Message[]=[];

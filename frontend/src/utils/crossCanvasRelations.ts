@@ -5,15 +5,36 @@ interface DeriveCrossCanvasRelationsInput {
   edges: DemoEdge[];
   visibleMessageIds: Set<string>;
   renderedEdges?: DemoEdge[];
+  /** Records shown by other presentations, including discussion summaries. */
+  representedRecordIds?: ReadonlySet<string>;
 }
 
 export interface CrossCanvasRelationGroups { outgoing: Record<string, string[]>; incoming: Record<string, string[]> }
 
+/** Precomputed candidates still need the exclusions for the canvas that displays them. */
+export function filterCrossCanvasRelations(groups: CrossCanvasRelationGroups | undefined, representedRecordIds: ReadonlySet<string>): CrossCanvasRelationGroups | undefined {
+  if (!groups || !representedRecordIds.size) return groups;
+  const result: CrossCanvasRelationGroups = { outgoing: {}, incoming: {} };
+  let hasRecords = false;
+  for (const direction of ['outgoing', 'incoming'] as const) {
+    for (const [type, ids] of Object.entries(groups[direction])) {
+      const missing = ids.filter(id => !representedRecordIds.has(id));
+      if (missing.length) {
+        result[direction][type] = missing;
+        hasRecords = true;
+      }
+    }
+  }
+  return hasRecords ? result : undefined;
+}
+
 /** Attach each missing directed connection to whichever endpoints this canvas displays. */
 export function deriveCrossCanvasRelations(input: DeriveCrossCanvasRelationsInput): Map<string, CrossCanvasRelationGroups> {
-  const { edges, visibleMessageIds, renderedEdges = edges } = input;
-  const completeEdges = new Set(renderedEdges.filter(edge =>
-    visibleMessageIds.has(edge.from.messageId) && visibleMessageIds.has(edge.to.messageId)).map(edge => edge.id));
+  const { edges, visibleMessageIds, representedRecordIds, renderedEdges = edges } = input;
+  // One visible edge represents the entire record, even when other targets of
+  // that record are outside this canvas.
+  const renderedRecordIds = new Set(renderedEdges.filter(edge =>
+    visibleMessageIds.has(edge.from.messageId) && visibleMessageIds.has(edge.to.messageId)).map(edge => edge.relationMessageId));
   const raw = new Map<string, { outgoing: Record<string, Set<string>>; incoming: Record<string, Set<string>> }>();
   for (const e of edges) {
     const presentation = getPresentationSpec(e.relationType);
@@ -21,7 +42,8 @@ export function deriveCrossCanvasRelations(input: DeriveCrossCanvasRelationsInpu
     // JOINs have their own membership-history controls.
     // A stance with a content source remains discoverable when its endpoints live in different scopes.
     if ((presentation.kind !== 'edge-label' && !stance) || String(e.relationType).toLowerCase() === 'join' || e.from.messageId.startsWith('anon:')) continue;
-    if (completeEdges.has(e.id)) continue;
+    if (renderedRecordIds.has(e.relationMessageId) || visibleMessageIds.has(e.relationMessageId)
+      || representedRecordIds?.has(e.relationMessageId)) continue;
     const fromVisible = visibleMessageIds.has(e.from.messageId);
     const toVisible = visibleMessageIds.has(e.to.messageId);
     const lbl = presentation.label;

@@ -7,6 +7,7 @@ import {placeMessageValueWager,placeWager} from './economy.js';
 import { messageDisplayDependency, reviewContextOf, reviewContextPart, sameReviewContext } from '@gonglun/core';
 import { hasModerationTables } from './moderation-schema.js';
 import { moderationPolicy } from './moderation.js';
+import { restrictedCurrentCasesSql } from './moderation-visibility.js';
 
 const whole = (ref: { revision?: number; partId?: string; memberId?: string; path?: unknown[]; range?: unknown }) =>
     ref.revision === undefined && !ref.partId && !ref.memberId && !ref.path?.length && !ref.range;
@@ -150,9 +151,10 @@ export async function reconcileOrganizationEffects(tx: Mutation) {
     const states = await statesFor(tx.store, [...new Set(actions.flatMap(action => [action.id, action.parentId]))]);
     const rejected = new Set(states.filter(state => state.suppressed).map(state => state.messageId));
     if(await hasModerationTables(tx.store)&&(await moderationPolicy(tx.store)).enabled){
-        const cases=await tx.store.db.prepare('SELECT DISTINCT ON ("messageId") "messageId",status FROM moderation_cases ORDER BY "messageId",revision DESC').all<{messageId:string;status:string}>();
-        for(const c of cases)if(['rejected','appeal'].includes(c.status))rejected.add(c.messageId);
-        for(const action of actions)if(cases.some(c=>c.messageId===action.memberId&&['rejected','appeal'].includes(c.status)))rejected.add(action.id);
+        const cases=await tx.store.db.prepare(restrictedCurrentCasesSql).all<{messageId:string}>();
+        const hidden=new Set(cases.map(c=>c.messageId));
+        for(const id of hidden)rejected.add(id);
+        for(const action of actions)if(hidden.has(action.memberId))rejected.add(action.id);
     }
     for (const row of rows) if (row.disabled) rejected.add(String(row.id));
     const resolved = resolveMemberships(actions, rejected, await retiredOrganizationIds(tx.store));

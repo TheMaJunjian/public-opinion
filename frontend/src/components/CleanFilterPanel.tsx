@@ -3,6 +3,7 @@
 
 import { useState, useRef, useEffect, useId } from 'react';
 import {dialogStyles} from './dialogStyles';
+import { useToolbarPopover } from '../hooks/useToolbarPopover';
 import type { CleanFilterRule } from '../types';
 import { CLEAN_FILTER_LABELS, CLEAN_MESSAGE_TYPES, CLEAN_CONTENT_TYPES, defaultCleanRule } from '../types';
 
@@ -68,6 +69,7 @@ export default function CleanFilterPanel({
   const [open, setOpen] = useState(false);
   const [addingKind, setAddingKind] = useState<CleanFilterRule['kind'] | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const popover = useToolbarPopover(open);
   const [tempRule, setTempRule] = useState<CleanFilterRule | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const editorId = useId();
@@ -141,7 +143,7 @@ export default function CleanFilterPanel({
       {/* 下拉面板 */}
       {open && (
         <div
-          role="dialog" aria-label="过滤器"
+          ref={popover} role="dialog" aria-label="过滤器"
           style={{
             position: 'absolute',
             top: '100%',

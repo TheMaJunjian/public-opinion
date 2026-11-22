@@ -1,5 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
 import {dialogStyles} from './dialogStyles';
+import {useToolbarPopover} from '../hooks/useToolbarPopover';
 
 import {normalizeHomeFilter,type HomeFilterMode,type HomeFilterSelection} from '../pages/workbench/model/homeFilter';
 export type {HomeFilterMode,HomeFilterSelection} from '../pages/workbench/model/homeFilter';
@@ -7,6 +8,7 @@ const scopes=[['all','全部'],['self','自发'],['related','与我相关'],['fo
 const statuses=[['all','全部'],['pending','待阅或有新提醒'],['confirmed','已阅且无新提醒']] as const;
 export default function HomeFilterPanel({mode,onChange}:{mode:HomeFilterMode|null;onChange:(mode:HomeFilterMode|null)=>void}) {
   const [open,setOpen]=useState(false),ref=useRef<HTMLDivElement>(null),selected=normalizeHomeFilter(mode);
+  const popover=useToolbarPopover(open);
   const active=selected.scope!=='all'||selected.status!=='all';
   useEffect(()=>{
     if(!open)return;
@@ -20,7 +22,7 @@ export default function HomeFilterPanel({mode,onChange}:{mode:HomeFilterMode|nul
     <button type="button" className="workbench-toolbar-action" data-filter-active={active || undefined} aria-expanded={open} onClick={()=>setOpen(value=>!value)}
       title={active?'主页过滤中':'主页：按消息范围和查看状态筛选'}
       style={{padding:'3px 9px',borderRadius:4,border:`1px solid ${active?'var(--line-22d3ee)':'var(--line-666)'}`,background:active?'var(--surface-087f8c)':'var(--surface-333)',color:'var(--ink-fff)',fontSize:12,cursor:'pointer'}}>主页</button>
-    {open&&<div role="dialog" aria-label="主页过滤" style={{...dialogStyles.panel,position:'absolute',top:'100%',right:0,marginTop:4,width:280,padding:12,zIndex:100,fontSize:12}}>
+    {open&&<div ref={popover} role="dialog" aria-label="主页过滤" style={{...dialogStyles.panel,position:'absolute',top:'100%',right:0,marginTop:4,width:280,padding:12,zIndex:100,fontSize:12}}>
       <fieldset style={{border:0,padding:0,margin:0}}><legend style={{marginBottom:8,color:'var(--ink-94a3b8)'}}>消息范围</legend>
         <div style={{display:'flex',flexWrap:'wrap',gap:10}}>{scopes.map(([value,label])=><label key={value} style={{cursor:'pointer'}}>
           <input type="radio" name="home-scope" checked={selected.scope===value} onChange={()=>update({scope:value})} /> {label}

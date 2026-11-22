@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import request from 'supertest';
 import {afterEach,expect,it} from 'vitest';
 import {Mutation,Store} from '../../server/src/db.js';
@@ -11,7 +12,7 @@ afterEach(cleanupTestDatabases);
 
 it('reopens provisional head-count conclusions through v43 without changing money, review rounds, paid outcomes or notifications',async()=>{
   const app=await createTestApp({moderation:true});
-  const registered=await request(app).post('/api/register').send({name:'review-author',password:'password'});
+  const registered=await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'review-author',password:'password'});
   expect(registered.status,registered.text).toBe(201);
   const cases=[];
   for(const state of ['approved','rejected','finalized','pending'] as const){

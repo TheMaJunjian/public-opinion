@@ -87,7 +87,7 @@ export function getExportCacheReference(data: ExportData): ExportCacheReference 
   return reference && durableViewCacheIds.has(reference.viewCacheId) ? { ...reference } : null;
 }
 
-class ArchiveConflictError extends Error {}
+export class ArchiveConflictError extends Error {}
 
 /** Zhihu projections are rebuilt on opening; cloning them again only increases memory and load time. */
 function readingSource(data: ExportData, sourceOnly = false): unknown {
@@ -259,6 +259,37 @@ export async function saveLastExport(data: ExportData, options: { immutable?: bo
     try { sessionStorage.setItem(LAST_EXPORT_KEY, memoryFallback(entry.data)); }
     catch { /* Keep the latest archive in memory instead of reopening stale data. */ }
   }
+}
+
+/** Rejoining a shared meeting must restore locally saved, unpublished speech.
+ * Concurrent first-time joins create a single revision for the existing edit CAS. */
+export async function openFolderMeetingExport(start: ExportData): Promise<ExportData> {
+  if (!start.meeting) throw new Error('请选择会议起始文件。');
+  const { id, baseHash } = start.meeting;
+  const archiveId = `folder-meeting:${id}:${baseHash}`;
+  const first = { archiveId, viewCacheId: crypto.randomUUID(), revision: crypto.randomUUID(), data: start };
+  let mismatched = false;
+  const existing = await withArchiveStore<CachedArchive | undefined>('readwrite', store => {
+    const read = store.get(archiveId);
+    read.onsuccess = () => {
+      const cached = read.result as CachedArchive | undefined;
+      if (cached && (cached.data?.meeting?.id !== id || cached.data.meeting.baseHash !== baseHash || !cached.viewCacheId || !cached.revision)) {
+        mismatched = true;
+        return;
+      }
+      if (!cached) {
+        store.put(first, archiveId);
+        store.put(nativeRevision(start, first.revision, first.viewCacheId), nativeVersionKey(archiveId));
+        store.put(archivePreview(first), previewKey(archiveId));
+      }
+      store.put({ archiveId }, LAST_ARCHIVE_POINTER);
+    };
+    return read;
+  });
+  if (mismatched) throw new Error('本机会议记录与共享会议不匹配，请检查阅览缓存。');
+  const entry = existing ?? first;
+  rememberInTab(entry, true);
+  return entry.data;
 }
 
 /** Resolve only after durable storage succeeds; failures do not replace active data. */

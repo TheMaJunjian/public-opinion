@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import {afterEach,expect,it} from 'vitest';
 import request from 'supertest';
 import {randomUUID} from 'node:crypto';
@@ -10,7 +11,7 @@ import {messageAuthorInvestment} from '../../../frontend/src/utils/messageAuthor
 afterEach(cleanupTestDatabases);
 it('拒绝文本和关系的零投入，接受真假、价值或同时投入，失败不扣费且重试不重复扣费',async()=>{
   const app=await createTestApp(),agent=request.agent(app);
-  const {body:session}=await agent.post('/api/register').send({name:'投入测试',password:'password'});
+  const {body:session}=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'投入测试',password:'password'});
   const post=(path:string,body:object)=>agent.post(path==='/native/messages'?'/api/messages':'/api/ui'+path).set('x-csrf-token',session.csrf).set('x-request-id',('requestId' in body?String(body.requestId):randomUUID())).send(body);
   const initial=await app.store.account(session.user.id),sequence=await app.store.latestSequence(),operating=await app.store.setting<number>('operating');
   expect((await post('/messages',{content:'不允许零投入',wager:0,recommendation:0})).status).toBe(400);
@@ -56,7 +57,7 @@ it('拒绝文本和关系的零投入，接受真假、价值或同时投入，�
 
 it('一条批量命令零投入时整批回滚，新建分类的加入消息也分别收费',async()=>{
   const app=await createTestApp(),agent=request.agent(app);
-  const {body:session}=await agent.post('/api/register').send({name:'批量投入',password:'password'});
+  const {body:session}=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'批量投入',password:'password'});
   const post=(path:string,body:object)=>agent.post(path==='/native/messages'?'/api/messages':'/api/ui'+path).set('x-csrf-token',session.csrf).set('x-request-id',('requestId' in body?String(body.requestId):randomUUID())).send(body);
   const before=await app.store.account(session.user.id),sequence=await app.store.latestSequence();
   const failed=await post('/commands',{requestId:randomUUID(),commands:[
@@ -79,7 +80,7 @@ it('一条批量命令零投入时整批回滚，新建分类的加入消息也�
 
 it.each(['root','classification'])('两条引用和一条文本只在分类中增加一条加入消息，各类按每条投入收费（%s）',async scope=>{
   const app=await createTestApp(),agent=request.agent(app);
-  const {body:session}=await agent.post('/api/register').send({name:'引用计费',password:'password'});
+  const {body:session}=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'引用计费',password:'password'});
   const post=(path:string,body:object)=>agent.post('/api/ui'+path).set('x-csrf-token',session.csrf).set('x-request-id',('requestId' in body?String(body.requestId):randomUUID())).send(body);
   const a=await post('/messages',{content:'目标甲',recommendation:1}),b=await post('/messages',{content:'目标乙',recommendation:1});
   const container=await post('/relations',{relationType:'CLASSIFY',payload:{content:'分类'},recommendation:1});
@@ -114,7 +115,7 @@ it.each(['root','classification'])('两条引用和一条文本只在分类中�
 
 it('新分类的多条加入共用投入配置，但每条扣款；余额不足时全部回滚',async()=>{
   const app=await createTestApp(),agent=request.agent(app);
-  const {body:session}=await agent.post('/api/register').send({name:'加入计费',password:'password'});
+  const {body:session}=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'加入计费',password:'password'});
   const post=(path:string,body:object)=>agent.post('/api/ui'+path).set('x-csrf-token',session.csrf).set('x-request-id',randomUUID()).send(body);
   const memberIds=[];
   for(const content of ['甲','乙','丙'])memberIds.push((await post('/messages',{content,recommendation:1})).body.id);

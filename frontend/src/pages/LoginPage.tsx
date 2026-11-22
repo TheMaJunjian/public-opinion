@@ -5,6 +5,9 @@ import PromptModal from '../components/PromptModal';
 import { dialogStyles } from '../components/dialogStyles';
 import { AutoAuthEntryContext } from '../context/AutoAuthEntryContext';
 import { authReturnPath } from '../utils/authReturnPath';
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
+import { ApiError } from '../api/client';
+import ParticipationAgreementField from '../components/ParticipationAgreementField';
 
 export default function LoginPage({ onClose, onRegister, onSuccess, closeText = '返回首页' }: {
   onClose?: () => void;
@@ -22,6 +25,8 @@ export default function LoginPage({ onClose, onRegister, onSuccess, closeText = 
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [agreementRequired, setAgreementRequired] = useState(false);
+  const [accepted, setAccepted] = useState(false);
   const close = useCallback(() => onClose ? onClose() : navigate('/', { replace: true }), [navigate, onClose]);
   useEffect(() => {
     if (suspended) return;
@@ -32,15 +37,20 @@ export default function LoginPage({ onClose, onRegister, onSuccess, closeText = 
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (loading || (agreementRequired && !accepted)) return;
     if (!username.trim() || !password) { setError('请填写与会者名和密码'); return; }
     setError('');
     setLoading(true);
     try {
-      await login(username.trim(), password);
+      await login(username.trim(), password, agreementRequired && accepted ? PARTICIPATION_AGREEMENT_VERSION : undefined);
       if (onSuccess) onSuccess();
       else navigate(authReturnPath(location.state), { replace: true });
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : '登录失败，请重试');
+      if (err instanceof ApiError && err.status === 428 && err.code === 'AGREEMENT_REQUIRED') {
+        setAgreementRequired(true);
+        setAccepted(false);
+        setError(accepted ? '参与协议版本已更新，请刷新页面后重新阅读。' : '');
+      } else setError(err instanceof Error ? err.message : '登录失败，请重试');
     } finally {
       setLoading(false);
     }
@@ -70,7 +80,8 @@ export default function LoginPage({ onClose, onRegister, onSuccess, closeText = 
               autoComplete="username"
               autoFocus
               value={username}
-              onChange={e => setUsername(e.target.value)}
+              disabled={loading}
+              onChange={e => { setUsername(e.target.value); setAgreementRequired(false); setAccepted(false); }}
               placeholder="请输入与会者名"
               className="auth-input"
             />
@@ -82,15 +93,17 @@ export default function LoginPage({ onClose, onRegister, onSuccess, closeText = 
               type="password"
               name="password"
               autoComplete="current-password"
+              disabled={loading}
               value={password}
               onChange={e => setPassword(e.target.value)}
               placeholder="请输入密码"
               className="auth-input"
             />
           </div>
+          {agreementRequired && <ParticipationAgreementField checked={accepted} onChange={setAccepted} />}
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || (agreementRequired && !accepted)}
             style={{ ...dialogStyles.primaryButton, padding: '9px 14px' }}
             className="w-full disabled:opacity-50 disabled:cursor-wait"
           >

@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
 import { Mutation, Store } from '../../server/src/db.js';
@@ -7,7 +8,7 @@ import { financialFingerprint } from './financial-fingerprint.js';
 afterEach(cleanupTestDatabases);
 it('升级旧账本时只补充历史余额缓存，保留账户和每笔旧流水，重新打开不会重复变更', async () => {
   const app = await createTestApp({ initialGrant: 0 }), store = app.store;
-  const { body: session } = await request(app).post('/api/register').send({ name: '旧版账目', password: 'password' });
+  const { body: session } = await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  name: '旧版账目', password: 'password' });
   await store.transaction(async () => {
     const tx = new Mutation(store), message = await tx.create('system', [{ id: 'body', type: 'text', text: '原发放' }]);
     for (let i = 0; i < 3; i++) await store.ledger(session.user.id, message.id, 1, 0, '使用公论计时奖励');

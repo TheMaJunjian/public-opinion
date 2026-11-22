@@ -17,7 +17,7 @@ import { projectStanceLayoutEdges } from '../utils/stanceLayout';
 import { isDiscussionType } from '../utils/discussionTypes';
 import DiscussionRegions from './graph/DiscussionRegions';
 import DiscussionSummaries from './graph/DiscussionSummaries';
-import { summarizeDiscussionEdges, mergeRelatedGroups } from '../utils/discussionSummaries';
+import { summarizeDiscussionEdges } from '../utils/discussionSummaries';
 import { GRAPH_EDGE_PATH_LAYER, GRAPH_EDGE_LABEL_LAYER } from '../utils/graphPresentationGeometry';
 import { computeDiscussionRegionTextStats } from '../utils/discussionRegionStats';
 import type { DiscussionRegionGeometry } from '../utils/discussionLayout';
@@ -67,7 +67,7 @@ import ReviewPanel from './ReviewPanel';
 import RoundHistory from './RoundHistory';
 import RelatedMessages from './RelatedMessages';
 import CrossCanvasRelatedMessages from './CrossCanvasRelatedMessages';
-import { deriveCrossCanvasRelations } from '../utils/crossCanvasRelations';
+import { deriveCrossCanvasRelations, filterCrossCanvasRelations, type CrossCanvasRelationGroups } from '../utils/crossCanvasRelations';
 import JoinRecordBadges from './JoinRecordBadges';
 import ComparisonPane from './ComparisonPane';
 import WorkbenchScrollViewport from './WorkbenchScrollViewport';
@@ -220,7 +220,7 @@ export interface GraphViewProps {
   /** Phase 5: Settlement entry highlight filter for SettlementPanel */
   settlementEntryHighlight?: { side?: 'PRO' | 'CON'; vote?: 'TRUE' | 'FALSE'; username?: string } | null;
   /** Cross-canvas directed relations grouped by direction and message type. */
-  crossCanvasRelations?: Map<string, { outgoing: Record<string, string[]>; incoming: Record<string, string[]> }>;
+  crossCanvasRelations?: Map<string, CrossCanvasRelationGroups>;
   /** 点击加入消息标签；incoming 查看消息的“加入”，outgoing 查看容器的“被加入” */
   onNavigateToMessage?: (messageId: string) => void;
   /** JOIN records grouped by their target message, used by the target filter badge. */
@@ -1045,20 +1045,54 @@ function GraphViewCanvas(props: GraphViewProps) {
   [visibleArrangeFrames, visibleGroupFrames, frameDepthMap]);
 
   const relatedCatalog = useMemo(() => new Map((props.relatedMessages ?? messages).map(message => [message.id, message])), [props.relatedMessages, messages]);
-  const relatedConnections = useMemo(() => props.relatedEdges ? deriveCrossCanvasRelations({
-    edges: props.relatedEdges,
-    visibleMessageIds: new Set([...visibleNormalIds.filter(id => !effectiveHideMessageIds.has(id)),
-      ...overlays.groupFrames.filter(frame => !effectiveHideMessageIds.has(frame.relMsgId)
-        && (!isTraceWindow || !['classify', 'summary'].includes(frame.relType) || traceExpandedFrameIds.has(frame.relMsgId))).map(frame => frame.relMsgId),
-      ...overlays.arrangeFrames.filter(frame => !effectiveHideMessageIds.has(frame.relMsgId)).map(frame => frame.relMsgId),
-      ...overlays.positionedEdges.map(positioned => positioned.edge.relationMessageId)]),
-    renderedEdges: overlays.positionedEdges.map(positioned => positioned.edge),
-  }) : crossCanvasRelations, [props.relatedEdges, visibleNormalIds, effectiveHideMessageIds, overlays, isTraceWindow, traceExpandedFrameIds, crossCanvasRelations]);
+  const relatedConnections = useMemo(() => {
+    if (!props.relatedEdges?.length && !crossCanvasRelations?.size) return;
+    // Use the whole displayed layer. Virtual mounting and scrolling do not change
+    // which records already have a presentation on this canvas.
+    const visibleIds = new Set(visibleNormalIds.filter(id => layout[id] && !effectiveHideMessageIds.has(id)
+      && !hiddenTargetIds.has(id) && !traceExpandedFrameIds.has(id)));
+    const visibleEdgeRecords = new Set(visibleEdges.map(edge => edge.relationMessageId));
+    const displayedFrame = (id: string) => !effectiveHideMessageIds.has(id) && !discussionHiddenIds.has(id)
+      && (!props.visibleMessageIds || props.visibleMessageIds.has(id) || visibleEdgeRecords.has(id));
+    for (const frame of overlays.groupFrames) {
+      if (displayedFrame(frame.relMsgId) && (!isTraceWindow || !['classify', 'summary'].includes(frame.relType)
+        || traceExpandedFrameIds.has(frame.relMsgId))) visibleIds.add(frame.relMsgId);
+    }
+    for (const frame of overlays.arrangeFrames) if (displayedFrame(frame.relMsgId)) visibleIds.add(frame.relMsgId);
+    const renderedEdges = overlays.positionedEdges.map(positioned => positioned.edge);
+    for (const edge of renderedEdges) visibleIds.add(edge.relationMessageId);
+    for (const id of visibleAnnotationIds) {
+      if (!visibleIds.has(id)) continue;
+      for (const badge of overlays.inlineBadgesByMsg.get(id) ?? []) {
+        for (const record of badge.relMsgIds ?? [badge.relMsgId]) visibleIds.add(record);
+      }
+      for (const group of overlays.tagDecorationsByMsg[id] ?? []) for (const record of group.relMsgIds) visibleIds.add(record);
+      for (const tag of overlays.tagsByRelMsgState.get(id) ?? []) visibleIds.add(tag.relMsgId);
+    }
+    for (const id of visibleDecorationIds) {
+      if (!visibleIds.has(id)) continue;
+      const votes = overlays.relDecByRelMsgState.get(id);
+      if (votes) for (const record of [...votes.agreeRelMsgIds, ...votes.disagreeRelMsgIds]) visibleIds.add(record);
+    }
+    for (const edge of edges) {
+      if (visibleIds.has(edge.to.messageId) && visibleDecorationIds.has(edge.to.messageId)
+        && overlays.decorationRectsState?.[`${edge.to.messageId}::${edge.relationType}`]) visibleIds.add(edge.relationMessageId);
+    }
+    if (props.relatedEdges) return deriveCrossCanvasRelations({ edges: props.relatedEdges, visibleMessageIds: visibleIds,
+      representedRecordIds: summaryProjection.hiddenRecordIds, renderedEdges });
+    const representedRecordIds = new Set([...visibleIds, ...summaryProjection.hiddenRecordIds]);
+    const filtered = new Map<string, CrossCanvasRelationGroups>();
+    for (const [id, groups] of crossCanvasRelations ?? []) {
+      const missing = filterCrossCanvasRelations(groups, representedRecordIds);
+      if (missing) filtered.set(id, missing);
+    }
+    return filtered;
+  }, [props.relatedEdges, props.visibleMessageIds, visibleNormalIds, layout, effectiveHideMessageIds, hiddenTargetIds, traceExpandedFrameIds,
+    visibleEdges, discussionHiddenIds, overlays, isTraceWindow, visibleAnnotationIds, visibleDecorationIds, edges, summaryProjection, crossCanvasRelations]);
   const relatedHighlightedMessageIds = useMemo(() => new Set([...(props.highlightedMessageIds ?? []), ...(props.locatedMessageIds ?? [])]), [props.highlightedMessageIds, props.locatedMessageIds]);
-  const renderRelatedConnections = (messageId: string) => <CrossCanvasRelatedMessages groups={mergeRelatedGroups(relatedConnections?.get(messageId), summaryProjection.related.get(messageId))}
+  const renderRelatedConnections = (messageId: string) => <CrossCanvasRelatedMessages groups={relatedConnections?.get(messageId)}
     messages={relatedCatalog} selectedUnits={draftUnits} highlightedMessageIds={relatedHighlightedMessageIds}
-    summarizedRelationIds={summaryProjection.hiddenRecordIds} hiddenRelationIds={hiddenSummarizedRelationIds}
-    onToggleRelationVisibility={toggleDiscussionRelation} onView={viewRelatedRelation} />;
+    onView={viewRelatedRelation} />;
 
   const selectedMessageIds = useMemo(() => new Set([
     ...draftUnits

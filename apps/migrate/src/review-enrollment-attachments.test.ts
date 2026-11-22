@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { afterEach, expect, it } from 'vitest';
@@ -14,7 +15,7 @@ afterEach(cleanupTestDatabases);
 
 async function fixture() {
   const app = await createTestApp(), agent = request.agent(app);
-  const registration = await agent.post('/api/register').send({name:'enrollment-author',password:'test-password'});
+  const registration = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'enrollment-author',password:'test-password'});
   expect(registration.status,registration.text).toBe(201);
   const targets: Message[] = [];
   for (const text of ['第一个被审核正文', '第二个被审核正文']) {

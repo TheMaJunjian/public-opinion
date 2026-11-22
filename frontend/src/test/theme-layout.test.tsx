@@ -38,9 +38,12 @@ function Controls({onJump}:{onJump:(id:string)=>void}) {
   };
   const props:ComponentProps<typeof WorkbenchViewToolbar>={
     top:0,scopeMessageId:'root',exportTitle:'公论',showAlert:vi.fn(),onJump,
+    discussionStatus:<button type="button">讨论详情</button>,
+    history:{canGoBack:true,canGoForward:false,back:vi.fn(),forward:vi.fn()},
+    discussion:{value:{mode:'discussion',collapsed:[]},onChange:vi.fn(),error:null,retry:vi.fn()},
     home:{mode:null,onChange:vi.fn()},filter:{settings:{hideJoin:false,hideSettlement:true},onChange:vi.fn()},
     clean:{active:false,filters:[],matchCount:0,totalCount:0,onAdd:vi.fn(),onRemove:vi.fn(),onUpdate:vi.fn(),onClear:vi.fn()},
-    view:{viewMode:'list',setViewMode:vi.fn(),leftPanelRef:{current:null},viewModeScrollRef:{current:{graph:null,list:null}},
+    view:{viewMode:'graph',setViewMode:vi.fn(),leftPanelRef:{current:null},viewModeScrollRef:{current:{graph:null,list:null}},
       draftUnits:[],targetUnits:[],traceCount:0,currentClassifyRelMsgId:null,
       messages:[{id:'known-message',kind:'normal',content:'消息',author:'用户',createdAt:''}],relations:[],
       findContainingClassification:()=>null,exitClassification:vi.fn(),enterClassification:vi.fn(),scheduleViewNavigation:vi.fn()},
@@ -67,12 +70,34 @@ async function checkControls(layout:ThemeLayout) {
   expect(screen.queryByRole('textbox',{name:'消息 ID'})).toBeNull();
   const jump=screen.getByRole('button',{name:'跳转'});
   if(layout.messageJump==='toolbar') expect(screen.getByTestId('toolbar')).toContainElement(jump);
-  else expect(screen.getByRole('button',{name:'导出'}).nextElementSibling).toBe(jump);
+  else expect(screen.getByRole('group',{name:'浏览'})).toContainElement(jump);
   expect(readText).not.toHaveBeenCalled();
   fireEvent.click(jump);
   await waitFor(()=>expect(readText).toHaveBeenCalledOnce());
   await waitFor(()=>expect(onJump).toHaveBeenCalledExactlyOnceWith('known-message'));
 }
+
+it('orders the view toolbar groups and the actions inside each group',async()=>{
+  override.layout={messageJump:'view',relationControls:'desk'};
+  render(<Controls onJump={vi.fn()}/>);
+  await screen.findByRole('button',{name:'过滤'});
+  const expected=[
+    {name:'浏览',buttons:['切换为消息表','返回','前进','跳转']},
+    {name:'讨论',buttons:['讨论详情','布局设置']},
+    {name:'筛选与对比',buttons:['对比','过滤']},
+    {name:'工具',buttons:['主页','排行榜','导出']},
+  ];
+  const groups=screen.getAllByRole('group',{name:/^(浏览|讨论|筛选与对比|工具)$/});
+  expect(groups).toHaveLength(expected.length);
+  expected.forEach(({name,buttons},index)=>{
+    const group=groups[index];
+    expect(group).toHaveAccessibleName(name);
+    expect(within(group).queryByText(name, { exact: true })).toBeNull();
+    const actions=within(group).getAllByRole('button');
+    expect(actions).toHaveLength(buttons.length);
+    buttons.forEach((label,actionIndex)=>expect(actions[actionIndex]).toHaveAccessibleName(label));
+  });
+});
 
 it.each<ThemeLayout>([
   {messageJump:'toolbar',relationControls:'toolbar'},

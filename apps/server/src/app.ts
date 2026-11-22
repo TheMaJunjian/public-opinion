@@ -9,7 +9,7 @@ import { createUiRouter } from './ui.js';
 import { journalManifest } from './export-response.js';
 import { RollbackUnconfirmedError } from './postgres.js';
 import { refreshUsagePoints } from './usage-points.js';
-import { createAccessRouter } from './access-routes.js';
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { moderationHttp } from './moderation-http.js';
 import { createModerationRouter } from './moderation-routes.js';
 import { moderationPolicy } from './moderation.js';
@@ -147,7 +147,7 @@ export async function createApp(options: {
     catch (error) {
         next(error);
     } });
-    get('/api/setup', async (_req, res,next) => {try { const initialized = !!(await store.db.prepare("SELECT 1 FROM users LIMIT 1").get()); res.json({ initialized, founderKeyRequired: !initialized && process.env.NODE_ENV === 'production', inviteRequired: initialized }); }catch(error){next(error);}});
+    get('/api/setup', async (_req, res,next) => {try { const initialized = !!(await store.db.prepare("SELECT 1 FROM users LIMIT 1").get()); res.json({ initialized, founderKeyRequired:false, inviteRequired:false, agreementVersion:PARTICIPATION_AGREEMENT_VERSION }); }catch(error){next(error);}});
     app.post('/api/register', async (req, res, next) => { try {
         res.status(201).json((await register(store, req.body, res)).session);
         await publish().catch(error=>console.error('发布消息变更失败',error));
@@ -168,7 +168,6 @@ export async function createApp(options: {
     catch (error) {
         next(error);
     } });
-    app.use('/api/admin', createAccessRouter(store));
     app.use('/api/moderation',createModerationRouter(store));
     app.use('/api/ui', createUiRouter(store, publish));
     get('/api/messages', async (req, res, next) => { try {

@@ -30,6 +30,8 @@ export type TraceSnapshot = {
 
 export type ClassifyStackEntry = {
   relMsgId: string; snapshot: TraceSnapshot | null;
+  /** A direct link must reveal this card when exiting to its parent. */
+  locateOnExit?: boolean;
   /** A temporary category contains only messages present in the expanded frame. */
   frameScopeIds?: string[];
   frameKnownIds?: string[];

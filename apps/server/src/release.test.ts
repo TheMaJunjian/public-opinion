@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
 import { Pool } from 'pg';
@@ -9,7 +10,7 @@ afterEach(cleanupTestDatabases);
 it('shares the password attempt budget with signing-key rotation', async () => {
   const app = await createTestApp();
   const agent = request.agent(app);
-  const registered = await agent.post('/api/register').send({name:'release-user',password:'release-password'});
+  const registered = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'release-user',password:'release-password'});
   expect(registered.status).toBe(201);
   for (let attempt = 0; attempt < 29; attempt++) {
     const response = await agent.post('/api/ui/auth/signing-key').set('x-csrf-token',registered.body.csrf).send({password:'wrong-password'});

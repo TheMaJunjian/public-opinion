@@ -26,6 +26,7 @@ export class LocalDiscussion {
       scope: source.scope, messages: [...source.messages], relations: [...source.relations],
       users: [...source.users ?? []], stakes: source.stakes, tagCounts: structuredClone(source.tagCounts ?? {}),
       attentionUsers: structuredClone(source.attentionUsers ?? {}), viewerUsername: name,
+      ...(source.meeting ? { meeting: source.meeting } : {}),
       ...(source.view ? { view: { ...source.view, username: name } } : {}) };
     if (!this.data.users!.some(user => user.id === this.user.id)) this.data.users!.push(this.user);
     const sequence = new Map(source.messages.map(message => [message.id, message.sequence ?? 0]));
@@ -37,6 +38,10 @@ export class LocalDiscussion {
     if (this.failure) throw this.failure;
     if (this.sealed) throw new Error('本地文件正在保存，请稍候再发送');
     this.sealed = true;
+    if (this.count && this.data.meeting) {
+      const { validateMeetingDocument } = await import('./meetingExchange');
+      await validateMeetingDocument(this.data);
+    }
     if (this.count) await save(this.data);
     return this.count;
   }

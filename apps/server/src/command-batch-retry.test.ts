@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { afterEach, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
@@ -18,7 +19,7 @@ it('reconciles a lost committed response with one database receipt, then accepts
   vi.stubGlobal('sessionStorage', memoryStorage());
   vi.stubGlobal('window', new EventTarget());
   const app = await createTestApp();
-  const registration = await request(app).post('/api/register').send({ username: '合成重试验收', password: 'only-for-local-retry-test' });
+  const registration = await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  username: '合成重试验收', password: 'only-for-local-retry-test' });
   expect(registration.status, registration.text).toBe(201);
   const user = registration.body.user;
   localStorage.setItem('user', JSON.stringify(user));
@@ -56,7 +57,7 @@ it('reconciles a lost committed response with one database receipt, then accepts
 
 it('commits overlapping retries from separate database connections only once', async () => {
   const app = await createTestApp();
-  const registration = await request(app).post('/api/register').send({ username: '并发重试验收', password: 'only-for-local-retry-test' });
+  const registration = await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  username: '并发重试验收', password: 'only-for-local-retry-test' });
   expect(registration.status, registration.text).toBe(201);
   const user = registration.body.user;
   const other = await createTestStore(app.store.db.schema);

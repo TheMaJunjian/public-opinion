@@ -4,13 +4,20 @@ import { useState } from 'react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import ExportViewerModal from '../components/ExportViewerModal';
 import type { ExportData } from '../api/client';
-import { getExportCacheReference, loadCachedExport, loadLastExport, loadLastExportPreview, loadReferencedExport, loadExportNavigation, saveLastExport } from '../utils/exportViewerCache';
+import { getExportCacheReference, loadCachedExport, loadLastExport, loadLastExportPreview, loadReferencedExport, loadExportNavigation, openFolderMeetingExport, saveLastExport } from '../utils/exportViewerCache';
 import { getPreparedViewerExport } from '../utils/exportViewerSession';
 import { isZhihuViewingData, prepareZhihuForViewing, updateZhihuRelations } from '../utils/zhihuArchive';
+import { createMeetingStart } from '../utils/meetingExchange';
+import { createLocalMessageFile } from '../utils/localMessageFile';
+import { listFolderMeetings, openFolderMeeting } from '../utils/meetingFolder';
+import { takeMeetingDirectory } from '../utils/meetingDirectoryHandoff';
 
 vi.mock('../utils/exportViewerCache', () => ({ loadCachedExport: vi.fn(), loadLastExport: vi.fn(), saveLastExport: vi.fn(),
-  loadLastExportPreview: vi.fn(), loadReferencedExport: vi.fn(), loadExportNavigation: vi.fn(),
+  loadLastExportPreview: vi.fn(), loadReferencedExport: vi.fn(), loadExportNavigation: vi.fn(), openFolderMeetingExport: vi.fn(),
   getExportCacheReference: vi.fn(() => null), inheritExportCacheReference: (data: ExportData) => data }));
+vi.mock('../utils/meetingFolder', async importOriginal => ({
+  ...await importOriginal<typeof import('../utils/meetingFolder')>(), listFolderMeetings: vi.fn(), openFolderMeeting: vi.fn(),
+}));
 
 const data: ExportData = {
   formatVersion: 5, exportedAt: '', scope: { messageId: null, title: '相同阅览文件' },
@@ -27,7 +34,55 @@ function Chooser() {
 }
 
 beforeEach(() => { vi.mocked(loadExportNavigation).mockResolvedValue(null); vi.mocked(loadLastExportPreview).mockResolvedValue(null); vi.mocked(getExportCacheReference).mockReturnValue(null); vi.mocked(loadCachedExport).mockResolvedValue(null); vi.mocked(loadLastExport).mockResolvedValue(null); vi.mocked(saveLastExport).mockResolvedValue(); });
-afterEach(() => { cleanup(); vi.clearAllMocks(); vi.useRealTimers(); });
+afterEach(() => { cleanup(); vi.clearAllMocks(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+async function sharedMeetingFolder() {
+  const { webcrypto } = await vi.importActual<{ webcrypto: Crypto }>('node:crypto');
+  vi.stubGlobal('crypto', webcrypto);
+  const folder = { name: '本机映射的共享文件夹' } as FileSystemDirectoryHandle;
+  vi.stubGlobal('showDirectoryPicker', vi.fn().mockResolvedValue(folder));
+  const start = await createMeetingStart(createLocalMessageFile());
+  const { id, baseHash } = start.meeting!;
+  vi.mocked(listFolderMeetings).mockResolvedValue([{ id, baseHash, title: start.scope.title, createdAt: start.exportedAt }]);
+  vi.mocked(openFolderMeeting).mockResolvedValue(start);
+  return { folder, start, id };
+}
+
+it('opens a shared meeting from the viewer chooser with its local revision and an in-memory folder handle', async () => {
+  const { folder, start, id } = await sharedMeetingFolder();
+  const reference = { archiveId: 'folder-meeting-view', viewCacheId: 'local-view' };
+  const stored = { ...start, viewerUsername: '本机署名' };
+  vi.mocked(openFolderMeetingExport).mockRejectedValueOnce(new Error('本地缓存暂不可用')).mockResolvedValue(stored);
+  vi.mocked(getExportCacheReference).mockReturnValue(reference);
+  render(<MemoryRouter><Chooser /></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: '共享文件夹会议' }));
+  fireEvent.click(await screen.findByRole('button', { name: start.scope.title }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('本地缓存暂不可用');
+  expect(JSON.parse(screen.getByTestId('location').textContent!).pathname).toBe('/');
+  fireEvent.click(screen.getByRole('button', { name: start.scope.title }));
+  await waitFor(() => expect(JSON.parse(screen.getByTestId('location').textContent!).pathname).toBe('/viewer'));
+  const state = JSON.parse(screen.getByTestId('location').textContent!).state;
+  expect(state).toEqual({ viewerInstanceKey: expect.any(String), viewerCacheRef: reference });
+  expect(getPreparedViewerExport(state.viewerInstanceKey)).toEqual(stored);
+  expect(takeMeetingDirectory(state.viewerInstanceKey, id)).toBe(folder);
+  expect(takeMeetingDirectory(state.viewerInstanceKey, id)).toBeNull();
+  expect(saveLastExport).not.toHaveBeenCalled();
+});
+
+it('stays in the viewer chooser when a meeting dialog closes during a slow local cache read', async () => {
+  const { start } = await sharedMeetingFolder();
+  let finish!: (data: ExportData) => void;
+  vi.mocked(openFolderMeetingExport).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  render(<MemoryRouter><Chooser /></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: '共享文件夹会议' }));
+  fireEvent.click(await screen.findByRole('button', { name: start.scope.title }));
+  await waitFor(() => expect(openFolderMeetingExport).toHaveBeenCalled());
+  fireEvent.keyDown(screen.getByRole('button', { name: '关闭共享文件夹会议' }), { key: 'Escape' });
+  await act(async () => { finish(start); });
+  expect(screen.queryByRole('dialog', { name: '共享文件夹会议' })).toBeNull();
+  expect(screen.getByRole('dialog', { name: '阅览导出文本' })).toBeVisible();
+  expect(JSON.parse(screen.getByTestId('location').textContent!).pathname).toBe('/');
+});
 
 it('creates a new local discussion without choosing a file or logging in', async () => {
   render(<MemoryRouter><Chooser /></MemoryRouter>);

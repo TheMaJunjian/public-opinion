@@ -75,7 +75,7 @@ export default function GovernancePanel({ scopeMessageId }: { scopeMessageId: st
       ) : proposals.length === 0 ? (
         <div>
           <div className="text-sm text-[color:var(--ink-9ca3af)]">暂无治理提案</div>
-          <div className="text-xs text-[color:var(--ink-6b7280)] mt-1">治理提案用于修改系统规则或参数。任何人都可以发起提案，经过社区讨论、投票（赞同/反对）、结算后决定是否采纳。通过后的提案由运营者执行并公告。</div>
+          <div className="text-xs text-[color:var(--ink-6b7280)] mt-1">所有用户都可提出规则建议并参与讨论。全站规则修改的共同批准程序尚待确定。</div>
         </div>
       ) : (
         <div className="space-y-2 max-h-64 overflow-y-auto">

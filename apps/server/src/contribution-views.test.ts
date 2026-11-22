@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
 import { Mutation } from './db.js';
@@ -11,7 +12,7 @@ afterEach(cleanupTestDatabases);
 
 it('充值贡献只统计清零后的实际到账，使用贡献含零点补发，支出或负余额不影响累计；范围与导出一致', async () => {
   const app = await createTestApp(), store = app.store;
-  const { body: session } = await request(app).post('/api/register').send({ name: '贡献统计', password: 'password' });
+  const { body: session } = await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  name: '贡献统计', password: 'password' });
   const userId = session.user.id as string;
   const recharge = async (amount: number, revenuePoolShare: number) => store.transaction(async () => {
     const tx = new Mutation(store), proposal = await tx.create(userId, [

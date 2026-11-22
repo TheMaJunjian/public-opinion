@@ -1,7 +1,7 @@
 import { rejectsMembership, resolveRecommendedMemberships, type MembershipAction, type Message } from '@gonglun/core';
 import type { Store } from './db.js';
 import { retiredOrganizationIds } from './retired-organizations.js';
-import { inaccessibleMessages } from './moderation-visibility.js';
+import { inaccessibleMessages, restrictedCurrentCasesSql } from './moderation-visibility.js';
 import { feedEntry } from './feed-index.js';
 export { recommendedMembershipSchema } from './feed-schema.js';
 
@@ -32,9 +32,7 @@ export async function indexRecommendedMemberships(store: Store, affected?: Reado
   }
   for (const action of actions) if (action.disabled) excluded.add(action.id);
   if ((await store.rules()).moderation?.enabled) {
-    const rejected = await store.db.prepare(`SELECT "messageId" FROM (
-      SELECT DISTINCT ON ("messageId") "messageId",status FROM moderation_cases ORDER BY "messageId",revision DESC
-    ) latest WHERE status IN ('rejected','appeal')`).all();
+    const rejected = await store.db.prepare(restrictedCurrentCasesSql).all();
     for (const row of rejected) { excluded.add(String(row.messageId)); unavailableMembers.add(String(row.messageId)); }
   }
   const memberships = [...resolveRecommendedMemberships(actions.filter(action => !unavailableMembers.has(action.memberId))

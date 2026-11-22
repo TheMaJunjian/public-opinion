@@ -10,8 +10,8 @@ interface AuthContextValue {
   user: User | null;
   token: string | null;
   loading: boolean;
-  login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string, publicKey?: string | null, founderKey?: string, inviteCode?: string) => Promise<void>;
+  login: (username: string, password: string, acceptedAgreementVersion?: string) => Promise<void>;
+  register: (username: string, password: string, acceptedAgreementVersion: string) => Promise<void>;
   logout: () => Promise<void>;
   /** Sign a payload with the stored private key, returns base64 signature or null */
   signPayload: (payload: string) => Promise<string | null>;
@@ -56,9 +56,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => { active = false; window.removeEventListener('gonglun:session-expired', expired); };
   }, []);
 
-  async function login(username: string, password: string) {
-    const finishLoginTiming = startEntryTiming('login');
-    try {
+  async function authenticateDevice(username: string, startSession: (publicKey: string) => ReturnType<typeof api.login>) {
     const storedPrivateKey = getPrivateKeyForUser(username);
     let privateJwk: JsonWebKey | null = null;
     let publicKey: string;
@@ -78,23 +76,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
       publicKey = JSON.stringify(publicJwk);
     }
-    const res = await api.login({ username, password, publicKey });
+    const res = await startSession(publicKey);
     if (!privateJwk || !res.user.publicKey || !privateKeyMatchesPublicKey(JSON.stringify(privateJwk), res.user.publicKey)) {
       throw new Error('设备签名密钥绑定失败，请重新登录');
     }
-    storePrivateKeyForUser(username, privateJwk);
+    storePrivateKeyForUser(res.user.username, privateJwk);
     localStorage.setItem('token', res.token);
     localStorage.setItem('user', JSON.stringify(res.user));
     authVersion.current++;
     setToken(res.token);
     setUser(res.user);
     setLoading(false);
+  }
+
+  async function login(username: string, password: string, acceptedAgreementVersion?: string) {
+    const finishLoginTiming = startEntryTiming('login');
+    try {
+      await authenticateDevice(username, publicKey => api.login({ username, password, publicKey, acceptedAgreementVersion }));
     } finally { finishLoginTiming(); }
   }
 
-  async function register(username: string, password: string, publicKey?: string | null, founderKey?: string, inviteCode?: string) {
-    await api.register({ username, password, publicKey: publicKey ?? null, founderKey, inviteCode });
-    await login(username, password);
+  async function register(username: string, password: string, acceptedAgreementVersion: string) {
+    await authenticateDevice(username, publicKey => api.register({ username, password, publicKey, acceptedAgreementVersion }));
   }
 
   async function logout() {

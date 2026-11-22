@@ -3,6 +3,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import type { ComponentProps } from 'react';
 import type { ExportData } from '../api/client';
 import WorkbenchViewToolbar from '../pages/workbench/ui/WorkbenchViewToolbar';
+import DiscussionStatusControl from '../components/DiscussionStatusControl';
 import { useDiscussionView } from '../pages/workbench/useDiscussionView';
 import { prepareZhihuForViewing } from '../utils/zhihuArchive';
 import type { DiscussionView } from '../utils/discussionView';
@@ -89,6 +90,15 @@ it('chooses the optional legacy layout from settings and exports its folds witho
   ui.rerender(<WorkbenchViewToolbar {...props} view={{ ...props.view, viewMode: 'list' }} />);
   expect(screen.queryByRole('button', { name: '布局设置' })).toBeNull();
   expect(screen.queryByRole('dialog', { name: '布局设置' })).toBeNull();
+  expect(screen.queryByRole('group', { name: '讨论' })).toBeNull();
+  ui.rerender(<WorkbenchViewToolbar {...props} view={{ ...props.view, viewMode: 'list' }}
+    comparison={{ ...props.comparison, singleSideReview: true }}
+    discussionStatus={<DiscussionStatusControl state={null} onRefresh={vi.fn()} onOpenFull={vi.fn()} />} />);
+  expect(screen.queryByRole('group', { name: '浏览' })).toBeNull();
+  const details = screen.getByRole('button', { name: '讨论详情' });
+  expect(screen.getByRole('group', { name: '讨论' })).toContainElement(details);
+  fireEvent.click(details);
+  expect(screen.getByRole('dialog', { name: '讨论详情' })).toBeVisible();
 });
 
 it('makes unsuccessful layout persistence visible and offers an explicit retry', () => {

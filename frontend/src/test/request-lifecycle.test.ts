@@ -32,16 +32,16 @@ it('refreshes a retained feed as a bounded read without a signing key or command
   expect(getOperations()).toEqual([]);
 });
 
-it('sends administrator actions to the private API with CSRF and no message signature', async () => {
+it('saves private feed settings with CSRF and no message signature', async () => {
   localStorage.removeItem('privateKey:device:alice');
   vi.mocked(signPayloadWithPrivateJwk).mockClear();
-  const fetcher = vi.fn(async () => new Response(JSON.stringify({code:'one-use',invite:{id:'invite'}})));
+  const fetcher = vi.fn(async () => new Response(JSON.stringify({ok:true})));
   vi.stubGlobal('fetch',fetcher);
-  await api.createAdminInvite(7);
+  await api.setFeedHidden('msg',true);
   const [url,options] = fetcher.mock.calls[0] as unknown as [string,RequestInit];
-  expect(url).toBe('/api/admin/invites');
+  expect(url).toBe('/api/ui/feed/hidden');
   expect(options.headers).toMatchObject({'X-CSRF-Token':'csrf'});
-  expect(JSON.parse(String(options.body))).toEqual({expiresInDays:7});
+  expect(JSON.parse(String(options.body))).toEqual({messageId:'msg',hidden:true});
   expect(signPayloadWithPrivateJwk).not.toHaveBeenCalled();
 });
 
@@ -80,8 +80,8 @@ it('keeps a fresh login when a revoked-session response arrives late for the sam
     finish(new Response(JSON.stringify({error:'请先登录',code:'SESSION_REQUIRED'}),{status:401}));
     expect(await pending).toMatchObject({status:401});
     expect(expired).not.toHaveBeenCalled();
-    await api.createAdminInvite(7);
-    expect(fetcher.mock.calls.at(-1)).toEqual(['/api/admin/invites',expect.objectContaining({headers:expect.objectContaining({'X-CSRF-Token':'fresh-csrf'})})]);
+    await api.setFeedHidden('msg',true);
+    expect(fetcher.mock.calls.at(-1)).toEqual(['/api/ui/feed/hidden',expect.objectContaining({headers:expect.objectContaining({'X-CSRF-Token':'fresh-csrf'})})]);
   } finally { window.removeEventListener('gonglun:session-expired',expired); }
 });
 
@@ -95,8 +95,8 @@ it('does not overwrite a fresh login with an older session lookup', async () => 
   await api.login({username:'alice',password:'password'});
   finish(new Response(JSON.stringify({csrf:'revoked-csrf',user:{id:'u',username:'alice'}})));
   expect(await pending).toMatchObject({name:'AbortError'});
-  await api.createAdminInvite(7);
-  expect(fetcher.mock.calls.at(-1)).toEqual(['/api/admin/invites',expect.objectContaining({headers:expect.objectContaining({'X-CSRF-Token':'fresh-csrf'})})]);
+  await api.setFeedHidden('msg',true);
+  expect(fetcher.mock.calls.at(-1)).toEqual(['/api/ui/feed/hidden',expect.objectContaining({headers:expect.objectContaining({'X-CSRF-Token':'fresh-csrf'})})]);
 });
 
 it('计时操作使用会话校验，独立于消息批次和前台进度，不需要设备签名',async()=>{

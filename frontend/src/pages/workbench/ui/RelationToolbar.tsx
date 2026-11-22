@@ -9,6 +9,7 @@ import AboutLink from '../../../components/AboutLink';
 import MessageJumpControl from '../../../components/MessageJumpControl';
 
 interface ComposerMode {
+  meeting?: boolean;
   relationType: RelationType | null; secondaryRelationType: string; newMessageContent: string; subType: string | null;
   setRelationType: Dispatch<SetStateAction<RelationType | null>>; setSecondaryRelationType: Dispatch<SetStateAction<string>>;
   setNewMessageContent: Dispatch<SetStateAction<string>>;
@@ -69,7 +70,8 @@ export function RelationChoices({ composer, placement = 'toolbar', localMode }: 
   if (placement !== layout.relationControls) return null;
   const { secondaryRelationType, newMessageContent, setRelationType, setSecondaryRelationType, setNewMessageContent, lastTagSecondaryRef, lastDelegationSecondaryRef, savedTextOnTypeSwitchRef, guideTargetIdRef } = composer;
   const relationType = localMode ? localMode.relationType : composer.relationType;
-  const allowedTypes = (types: readonly RelationType[]) => localMode ? types.filter(type => LOCAL_RELATION_TYPES.includes(type)) : types;
+  const allowedTypes = (types: readonly RelationType[]) => composer.meeting ? types.filter(type => type === 'reply')
+    : localMode ? types.filter(type => LOCAL_RELATION_TYPES.includes(type)) : types;
   const renderTypes = (types: readonly RelationType[]) => <>
           {allowedTypes(types).map(rt => (
             <button key={rt} disabled={localMode?.disabled} aria-pressed={relationType === rt} onClick={() => {

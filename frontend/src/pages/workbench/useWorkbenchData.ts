@@ -137,6 +137,12 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     entryMode.current = { pathname: location.pathname, full: explicitFullCatalog, scoped: !!entryFocus && !explicitFullCatalog };
   const scopedDiscussion = !isViewerRoute && entryMode.current.scoped;
   const viewerInstanceKey = (location.state as ExportViewerRouteState | null)?.viewerInstanceKey;
+  const activeViewer = useRef<object | null>(null);
+  useLayoutEffect(() => {
+    if (!isViewerRoute) return;
+    activeViewer.current = {};
+    return () => { activeViewer.current = null; };
+  }, [isViewerRoute, viewerInstanceKey]);
   const preparedRouteExport = useMemo(() => getPreparedViewerExport(viewerInstanceKey), [viewerInstanceKey]);
   useEffect(() => { releasePreparedViewerExport(viewerInstanceKey); }, [viewerInstanceKey]);
   const routeExport = preparedRouteExport ?? (location.state as { exportData?: ExportData })?.exportData ?? null;
@@ -296,13 +302,16 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
   useEffect(() => () => { viewerScopeGeneration.current++; cancelViewerScope.current?.(); }, []);
 
   /** Publish only after the source or incremental local edit is durable. */
-  const persistPreloadedExport = useCallback(async (next: ExportData, options?: { sourceUpdate?: boolean }) => {
+  const persistPreloadedExport = useCallback(async (next: ExportData, options?: { sourceUpdate?: boolean }, expected?: ExportData, assertActive?: () => void) => {
     if (!preloadedData) throw new Error('当前未打开阅览文件');
     const origin = locationRef.current;
+    const baseline = expected ?? loadedExport ?? preloadedData;
     let preparedScopeKey = structuralScopeKey(viewerScope.current), preparedUsername = viewerUsername.current;
     let projection = await projectViewer(next, viewerScope.current, preparedUsername);
-    if (options) await saveLastExportPersistent(next, loadedExport ?? preloadedData, options);
-    else await saveLastExportPersistent(next, loadedExport ?? preloadedData);
+    assertActive?.();
+    if (options) await saveLastExportPersistent(next, baseline, options);
+    else await saveLastExportPersistent(next, baseline);
+    assertActive?.();
     if (!mounted.current || locationRef.current.key !== origin.key || locationRef.current.pathname !== origin.pathname
       || locationRef.current.state?.exportData !== origin.state?.exportData) {
       throw new Error('文件已保存；阅览页面已切换，请重新打开上次阅览');
@@ -312,13 +321,14 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     while (preparedScopeKey !== structuralScopeKey(viewerScope.current) || preparedUsername !== viewerUsername.current) {
       preparedScopeKey = structuralScopeKey(viewerScope.current); preparedUsername = viewerUsername.current;
       projection = await projectViewer(next, viewerScope.current, viewerUsername.current);
+      assertActive?.();
       if (!mounted.current || locationRef.current.key !== origin.key || locationRef.current.pathname !== origin.pathname)
         throw new Error('文件已保存；阅览页面已切换，请重新打开上次阅览');
     }
     preloadedLoaded.current = next;
     viewerScopeGeneration.current++;
     cancelViewerScope.current?.();
-    setRelatedTraceContext(null);
+    if (!next.meeting) setRelatedTraceContext(null);
     setLoadError(null);
     if (graphViewRef.current) beginWorkbenchDrawing();
     publishViewer(projection);
@@ -329,6 +339,26 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     // clones the whole archive and can restart loading, unmounting the canvas.
     setRestoredViewer({ key: origin.key, data: next });
   }, [preloadedData, loadedExport, viewerUser?.username, records.replace]);
+
+  const meetingWrites = useRef(Promise.resolve());
+  const persistMeetingExport = useCallback((next: ExportData, expected: ExportData, localEdit = false) => {
+    const viewer = activeViewer.current;
+    const assertActive = () => {
+      if (!viewer || viewer !== activeViewer.current || locationRef.current.key !== location.key)
+        throw new Error('阅览页面已切换，请重新打开会议。');
+    };
+    const save = async () => {
+      const { persistMeetingRevision } = await import('../../utils/persistMeetingRevision');
+      assertActive();
+      const active = preloadedLoaded.current;
+      if (!active) throw new Error('请先打开会议文件。');
+      await persistMeetingRevision(next, expected, active, localEdit,
+        (merged, baseline) => persistPreloadedExport(merged, undefined, baseline, assertActive));
+    };
+    const pending = meetingWrites.current.then(save);
+    meetingWrites.current = pending.catch(() => {});
+    return pending;
+  }, [location.key, persistPreloadedExport]);
 
   useLayoutEffect(() => {
     if (!preloadedData || preloadedLoaded.current === preloadedData) return;
@@ -345,6 +375,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
             const savedUsername = localStorage.getItem(VIEWER_USERNAME_KEY);
             const username = preloadedData.view ? preloadedData.view.username
               : preloadedData.viewerUsername !== undefined ? preloadedData.viewerUsername
+              : preloadedData.meeting ? null
               : user?.username ?? (savedUsername && names.includes(savedUsername) ? savedUsername : names[0]);
             viewerScope.current = { classificationId: viewerNavigation ? viewerNavigation.classificationId : preloadedData.view?.classificationId ?? null,
               full: !!preloadedData.view?.homeFilter || !!preloadedData.view?.cleanFilters.length,
@@ -638,7 +669,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     showUnauthenticatedNotice, setShowUnauthenticatedNotice, showRegistrationGuide, setShowRegistrationGuide, stakeCounts,
     setStakeCounts, messageBettorCounts, setMessageBettorCounts, authorStakes, setAuthorStakes,
     refreshLeaderboard, registeredUsers, isPreloaded, viewerUser, setViewerUser,
-    displayUser, correctionVersions, preloadedData, loadedExport, viewerUsers, loading, persistPreloadedExport, isViewerRoute,
+    displayUser, correctionVersions, preloadedData, loadedExport, viewerUsers, loading, persistPreloadedExport, persistMeetingExport, isViewerRoute,
     viewerNavigation,
     viewingExport, viewerStructure, unloadedViewerContainers, loadViewerScope, viewerBodyPage, loadMoreViewerBodies,
     appliedScopeKey,

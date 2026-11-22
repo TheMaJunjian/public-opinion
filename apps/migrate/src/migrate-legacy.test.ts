@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { afterEach, expect, it, vi } from 'vitest';
 import { hash } from 'bcryptjs';
 import { Pool } from 'pg';
@@ -75,7 +76,7 @@ it('migrates an immutable source snapshot, preserves bcrypt login and reconciles
   expect(report).toMatchObject({applied:true,sourceDigest:dry.sourceDigest,available:500,operating:12});
   const app=await createTestApp({databaseSchema:targetSchema});
   const agent=request.agent(app);
-  const login=await agent.post('/api/login').send({name:'旧用户',password:'short'});
+  const login=await agent.post('/api/login').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'旧用户',password:'short'});
   expect(login.status,login.text).toBe(200);expect(login.body.user).toMatchObject({id:'old-user',founder:true});
   expect(login.body.account).toMatchObject({available:498,locked:2});
   const view=await agent.get('/api/ui/snapshot?parent=old-topic');
@@ -142,7 +143,7 @@ it('automatically imports a Prisma database once under concurrent startups and r
   expect(await app.store.db.prepare('SELECT COUNT(*) AS n FROM moderation_assignments').get()).toEqual({n:0});
   expect((await app.store.db.prepare('SELECT body FROM points_archive_rows WHERE "tableName"=$1 AND body->>\'userId\'=$2').get('accounts','old-user'))!.body)
     .toMatchObject({available:498,locked:2});
-  const login=await agent.post('/api/login').send({name:'旧用户',password:'short'});
+  const login=await agent.post('/api/login').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'旧用户',password:'short'});
   expect(login.status,login.text).toBe(200);
   const cursor=await app.store.latestSequence();
   await prepareStartupDatabase(source.sourceUrl,source.sourceSchema,options);
@@ -254,7 +255,7 @@ it('creates visible JOIN history when grouping an imported classification inside
   const targetSchema = newTestSchema();
   expect((await migrateLegacy({ ...source, targetUrl: testDatabaseUrl(), targetSchema, apply: true })).blockers).toEqual([]);
   const app = await createTestApp({ databaseSchema: targetSchema }), agent = request.agent(app);
-  const session = (await agent.post('/api/login').send({ name: '旧用户', password: 'short' })).body;
+  const session = (await agent.post('/api/login').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  name: '旧用户', password: 'short' })).body;
   const outerId = randomUUID(), requestId = randomUUID();
   const response = await agent.post('/api/ui/commands').set('x-csrf-token', session.csrf).set('x-request-id', requestId).send({ requestId, commands: [
     { id: outerId, method: 'POST', path: '/relations', body: { recommendation:1,parentMessageId: 'old-topic', relationType: 'CLASSIFY', payload: { title: '新外层分类' },
@@ -315,7 +316,7 @@ it('keeps closed historical rounds visible and rejects cross-boundary wagers',as
   const targetSchema=newTestSchema();
   expect((await migrateLegacy({...source,targetUrl:testDatabaseUrl(),targetSchema,apply:true})).applied).toBe(true);
   const app=await createTestApp({databaseSchema:targetSchema}),agent=request.agent(app);
-  const login=await agent.post('/api/login').send({name:'旧用户',password:'short'});
+  const login=await agent.post('/api/login').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'旧用户',password:'short'});
   const history=await agent.get('/api/messages/old-message/context');
   expect(history.body.rounds).toHaveLength(2);expect(history.body.rounds.find((round:any)=>round.id==='old-round')).toMatchObject({id:'old-round',status:'settled',pro:10,con:5});
   const wager=await agent.post('/api/messages').set('x-csrf-token',login.body.csrf).send({requestId:randomUUID(),wager:1,parts:[{id:'stance',type:'relation',relation:'agree',roles:{target:[{id:'target',reference:{messageId:'old-message',partId:'body'}}]}}]});
@@ -344,7 +345,7 @@ it('converts unambiguous container and JOIN ownership, with live personal marks 
   const group=await agent.get('/api/ui/snapshot?parent=old-group');
   expect(group.status,group.text).toBe(200);
   expect(group.body.messages.map((row:any)=>row.id)).toEqual(expect.arrayContaining(['original','joined']));
-  const login=await agent.post('/api/login').send({name:'旧用户',password:'short'});
+  const login=await agent.post('/api/login').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'旧用户',password:'short'});
   const unread=await agent.post('/api/messages').set('x-csrf-token',login.body.csrf).send({requestId:randomUUID(),recommendation:1,parts:[{id:'mark',type:'relation',relation:'unread',roles:{target:[{id:'target',reference:{messageId:'original'}}]}}]});
   expect(unread.status,unread.text).toBe(400);
   const privateRead=await agent.post('/api/ui/reading-state').set('x-csrf-token',login.body.csrf)
@@ -377,9 +378,9 @@ it('creates an explicitly read-only rehearsal preserving locked funds and pendin
   expect(await app.store.account('old-user')).toMatchObject({available:498,locked:12});
   expect((await agent.get('/api/messages/old-message/context')).body.rounds[0]).toMatchObject({status:'frozen'});
   const before=await app.store.latestSequence();
-  expect((await agent.post('/api/login').send({name:'旧用户',password:'short'})).status).toBe(200);
+  expect((await agent.post('/api/login').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'旧用户',password:'short'})).status).toBe(200);
   expect((await agent.post('/api/messages').send({requestId:randomUUID(),recommendation:1,parts:[{id:'body',type:'text',text:'blocked'}]})).status).toBe(503);
-  expect((await agent.post('/api/register').send({name:'blocked-user',password:'long-password'})).status).toBe(503);
+  expect((await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'blocked-user',password:'long-password'})).status).toBe(503);
   await new Promise(resolve=>setTimeout(resolve,25));
   expect(await app.store.latestSequence()).toBe(before);
 });
@@ -398,7 +399,7 @@ it('preserves separate truth/value/delegation pools, active principal and source
   const compact=await agent.get('/api/ui/snapshot?format=compact-v1&batch=4').set('Accept-Encoding','gzip');
   expect(compact.headers['content-encoding']).toBe('gzip');
   expect(decodeWorkbenchSnapshot<WorkbenchSnapshot>(compact.body)).toEqual(view.body);
-  const login=await agent.post('/api/login').send({name:'旧用户',password:'short'});
+  const login=await agent.post('/api/login').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'旧用户',password:'short'});
   expect(login.status,login.text).toBe(200);
   const balance=await agent.get('/api/ui/points/balance');
   expect(balance.body.breakdown).toMatchObject({totalLost:15,totalEarned:20});

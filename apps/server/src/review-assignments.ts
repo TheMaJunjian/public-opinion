@@ -1,4 +1,4 @@
-import { DEFAULT_MODERATION_POLICY, reviewAssignmentSize, reviewEconomy } from '@gonglun/core';
+import { DEFAULT_MODERATION_POLICY, PARTICIPATION_AGREEMENT_VERSION, reviewAssignmentSize, reviewEconomy } from '@gonglun/core';
 import { Mutation, now, type Store } from './db.js';
 import type { ModerationCase } from './moderation.js';
 
@@ -47,9 +47,9 @@ export async function refreshCaseAssignments(tx:Mutation,c:ModerationCase):Promi
     LEFT JOIN moderation_candidate_preferences p ON p."userId"=u.id
     WHERE u.id<>$1 AND u.id<>'system' AND COALESCE(p.enabled,TRUE) AND a.available>=$4
     AND NOT EXISTS(SELECT 1 FROM disabled_accounts d WHERE d."userId"=u.id)
-    AND EXISTS(SELECT 1 FROM sessions s WHERE s."userId"=u.id AND s.expires>$5 AND s."lastActiveAt">$7)
+    AND EXISTS(SELECT 1 FROM sessions s WHERE s."userId"=u.id AND s.expires>$5 AND s."lastActiveAt">$7 AND s."agreementVersion"=$8)
     AND NOT EXISTS(SELECT 1 FROM moderation_assignments r WHERE r."caseId"=$2 AND r.round=$3 AND r."userId"=u.id)
-    ORDER BY random() LIMIT $6`).all<{id:string}>(c.authorId,c.id,c.round,rules.protocolFee+reviewEconomy(c.policy).minWager,Date.now(),slots,Date.now()-REVIEW_ONLINE_WINDOW_MS):[];
+    ORDER BY random() LIMIT $6`).all<{id:string}>(c.authorId,c.id,c.round,rules.protocolFee+reviewEconomy(c.policy).minWager,Date.now(),slots,Date.now()-REVIEW_ONLINE_WINDOW_MS,PARTICIPATION_AGREEMENT_VERSION):[];
   const expiresAt=new Date(Date.now()+(c.policy.assignmentTtlMs??DEFAULT_MODERATION_POLICY.assignmentTtlMs!)).toISOString();
   for(const user of candidates)await store.db.prepare(`INSERT INTO moderation_assignments("caseId",round,"userId",stage,"assignedAt","expiresAt") VALUES($1,$2,$3,$4,$5,$6)`)
     .run(c.id,c.round,user.id,c.stage,at,expiresAt);

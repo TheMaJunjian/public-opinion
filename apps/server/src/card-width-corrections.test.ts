@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { afterEach, expect, it } from 'vitest';
@@ -10,7 +11,7 @@ afterEach(async () => { for (const app of apps.splice(0)) await app.close(); awa
 it('persists width corrections of text and every organization as voted display records without changing the target', async () => {
   const app = await createTestApp(); apps.push(app);
   const agent = request.agent(app);
-  const registration = await agent.post('/api/register').send({ username: '宽度编辑者', password: 'test-password-123' });
+  const registration = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION,  username: '宽度编辑者', password: 'test-password-123' });
   expect(registration.status).toBe(201);
   const post = async (path: string, body: Record<string, unknown>) => {
     const response = await agent.post(`/api/ui${path}`).set('x-csrf-token', registration.body.csrf)

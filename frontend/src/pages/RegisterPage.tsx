@@ -1,8 +1,9 @@
 import { useCallback, useContext, useEffect, useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getSetup, storePrivateKeyForUser } from '../api/client';
-import { generateSigningKeyPair } from '../utils/signature';
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
+import { ApiError } from '../api/client';
+import ParticipationAgreementField from '../components/ParticipationAgreementField';
 import PromptModal from '../components/PromptModal';
 import { dialogStyles } from '../components/dialogStyles';
 import { AutoAuthEntryContext } from '../context/AutoAuthEntryContext';
@@ -23,11 +24,7 @@ export default function RegisterPage({ onClose, onLogin, onSuccess, closeText = 
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [founderKeyRequired, setFounderKeyRequired] = useState(false);
-  const [founderKey, setFounderKey] = useState('');
-  const [inviteRequired, setInviteRequired] = useState(true);
-  const [inviteCode, setInviteCode] = useState('');
-  const [setupReady, setSetupReady] = useState(false);
+  const [accepted, setAccepted] = useState(false);
   const close = useCallback(() => onClose ? onClose() : navigate('/', { replace: true }), [navigate, onClose]);
 
   useEffect(() => {
@@ -37,44 +34,27 @@ export default function RegisterPage({ onClose, onLogin, onSuccess, closeText = 
     return () => window.removeEventListener('keydown', dismiss);
   }, [close, suspended]);
 
-  useEffect(() => {
-    let active = true;
-    void getSetup().then(setup => {
-      if (active) {
-        setFounderKeyRequired(!setup.initialized && setup.founderKeyRequired);
-        setInviteRequired(setup.inviteRequired ?? setup.initialized);
-        setSetupReady(true);
-      }
-    }).catch(err => { if (active) setError(err instanceof Error ? err.message : '无法确认站点初始化状态，请刷新重试'); });
-    return () => { active = false; };
-  }, []);
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!setupReady || loading) return;
+    if (!accepted || loading) return;
     const normalizedUsername = username.trim();
     if (!normalizedUsername || !password) { setError('请填写与会者名和密码'); return; }
     if (!/^[a-zA-Z0-9_\u4e00-\u9fa5]{2,30}$/.test(normalizedUsername)) {
       setError('与会者名需为 2-30 位字母、数字、下划线或汉字（不含空格和标点）');
       return;
     }
-    if (founderKeyRequired && !founderKey.trim()) { setError('请填写初始发起人密钥'); return; }
-    if (inviteRequired && !inviteCode.trim()) { setError('请填写管理员提供的邀请码'); return; }
     setError('');
     setLoading(true);
     try {
-      const keyPair = await generateSigningKeyPair();
-      const jwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
-      storePrivateKeyForUser(normalizedUsername, jwk);
-      const pubJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
-      const publicKey = JSON.stringify(pubJwk);
-
-      await register(normalizedUsername, password, publicKey, founderKeyRequired ? founderKey.trim() : undefined, inviteRequired ? inviteCode.trim() : undefined);
+      await register(normalizedUsername, password, PARTICIPATION_AGREEMENT_VERSION);
       localStorage.setItem('registration-guide-pending', 'true');
       if (onSuccess) onSuccess();
       else navigate(authReturnPath(location.state), { replace: true });
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : '注册失败，请重试');
+      if (err instanceof ApiError && err.status === 428 && err.code === 'AGREEMENT_REQUIRED') {
+        setAccepted(false);
+        setError('参与协议版本已更新，请刷新页面后重新阅读。');
+      } else setError(err instanceof Error ? err.message : '注册失败，请重试');
     } finally {
       setLoading(false);
     }
@@ -83,7 +63,6 @@ export default function RegisterPage({ onClose, onLogin, onSuccess, closeText = 
   return (
     <PromptModal open title="注册公论" hideActions onConfirm={() => {}} onCancel={close} onClose={close}
       dialogProps={{ style: { width: 'min(400px, 100%)' } }} message={<div style={{ whiteSpace: 'normal' }}>
-        <p className="text-center text-[color:var(--ink-d1d5db)] text-sm mb-6">{inviteRequired ? '公论目前采用邀请注册，请向管理员获取邀请码。' : '创建首位管理员账户'}</p>
         {error && (
           <div role="alert" className="bg-[color:var(--surface-450a0a)] border border-[color:var(--line-991b1b)] text-[color:var(--ink-fecaca-2)] rounded px-3 py-2 text-sm mb-4">
             {error}
@@ -116,23 +95,10 @@ export default function RegisterPage({ onClose, onLogin, onSuccess, closeText = 
               className="auth-input"
             />
           </div>
-          {founderKeyRequired && <div>
-            <label htmlFor="founder-key" className="block text-sm font-medium text-[color:var(--ink-e5e7eb-2)] mb-1">初始发起人密钥</label>
-            <input id="founder-key" type="password" autoComplete="off" value={founderKey}
-              onChange={e => setFounderKey(e.target.value)}
-              placeholder="站点首次初始化时需要"
-              className="auth-input" />
-          </div>}
-          {inviteRequired && <div>
-            <label htmlFor="invite-code" className="block text-sm font-medium text-[color:var(--ink-e5e7eb-2)] mb-1">邀请码</label>
-            <input id="invite-code" type="text" autoComplete="off" autoCapitalize="none" spellCheck={false}
-              value={inviteCode} onChange={e => setInviteCode(e.target.value)} maxLength={200}
-              placeholder="管理员提供的一次性邀请码" className="auth-input" />
-            <p className="mt-1 text-xs text-[color:var(--ink-9ca3af)]">每个邀请码只能注册一个账号，请在有效期内使用。</p>
-          </div>}
+          <ParticipationAgreementField checked={accepted} onChange={setAccepted} />
           <button
             type="submit"
-            disabled={loading || !setupReady}
+            disabled={loading || !accepted}
             style={{ ...dialogStyles.primaryButton, padding: '9px 14px' }}
             className="w-full disabled:opacity-50 disabled:cursor-wait"
           >

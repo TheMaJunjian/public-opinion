@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import request from 'supertest';
 import {afterEach,expect,it} from 'vitest';
 import {bindRoles,replayArchive} from '@gonglun/core';
@@ -11,7 +12,7 @@ import {migrationsFor,runMigrations} from './migrations.js';
 afterEach(cleanupTestDatabases);
 it.each(['read','unread'].flatMap(type=>[false,true].map(settled=>({type,settled}))))('removes obsolete $type records and refunds their net ledger costs, settled=$settled',async({type,settled})=>{
   const app=await createTestApp(),store=app.store;
-  const user=(await request(app).post('/api/register').send({name:'reading removal',password:'test-password-123'})).body.user;
+  const user=(await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'reading removal',password:'test-password-123'})).body.user;
   const before=await store.account(user.id),operating=await store.setting<number>('operating');
   await store.transaction(async()=>{
     const tx=new Mutation(store);
@@ -53,7 +54,7 @@ it.each(['read','unread'].flatMap(type=>[false,true].map(settled=>({type,settled
 
 it.each([false,true])('preserves unrelated shared value investments and refuses ambiguous settled pools, settled=%s',async settled=>{
   const app=await createTestApp(),store=app.store;
-  const user=(await request(app).post('/api/register').send({name:'shared pool',password:'test-password-123'})).body.user;
+  const user=(await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'shared pool',password:'test-password-123'})).body.user;
   await store.transaction(async()=>{
     const tx=new Mutation(store);
     await tx.create(user.id,[{id:'body',type:'text',text:'preserve'}],undefined,'original');

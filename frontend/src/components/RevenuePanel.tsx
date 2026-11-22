@@ -64,7 +64,7 @@ export default function RevenuePanel() {
       )}
 
       <div className="border-t border-[color:var(--line-f3f4f6)] pt-3 text-xs text-[color:var(--ink-6b7280)]">
-        充值分账和运营收入注入必须发起提案，经讨论、结算和生效条件确认后才会进入收入池。
+        这里展示已入账的收入及分配。任何用户都可提出资金方案，新增充值分账及运营收入注入的共同批准流程尚待确定。
       </div>
     </div>
   );

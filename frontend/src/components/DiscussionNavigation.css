@@ -1,6 +1,6 @@
-.discussion-navigation { padding: 10px 12px; border-bottom: 1px solid var(--border-default); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
-.discussion-navigation summary { cursor: pointer; color: var(--text-secondary); }
+.discussion-navigation { padding-top: 12px; border-top: 1px solid var(--dialog-border); overflow-wrap: anywhere; }
+.discussion-navigation summary { cursor: pointer; font-weight: 600; }
 .discussion-navigation nav { margin-top: 4px; }
 .discussion-navigation small { display: block; color: var(--text-secondary); }
-.discussion-navigation button { font: inherit; color: inherit; cursor: pointer; background: none; border: 0; padding: 0; text-decoration: underline; text-underline-offset: 3px; }
-.discussion-navigation-actions { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 8px; }
+.discussion-navigation nav button { font: inherit; color: inherit; cursor: pointer; background: none; border: 0; padding: 0; text-decoration: underline; text-underline-offset: 3px; }
+.discussion-navigation-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }

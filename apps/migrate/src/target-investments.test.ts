@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import {afterEach,expect,it,vi} from 'vitest';
 import request from 'supertest';
 import {randomUUID} from 'node:crypto';
@@ -13,7 +14,7 @@ import {financialFingerprint} from './financial-fingerprint.js';
 afterEach(cleanupTestDatabases);
 async function setup(){
   const app=await createTestApp(),agent=request.agent(app);
-  const {body:session}=await agent.post('/api/register').send({name:'历史投入',password:'test-password'});
+  const {body:session}=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'历史投入',password:'test-password'});
   // Historical ordinary messages paid value into operating funds before this migration.
   const target=await app.store.transaction(async()=>{
     const tx=new Mutation(app.store),message=await tx.create(session.user.id,[{id:'body',type:'text',text:'原目标'}],{protocol:1,wager:0,recommendation:1});

@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import {withTestContribution} from './test-database.js';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
@@ -12,7 +13,7 @@ const data = (value: Record<string,string>): Part => ({id:'data',type:'data',val
 async function setup() {
   const app = await createTestApp(); apps.push(app);
   const agent = request.agent(app);
-  const registered = await agent.post('/api/register').send({name:'annotation-tester',password:'a-good-password'});
+  const registered = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'annotation-tester',password:'a-good-password'});
   expect(registered.status,registered.text).toBe(201);
   const session = registered.body as Session;
   const sent=new Map<string,Message>();

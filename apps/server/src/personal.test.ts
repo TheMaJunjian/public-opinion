@@ -1,4 +1,4 @@
-import { testInvitation } from './test-database.js';
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import {withTestContribution} from './test-database.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
@@ -10,7 +10,7 @@ type App = Awaited<ReturnType<typeof createTestApp>>;
 type Actor = { agent: ReturnType<typeof request.agent>; session: Session };
 const instances: App[] = [];
 const setup = async () => { const app = await createTestApp(); instances.push(app); return app; };
-async function register(app: App, name: string): Promise<Actor> { const agent = request.agent(app); const response = await agent.post('/api/register').send({inviteCode:await testInvitation(app), name, password: 'personal-password' }); expect(response.status).toBe(201); return { agent, session: response.body }; }
+async function register(app: App, name: string): Promise<Actor> { const agent = request.agent(app); const response = await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name, password: 'personal-password' }); expect(response.status).toBe(201); return { agent, session: response.body }; }
 async function send(actor: Actor, parts: Part[]): Promise<Message> { const response = await actor.agent.post('/api/messages').set('x-csrf-token', actor.session.csrf).send(withTestContribution({ requestId: randomUUID(), parts })); expect(response.status, response.text).toBe(201); return response.body.message; }
 async function viewBody(actor:Actor,messageId:string){
   const version=bodyVersion(messageId),key=messageReadingKey(version.messageId);

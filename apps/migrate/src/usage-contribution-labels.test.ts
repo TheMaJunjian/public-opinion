@@ -1,3 +1,4 @@
+import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
 import { replayArchive, updateUsageRewardMessage, type Message, type Json } from '@gonglun/core';
@@ -9,7 +10,7 @@ import { financialFingerprint } from './financial-fingerprint.js';
 afterEach(cleanupTestDatabases);
 it('旧汇总改称使用贡献时不改变余额和原历史，后续自动累计与完整复算保持一致', async () => {
   const app = await createTestApp({ initialGrant: 0 }), store = app.store;
-  const {body:session} = await request(app).post('/api/register').send({name:'名称升级',password:'password'});
+  const {body:session} = await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'名称升级',password:'password'});
   const at=Date.parse('2026-11-01T12:00:00+08:00');
   const first=await updateUsagePoints(store,session.user.id,{action:'start'},at);
   const second=await updateUsagePoints(store,session.user.id,{action:'tick',roundId:first.roundId},at+1000);

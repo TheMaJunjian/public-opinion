@@ -1,6 +1,6 @@
 import type { Message, Reference } from './types.js';
 import { REVIEW_RECORD_RELATIONS } from './moderation.js';
-import { hasReviewContext, reviewContextOf } from './review-context.js';
+import { hasReviewContext, reviewContextOf, REVIEW_REASON_RELATION } from './review-context.js';
 
 /** Display attachment is separate from explicit organization membership. */
 export const DISPLAY_DEPENDENCY_ROLES: Readonly<Record<string, 'source' | 'target' | 'parent'>> = {
@@ -22,6 +22,7 @@ export function messageDisplayDependency(message: Pick<Message, 'id' | 'parts'>)
   const display = message.parts.find(part => part.type === 'display' && part.target);
   if (display?.type === 'display' && display.target) return [display.target];
   const primary = message.parts.find(part => part.type === 'relation'
+    && part.relation !== REVIEW_REASON_RELATION
     && !(part.relation === 'member-of' && !part.roles.member?.length)
     && !((part.id === 'self-stance' || part.id.startsWith('minimum-self-stance-'))
       && ['agree', 'disagree'].includes(part.relation) && part.roles.target?.length === 1

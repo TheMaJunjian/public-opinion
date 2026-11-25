@@ -31,9 +31,12 @@ export function onlineStructuralSource(snapshot: WorkbenchSnapshot, load: Source
   }
   return data;
 }
-type BodyVersion = Pick<Body['message'], 'revision' | 'restricted' | 'moderation'>;
+type BodyVersion = Pick<Body['message'], 'revision' | 'restricted' | 'restrictedStance' | 'restrictedReviewTargets' | 'restrictedReviewSummaries' | 'moderation'>;
 const sameVisibilityAndRevision = (a: BodyVersion, b: BodyVersion) => a.revision === b.revision
-  && !!a.restricted === !!b.restricted && JSON.stringify(a.moderation) === JSON.stringify(b.moderation);
+  && !!a.restricted === !!b.restricted && a.restrictedStance === b.restrictedStance
+  && JSON.stringify(a.restrictedReviewTargets) === JSON.stringify(b.restrictedReviewTargets)
+  && JSON.stringify(a.restrictedReviewSummaries) === JSON.stringify(b.restrictedReviewSummaries)
+  && JSON.stringify(a.moderation) === JSON.stringify(b.moderation);
 const bodyFrom = (page: WorkbenchSnapshot, message: Body['message'], relation?: Body['relation']): Body => ({ message, relation,
   stake: page.stakes[message.id], tags: page.tagCounts[message.id], attention: page.attentionUsers[message.id] });
 function cacheBody(handle: Source, body: Body) {

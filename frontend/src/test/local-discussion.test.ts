@@ -17,6 +17,18 @@ async function saved(draft: LocalDiscussion) {
   return result;
 }
 
+it('saves a local review reason separately from its vote with pinned decision and original references',async()=>{
+  const draft=new LocalDiscussion(createLocalMessageFile(),'作者');
+  const original=await draft.createMessage('root',{content:'原文'});
+  const vote=await draft.createRelation('root',{relationType:'REVIEW',targetRefs:[target(original.id)],payload:{verdict:'reject',content:'理由正文'}});
+  const rows=(await saved(draft)).messages,reason=rows.find(row=>row.content==='理由正文')!;
+  expect(rows).toHaveLength(3);
+  expect(vote.parts?.some(part=>part.type==='text')).toBe(false);
+  expect(reason.parts).toEqual(expect.arrayContaining([
+    expect.objectContaining({relation:'review-context',roles:{target:[expect.objectContaining({reference:{messageId:original.id,revision:1}})]}}),
+    expect.objectContaining({relation:'review-reason',roles:{target:[expect.objectContaining({reference:{messageId:vote.id,revision:1}})]}}),
+  ]));
+});
 it('records multiple local participants and full relations, preserving identity after export and reopening', async () => {
   const original = createLocalMessageFile(), alice = new LocalDiscussion(original, '甲');
   const first = await alice.createMessage('root', { content: '讨论议题' });

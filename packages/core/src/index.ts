@@ -19,5 +19,6 @@ export * from './feed.js';
 export { hasModeratedContent } from './moderation-content.js';
 export * from './moderation.js';
 export * from './review-context.js';
+export * from './review-decision-facts.js';
 export { structureSnapshot } from './structure-snapshot.js';
 export { relationLabelPart, relationLabelPart as referenceLabelPart } from './relation-label.js';

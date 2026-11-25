@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import request from 'supertest';
 import { afterEach, expect, it } from 'vitest';
-import { replayArchive, messageDisplayDependency, reviewContextPart, decodeWorkbenchSnapshot, structureSnapshot, type WorkbenchSnapshot, type Part, type ReviewStakeItem } from '@gonglun/core';
+import { replayArchive, messageDisplayDependency, reviewContextPart, reviewReasonPart, bodyVersion, decodeWorkbenchSnapshot, structureSnapshot, type WorkbenchSnapshot, type Message, type Part, type Reference, type ReviewStakeItem } from '@gonglun/core';
 import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { cleanupTestDatabases, createTestApp } from './test-database.js';
 import { migrateModeration } from '../../migrate/src/moderation.js';
@@ -10,8 +10,67 @@ import { Mutation } from './db.js';
 import { enrollModeration } from './moderation.js';
 import { moderationCase } from './moderation.js';
 import { sanitizeModeration } from './moderation-visibility.js';
+import { rebindLegacyReviewFragments } from './legacy-review-fragments.js';
 
 afterEach(cleanupTestDatabases);
+
+function reasonFor(result:{message:Message;change:{messages:Message[]}}):Message {
+  const reasons=result.change.messages.filter(message=>message.parts.some(p=>p.type==='relation'&&p.relation==='review-reason'
+    &&p.roles.target?.[0]?.reference.messageId===result.message.id));
+  expect(reasons).toHaveLength(1);
+  return reasons[0]!;
+}
+
+it('rebinds only a migrated vote fragment at its exact historical revision across old corrections and new citations',async()=>{
+  const t=await setup(),original=await t.publish('上层原文');
+  const vote=await t.action(t.one,'review',original.id,{verdict:'reject'},12);
+  expect(vote.status,vote.text).toBe(201);
+  const decision=await t.app.store.message(vote.body.message.id),scope=reviewContextPart({messageId:original.id,revision:1});
+  const oldTarget={messageId:decision.id,revision:2,partId:'words'};
+  const words:Part={id:'words',type:'text',text:'abc'};
+  const {reason,correction,citation}=await t.app.store.transaction(async()=>{
+    const tx=new Mutation(t.app.store);
+    await tx.put({...decision,revision:2,parts:[...decision.parts,words]});
+    await tx.put({...decision,revision:3,parts:[...decision.parts,{...words,text:'head'}]});
+    const reason=await tx.create(t.one.user.id,[words,scope,reviewReasonPart({messageId:decision.id,revision:2})]);
+    await t.app.store.db.prepare('INSERT INTO legacy_review_reason_versions VALUES($1,2,$2,1)').run(decision.id,reason.id);
+    const correction=await tx.create(t.two.user.id,[{id:'corrected-body',type:'text',text:'axc'},
+      {id:'fix',type:'relation',relation:'correct',roles:{target:[{id:'t',reference:{...oldTarget,range:{start:1,end:2}}}]}},
+      {id:'data',type:'data',value:{correctionKind:'TEXT',correctionBeforeContent:'abc',value:'x'}},scope]);
+    const version=bodyVersion(decision.id,2,[{messageId:correction.id,revision:1,kind:'TEXT'}]);
+    const citation=await tx.create(t.two.user.id,[{id:'cite',type:'relation',relation:'reference',roles:{
+      target:[{id:'t',reference:{...oldTarget,context:{kind:'BODY',version},range:{start:0,end:2}}}]}},scope]);
+    await tx.commit();
+    return {reason,correction,citation};
+  });
+  const deps=await t.app.store.db.prepare('SELECT "targetId","targetRevision" FROM moderation_dependencies WHERE "sourceId"=$1').all(citation.id);
+  expect(deps).toEqual(expect.arrayContaining([{targetId:reason.id,targetRevision:1},{targetId:correction.id,targetRevision:1}]));
+  expect(deps.some(row=>row.targetId===decision.id)).toBe(false);
+  expect((await t.action(t.author,'review-settle',original.id)).status).toBe(201);
+  const detail=await t.observer.agent.get(`/api/moderation/messages/${original.id}`);
+  expect(detail.status,detail.text).toBe(200);
+  expect(detail.body.records.find((row:Message)=>row.id===correction.id)).toMatchObject({content:'axc',targetRefs:[{reference:{messageId:reason.id,revision:1,partId:'words'}}]});
+  const resolved={messageId:reason.id,revision:1,partId:'words',range:{start:0,end:2},context:{kind:'BODY',version:bodyVersion(reason.id,1,[{messageId:correction.id,revision:1,kind:'TEXT'}])}};
+  expect(detail.body.records.find((row:Message)=>row.id===citation.id)).toMatchObject({targetRefs:[{text:'ax',reference:resolved}]});
+  expect((await t.app.store.message(citation.id)).parts).toEqual(citation.parts);
+  const posted=await t.send(t.observer,citation.parts,{recommendation:1});
+  expect(posted.status,posted.text).toBe(201);
+  expect(posted.body.message.parts[0].roles.target[0].reference).toMatchObject({messageId:reason.id,revision:1,partId:'words',context:{version:resolved.context.version}});
+  const untouched:Reference[]=[{messageId:decision.id,revision:2},{...oldTarget,partId:'relation'},{...oldTarget,revision:3},{messageId:decision.id,partId:'words'}];
+  const refs:Part[]=[{id:'link',type:'relation',relation:'reference',roles:{target:untouched.map((reference,i)=>({id:String(i),reference}))}}];
+  expect(await rebindLegacyReviewFragments(t.app.store,[{parts:refs}])).toEqual([{parts:refs}]);
+  await t.app.store.transaction(async()=>{
+    const tx=new Mutation(t.app.store);
+    await tx.put({...decision,revision:4,parts:[...decision.parts,words,{id:'quote',type:'text',text:'受限引文'}]});
+    await tx.put({...reason,revision:2,parts:[words,scope,reviewReasonPart({messageId:decision.id,revision:4})]});
+    await t.app.store.db.prepare('INSERT INTO legacy_review_reason_versions ("decisionId","decisionRevision","reasonId","reasonRevision") VALUES($1,4,$2,2)').run(decision.id,reason.id);
+    await tx.commit();
+  });
+  const mixedRef={...oldTarget,revision:4};
+  const mixedParts:Part[]=['correct','reference'].map(relation=>({id:relation,type:'relation',relation,roles:{target:[{id:'t',reference:{...mixedRef}}]}}));
+  const [mixed]=await rebindLegacyReviewFragments(t.app.store,[{parts:mixedParts}]);
+  expect(mixed!.parts).toMatchObject([{roles:{target:[{reference:mixedRef}]}},{roles:{target:[{reference:{messageId:reason.id,revision:2,partId:'words'}}]}}]);
+});
 
 it('confirms an already committed review discussion after its reading permission changes without charging again',async()=>{
   const t=await setup(),target=await t.publish();
@@ -26,28 +85,72 @@ it('confirms an already committed review discussion after its reading permission
   expect(await t.app.store.latestSequence()).toBe(sequence);
 });
 
+it('stores one funded reason per decision and rolls back the vote when the reason is unaffordable',async()=>{
+  const t=await setup(),target=await t.publish(),scope={messageId:target.id,revision:1};
+  const input:Part[]=[{id:'review-context',type:'text',text:'自写审核理由'},
+    {id:'vote',type:'relation',relation:'review',roles:{target:[{id:'target',reference:scope}]}},
+    {id:'data',type:'data',value:{verdict:'pass',content:'自写审核理由',untrusted:'多余数据'}}];
+  const options={reviewWager:3,requestId:randomUUID()};
+  const keys=generateKeyPairSync('ed25519'),deviceId='review-device',agent=request.agent(t.app);
+  const registration=await agent.post('/api/register').send({name:'signed-reviewer',password:'password',deviceId,
+    publicKey:JSON.stringify(keys.publicKey.export({format:'jwk'})),acceptedAgreementVersion:PARTICIPATION_AGREEMENT_VERSION});
+  expect(registration.status,registration.text).toBe(201);
+  const signer=registration.body.user.id,before=await t.app.store.account(signer);
+  const body={...options,parts:input},path='/api/messages';
+  const payload=JSON.stringify({method:'POST',path,bodyHash:createHash('sha256').update(JSON.stringify(body)).digest('hex'),requestId:options.requestId});
+  const signature=sign(null,Buffer.from(payload),keys.privateKey).toString('base64');
+  const send=()=>agent.post(path).set('x-csrf-token',registration.body.csrf).set('x-device-id',deviceId).set('x-request-id',options.requestId)
+    .set('x-signed-payload',Buffer.from(payload).toString('base64')).set('x-signature',signature).send(body);
+  const votes=await Promise.all([send(),send()]);
+  for(const vote of votes)expect(vote.status,vote.text).toBe(201);
+  const result=votes[0]!.body,decision=result.message,reason=reasonFor(result);
+  expect(reasonFor(votes[1]!.body).id).toBe(reason.id);
+  expect(JSON.stringify(decision)).not.toMatch(/自写审核理由|多余数据/);
+  expect(reason).toMatchObject({authorId:signer,spending:{protocol:1,recommendation:1,wager:0,reviewFee:6,reviewDeposit:10}});
+  expect(reason.parts.filter(part=>part.type==='text')).toEqual([input[0]]);
+  expect(reason.parts).toContainEqual({...reviewContextPart(scope),id:'review-context-1'});
+  expect(reason.parts).toContainEqual(reviewReasonPart({messageId:decision.id,revision:1}));
+  expect(await moderationCase(t.app.store,decision.id)).toBeUndefined();
+  expect(await moderationCase(t.app.store,reason.id)).toMatchObject({status:'pending',fee:6,deposit:10});
+  expect(await t.app.store.db.prepare('SELECT "messageId",payload,signature FROM signatures WHERE "userId"=$1').all(signer)).toEqual([{messageId:decision.id,payload,signature}]);
+  const after=await t.app.store.account(signer);
+  expect(before.available-after.available).toBe(22); // Decision 1+3, reason 1+1+6+10.
+  expect(after.locked-before.locked).toBe(20);
+  const fake=await t.send(t.two,[{id:'body',type:'text',text:'冒认理由'},reviewReasonPart({messageId:decision.id,revision:1})],{recommendation:1});
+  expect(fake.status).toBe(400);
+  const remaining=(await t.app.store.account(t.two.user.id)).available-17-4;
+  expect((await t.send(t.two,[{id:'body',type:'text',text:'保留四点用于审核'}],{recommendation:remaining})).status).toBe(201);
+  const available=await t.app.store.account(t.two.user.id),sequence=await t.app.store.latestSequence();
+  expect(available.available).toBe(4);
+  expect((await t.send(t.two,input,{reviewWager:3})).status).toBe(400);
+  expect(await t.app.store.latestSequence()).toBe(sequence);
+  expect(await t.app.store.account(t.two.user.id)).toEqual(available);
+  expect((await t.action(t.two,'review',target.id,{verdict:'pass'},3)).status).toBe(201);
+  await conserve(t.app);
+});
+
 it('keeps corrected review reasons, replies, citations and organizations in the same review discussion without changing the vote',async()=>{
   const t=await setup(),target=await t.publish('被审核正文');
   const response=await t.action(t.one,'review',target.id,{verdict:'pass'},2,'审核理有');
   expect(response.status,response.text).toBe(201);
-  const review=response.body.message,original=await t.app.store.message(review.id);
+  const review=response.body.message,reason=reasonFor(response.body),original=await t.app.store.message(review.id);
   const scope={messageId:target.id,revision:1};
   const command=async(body:Record<string,unknown>,path='/relations')=>{
     const result=await t.one.agent.post(`/api/ui${path}`).set('x-csrf-token',t.one.csrf).set('x-request-id',randomUUID())
       .send({recommendation:1,reviewContext:scope,...body});
     expect(result.status,result.text).toBe(201);return result.body;
   };
-  const correction=await command({relationType:'CORRECT',targetRefs:[{kind:'text-fragment',messageId:review.id,
-    reference:{messageId:review.id,revision:1,partId:'reason',path:['text']}}],payload:{correctionContent:'审核理由',correctionKind:'TEXT'}});
+  const correction=await command({relationType:'CORRECT',targetRefs:[{kind:'text-fragment',messageId:reason.id,
+    reference:{messageId:reason.id,revision:1,partId:'reason',path:['text']}}],payload:{correctionContent:'审核理由',correctionKind:'TEXT'}});
   const reply=await command({content:'对审核理由的回复'},'/messages');
   const relation=await command({relationType:'REPLY',sourceMessageId:reply.id,targetRefs:[{kind:'message',messageId:review.id}]});
-  const citation=await command({relationType:'REFERENCE',sourceMessageId:reply.id,targetRefs:[{kind:'text-fragment',messageId:review.id,
-    reference:{messageId:review.id,revision:1,partId:'reason',range:{start:0,end:2}}}]});
+  const citation=await command({relationType:'REFERENCE',sourceMessageId:reply.id,targetRefs:[{kind:'text-fragment',messageId:reason.id,
+    reference:{messageId:reason.id,revision:1,partId:'reason',range:{start:0,end:2}}}]});
   const group=await command({relationType:'CLASSIFY',targetRefs:[review,reply].map(message=>({kind:'message',messageId:message.id})),payload:{title:'审核理由整理'}});
   const detail=await t.one.agent.get(`/api/moderation/messages/${target.id}`);
   expect(detail.status,detail.text).toBe(200);
   const ids=detail.body.records.map((record:any)=>record.id);
-  expect(ids).toEqual(expect.arrayContaining([review.id,correction.id,reply.id,relation.id,citation.id,group.id]));
+  expect(ids).toEqual(expect.arrayContaining([review.id,reason.id,correction.id,reply.id,relation.id,citation.id,group.id]));
   expect(new Set(ids).size).toBe(ids.length);
   expect(detail.body.stakes).toEqual([
     expect.objectContaining({sourceMessageId:review.id,side:'PRO',amount:2,kind:'wager',round:1,user:expect.objectContaining({id:t.one.user.id})}),
@@ -133,10 +236,8 @@ it.each(['CLASSIFY','SUMMARY','MERGE','ARRANGE'])('organizes review messages wit
   expect(await t.app.store.message(review.id)).toEqual(review);
   await conserve(t.app);
 });
-async function setup(stageSize=3){
+async function setup(){
   const app=await createTestApp({moderation:true});
-  // Invitation sizes do not impose settlement thresholds.
-  await app.store.transaction(async()=>app.store.set('rules',{...await app.store.rules(),moderation:{...(await app.store.rules()).moderation!,stages:[stageSize]}}));
   const users=[];
   for(const name of ['author','reviewer-one','reviewer-two','observer','reviewer-three']){
     const agent=request.agent(app),res=await agent.post('/api/register').send({name,password:'password',acceptedAgreementVersion:PARTICIPATION_AGREEMENT_VERSION});
@@ -148,7 +249,6 @@ async function setup(stageSize=3){
     ...(reason?[{id:'reason',type:'text' as const,text:reason}]:[]),
     {id:'relation',type:'relation',relation:name,roles:target?{target:[{id:'target',reference:{messageId:target}}]}:{}},
     {id:'data',type:'data',value:data}],{reviewWager});
-  expect((await observer.agent.put('/api/moderation/availability').set('x-csrf-token',observer.csrf).send({enabled:false})).status).toBe(200);
   const publish=async(secret='待审正文 SECRET-CONTENT')=>{
     const res=await send(author,[{id:'body',type:'text',text:secret}],{recommendation:1});expect(res.status,res.text).toBe(201);return res.body.message;
   };
@@ -169,6 +269,9 @@ it('returns only the current viewer latest vote and resets it for a new review r
   expect((await detail(t.one)).summary.viewerVote).toEqual({messageId:latest.body.message.id,verdict:'pass'});
   expect((await t.action(t.one,'review-settle',m.id)).status).toBe(201);
   expect((await t.action(t.two,'review-appeal',m.id,{},undefined,'新一轮审核')).status).toBe(201);
+  const stale=await t.action(t.one,'review',m.id,{verdict:'pass',reviewRound:1},2);
+  expect(stale.status).toBe(409);
+  expect(stale.body.code).toBe('REVIEW_ROUND_CHANGED');
   expect((await detail(t.one)).target.moderation.viewerVote).toBeUndefined();
 });
 it('releases a legacy pending settlement immediately and never pays it twice',async()=>{
@@ -202,7 +305,6 @@ it('settles with one reviewer and lets a funded minority overturn a larger numbe
   expect((await t.action(t.three,'review',m.id,{verdict:'reject'},20)).status).toBe(201);
   const detail=(await t.three.agent.get(`/api/moderation/messages/${m.id}`)).body;
   expect(detail).toMatchObject({canSettle:true,summary:{pass:14,reject:30,passReviewers:1,rejectReviewers:1,releaseAt:null}});
-  expect((await moderationCase(t.app.store,m.id))?.stage).toBe(0);
   expect((await t.action(t.three,'review-settle',m.id)).status).toBe(201);
   expect((await moderationCase(t.app.store,m.id))?.status).toBe('rejected');
   await assertFinalized(t,m.id);await conserve(t.app);
@@ -234,7 +336,10 @@ it.each(['pass','unknown','reject'] as const)('preserves the %s result’s readi
   const check=async()=>{
     const detail=await t.observer.agent.get(`/api/moderation/messages/${message.id}`);
     const visible=previous!=='reject';
-    expect(detail.body).toMatchObject({restricted:!visible,canReview:visible,canSettle:visible,assignment:null});
+    expect(detail.body).toMatchObject({restricted:!visible,canReview:visible,canSettle:visible});
+    const priorParticipant=await t.one.agent.get(`/api/moderation/messages/${message.id}`);
+    expect(priorParticipant.body.canReview).toBe(visible);
+    expect(priorParticipant.text.includes(text)).toBe(visible);
     const queue=await t.observer.agent.get('/api/moderation/queue');
     expect(queue.body.items.some((row:{messageId:string})=>row.messageId===message.id)).toBe(visible);
     expect((await request(t.app).get(`/api/messages/${message.id}`)).text.includes(text)).toBe(visible);
@@ -288,20 +393,21 @@ it('keeps a legacy same-round reopening private after an earlier public appeal',
   expect(detail.text).not.toContain(text);
 });
 
-it('paginates every readable pending version for an opted-out reader and excludes rejected originals and their quotations',async()=>{
+it('paginates every readable pending version for a reader and excludes rejected originals and their quotations',async()=>{
   const t=await setup(),target=await t.publish('仍待审核的原文');
   const quote=await t.send(t.author,[{id:'body',type:'text',text:'引用原文的内容'},
     {id:'source',type:'relation',relation:'reference',roles:{target:[{id:'t',reference:{messageId:target.id,revision:1}}]}}],{recommendation:1});
   expect(quote.status,quote.text).toBe(201);
   const firstQueue=await t.observer.agent.get('/api/moderation/queue');
   expect(firstQueue.body.items.map((row:{messageId:string})=>row.messageId)).toEqual([quote.body.message.id,target.id]);
-  expect(firstQueue.body.enabled).toBe(false);
   expect((await request(t.app).get('/api/moderation/queue')).status).toBe(401);
   expect((await t.action(t.one,'review',target.id,{verdict:'reject'},12)).status).toBe(201);
   expect((await t.action(t.one,'review-settle',target.id)).status).toBe(201);
   expect((await t.observer.agent.get('/api/moderation/queue')).body.items).toEqual([]);
-  expect((await t.action(t.author,'review-appeal',target.id,{},undefined,'重新核对')).status).toBe(201);
-  expect((await t.observer.agent.get('/api/moderation/queue')).body.items).toEqual([]);
+  const appeal=await t.action(t.author,'review-appeal',target.id,{},undefined,'重新核对');
+  expect(appeal.status,appeal.text).toBe(201);
+  const appealReason=reasonFor(appeal.body);
+  expect((await t.observer.agent.get('/api/moderation/queue')).body.items.map((row:{messageId:string})=>row.messageId)).toEqual([appealReason.id]);
   expect((await t.observer.agent.get(`/api/moderation/messages/${target.id}`)).body).toMatchObject({canReview:false,canSettle:false});
 
   const ids:string[]=[];
@@ -317,13 +423,13 @@ it('paginates every readable pending version for an opted-out reader and exclude
   expect(first.body.items.map((row:{messageId:string})=>row.messageId)).toEqual(ids.slice(1).reverse());
   expect(first.body.nextCursor).toBeTruthy();
   const last=await t.observer.agent.get('/api/moderation/queue').query({before:first.body.nextCursor});
-  expect(last.body).toMatchObject({items:[{messageId:ids[0]}],nextCursor:null});
+  expect(last.body).toMatchObject({items:[{messageId:ids[0]},{messageId:appealReason.id}],nextCursor:null});
 },45000);
 
-it('lets an unassigned reader settle the publication self stake without an extra review',async()=>{
+it('lets a reader settle the publication self stake without an extra review',async()=>{
   const t=await setup(),m=await t.publish();
   expect((await t.author.agent.get(`/api/moderation/messages/${m.id}`)).body).toMatchObject({canSettle:true,summary:{pass:10,reviewerCount:0}});
-  expect((await t.observer.agent.get(`/api/moderation/messages/${m.id}`)).body).toMatchObject({canSettle:true,assignment:null});
+  expect((await t.observer.agent.get(`/api/moderation/messages/${m.id}`)).body).toMatchObject({canSettle:true});
   expect((await request(t.app).get(`/api/moderation/messages/${m.id}`)).body).toMatchObject({canReview:false,canSettle:false});
   const before=await t.app.store.account(t.author.user.id);
   const settled=await t.action(t.observer,'review-settle',m.id);
@@ -347,7 +453,7 @@ it('counts publication self stakes as pass capital without a reviewer vote or re
   expect(initial.body.stakes).toEqual([expect.objectContaining({sourceMessageId:m.id,revision:1,kind:'self',side:'PRO',amount:10,round:1,
     user:expect.objectContaining({id:t.author.user.id,username:'author'})})]);
   const observer=await t.observer.agent.get(`/api/moderation/messages/${m.id}`);
-  expect(observer.body).toMatchObject({canReview:true,reviewEligibility:'eligible',readableWithoutAssignment:true,target:{id:m.id,content:expect.stringContaining('SECRET-CONTENT')}});
+  expect(observer.body).toMatchObject({canReview:true,reviewEligibility:'eligible',target:{id:m.id,content:expect.stringContaining('SECRET-CONTENT')}});
   expect((await request(t.app).get(`/api/moderation/messages/${m.id}`)).body).toMatchObject({canReview:false,reviewEligibility:'login-required',target:{id:m.id,content:expect.stringContaining('SECRET-CONTENT')}});
   expect((await t.one.agent.get(`/api/moderation/messages/${m.id}`)).body).toMatchObject({canReview:true,reviewEligibility:'eligible'});
   expect((await t.action(t.one,'review',m.id,{verdict:'pass'},2)).status).toBe(201);
@@ -377,7 +483,7 @@ it('lets any reader including the author submit an explicit review, while self s
   const t=await setup(),m=await t.publish();
   for(const actor of [t.observer,t.author]){
     const access=await actor.agent.get(`/api/moderation/messages/${m.id}`);
-    expect(access.body).toMatchObject({canReview:true,reviewEligibility:'eligible',assignment:null});
+    expect(access.body).toMatchObject({canReview:true,reviewEligibility:'eligible'});
     expect((await t.action(actor,'review',m.id,{verdict:'pass'},2)).status).toBe(201);
   }
   for(const actor of [t.one,t.two])expect((await t.action(actor,'review',m.id,{verdict:'reject'},2)).status).toBe(201);
@@ -396,9 +502,11 @@ it('ends voluntary reviewer access immediately after rejection settlement',async
   for(const actor of [t.observer,t.one])expect((await t.action(actor,'review',m.id,{verdict:'reject'},8)).status).toBe(201);
   expect((await t.action(t.observer,'review-settle',m.id)).status).toBe(201);
   const access=await t.observer.agent.get(`/api/moderation/messages/${m.id}`);
-  expect(access.body).toMatchObject({canReview:false,assignment:null,restricted:true,readableWithoutAssignment:false,target:{content:'',restricted:true}});
+  expect(access.body).toMatchObject({canReview:false,restricted:true,target:{content:'',restricted:true}});
   const hidden=await request(t.app).get(`/api/moderation/messages/${m.id}`);
-  expect(hidden.text).not.toContain('SECRET-CONTENT');expect(hidden.body.stakes).toEqual([]);
+  expect(hidden.text).not.toContain('SECRET-CONTENT');
+  expect(hidden.body.stakes).toEqual(access.body.stakes);
+  expect(hidden.body.stakes.filter((stake:{kind:string})=>stake.kind==='wager')).toHaveLength(2);
   expect((await t.action(t.observer,'review',m.id,{verdict:'pass'},8)).status).toBe(403);
   expect((await t.author.agent.get(`/api/moderation/messages/${m.id}`)).body.target.content).toContain('SECRET-CONTENT');
   await conserve(t.app);
@@ -450,14 +558,13 @@ it('stakes an appeal against an approved conclusion on reject, reverses old paym
   expect(winningPayments.reduce((sum,p)=>sum+p.amount,0)).toBe(40);
   const appealPayout=winningPayments.find(p=>p.userId===t.observer.user.id)!.amount;
   expect(appealPayout).toBeGreaterThan(10);
-  expect((await t.app.store.account(t.observer.user.id)).available).toBe(before.available-17+appealPayout+2);
+  expect((await t.app.store.account(t.observer.user.id)).available).toBe(before.available-17-18+appealPayout+2);
   expect(await t.app.store.db.prepare(`SELECT 1 FROM ledger WHERE "userId"=$1 AND reason='审核参与报酬'`).get(t.observer.user.id)).toBeUndefined();
   await conserve(t.app);
 });
 
 it('pays only the first three distinct participants, including a losing reviewer, while later reviewers earn wrong-side wagers',async()=>{
-  const t=await setup(5);
-  await t.observer.agent.put('/api/moderation/availability').set('x-csrf-token',t.observer.csrf).send({enabled:true});
+  const t=await setup();
   const m=await t.publish(),before=await t.app.store.account(t.one.user.id);
   for(const actor of [t.one,t.one])expect((await t.action(actor,'review',m.id,{verdict:'reject'},8)).status).toBe(201);
   const repeated=(await t.author.agent.get(`/api/moderation/messages/${m.id}`)).body.stakes as ReviewStakeItem[];
@@ -478,26 +585,29 @@ it('pays only the first three distinct participants, including a losing reviewer
 it('settles the initial and all appeal self stakes after two reversals, retaining each round’s earned rewards',async()=>{
   const t=await setup(),before=await t.app.store.account(t.author.user.id),m=await t.publish();
   for(let round=1;round<=3;round++){
-    for(const actor of [t.one,t.two])expect((await t.action(actor,'review',m.id,{verdict:round===3?'pass':'reject'},round===3?2:8)).status).toBe(201);
-    expect((await t.action(t.one,'review-settle',m.id)).status).toBe(201);await assertFinalized(t,m.id);await conserve(t.app);
+    const voters=round===1?[t.one,t.two]:[t.author];
+    for(const actor of voters)expect((await t.action(actor,'review',m.id,{verdict:round===3?'pass':'reject'},round===3?2:8)).status).toBe(201);
+    expect((await t.action(voters[0]!,'review-settle',m.id)).status).toBe(201);await assertFinalized(t,m.id);await conserve(t.app);
     if(round<3){
       const balance=await t.app.store.account(t.author.user.id);
+      const settlement=(await moderationCase(t.app.store,m.id))!.settlement!;
+      const reversed=settlement.payouts.filter(p=>p.userId===t.author.user.id&&p.kind==='wager').reduce((sum,p)=>sum+p.amount,0);
       const input:Part[]=[{id:'reason',type:'text',text:'补充证据申请复核'},
         {id:'appeal',type:'relation',relation:'review-appeal',roles:{target:[{id:'target',reference:{messageId:m.id}}]}}];
       const requestId=randomUUID();
       const replies=await Promise.all([t.send(t.author,input,{requestId}),t.send(t.author,input,{requestId})]);
       for(const reply of replies)expect(reply.status,reply.text).toBe(201);
       expect(replies[0]!.body.message.id).toBe(replies[1]!.body.message.id);
-      expect((await t.app.store.account(t.author.user.id)).available).toBe(balance.available-17);
+      expect((await t.app.store.account(t.author.user.id)).available).toBe(balance.available-17-18-reversed);
       expect((await moderationCase(t.app.store,m.id))?.deposit).toBe((round+1)*10);
     }
   }
-  const authorPayout=Number((await t.app.store.db.prepare(`SELECT SUM(amount) AS amount FROM ledger WHERE reason='审核押注结算' AND "userId"=$1`).get(t.author.user.id))?.amount);
+  const authorPayout=Number((await t.app.store.db.prepare(`SELECT SUM(amount) AS amount FROM ledger WHERE reason IN ('审核押注结算','审核押注冲正') AND "userId"=$1`).get(t.author.user.id))?.amount);
   expect(authorPayout).toBeGreaterThan(30);
-  expect((await t.app.store.account(t.author.user.id)).available).toBe(before.available-46+authorPayout);
-  expect((await t.app.store.account(t.author.user.id)).locked).toBe(before.locked+1);
-  expect((await t.app.store.db.prepare(`SELECT COUNT(*) AS n FROM moderation_deposits WHERE "payerId"=$1 AND verdict='pass'`).get(t.author.user.id))?.n).toBe(3);
-  expect(Number((await t.app.store.db.prepare(`SELECT SUM(amount) AS amount FROM ledger WHERE reason='审核参与报酬'`).get())?.amount)).toBe(12);
+  expect((await t.app.store.account(t.author.user.id)).available).toBe(before.available-52-2*18+authorPayout);
+  expect((await t.app.store.account(t.author.user.id)).locked).toBe(before.locked+1+2*17);
+  expect((await t.app.store.db.prepare(`SELECT COUNT(*) AS n FROM moderation_deposits WHERE "caseId"=$1 AND "payerId"=$2 AND verdict='pass'`).get((await moderationCase(t.app.store,m.id))!.id,t.author.user.id))?.n).toBe(3);
+  expect(Number((await t.app.store.db.prepare(`SELECT SUM(amount) AS amount FROM ledger WHERE reason='审核参与报酬'`).get())?.amount)).toBe(8);
   expect((await t.app.store.db.prepare(`SELECT COUNT(*) AS n FROM moderation_round_fees WHERE paid`).get())?.n).toBe(3);
   await conserve(t.app);
 },30000);
@@ -649,8 +759,9 @@ it('pays rejected deposits to the rejecting side and reverses positions on appea
   expect((await t.observer.agent.get(`/api/messages/${m.id}`)).text).not.toContain('SECRET-CONTENT');
   expect((await t.action(t.author,'review-appeal',m.id,{},undefined,'请重新核对规则')).status).toBe(201);
   expect(await t.app.store.setting('moderation-fund')).toBe(0);
-  for(const actor of [t.one,t.two])expect((await t.action(actor,'review',m.id,{verdict:'pass'},3,'复核通过')).status).toBe(201);
-  expect((await t.action(t.two,'review-settle',m.id)).status).toBe(201);
+  expect((await t.action(t.one,'review',m.id,{verdict:'pass'},3)).status).toBe(403);
+  expect((await t.action(t.author,'review',m.id,{verdict:'pass'},3,'复核通过')).status).toBe(201);
+  expect((await t.action(t.author,'review-settle',m.id)).status).toBe(201);
   await conserve(t.app);
 });
 it('converts stances on review decisions while preserving discussion of the reason',async()=>{
@@ -662,7 +773,7 @@ it('converts stances on review decisions while preserving discussion of the reas
   expect(response.body.message.parts).toContainEqual(expect.objectContaining({relation:'review'}));
   expect(response.body.message.parts.find((p:any)=>p.type==='data').value).toMatchObject({verdict:'pass',convertedFrom:first.body.message.id});
   expect(response.body.message.spending).toMatchObject({wager:0,reviewWager:2});
-  const reason=await t.send(t.two,[{id:'relation',type:'relation',relation:'disagree',roles:{target:[{id:'target',reference:{messageId:first.body.message.id,partId:'reason'}}]}}],{wager:1});
+  const reason=await t.send(t.two,[{id:'relation',type:'relation',relation:'disagree',roles:{target:[{id:'target',reference:{messageId:reasonFor(first.body).id,partId:'reason'}}]}}],{wager:1});
   expect(reason.status,reason.text).toBe(201);expect(reason.body.message.parts.some((p:any)=>p.relation==='review')).toBe(false);
   const forged=await t.send(t.two,[{id:'relation',type:'relation',relation:'review',roles:{target:[{id:'target',reference:{messageId:m.id}}]}},
     {id:'data-one',type:'data',value:{verdict:'pass'}},{id:'data-two',type:'data',value:{snapshotHash:'forged',reviewRuleVersion:999}}],{reviewWager:2});
@@ -808,7 +919,7 @@ it('replaces rejected content and dependent quotations, invalidates cached depen
   expect((await t.action(t.one,'review-appeal',m.id,{},undefined,'越权复核')).status).toBe(403);
   expect((await t.action(t.one,'review',m.id,{verdict:'pass'},5)).body.code).toBe('CONTENT_RESTRICTED');
   expect((await t.action(t.author,'review-appeal',m.id,{},undefined,'补充证据，请复核')).status).toBe(201);
-  expect((await t.one.agent.get(`/api/messages/${m.id}`)).text).toContain('SECRET-CONTENT');
+  expect((await t.one.agent.get(`/api/messages/${m.id}`)).text).not.toContain('SECRET-CONTENT');
   await conserve(t.app);
 });
 
@@ -823,7 +934,7 @@ it('keeps a rejected historical revision hidden when a newer revision is public'
   const oldReview=await t.author.agent.get(`/api/moderation/messages/${m.id}?revision=1`);
   expect(oldReview.body.target).toMatchObject({id:m.id,revision:1,content:'OLD-PRIVATE-BODY'});expect(JSON.stringify(oldReview.body.target)).not.toContain('NEW-PUBLIC-BODY');
   const hiddenReview=await t.observer.agent.get(`/api/moderation/messages/${m.id}?revision=1`);
-  expect(hiddenReview.body.target).toMatchObject({id:m.id,revision:1,restricted:true});expect(hiddenReview.text).not.toContain('OLD-PRIVATE-BODY');expect(JSON.stringify(hiddenReview.body.target)).not.toContain('NEW-PUBLIC-BODY');
+  expect(hiddenReview.body.target).toMatchObject({id:m.id,revision:1,restricted:true,restrictedReviewTargets:[{messageId:m.id,revision:1}]});expect(hiddenReview.text).not.toContain('OLD-PRIVATE-BODY');expect(JSON.stringify(hiddenReview.body.target)).not.toContain('NEW-PUBLIC-BODY');
   const oldTargetRefs=[
     {kind:'message',messageId:m.id,reference:{messageId:m.id,revision:1}},
     {kind:'text-fragment',messageId:m.id,text:'OLD-PRIVATE-BODY',hash:'PRIVATE-HASH',reference:{messageId:m.id,revision:1,partId:'body',range:{start:0,end:3}}},
@@ -839,6 +950,38 @@ it('keeps a rejected historical revision hidden when a newer revision is public'
   expect(oldReference.status).toBe(409);
   expect((await t.observer.agent.post('/api/ui/body-versions/resolve').send({format:2,messageId:m.id,revision:1,corrections:[]})).status).toBe(403);
   const queue=await t.one.agent.get('/api/moderation/queue');expect(queue.body.items.filter((c:any)=>c.messageId===m.id)).toEqual([expect.objectContaining({revision:1,status:'rejected',finalized:true})]);
+});
+
+it('links a mask to all blocking case versions, prioritizing its own case and respecting the reader',async()=>{
+  const t=await setup(),first=await t.publish('private-first');
+  const second=await t.send(t.one,[{id:'body',type:'text',text:'private-second'}],{recommendation:1});
+  expect(second.status,second.text).toBe(201);
+  const ref=(messageId:string)=>({id:messageId,reference:{messageId,revision:1}});
+  const related=await t.send(t.two,[{id:'words',type:'text',text:'private-related'},
+    {id:'refs',type:'relation',relation:'reference',roles:{target:[ref(first.id),ref(second.body.message.id)]}}],{recommendation:1});
+  expect(related.status,related.text).toBe(201);
+  const grandchild=await t.send(t.observer,[{id:'refs',type:'relation',relation:'reference',
+    roles:{target:[ref(related.body.message.id),ref(first.id)]}}],{recommendation:1});
+  expect(grandchild.status,grandchild.text).toBe(201);
+  await t.app.store.transaction(async()=>{
+    const tx=new Mutation(t.app.store),next={...first,revision:2};
+    await tx.put(next);await enrollModeration(tx,next);await tx.commit();
+    await t.app.store.db.prepare(`UPDATE moderation_cases SET status='rejected' WHERE
+      ("messageId"=$1 AND revision=2) OR "messageId" IN ($2,$3)`).run(first.id,second.body.message.id,related.body.message.id);
+  });
+  const sourceCases=[{messageId:first.id,revision:2},{messageId:second.body.message.id,revision:1}];
+  sourceCases.sort((a,b)=>a.messageId.localeCompare(b.messageId));
+  const own={messageId:related.body.message.id,revision:1};
+  const relatedCard=await request(t.app).get(`/api/messages/${own.messageId}`);
+  expect(relatedCard.status,relatedCard.text).toBe(200);
+  expect(relatedCard.body.restrictedReviewTargets).toEqual([own,...sourceCases]);
+  const indirect=await request(t.app).get(`/api/messages/${grandchild.body.message.id}`);
+  expect(indirect.body.restrictedReviewTargets).toEqual([...sourceCases,own].sort((a,b)=>a.messageId.localeCompare(b.messageId)));
+  expect(indirect.text).not.toMatch(/private-first|private-second|private-related/);
+  const author=await t.two.agent.get(`/api/messages/${own.messageId}`);
+  expect(author.body.restrictedReviewTargets).toEqual(sourceCases);
+  const firstAuthor=await t.author.agent.get(`/api/messages/${own.messageId}`);
+  expect(firstAuthor.body.restrictedReviewTargets).toEqual([own,{messageId:second.body.message.id,revision:1}]);
 });
 
 it('publishes custom labels immediately and removes them from aggregates after rejection',async()=>{
@@ -875,4 +1018,13 @@ it('redacts membership notification excerpts and keeps historical previews tied 
   for(const actor of [t.one,t.two])await t.action(actor,'review',m.id,{verdict:'pass'},2);
   await t.action(t.one,'review-settle',m.id);
   expect((await t.observer.agent.get('/api/ui/notifications')).text).not.toContain('PRIVATE-NOTIFICATION-BODY');
+});
+
+it('rejects the retired reviewer authorization command even with a valid ordinary contribution',async()=>{
+  const t=await setup(),target=await t.publish();
+  const before=await t.app.store.latestSequence();
+  const response=await t.send(t.one,[{id:'action',type:'relation',relation:'reviewer-authorize',
+    roles:{target:[{id:'target',reference:{messageId:target.id}}]}}],{recommendation:1});
+  expect(response.status).toBe(400);
+  expect(await t.app.store.latestSequence()).toBe(before);
 });

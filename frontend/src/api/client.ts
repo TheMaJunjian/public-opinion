@@ -141,7 +141,7 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
   headers['X-Device-Id'] = getDeviceId();
   const isAuthBootstrap = ['/login', '/register', '/logout', '/auth/signing-key'].includes(path);
   const privateReading=path==='/reading-state';
-  const privateActivity=path==='/points/activity'||path==='/moderation/presence';
+  const privateActivity=path==='/points/activity';
   const privateNotifications=path.startsWith('/notifications') || path === '/feed/hidden';
   const readOnlySnapshot = ['/snapshot/query','/snapshot/discussion','/body-versions/resolve','/feed/refresh'].includes(path.split('?')[0]);
   let identityKey: string | undefined;
@@ -407,7 +407,6 @@ export interface ReviewDetail {
   snapshot?: CoreMessage;
   target?: import('@gonglun/core').NativeMessageView;
   reviewEligibility?: import('@gonglun/core').ReviewEligibility;
-  readableWithoutAssignment?: boolean;
   records: import('@gonglun/core').NativeMessageView[];
   stakes: import('@gonglun/core').ReviewStakeItem[];
   canReview: boolean;
@@ -417,14 +416,11 @@ export interface ReviewDetail {
   restricted?: boolean;
   feePaid?: boolean;
   available?: number;
-  costs?: {protocol:number;reviewMinimum:number;appealFee:number;appealDeposit:number;appealTotal:number};
-  assignment?: {expiresAt:string;submittedAt:string|null;revokedAt:string|null}|null;
+  costs?: {protocol:number;reviewMinimum:number;appealFee:number;appealDeposit:number;appealTotal:number;reasonTotal?:number;reasonFee?:number;reasonDeposit?:number};
   policy: import('@gonglun/core').ModerationPolicy;
 }
 export const getReview=(messageId:string,signal?:AbortSignal,revision?:number)=>request<ReviewDetail>(`/moderation/messages/${encodeURIComponent(messageId)}${revision?`?revision=${revision}`:''}`,{signal});
-export const getReviewQueue=(before?:string,signal?:AbortSignal)=>request<{items:Array<import('@gonglun/core').ModerationSummary&{author?:{name:string}}>;nextCursor:string|null;enabled:boolean;eligibility?:{online:boolean;available:number;minimumRequired:number};policy:import('@gonglun/core').ModerationPolicy}>(`/moderation/queue${before?`?before=${encodeURIComponent(before)}`:''}`,{signal});
-export const setReviewAvailability=(enabled:boolean)=>request<{enabled:boolean}>('/moderation/availability',{method:'PUT',body:JSON.stringify({enabled})});
-export const updateReviewPresence=(signal?:AbortSignal)=>requestCore<{ok:boolean}>('/moderation/presence',{method:'POST',signal});
+export const getReviewQueue=(before?:string,signal?:AbortSignal)=>request<{items:Array<import('@gonglun/core').ModerationSummary&{author?:{name:string}}>;nextCursor:string|null;policy:import('@gonglun/core').ModerationPolicy}>(`/moderation/queue${before?`?before=${encodeURIComponent(before)}`:''}`,{signal});
 export function sendReviewAction(detail:ReviewDetail,action:'review'|'review-appeal'|'review-settle'|'review-finalize',reason='',verdict?:'pass'|'reject',reviewWager?:number){
   if(action==='review-appeal')verdict=detail.appealVerdict??verdict??(detail.summary.status==='approved'?'reject':'pass');
   return createRelation('root',{relationType:action.toUpperCase(),targetRefs:[{kind:'message',messageId:detail.summary.messageId,reference:{messageId:detail.summary.messageId,revision:detail.summary.revision}}],
@@ -639,7 +635,7 @@ export interface ExportData {
     classificationId: string | null;
     discussion?: { mode: 'graph' | 'discussion'; collapsed: string[] };
   };
-  messages: Array<Partial<Pick<import('../types').Message, 'sequence' | 'revision' | 'parts' | 'state' | 'spending' | 'executedStance'>> & {
+  messages: Array<Partial<Pick<import('../types').Message, 'sequence' | 'revision' | 'parts' | 'state' | 'spending' | 'executedStance' | 'restricted' | 'restrictedStance' | 'restrictedReviewTargets' | 'restrictedReviewSummaries'>> & {
     id: string;
     kind: string;
     contentType: string | null;

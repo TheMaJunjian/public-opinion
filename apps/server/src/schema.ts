@@ -14,9 +14,8 @@ CREATE TABLE IF NOT EXISTS rule_versions(version INTEGER PRIMARY KEY,body TEXT N
 CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,name TEXT UNIQUE NOT NULL,password TEXT NOT NULL,founder INTEGER NOT NULL,"createdAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,position BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE);
 CREATE UNIQUE INDEX IF NOT EXISTS users_name_folded ON users(lower(name));
 CREATE TABLE IF NOT EXISTS accounts("userId" TEXT PRIMARY KEY,available BIGINT NOT NULL,locked BIGINT NOT NULL CHECK(locked >= 0),earned BIGINT NOT NULL,spent BIGINT NOT NULL);
-CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,"userId" TEXT NOT NULL,csrf TEXT NOT NULL,expires BIGINT NOT NULL,"deviceId" TEXT,"lastActiveAt" BIGINT NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,"userId" TEXT NOT NULL,csrf TEXT NOT NULL,expires BIGINT NOT NULL,"deviceId" TEXT);
 CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires);
-CREATE INDEX IF NOT EXISTS sessions_activity ON sessions("userId","lastActiveAt");
 CREATE TABLE IF NOT EXISTS signing_keys("userId" TEXT NOT NULL,"deviceId" TEXT NOT NULL,"publicKey" TEXT NOT NULL,"createdAt" TEXT NOT NULL,PRIMARY KEY("userId","deviceId"));
 CREATE TABLE IF NOT EXISTS signatures("messageId" TEXT PRIMARY KEY,"userId" TEXT NOT NULL,"deviceId" TEXT NOT NULL,"publicKey" TEXT NOT NULL,payload TEXT NOT NULL,signature TEXT NOT NULL,"createdAt" TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS notification_receipts("sourceId" TEXT NOT NULL,"userId" TEXT NOT NULL,"targetId" TEXT NOT NULL,PRIMARY KEY("sourceId","userId","targetId"));

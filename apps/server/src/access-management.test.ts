@@ -32,7 +32,7 @@ it('preserves accounts across an upgrade and requires fresh consent without revi
   const schema = newTestSchema(), app = await createTestApp({databaseSchema:schema}), old = request.agent(app);
   const joined = await old.post('/api/register').send({...credentials,...acceptance});
   const before = await app.store.account(joined.body.user.id);
-  await app.store.db.exec('DROP TABLE participation_acceptances; ALTER TABLE sessions DROP COLUMN "agreementVersion"; DELETE FROM schema_migrations WHERE version=49');
+  await app.store.db.exec('DROP TABLE participation_acceptances; ALTER TABLE sessions DROP COLUMN "agreementVersion"; DELETE FROM schema_migrations WHERE version>=49');
   const upgraded = await openMigratingStore(testDatabaseUrl(), {schema});
   try {
     expect((await old.get('/api/session')).body).toBeNull();

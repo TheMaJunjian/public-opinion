@@ -47,16 +47,17 @@ export function calculateSendCost(deps:CostInput,protocolFee:number,reviewPolicy
   add('TEXT',Number(hasText));
   if(!reviewDraft&&relCount&&deps.relationContributionTypes?.length)for(const type of deps.relationContributionTypes)add(type,multiplier);
   else add(primary,relCount);
+  if(reviewDraft&&content)add('REVIEW_REASON',1);
   add('REFERENCE',refCount);add('JOIN',joinCount);
   const groups=[...counts].map(([type,count])=>{
     const fallback={truth:type==='REVIEW'?reviewEconomy(reviewPolicy??DEFAULT_MODERATION_POLICY).minWager:type==='TEXT'?deps.stakeAmount:type===primary?deps.relStakeAmount:1,value:type===primary?deps.recommendationAmount??0:0};
-    const investment=contributionFor(type,deps.contributions,fallback),truth=amount(investment.truth),value=amount(investment.value);
+    const investment=type==='REVIEW_REASON'?{truth:0,value:1}:contributionFor(type,deps.contributions,fallback),truth=amount(investment.truth),value=amount(investment.value);
     const error=investment.truth===''||investment.value===''?`请输入${contributionLabel(type)}消息的真假和价值投入`
       :!Number.isSafeInteger(investment.truth)||!Number.isSafeInteger(investment.value)||investment.truth<0||investment.value<0?`${contributionLabel(type)}消息的投入须为非负整数`
       :type==='REVIEW'&&truth<reviewEconomy(reviewPolicy??DEFAULT_MODERATION_POLICY).minWager?`审核押注至少 ${reviewEconomy(reviewPolicy??DEFAULT_MODERATION_POLICY).minWager} 点`:truth===0&&value===0?'真假和价值至少一项须大于 0':null;
-    const reviewed=!!reviewPolicy?.enabled&&(type==='TEXT'||type==='TAG'||content&&['CLASSIFY','SUMMARY','PROPOSAL','DELEGATION','CODE_CHANGE','OPERATIONS','CORRECT'].includes(type)&&deps.secondaryRelationType!=='width');
+    const reviewed=!!reviewPolicy?.enabled&&(type==='TEXT'||type==='TAG'||type==='REVIEW_REASON'||content&&['CLASSIFY','SUMMARY','PROPOSAL','DELEGATION','CODE_CHANGE','OPERATIONS','CORRECT'].includes(type)&&deps.secondaryRelationType!=='width');
     const reviewFeeTotal=reviewed?reviewPolicy!.fee*count:0,reviewDepositTotal=reviewed?reviewPolicy!.deposit*count:0;
-    return {type,label:contributionLabel(type),count,truth:investment.truth,value:investment.value,reviewFeeTotal,reviewDepositTotal,
+    return {type,label:type==='REVIEW_REASON'?'审核理由':contributionLabel(type),count,truth:investment.truth,value:investment.value,reviewFeeTotal,reviewDepositTotal,
       stakeTotal:type==='REVIEW'?0:truth*count,reviewWagerTotal:type==='REVIEW'?truth*count:0,recommendationTotal:value*count,protocolFeeTotal:protocolFee*count,total:(truth+value+protocolFee)*count+reviewFeeTotal+reviewDepositTotal,error};
   });
   const stakeTotal=groups.reduce((sum,group)=>sum+group.stakeTotal,0),recommendationTotal=groups.reduce((sum,group)=>sum+group.recommendationTotal,0);

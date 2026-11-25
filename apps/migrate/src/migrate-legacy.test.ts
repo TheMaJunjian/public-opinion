@@ -59,7 +59,7 @@ it('enrolls imported content when moderation is enabled without inventing past r
   expect(cases).toEqual(['old-message','old-topic'].map(messageId=>({messageId,revision:1,status:'pending',fee:6,deposit:10})));
   const account=await app.store.account('old-user');
   expect(account).toMatchObject({available:466,locked:34});
-  expect(await app.store.db.prepare('SELECT 1 FROM moderation_assignments').get()).toBeUndefined();
+  expect(await app.store.db.prepare("SELECT to_regclass('moderation_assignments') AS old").get()).toEqual({old:null});
   expect(await app.store.db.prepare('SELECT 1 FROM moderation_votes').get()).toBeUndefined();
   expect(await app.store.db.prepare("SELECT 1 FROM notifications WHERE category='review'").get()).toBeUndefined();
   const sequence=await app.store.latestSequence();
@@ -140,7 +140,7 @@ it('automatically imports a Prisma database once under concurrent startups and r
   expect(await app.store.setting('automatic-import-source')).toBe(source.sourceSchema);
   expect(await app.store.account('old-user')).toMatchObject({available:-36,locked:34});
   expect(await app.store.db.prepare('SELECT COUNT(*) AS n FROM moderation_cases').get()).toEqual({n:2});
-  expect(await app.store.db.prepare('SELECT COUNT(*) AS n FROM moderation_assignments').get()).toEqual({n:0});
+  expect(await app.store.db.prepare("SELECT to_regclass('moderation_assignments') AS old").get()).toEqual({old:null});
   expect((await app.store.db.prepare('SELECT body FROM points_archive_rows WHERE "tableName"=$1 AND body->>\'userId\'=$2').get('accounts','old-user'))!.body)
     .toMatchObject({available:498,locked:2});
   const login=await agent.post('/api/login').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'旧用户',password:'short'});

@@ -36,12 +36,12 @@ export const TAG_MAX_LABEL_CHARS = 20; // max characters shown in a tag label ba
 export const TAG_HIT_PAD = 14;  // extra transparent padding around tag hit area so tags are easy to click even when overlapping frames (> FRAME_PAD=12 so tag hit area fully covers frame border strip overlap)
 export const TAG_HIT_PAD_X = 4; // keep adjacent decoration columns independently clickable
 
-/** Annotations fold above the upper-right corner; votes fold beside that corner. */
-export function getAnnotationPlacement(box: Rect, voteWidth = 0) {
+export function getAnnotationPlacement(box: Rect, voteWidth = 0, reviewWidth = 0) {
   const right = box.x + box.width;
-  const toggle = { x: right - EDGE_HINT_W - DEC_RIGHT_GAP, y: Math.max(0, box.y - EDGE_HINT_W - DEC_GAP), width: EDGE_HINT_W, height: EDGE_HINT_W };
-  return { toggle, x: voteWidth ? right + DEC_RIGHT_GAP + voteWidth + DEC_RIGHT_GAP : right + DEC_GAP,
-    y: Math.max(TAG_HIT_PAD, toggle.y) };
+  const toggle = { x: right + DEC_RIGHT_GAP, y: box.y + DEC_RIGHT_TOP, width: EDGE_HINT_W, height: EDGE_HINT_W };
+  const reviewX = toggle.x + Math.max(EDGE_HINT_W, voteWidth) + DEC_RIGHT_GAP;
+  return { toggle, reviewX, x: reviewX + (reviewWidth ? reviewWidth + DEC_RIGHT_GAP : 0),
+    y: Math.max(TAG_HIT_PAD, box.y - EDGE_HINT_W - DEC_GAP) };
 }
 // Frame constants (shared by arrange, classify, merge, summary frames)
 // FRAME_PAD is imported from ../utils/layout

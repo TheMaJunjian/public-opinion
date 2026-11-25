@@ -9,6 +9,14 @@ beforeEach(() => { sessionStorage.clear(); localStorage.setItem('user', JSON.str
 const add = (body: object) => queueCommand('/messages', { method: 'POST', body: JSON.stringify(body) });
 
 describe('workbench sends', () => {
+  it('reviews an independent reason in its own case from the original review discussion',async()=>{
+    const reviewContext={messageId:'original',revision:3};
+    const prepared=await prepareCommandBatch(async()=>{
+      queueCommand('/relations',{method:'POST',body:JSON.stringify({relationType:'REVIEW',targetRefs:[
+        {kind:'message',messageId:'reason',reference:{messageId:'reason',revision:1}}],payload:{verdict:'pass',content:'程序符合要求'}})});
+    },{apiBase:'/api',reviewContext});
+    expect(prepared!.envelope.commands[0]!.body).not.toHaveProperty('reviewContext');
+  });
   it('captures the review scope on every prepared text and relation command',async()=>{
     const reviewContext={messageId:'reviewed',revision:3};
     const prepared=await prepareCommandBatch(async()=>{

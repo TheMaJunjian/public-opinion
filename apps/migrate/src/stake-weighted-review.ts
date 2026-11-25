@@ -4,6 +4,9 @@ import { reconcileOrganizationEffects } from '../../server/src/organizations.js'
 
 /** Reopen provisional head-count conclusions without moving any money or revisiting paid results. */
 export async function migrateStakeWeightedReview(store:Store):Promise<void>{
+  // The standalone migration can also inspect a database that has retired staged reviews (v50).
+  if (!await store.db.prepare(`SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema()
+    AND table_name='moderation_cases' AND column_name='stage'`).get()) return;
   const cases=await store.db.prepare(`SELECT * FROM moderation_cases
     WHERE settlement->>'finalized'='false' OR ((settlement IS NULL OR settlement='null'::jsonb) AND stage<>0) ORDER BY position`).all<ModerationCase>();
   for(let start=0;start<cases.length;start+=100){

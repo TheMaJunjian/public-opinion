@@ -7,11 +7,13 @@ import {cleanupTestDatabases,createTestApp,testDatabaseUrl} from '../../server/s
 import {financialFingerprint} from './financial-fingerprint.js';
 import {migrateStakeWeightedReview} from './stake-weighted-review.js';
 import {DATABASE_MIGRATIONS} from '../../server/src/database-version.js';
+import {reviewAssignmentSchema} from './random-review-assignments.js';
 
 afterEach(cleanupTestDatabases);
 
 it('reopens provisional head-count conclusions through v43 without changing money, review rounds, paid outcomes or notifications',async()=>{
   const app=await createTestApp({moderation:true});
+  await app.store.db.exec(reviewAssignmentSchema);
   const registered=await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'review-author',password:'password'});
   expect(registered.status,registered.text).toBe(201);
   const cases=[];
@@ -32,8 +34,8 @@ it('reopens provisional head-count conclusions through v43 without changing mone
   try{
     for(const [index,review] of cases.entries()){
       const current=await moderationCase(upgraded,review.messageId);
-      if(index===2)expect(current).toEqual(review);
-      else expect(current).toMatchObject({status:index===1?'appeal':'pending',stage:0,round:review.round,fee:review.fee,deposit:review.deposit,settlement:null,releaseAt:null});
+      if(index===2)expect(current).toMatchObject({status:'approved',round:review.round,fee:review.fee,deposit:review.deposit,settlement:review.settlement,releaseAt:review.releaseAt});
+      else expect(current).toMatchObject({status:index===1?'appeal':'pending',round:review.round,fee:review.fee,deposit:review.deposit,settlement:null,releaseAt:null});
     }
     expect(await financialFingerprint(upgraded.db)).toBe(finances);
     expect(await upgraded.db.prepare('SELECT COUNT(*) AS n FROM notifications').get()).toEqual(notifications);

@@ -4,14 +4,14 @@ import {clearBrowserSelection} from '../../../utils/graphTextSelection';
 import type {DraftSendDependencies} from './sendDraftTypes';
 import type {UnitSelection} from '../../../utils/modelBridge';
 
-/** A review is a single dependent relation; its reason never becomes a separate public message. */
+/** The server commits the vote and any independent reason in the same transaction. */
 export async function sendReviewDraft(deps:DraftSendDependencies,targets:UnitSelection[]){
   if(deps.sourceUnits.length||targets.length!==1||!isWholeMessageSelection(targets[0]!,targets[0]!.messageId))throw new Error('审核需要一条完整目标消息，不能有来源消息');
   if(deps.subType!=='pass'&&deps.subType!=='reject')throw new Error('请选择审核通过或不通过');
   const target=targets[0]!,detail=deps.local ? { canReview: true, summary: {
     messageId: target.messageId, revision: deps.msgMap.get(target.messageId)?.revision ?? 1, caseId: `local-review:${target.messageId}`, round: 1,
   } } : await api.getReview(target.messageId,undefined,target.reference?.revision);
-  if(!detail.canReview)throw new Error('当前没有本条消息本轮的审核资格，请从审核入口查看状态');
+  if(!detail.canReview)throw new Error('当前无法提交审核，请打开消息的审核面板查看状态');
   const record=await deps.createRel(deps.scopeMessageId,{
     relationType:'REVIEW',sourceMessageId:null,
     targetRefs:[{kind:'message',messageId:detail.summary.messageId,reference:{messageId:detail.summary.messageId,revision:detail.summary.revision}}],

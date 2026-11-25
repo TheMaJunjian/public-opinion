@@ -8,8 +8,32 @@ import { distribution } from './economy.js';
 import { bindRoles } from '@gonglun/core';
 import {enrollModeration} from './moderation.js';
 import {randomUUID} from 'node:crypto';
+import {removeReviewPermissions} from '../../migrate/src/remove-review-permissions.js';
 
 afterEach(cleanupTestDatabases);
+it('keeps account history and ordinary references readable after their permission message is deleted',async()=>{
+  const app=await createTestApp(),agent=request.agent(app),{store}=app;
+  const {body:owner}=await agent.post('/api/register').send({acceptedAgreementVersion:PARTICIPATION_AGREEMENT_VERSION,name:'旧流水',password:'password'});
+  const {permission,reply}=await store.transaction(async()=>{
+    const tx=new Mutation(store);
+    const permission=await tx.create(owner.user.id,[{id:'body',type:'text',text:'旧授权正文'},
+      {id:'permission',type:'relation',relation:'reviewer-authorize',roles:{}}]);
+    const reply=await tx.create(owner.user.id,[{id:'reply',type:'relation',relation:'reply',roles:bindRoles({
+      target:[{messageId:permission.id,revision:1,partId:'body',range:{start:0,end:2}}]})}]);
+    await store.ledger(owner.user.id,permission.id,-1,0,'协议费');await store.operating(1);
+    await tx.commit();return {permission,reply};
+  });
+  await store.transaction(()=>removeReviewPermissions(store));
+  const history=await agent.get('/api/ui/points/transactions').query({mode:'summary',messageId:permission.id});
+  expect(history.status,history.text).toBe(200);
+  expect(history.body.data).toMatchObject([{messageId:permission.id,amount:-1,reason:'协议费',messages:[]}]);
+  const context=await agent.get('/api/ui/message-context').query({id:reply.id});
+  expect(context.status,context.text).toBe(200);
+  expect(context.body.messages[0].targetRefs).toEqual([{kind:'message',messageId:permission.id,reference:{messageId:permission.id,revision:1}}]);
+  expect(context.text).not.toContain('旧授权正文');
+  expect((await agent.post('/api/messages').set('x-csrf-token',owner.csrf).send({
+    requestId:randomUUID(),parts:reply.parts,recommendation:1})).status).toBe(404);
+});
 it('keeps the reviewed version for native reviews of a category',async()=>{
   const app=await createTestApp({moderation:true}),agent=request.agent(app),store=app.store;
   const {body:owner}=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'分类审核者',password:'password'});
@@ -41,7 +65,7 @@ it.each([false,true])('includes reviewed message identities and Chinese audit ty
   const {body:owner}=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'审核收支查看者',password:'password'});
   const {body:author}=await request(app).post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'被审核作者',password:'password'});
   const kinds=[['review','审核'],['review-appeal','复核申请'],['review-settle','审核结算'],['review-finalize','审核资金划转'],
-    ['review-record','审核记录'],['review-enrollment','纳入审核'],['reviewer-authorize','审核资格授权']];
+    ['review-record','审核记录'],['review-enrollment','纳入审核']];
   let targetId='';
   const records:Array<{id:string;label:string}>=[];
   await store.transaction(async()=>{

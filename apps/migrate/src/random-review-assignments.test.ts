@@ -6,17 +6,16 @@ import {createTestApp,cleanupTestDatabases,testDatabaseUrl} from '../../server/s
 import {Store} from '../../server/src/db.js';
 import {moderationCase} from '../../server/src/moderation.js';
 import {financialFingerprint} from './financial-fingerprint.js';
-import {migrateRandomReviewAssignments} from './random-review-assignments.js';
+import {reviewAssignmentSchema} from './random-review-assignments.js';
 import {DATABASE_MIGRATIONS} from '../../server/src/database-version.js';
 
 afterEach(cleanupTestDatabases);
-it('migrates old login sessions without marking absent users online or changing their credentials and finances',async()=>{
+it('migrates old sessions through activity tracking and its retirement, preserving credentials and finances',async()=>{
   const app=await createTestApp({moderation:true}),agent=request.agent(app);
   const registration=await agent.post('/api/register').send({acceptedAgreementVersion: PARTICIPATION_AGREEMENT_VERSION, name:'presence-migration',password:'password'});
   expect(registration.status).toBe(201);
-  // A second device must not receive the first device's foreground timestamp.
   expect((await request(app).post('/api/login').send({name:'presence-migration',password:'password'})).status).toBe(200);
-  await app.store.transaction(()=>app.store.db.exec(`ALTER TABLE sessions DROP COLUMN "lastActiveAt";
+  await app.store.transaction(()=>app.store.db.exec(`${reviewAssignmentSchema}
     DELETE FROM schema_migrations WHERE version>=39`));
   const before=await financialFingerprint(app.store.db);
   const sessions=await app.store.db.prepare('SELECT token,"userId",csrf,expires,"deviceId" FROM sessions ORDER BY token').all();
@@ -24,15 +23,12 @@ it('migrates old login sessions without marking absent users online or changing 
   try{
     expect((await migrated.db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get())?.version).toBe(DATABASE_MIGRATIONS.length);
     expect(await migrated.db.prepare('SELECT token,"userId",csrf,expires,"deviceId" FROM sessions ORDER BY token').all()).toEqual(sessions);
-    expect(await migrated.db.prepare('SELECT "lastActiveAt" FROM sessions').all()).toEqual([{lastActiveAt:0},{lastActiveAt:0}]);
+    expect(await migrated.db.prepare(`SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema()
+      AND table_name='sessions' AND column_name='lastActiveAt'`).get()).toBeUndefined();
     expect((await agent.get('/api/session')).body.user.id).toBe(registration.body.user.id);
-    expect((await agent.post('/api/moderation/presence').set('x-csrf-token',registration.body.csrf)).status).toBe(200);
-    const active=await migrated.db.prepare('SELECT "lastActiveAt" FROM sessions ORDER BY "lastActiveAt"').all<{lastActiveAt:number}>();
-    expect(active[0]!.lastActiveAt).toBe(0);expect(active[1]!.lastActiveAt).toBeGreaterThan(Date.now()-10_000);
     expect(await financialFingerprint(migrated.db)).toBe(before);
     expect((await agent.post('/api/logout').set('x-csrf-token',registration.body.csrf)).status).toBe(200);
-    expect((await agent.post('/api/moderation/presence').set('x-csrf-token',registration.body.csrf)).status).toBe(401);
-    expect(await migrated.db.prepare('SELECT "lastActiveAt" FROM sessions').all()).toEqual([{lastActiveAt:0}]);
+    expect(await migrated.db.prepare('SELECT COUNT(*) AS n FROM sessions').get()).toEqual({n:1});
   }finally{await migrated.close();}
 });
 
@@ -55,8 +51,7 @@ it('upgrades the fixed-role review schema without charging, clearing stakes, or 
   expect(vote.status,vote.text).toBe(201);
   await app.store.transaction(async()=>{
     // An old vote keeps its money and audit identity, but cannot open a new random round.
-    await app.store.db.exec(`DROP TABLE moderation_assignments; DROP TABLE moderation_candidate_preferences;
-      ALTER TABLE moderation_cases DROP COLUMN round,DROP COLUMN stage,DROP COLUMN "assignmentCheckAt";
+    await app.store.db.exec(`ALTER TABLE moderation_cases DROP COLUMN round;
       ALTER TABLE moderation_votes DROP COLUMN round;
       UPDATE moderation_cases SET policy=policy-'stages'-'assignmentTtlMs'-'exposureMultiplier';
       DELETE FROM schema_migrations WHERE version>=38`);
@@ -65,11 +60,9 @@ it('upgrades the fixed-role review schema without charging, clearing stakes, or 
   const migrated=await Store.open(testDatabaseUrl(),{schema:app.store.db.schema});await migrated.close();
   expect(await financialFingerprint(app.store.db)).toBe(before);
   const updated=(await moderationCase(app.store,c.messageId))!;
-  expect(updated).toMatchObject({round:2,stage:0,status:'pending',policy:{stages:[3,9,27]}});
+  expect(updated).toMatchObject({round:2,status:'pending'});
+  expect(updated.policy).not.toHaveProperty('stages');
   expect((await request(app).get(`/api/messages/${c.messageId}`)).text).toContain('MIGRATION-PRIVATE');
   const votes=await app.store.db.prepare('SELECT * FROM moderation_votes WHERE "caseId"=$1').all(c.id);
   expect(votes).toHaveLength(1);expect(votes[0]).toMatchObject({round:1,amount:2});
-  await app.store.transaction(()=>migrateRandomReviewAssignments(app.store));
-  expect((await moderationCase(app.store,c.messageId))!.round).toBe(2);
-  expect(await financialFingerprint(app.store.db)).toBe(before);
 });

@@ -120,6 +120,6 @@
 :root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-skin-frame-header][data-skin-selected='true'] {
   background: var(--selection-bg) !important; outline: 2px solid var(--skin-selected); outline-offset: 2px;
 }
-:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) :is([data-decoration-toggle], [data-annotation-toggle]) {
+:root:is([data-appearance='opus-paper'], [data-appearance='gpt-arena']) [data-decoration-toggle] {
   background: var(--surface-card) !important; color: var(--text-primary) !important; border-color: var(--skin-border) !important;
 }

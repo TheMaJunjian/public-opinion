@@ -1,4 +1,12 @@
 import type { Store } from './db.js';
+export const legacyReviewReasonSchema = `
+CREATE TABLE IF NOT EXISTS legacy_review_reason_versions(
+  "decisionId" TEXT NOT NULL,"decisionRevision" INTEGER NOT NULL,"reasonId" TEXT NOT NULL,"reasonRevision" INTEGER NOT NULL,
+  PRIMARY KEY("decisionId","decisionRevision"),UNIQUE("reasonId","reasonRevision")
+);
+ALTER TABLE legacy_review_reason_versions ADD COLUMN IF NOT EXISTS "citationId" TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS legacy_review_reason_citation ON legacy_review_reason_versions("citationId") WHERE "citationId" IS NOT NULL;
+`;
 export const reviewFinanceSchema = `
 CREATE TABLE IF NOT EXISTS moderation_round_fees(
   "caseId" TEXT NOT NULL,round INTEGER NOT NULL,"payerId" TEXT NOT NULL,amount BIGINT NOT NULL,
@@ -11,17 +19,6 @@ CREATE TABLE IF NOT EXISTS moderation_deposits(
   PRIMARY KEY("caseId",round)
 );
 `;
-export const reviewAssignmentSchema = `
-CREATE TABLE IF NOT EXISTS moderation_candidate_preferences(
-  "userId" TEXT PRIMARY KEY,enabled BOOLEAN NOT NULL,"updatedAt" TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS moderation_assignments(
-  "caseId" TEXT NOT NULL,round INTEGER NOT NULL,"userId" TEXT NOT NULL,stage INTEGER NOT NULL,
-  "assignedAt" TEXT NOT NULL,"expiresAt" TEXT NOT NULL,"submittedAt" TEXT,"revokedAt" TEXT,
-  PRIMARY KEY("caseId",round,"userId")
-);
-CREATE INDEX IF NOT EXISTS moderation_assignment_user ON moderation_assignments("userId","caseId",round);
-`;
 export async function hasModerationTables(store:Store){
   // Do not cache transactional DDL: a failed migration can roll these tables back.
   return !!(await store.db.prepare("SELECT to_regclass('moderation_cases') AS present").get())?.present;
@@ -33,7 +30,7 @@ CREATE TABLE IF NOT EXISTS moderation_cases(
   "appealFrom" TEXT CHECK ("appealFrom" IN ('pass','reject','unknown')),
   status TEXT NOT NULL DEFAULT 'pending',fee BIGINT NOT NULL,deposit BIGINT NOT NULL,
   "releaseAt" TEXT,settlement JSONB,"createdAt" TEXT NOT NULL,
-  round INTEGER NOT NULL DEFAULT 1,stage INTEGER NOT NULL DEFAULT 0,"assignmentCheckAt" BIGINT NOT NULL DEFAULT 0,
+  round INTEGER NOT NULL DEFAULT 1,
   position BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE,UNIQUE("messageId",revision)
 );
 CREATE INDEX IF NOT EXISTS moderation_message ON moderation_cases("messageId",revision DESC);
@@ -43,9 +40,6 @@ CREATE TABLE IF NOT EXISTS moderation_votes(
   "createdAt" TEXT NOT NULL,round INTEGER NOT NULL DEFAULT 1,position BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE
 );
 CREATE INDEX IF NOT EXISTS moderation_votes_case ON moderation_votes("caseId",position);
-CREATE TABLE IF NOT EXISTS moderation_reviewers(
-  "userId" TEXT PRIMARY KEY,"authorizationId" TEXT NOT NULL,"createdAt" TEXT NOT NULL
-);
 CREATE TABLE IF NOT EXISTS moderation_dependencies("sourceId" TEXT NOT NULL,"sourceRevision" INTEGER NOT NULL,"targetId" TEXT NOT NULL,"targetRevision" INTEGER NOT NULL DEFAULT 0,PRIMARY KEY("sourceId","sourceRevision","targetId","targetRevision"));
 CREATE INDEX IF NOT EXISTS moderation_dependency_target ON moderation_dependencies("targetId");
-` + reviewAssignmentSchema + reviewFinanceSchema;
+` + reviewFinanceSchema + legacyReviewReasonSchema;

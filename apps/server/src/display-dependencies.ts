@@ -5,7 +5,7 @@ const roles = `'${JSON.stringify(DISPLAY_DEPENDENCY_ROLES)}'::jsonb`;
 export function primaryRelationSql(alias: string) {
   return `(SELECT part.value FROM jsonb_array_elements(${alias}.body::jsonb->'parts') WITH ORDINALITY part(value,position)
     WHERE part.value->>'type'='relation'
-      AND part.value->>'relation'<>'review-context'
+      AND part.value->>'relation' NOT IN ('review-context','review-reason')
       AND (part.value->>'relation'<>'member-of' OR jsonb_array_length(COALESCE(part.value #> '{roles,member}','[]'::jsonb))>0)
       AND NOT ((part.value->>'id'='self-stance' OR part.value->>'id' LIKE 'minimum-self-stance-%')
         AND part.value->>'relation' IN ('agree','disagree')

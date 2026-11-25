@@ -16,6 +16,7 @@ export interface MessageTypeDetail {
 /** A category, its operation and its judgment are separate pieces of information. */
 export function getMessageTypeDetails(message: DemoMessage): MessageTypeDetail[] {
   const type = message.relationType, payload = message.relationPayload;
+  if(message.parts?.some(part=>part.type==='relation'&&part.relation==='review-reason'))return [{kind:'subtype',label:'审核理由'}];
   if (isReview(message)) return [{ kind: 'subtype', label: '审核' },
     ...(payload?.verdict === 'pass' || payload?.verdict === 'reject'
       ? [{ kind: 'verdict' as const, label: payload.verdict === 'pass' ? '通过' : '不通过', tone: payload.verdict }] : [])];

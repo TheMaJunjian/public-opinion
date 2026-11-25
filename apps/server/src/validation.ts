@@ -3,6 +3,7 @@ import { resolveReference, type BodyVersion, type Message, type Part, type Refer
 import { DomainError, Store } from './db.js';
 import {bodyVersionSchema,referenceSchema} from './reference-schema.js';
 import {preservedReferenceBasis} from './reference-bases.js';
+import {rebindLegacyReviewFragments} from './legacy-review-fragments.js';
 export {bodyVersionSchema,referenceSchema} from './reference-schema.js';
 
 const safe=z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
@@ -21,6 +22,7 @@ export const partsSchema=z.array(part).min(1).max(64).superRefine((parts,ctx)=>{
   if(parts.some(part=>part.type==='relation'&&part.relation==='correct')&&parts.some(part=>part.type==='data'&&part.value&&typeof part.value==='object'&&!Array.isArray(part.value)&&(part.value as Record<string,unknown>).correctionKind==='MEANING'))ctx.addIssue({code:'custom',message:'修改原意请发送新消息'});
   if(new Set(parts.map(p=>p.id)).size!==parts.length) ctx.addIssue({code:'custom',message:'部件 ID 必须唯一'});
   for (const p of parts) if (p.type === 'relation') {
+    if (p.relation.toLowerCase()==='reviewer-authorize') ctx.addIssue({code:'custom',message:'审核授权操作已停用'});
     if (['unfollow','unblock'].includes(p.relation)) ctx.addIssue({code:'custom',message:'请发送关注或拉黑标注，并明确选择是或否'});
     if (['follow','block'].includes(p.relation) && p.reason !== 'YES' && p.reason !== 'NO') ctx.addIssue({code:'custom',message:'关注和拉黑标注须选择是或否'});
   }
@@ -45,6 +47,8 @@ export function parseSend(input:unknown):SendInput {
     throw new DomainError('已读是个人查看状态，请使用标记已读操作');
   if (parsed.parts.some(part => ['membership-history', 'organization-memberships'].includes(part.id)))
     throw new DomainError('归属执行记录由服务器生成');
+  if (parsed.parts.some(part => part.type === 'relation' && part.relation.toLowerCase() === 'review-reason'))
+    throw new DomainError('审核理由与决定的关联由服务器生成');
   if(JSON.stringify(parsed).length>100000) throw new DomainError('消息过大');
   validateJson(parsed); return parsed as SendInput;
 }
@@ -64,6 +68,12 @@ export async function readReference(store: Store, ref: Reference): Promise<unkno
     const loaded=new Map<string,Message>();
     const references=version?[{messageId:version.messageId,revision:version.revision},...version.corrections]:[ref];
     for(const item of references){const message=await store.message(item.messageId,item.revision);loaded.set(`${message.id}:${message.revision}`,message);if(item.revision===undefined)loaded.set(message.id,message);}
+    if(version?.corrections.length){
+      const legacy=version.corrections.map(item=>loaded.get(`${item.messageId}:${item.revision}`)!)
+        .filter(message=>message.parts.some(part=>part.type==='relation'&&part.relation==='correct'
+          &&part.roles.target?.some(({reference})=>reference.partId&&reference.messageId!==version.messageId)));
+      for(const message of await rebindLegacyReviewFragments(store,legacy))loaded.set(`${message.id}:${message.revision}`,message);
+    }
     if(context?.kind==='CORRECTION'){
       const target=[...loaded.values()][0],correction=target?.parts.find(part=>part.type==='relation'&&part.relation==='correct');
       if(!correction||ref.range||ref.memberId||ref.path?.length&&!(ref.path.length===1&&ref.path[0]==='relation')||ref.partId&&ref.partId!==correction.id)throw new DomainError('更正采用表态必须指向更正关系');
@@ -88,4 +98,4 @@ export async function validateReferences(store: Store, parts: Part[]): Promise<v
             await readReference(store, part.target);
     }
 }
-export const rulesSchema=z.object({version:safe.min(1),protocolFee:safe.min(1),initialGrant:safe,operatingReserve:safe,lowQualityPenalty:safe,settlementDelayMs:safe.max(30*86400000),moderation:z.object({enabled:z.boolean(),fee:safe,deposit:safe,minReviewers:safe.min(1).max(100),appealDelayMs:safe.max(30*86400000),stages:z.array(safe.min(3).max(501).refine(n=>n%2===1)).min(1).max(5).refine(stages=>stages.every((n,i)=>i===0||n>stages[i-1]!)).optional(),assignmentTtlMs:safe.min(60_000).max(7*86400000).optional(),exposureMultiplier:safe.min(1).max(3).optional(),rewardSlots:safe.max(100).optional(),rewardAmount:safe.min(1).optional(),minWager:safe.min(1).optional(),appealFee:safe.optional(),appealDeposit:safe.optional()}).strict().optional(),contributionWeights:z.object({content:safe,relation:safe,agreement:safe,evidence:safe,duplicate:safe,earlyBonus:safe,earlyWindow:safe,unrecognizedAuthorCap:safe}).strict()}).strict();
+export const rulesSchema=z.object({version:safe.min(1),protocolFee:safe.min(1),initialGrant:safe,operatingReserve:safe,lowQualityPenalty:safe,settlementDelayMs:safe.max(30*86400000),moderation:z.object({enabled:z.boolean(),fee:safe,deposit:safe,minReviewers:safe.min(1).max(100),appealDelayMs:safe.max(30*86400000),rewardSlots:safe.max(100).optional(),rewardAmount:safe.min(1).optional(),minWager:safe.min(1).optional(),appealFee:safe.optional(),appealDeposit:safe.optional()}).strict().optional(),contributionWeights:z.object({content:safe,relation:safe,agreement:safe,evidence:safe,duplicate:safe,earlyBonus:safe,earlyWindow:safe,unrecognizedAuthorCap:safe}).strict()}).strict();

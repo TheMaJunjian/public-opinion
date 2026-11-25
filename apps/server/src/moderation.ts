@@ -1,15 +1,21 @@
 import { createHash } from 'node:crypto';
-import { DEFAULT_MODERATION_POLICY, REVIEW_RELATIONS, requiresModeration, relations, reviewResult, reviewEconomy, type Message, type ModerationPolicy, type ModerationSummary, type Part, type ReviewVerdict, type ReviewResult, type SendInput } from '@gonglun/core';
+import { DEFAULT_MODERATION_POLICY, REVIEW_RELATIONS, requiresModeration, relations, reviewReasonContent, reviewResult, reviewEconomy, type Message, type ModerationPolicy, type ModerationSummary, type Part, type ReviewVerdict, type ReviewResult, type SendInput } from '@gonglun/core';
 import { DomainError, id, integer, Mutation, now, type Store } from './db.js';
 import { hasModerationTables } from './moderation-schema.js';
-import { refreshCaseAssignments, reviewWindowOpen } from './review-assignments.js';
 import { addReviewFunding, payReviewFees, reviewDeposits, type ReviewDeposit, type ReviewPayment } from './review-finances.js';
-import { assertMessageReadable } from './moderation-visibility.js';
+import { assertMessageReadable, assertReferenceAllowed } from './moderation-visibility.js';
 import { retiredOrganizationIds } from './retired-organizations.js';
+import { chargeMessage } from './message-spending.js';
+import { placeMessageValueWager } from './economy.js';
+import { partsSchema } from './validation.js';
+import { reviewCitationParts, splitReviewReasonParts } from './review-reason-parts.js';
 
 const dataOf = (m: Pick<Message,'parts'>): Record<string,any> => Object.assign({}, ...m.parts.flatMap(p => p.type === 'data' && p.value && typeof p.value === 'object' && !Array.isArray(p.value) ? [p.value] : []));
 type Settlement = {verdict:ReviewResult;payouts:ReviewPayment[];fund:number;finalized:boolean;voteIds:string[];messageId:string};
-export interface ModerationCase {id:string;messageId:string;revision:number;authorId:string;snapshot:Message;ruleVersion:number;policy:ModerationPolicy;status:ModerationSummary['status'];appealFrom?:ReviewResult|null;fee:number;deposit:number;releaseAt:string|null;settlement:Settlement|null;createdAt:string;position:number;round:number;stage:number;assignmentCheckAt:number}
+export interface ModerationCase {id:string;messageId:string;revision:number;authorId:string;snapshot:Message;ruleVersion:number;policy:ModerationPolicy;status:ModerationSummary['status'];appealFrom?:ReviewResult|null;fee:number;deposit:number;releaseAt:string|null;settlement:Settlement|null;createdAt:string;position:number;round:number}
+export function reviewWindowOpen(c:ModerationCase):boolean {
+  return c.settlement ? !c.settlement.finalized&&!!c.releaseAt&&Date.now()<Date.parse(c.releaseAt) : ['pending','appeal'].includes(c.status);
+}
 type Vote = {messageId:string;caseId:string;userId:string;verdict:ReviewVerdict;amount:number;createdAt:string;position:number;round:number};
 export async function moderationPolicy(store:Store):Promise<ModerationPolicy> {return {...DEFAULT_MODERATION_POLICY,...(await store.rules()).moderation};}
 export async function moderationCase(store:Store,messageId:string,revision?:number):Promise<ModerationCase|undefined> {
@@ -43,7 +49,6 @@ export async function enrollModeration(tx:Mutation,message:Message,allowDebt=fal
   await addReviewFunding(tx,c,message,policy.fee,policy.deposit,allowDebt);
   if(!allowDebt){message.spending={...message.spending,reviewFee:policy.fee,reviewDeposit:policy.deposit};await tx.put(message);}
   tx.affected.add(message.id);
-  if(c&&c.round!==undefined&&!allowDebt)await refreshCaseAssignments(tx,c);
   return c;
 }
 function reviewPart(message:Pick<Message,'parts'>){return relations(message as Message).find(p=>p.relation==='review');}
@@ -60,8 +65,11 @@ export async function normalizeReviewStance(store:Store,input:SendInput):Promise
   if(!['pass','reject'].includes(verdict)||review.roles.target?.length!==1)throw new DomainError('审核记录无效');
   const chosen=stance.relation==='agree'?verdict:verdict==='pass'?'reject':'pass';
   const parts:Part[]=input.parts.filter(p=>p!==stance&&p.type!=='data');
+  for(const content of reviewReasonContent(input))if(!parts.includes(content))parts.push(content);
   parts.push({...stance,relation:'review',roles:{...stance.roles,target:review.roles.target}});
-  parts.push({id:'review-data',type:'data',value:{uiType:'REVIEW',verdict:chosen,caseId:originalData.caseId,reviewRound:originalData.reviewRound,convertedFrom:reference.messageId,convertedSide:stance.relation}});
+  let dataId='review-data';
+  for(let i=1;parts.some(p=>p.id===dataId);i++)dataId=`review-data-${i}`;
+  parts.push({id:dataId,type:'data',value:{uiType:'REVIEW',verdict:chosen,caseId:originalData.caseId,reviewRound:originalData.reviewRound,convertedFrom:reference.messageId,convertedSide:stance.relation}});
   return {...input,parts,wager:0,recommendation:0,selfStance:undefined,reviewWager:input.reviewWager??input.wager??0};
 }
 async function selectedCase(store:Store,message:Message,part:Extract<Part,{type:'relation'}>):Promise<ModerationCase> {
@@ -73,7 +81,7 @@ async function selectedCase(store:Store,message:Message,part:Extract<Part,{type:
   if(dataOf(message).caseId&&dataOf(message).caseId!==c.id)throw new DomainError('审核版本已变化，请刷新',409);
   return c;
 }
-async function saveCase(store:Store,c:ModerationCase){await store.db.prepare('UPDATE moderation_cases SET status=$2,"releaseAt"=$3,settlement=$4::jsonb,round=$5,stage=$6,fee=$7,deposit=$8,"appealFrom"=$9 WHERE id=$1').run(c.id,c.status,c.releaseAt,c.settlement===null?null:JSON.stringify(c.settlement),c.round,c.stage,c.fee,c.deposit,c.appealFrom??null);}
+async function saveCase(store:Store,c:ModerationCase){await store.db.prepare('UPDATE moderation_cases SET status=$2,"releaseAt"=$3,settlement=$4::jsonb,round=$5,fee=$6,deposit=$7,"appealFrom"=$8 WHERE id=$1').run(c.id,c.status,c.releaseAt,c.settlement===null?null:JSON.stringify(c.settlement),c.round,c.fee,c.deposit,c.appealFrom??null);}
 function reopenConclusion(c:ModerationCase){
   if(c.status==='rejected'){c.status='appeal';c.appealFrom='reject';}
   else c.status='pending';
@@ -101,26 +109,50 @@ async function reverseSettlement(tx:Mutation,c:ModerationCase,trigger:Message){
   for(const deposit of await reviewDeposits(tx.store,c.id))if(deposit.amount)await tx.store.ledger(deposit.payerId,record.id,0,deposit.amount,'恢复审核自押锁定',true);
   c.settlement=null;c.releaseAt=null;
 }
-export async function processModerationAction(tx:Mutation,message:Message,reviewWager=0):Promise<boolean>{
+async function publishReviewReason(tx:Mutation,submitted:Message,c:ModerationCase){
+  const citations=reviewCitationParts(submitted);
+  if(!citations.length&&!reviewReasonContent(submitted).length)return;
+  // An explicitly cited body or fragment has the same publication rules as a standalone reference.
+  for(const part of citations){
+    const refs=part.type==='relation'?Object.values(part.roles).flat().map(binding=>binding.reference)
+      :part.type==='display'&&part.target?[part.target]:[];
+    for(const ref of refs)await assertReferenceAllowed(tx.store,ref,submitted.authorId);
+  }
+  const reasonId=id();
+  const publications=await splitReviewReasonParts(tx.store,submitted,{messageId:c.messageId,revision:c.revision},{messageId:reasonId,revision:1});
+  for(const [parts,messageId] of [[publications.parts,reasonId],[publications.citation,undefined]] as const){
+    if(!parts?.length)continue;
+    partsSchema.parse(parts.filter(p=>p.type!=='relation'||!['review-context','review-reason'].includes(p.relation)));
+    const message=await tx.create(submitted.authorId,parts,{protocol:submitted.spending.protocol,recommendation:1,wager:0},messageId);
+    await chargeMessage(tx.store,message,true);
+    await enrollModeration(tx,message);
+    await placeMessageValueWager(tx,message);
+  }
+}
+
+export async function processModerationAction(tx:Mutation,message:Message,reviewWager=0,convertedStance=false):Promise<boolean>{
   const parts=relations(message).filter(p=>REVIEW_RELATIONS.has(p.relation));
   if(!parts.length){if(reviewWager)throw new DomainError('审核押注只能用于审核关系');return false;}
   if(parts.length!==1)throw new DomainError('一条消息只能执行一个审核操作');
   const part=parts[0]!,store=tx.store,data=dataOf(message);
+  const decision=part.relation==='review'||part.relation==='review-appeal';
+  const submitted={...message};
   if(part.relation!=='review'&&reviewWager)throw new DomainError('只有审核意见可以投入审核押注');
-  if(part.relation==='reviewer-authorize'){
-    throw new DomainError('能阅读对应消息版本的登录用户即可审核，无需固定授权',409);
-  }
   const c=await selectedCase(store,message,part);
   if(data.reviewRound!==undefined&&data.reviewRound!==c.round)throw new DomainError('审核轮次已变化，请重新打开审核入口',409,'REVIEW_ROUND_CHANGED');
   const dataId=message.parts.find(p=>p.type==='data')?.id??['review-data',...Array.from({length:message.parts.length+1},(_,i)=>`review-data-${i}`)].find(candidate=>!message.parts.some(p=>p.id===candidate))!;
-  // Canonical metadata must not be overridden by a later user-supplied data part.
-  message.parts=message.parts.filter(p=>p.type!=='data');
-  message.parts.push({id:dataId,type:'data',value:{...data,uiType:part.relation.toUpperCase(),caseId:c.id,targetRevision:c.revision,
-    snapshotHash:createHash('sha256').update(JSON.stringify(c.snapshot)).digest('hex'),reviewRuleVersion:c.ruleVersion,reviewRound:c.round,reviewStage:c.stage}});
+  // The public decision contains only the pinned target, placement, and verified accounting facts.
+  const target=part.roles.target![0]!;
+  message.parts=decision?[{...part,roles:{target:[{id:target.id,reference:{messageId:c.messageId,revision:c.revision}}]}},
+    ...message.parts.filter(p=>p.type==='relation'&&p.relation==='member-of')]:message.parts.filter(p=>p.type!=='data');
+  message.parts.push({id:dataId,type:'data',value:{...(!decision?data:{}),uiType:part.relation.toUpperCase(),caseId:c.id,targetRevision:c.revision,
+    ...(part.relation==='review'?{verdict:data.verdict}:{}),
+    ...(convertedStance?{convertedFrom:data.convertedFrom,convertedSide:data.convertedSide}:{}),
+    snapshotHash:createHash('sha256').update(JSON.stringify(c.snapshot)).digest('hex'),reviewRuleVersion:c.ruleVersion,reviewRound:c.round}});
   await tx.put(message);
   if(part.relation==='review-appeal'){
     if(c.status==='rejected'&&c.authorId!==message.authorId)throw new DomainError('审核不通过后仅作者可以申请复核',403);
-    if(!message.parts.some(p=>p.type==='text'&&p.text.trim()))throw new DomainError('复核需要填写理由');
+    if(!reviewReasonContent(submitted).some(p=>p.type==='text'&&p.text.trim()))throw new DomainError('复核需要填写理由');
     if(c.status==='pending'||c.status==='appeal')throw new DomainError('该内容正在审核或复核',409);
     const verdict:ReviewVerdict=c.status==='unknown'?(data.verdict??'pass'):c.status==='approved'?'reject':'pass';
     if(!['pass','reject'].includes(verdict))throw new DomainError('请选择复核自押方向');
@@ -131,10 +163,12 @@ export async function processModerationAction(tx:Mutation,message:Message,review
     await reverseSettlement(tx,c,message);
     await payReviewFees(tx,c);
     const economy=reviewEconomy(c.policy);
-    c.status='appeal';c.releaseAt=null;c.settlement=null;c.round++;c.stage=0;c.fee=economy.appealFee;c.deposit=integer(c.deposit+economy.appealDeposit);
+    c.status='appeal';c.releaseAt=null;c.settlement=null;c.round++;c.fee=economy.appealFee;c.deposit=integer(c.deposit+economy.appealDeposit);
     await addReviewFunding(tx,c,message,economy.appealFee,economy.appealDeposit,false,verdict);
     message.spending.reviewFee=economy.appealFee;message.spending.reviewDeposit=economy.appealDeposit;await tx.put(message);
-    await saveCase(store,c);await note(tx,c,message,'已发起审核复核，重新分配本轮审核任务',{status:c.status,round:c.round});await refreshCaseAssignments(tx,c);return true;
+    await saveCase(store,c);await note(tx,c,message,'已发起审核复核',{status:c.status,round:c.round});
+    await publishReviewReason(tx,submitted,c);
+    return true;
   }
   await assertMessageReadable(store,c.messageId,message.authorId,c.revision);
   if(part.relation==='review'){
@@ -143,7 +177,6 @@ export async function processModerationAction(tx:Mutation,message:Message,review
     if(!['pass','reject'].includes(data.verdict)||!Number.isSafeInteger(reviewWager)||reviewWager<minimum)throw new DomainError(`请选择通过或不通过，审核押注至少 ${minimum} 点`);
     await store.ledger(message.authorId,message.id,-reviewWager,reviewWager,'审核押注冻结');
     await store.db.prepare('INSERT INTO moderation_votes("messageId","caseId","userId",verdict,amount,"createdAt",round) VALUES($1,$2,$3,$4,$5,$6,$7)').run(message.id,c.id,message.authorId,data.verdict,reviewWager,message.createdAt,c.round);
-    await store.db.prepare('UPDATE moderation_assignments SET "submittedAt"=COALESCE("submittedAt",$4) WHERE "caseId"=$1 AND round=$2 AND "userId"=$3').run(c.id,c.round,message.authorId,now());
     message.spending.reviewWager=reviewWager;await tx.put(message);
     tx.affected.add(c.messageId);
     if(c.settlement){
@@ -153,6 +186,7 @@ export async function processModerationAction(tx:Mutation,message:Message,review
         await note(tx,c,message,'累计押注改变审核结果，等待重新结算',{status:c.status});
       }
     }
+    await publishReviewReason(tx,submitted,c);
     return true;
   }
   const votes=await reviewVotes(store,c.id),deposits=await reviewDeposits(store,c.id),summary=summarizeReview(c,votes,deposits);

@@ -14,10 +14,6 @@ export interface ModerationPolicy {
   minReviewers: number;
   /** Historical setting; settlements now distribute funds immediately. */
   appealDelayMs: number;
-  /** Retained for old policies; only the initial invitation count is used. */
-  stages?: number[];
-  assignmentTtlMs?: number;
-  exposureMultiplier?: number;
   rewardSlots?: number;
   rewardAmount?: number;
   minWager?: number;
@@ -27,7 +23,6 @@ export interface ModerationPolicy {
 }
 export const DEFAULT_MODERATION_POLICY: ModerationPolicy = {
   enabled: true, fee: 6, deposit: 10, minReviewers: 2, appealDelayMs: 0,
-  stages: [3, 9, 27], assignmentTtlMs: 30 * 60_000, exposureMultiplier: 2,
   rewardSlots: 3, rewardAmount: 2, minWager: 2, appealFee: 6, appealDeposit: 10,
 };
 export type ReviewVerdict = 'pass' | 'reject';
@@ -61,39 +56,29 @@ export interface ModerationSummary {
   releaseAt: string | null;
   finalized: boolean;
   round?: number;
-  stage?: number;
-  stageSize?: number;
-  stageCount?: number;
-  requiredMajority?: number;
   passReviewers?: number;
   rejectReviewers?: number;
-  assignedCount?: number;
-  exposedCount?: number;
-  exposureLimit?: number;
   provisional?: boolean;
   rewardSlots?: number;
   rewardAmount?: number;
   rewardCount?: number;
   feeRefund?: number;
 }
-export function reviewStages(policy:ModerationPolicy):number[]{return policy.stages??DEFAULT_MODERATION_POLICY.stages!;}
-/** Random invitations are reminders and never a settlement quorum or an expanding jury. */
-export function reviewAssignmentSize(policy:ModerationPolicy):number{return reviewStages(policy)[0]!;}
 export function reviewEconomy(policy:ModerationPolicy){return {
   rewardSlots:policy.rewardSlots??DEFAULT_MODERATION_POLICY.rewardSlots!,rewardAmount:policy.rewardAmount??DEFAULT_MODERATION_POLICY.rewardAmount!,
   minWager:policy.minWager??DEFAULT_MODERATION_POLICY.minWager!,appealFee:policy.appealFee??DEFAULT_MODERATION_POLICY.appealFee!,appealDeposit:policy.appealDeposit??DEFAULT_MODERATION_POLICY.appealDeposit!,
 };}
-export const REVIEW_RELATIONS = new Set(['review', 'review-appeal', 'review-settle', 'review-finalize', 'reviewer-authorize']);
+export const REVIEW_RELATIONS = new Set(['review', 'review-appeal', 'review-settle', 'review-finalize']);
 /** All review audit records, including historical enrollment, attach to reviewed content. */
 export const REVIEW_RECORD_RELATIONS = new Set([...REVIEW_RELATIONS, 'review-record', 'review-enrollment']);
 /** Process events feed private notifications, never the review discussion canvas. */
-export const REVIEW_PROCESS_RELATIONS = new Set(['review-record', 'review-enrollment', 'review-settle', 'review-finalize', 'reviewer-authorize']);
+export const REVIEW_PROCESS_RELATIONS = new Set(['review-record', 'review-enrollment', 'review-settle', 'review-finalize']);
 
 /** Content and custom labels require publication review; structural actions do not. */
 export function requiresModeration(message: Pick<Message, 'authorId' | 'parts'> & {id?:string}): boolean {
   if (message.authorId === 'system') return false;
   const actions = message.parts.filter((p): p is Extract<Part,{type:'relation'}> => p.type === 'relation'
-    && !(p.relation === 'member-of' && !p.roles.member?.length) && p.relation !== 'review-context'
+    && !(p.relation === 'member-of' && !p.roles.member?.length) && !['review-context','review-reason'].includes(p.relation)
     && !((p.id === 'self-stance' || p.id.startsWith('minimum-self-stance-'))
       && ['agree','disagree'].includes(p.relation) && p.roles.target?.length === 1 && p.roles.target[0]!.reference.messageId === message.id));
   if (actions.some(p => REVIEW_RELATIONS.has(p.relation))) return false;

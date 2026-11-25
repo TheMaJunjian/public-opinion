@@ -25,10 +25,12 @@ export function createDiscussionClient(initialFocus: string, options: {
   let rootScope = false;
   let key = '', publishedKey = '', pageKey = '', requestingScopeKey = '', generation = 0, stopped = false, controller: AbortController | undefined;
   let pages: WorkbenchSnapshot[] = [], nextCursor: string | null = null, expanded = false, loadingMore = false;
+  let publishedReviewVotes: boolean | undefined;
   let pending: Promise<void> | undefined;
   let snapshot: WorkbenchSnapshot | undefined;
   const contextRequests = new Set<AbortController>();
   const queryFor = (scope: ZhihuViewerScope): DiscussionQuery => ({ focusId, classificationId: scope.classificationId ?? options.baseClassificationId ?? (!scope.trace && rootScope ? 'root' : null),
+    ...(scope.viewMode==='list'&&{includeReviewVotes:true}),
     extraIds: [...new Set([...scope.extraIds ?? [], ...scope.pinnedIds ?? []])].sort(), recordIds: [...new Set(scope.recordIds ?? [])].sort(), trace: scope.trace });
   const report = (loading: boolean, error?: string, restricted?: boolean) => options.status({ focusId,
     recommendedPath: snapshot?.discussion?.recommendedPath,
@@ -44,14 +46,15 @@ export function createDiscussionClient(initialFocus: string, options: {
     if (!scope.trace && !scope.classificationId && activeScope.classificationId) rootScope = true;
     const query = queryFor(scope), nextKey = JSON.stringify(query);
     const nextPageKey = JSON.stringify([query.focusId, query.classificationId, query.trace]);
+    const nextContextKey = JSON.stringify([nextPageKey,query.includeReviewVotes]);
     const sameScope = nextPageKey === pageKey;
     if (nextKey === key && pending) return pending;
     if (!force && nextKey === publishedKey && nextKey === key && snapshot) { activeScope = scope; return; }
     const expandedIds = new Set(snapshot?.discussion?.expandedIds ?? snapshot?.messages.map(message=>message.id));
-    const loadedContext = sameScope && snapshot && [...query.extraIds ?? [], ...query.recordIds ?? []]
+    const loadedContext = sameScope && snapshot && query.includeReviewVotes===publishedReviewVotes && [...query.extraIds ?? [], ...query.recordIds ?? []]
       .every(id => expandedIds.has(id));
     // Selection and its subsequent background refresh share an in-flight append.
-    if (loadedContext && pending && requestingScopeKey === nextPageKey) { activeScope = scope; return pending; }
+    if (loadedContext && pending && requestingScopeKey === nextContextKey) { activeScope = scope; return pending; }
     if (!force && loadedContext) {
       controller?.abort(); generation++; pending = undefined;
       activeScope = scope; key = publishedKey = nextKey; report(false); return;
@@ -60,7 +63,7 @@ export function createDiscussionClient(initialFocus: string, options: {
     const signal = controller.signal, ticket = ++generation;
     const previousPages = sameScope ? pages : [];
     loadingMore = append;
-    activeScope = scope; key = nextKey; requestingScopeKey = nextPageKey;
+    activeScope = scope; key = nextKey; requestingScopeKey = nextContextKey;
     report(true);
     const finish = startWorkbenchTiming('discussion-request');
     pending = (async () => {
@@ -108,6 +111,7 @@ export function createDiscussionClient(initialFocus: string, options: {
         }
         if (stopped || signal.aborted || ticket !== generation) return;
         const value = mergeDiscussionSnapshots(refreshed);
+        publishedReviewVotes = query.includeReviewVotes;
         pages = refreshed; nextCursor = value.discussion!.nextCursor; expanded = sameScope ? expanded || append : false;
         if (sameScope && snapshot && fingerprint(snapshot) === fingerprint(value)) {
           snapshot = value; publishedKey = nextKey; nextCursor = value.discussion.nextCursor;

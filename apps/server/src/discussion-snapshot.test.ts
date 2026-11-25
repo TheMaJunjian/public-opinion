@@ -7,6 +7,7 @@ import { createTestApp, cleanupTestDatabases, withTestContribution } from './tes
 import { Mutation } from './db.js';
 import { viewsFor } from './ui-projections.js';
 import { recordStance } from './projections.js';
+import { sanitizeModeration } from './moderation-visibility.js';
 import { convertMessagesToDemoModel, computeCorrectionVersions, computeEffectiveSuppressedRelIds } from '../../../frontend/src/utils/modelBridge.js';
 import { deriveContainerEffect } from '../../../frontend/src/pages/workbench/model/containerEffect.js';
 
@@ -381,7 +382,7 @@ it.each(['up', 'down'] as const)('traces %s through source/target relations with
   expect(new Set(result.messages.map(row => row.id))).toEqual(new Set(expected.map(row => row!.id)));
 });
 
-it('revalidates moderation for every page and refuses a restricted focus', async () => {
+it('revalidates every page and opens a restricted focus as a single card linked to its review', async () => {
   const app = await createTestApp({moderation:true}), author = await actor(app), reader = await actor(app,'reader');
   const [focus] = await seed(app,author.session.user.id,[[body('原文')]]);
   const sent = await author.agent.post('/api/messages').set('x-csrf-token', author.session.csrf).send(withTestContribution({requestId:randomUUID(),parts:[body('关联正文')]}));
@@ -394,5 +395,76 @@ it('revalidates moderation for every page and refuses a restricted focus', async
   });
   const after = await page(reader,{focusId:focus!.id,extraIds:[reply!.id]});
   expect(JSON.stringify(after)).not.toContain('关联正文');
-  expect((await reader.agent.post('/api/ui/snapshot/discussion').send({focusId:reply!.id})).status).toBe(403);
+  const linked=await page(reader,{focusId:reply.id,extraIds:[focus!.id]});
+  expect(linked.messages).toMatchObject([{id:reply.id,restricted:true,content:'',restrictedReviewTargets:[{messageId:reply.id,revision:1}]}]);
+  expect(linked.discussion).toMatchObject({nextCursor:null,pageIds:[]});
+  expect(JSON.stringify(linked)).not.toContain('关联正文');
+});
+
+it('lets an author open only their fixed stance when its referenced content becomes restricted',async()=>{
+  const app=await createTestApp({moderation:true}),publisher=await actor(app),voter=await actor(app,'voter'),other=await actor(app,'other');
+  const send=(who:typeof voter,parts:Part[],amounts:object)=>who.agent.post('/api/messages').set('x-csrf-token',who.session.csrf)
+    .send({requestId:randomUUID(),parts,...amounts});
+  const published=await send(publisher,[body('PRIVATE-ENDPOINT')],{recommendation:1});
+  expect(published.status,published.text).toBe(201);
+  const target=published.body.message.id;
+  const action=(side:string)=>relation(side,{target:[{messageId:target}]});
+  const stances=[];
+  for(const side of ['agree','disagree'] as const){
+    const sent=await send(voter,[action(side),{id:'data',type:'data',value:{note:'PRIVATE-METADATA'}}],{wager:1});
+    expect(sent.status,sent.text).toBe(201);stances.push({id:sent.body.message.id,side});
+  }
+  const reason=await send(voter,[action('agree'),body('PRIVATE-REASON')],{wager:1});
+  const vote=await send(voter,[action('review'),{id:'data',type:'data',value:{verdict:'reject'}}],{reviewWager:20});
+  expect(reason.status,reason.text).toBe(201);expect(vote.status,vote.text).toBe(201);
+  const ballotId=vote.body.message.id;
+  const list=await page(voter,{focusId:target,includeReviewVotes:true});
+  expect(list.messages.filter(row=>row.id===ballotId)).toHaveLength(1);
+  expect(list.relations.find(row=>row.id===ballotId)).toMatchObject({payload:{verdict:'reject'},spending:{reviewWager:20}});
+  expect((await page(voter,{focusId:target})).messages.map(row=>row.id)).not.toContain(ballotId);
+  const settled=await send(publisher,[action('review-settle')],{});
+  expect(settled.status,settled.text).toBe(201);
+  const coveredList=await page(other,{focusId:target,includeReviewVotes:true});
+  expect(coveredList.messages.map(row=>row.id)).toEqual([target,ballotId]);
+  expect(coveredList.relations).toMatchObject([{id:ballotId,payload:{verdict:'reject'}}]);
+  expect(JSON.stringify(coveredList)).not.toContain('PRIVATE-');
+
+  for(const {id,side} of stances){
+    const info=await voter.agent.get('/api/ui/message-context').query({id});
+    expect(info.status,info.text).toBe(200);
+    const scoped=await page(voter,{focusId:id,extraIds:[target],recordIds:[reason.body.message.id],
+      trace:{ids:[target],depths:{up:5,down:5},expandedIds:[target]},classificationId:target});
+    expect(scoped.discussion).toMatchObject({focusId:id,pageIds:[],nextCursor:null,expandedIds:[id]});
+    expect(scoped).toMatchObject({relations:[],stakes:{},tagCounts:{},attentionUsers:{}});
+    for(const result of [info.body,scoped]){
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0]).toMatchObject({id,createdBy:{id:voter.session.user.id,username:'voter'},
+        restricted:true,restrictedStance:side,content:'',targetRefs:[],payload:{}});
+      const {restrictedReviewTargets,restrictedReviewSummaries,...card}=result.messages[0];
+      expect(restrictedReviewTargets).toEqual([{messageId:target,revision:1}]);
+      expect(restrictedReviewSummaries).toMatchObject([{messageId:target,revision:1,pass:10,reject:20,status:'rejected'}]);
+      expect(JSON.stringify({...result,messages:[card]})).not.toContain(target);
+      for(const secret of ['PRIVATE-ENDPOINT','PRIVATE-REASON','PRIVATE-METADATA'])expect(JSON.stringify(result)).not.toContain(secret);
+    }
+    const linked=await page(other,{focusId:id,extraIds:[target]});
+    for(const otherCard of [linked.messages[0],(await other.agent.get('/api/ui/message-context').query({id})).body.messages[0]]){
+      expect(otherCard).not.toHaveProperty('restrictedStance');
+      expect(otherCard.restrictedReviewTargets).toEqual([{messageId:target,revision:1}]);
+    }
+    expect(linked.messages).toHaveLength(1);
+  }
+  for(const id of [target,reason.body.message.id,vote.body.message.id]){
+    const linked=await page(voter,{focusId:id,recordIds:[target,reason.body.message.id]});
+    expect(linked.messages).toHaveLength(1);
+    expect(linked.messages[0]).not.toHaveProperty('restrictedStance');
+    for(const secret of ['PRIVATE-ENDPOINT','PRIVATE-REASON','PRIVATE-METADATA'])expect(JSON.stringify(linked)).not.toContain(secret);
+    expect((await voter.agent.get('/api/ui/message-context').query({id})).body.messages[0]).not.toHaveProperty('restrictedStance');
+  }
+  const misleadingView={id:stances[0]!.id,revision:1,createdBy:{id:other.session.user.id,username:'PRIVATE-ALIAS'},parts:[action('disagree')]};
+  expect(await sanitizeModeration(app.store,misleadingView,voter.session.user.id)).toMatchObject({
+    createdBy:{id:voter.session.user.id,username:'voter'},restrictedStance:'agree'});
+  expect(await sanitizeModeration(app.store,misleadingView,other.session.user.id)).not.toHaveProperty('restrictedStance');
+  const denied=await send(voter,[action('review'),{id:'data',type:'data',value:{verdict:'pass'}}],{reviewWager:2});
+  expect(denied.status).toBe(403);
+  expect(denied.body.code).toBe('CONTENT_RESTRICTED');
 });

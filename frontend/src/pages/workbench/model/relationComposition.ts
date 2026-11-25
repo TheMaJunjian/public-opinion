@@ -1,6 +1,6 @@
 import type { Relation, RelationPayload, TargetRef } from '../../../types';
 import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../../../types';
-import type { DemoMessage, RelationType } from '../../../utils/modelBridge';
+import { reviewDecisionCard, type DemoMessage, type RelationType } from '../../../utils/modelBridge';
 
 export const ALL_RELATION_TYPES: RelationType[] = [
   'annotation', 'reference', 'reply', 'notify', 'agree', 'disagree', 'tag', 'arrange',
@@ -169,7 +169,7 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
   } else {
     content = `目标：${targetSummary}`;
   }
-  return {
+  return reviewDecisionCard({
     id: relation.id,
     sequence: relation.sequence,
     revision: relation.revision,
@@ -177,7 +177,8 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
     executedStance: relation.executedStance,
     state: relation.state,
     spending: relation.spending,
-    moderation:relation.moderation,restricted:relation.restricted,
+    moderation:relation.moderation,restricted:relation.restricted,restrictedStance:relation.restrictedStance,restrictedReviewTargets:relation.restrictedReviewTargets,
+    restrictedReviewSummaries:relation.restrictedReviewSummaries,
     sourceMessageId: relation.sourceMessageId,
     sourceRefs: relation.sourceRefs,
     targetRefs: relation.targetRefs,
@@ -191,7 +192,7 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
     relationPayload: relation.payload,
     content,
     joinInfo,
-  };
+  });
 }
 
 export function getTextTargetIds(targetRefs: TargetRef[]): string[] {

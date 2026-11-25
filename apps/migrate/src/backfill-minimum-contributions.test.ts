@@ -4,7 +4,7 @@ import {Mutation} from '../../server/src/db.js';
 import {openSettlement,placeWager,placeHistoricalSelfWager,refundHistoricalSelfWager} from '../../server/src/economy.js';
 import {cleanupTestDatabases,createTestStore,newTestSchema} from '../../server/src/test-database.js';
 import {migrationsFor,runMigrations} from './migrations.js';
-import {minimumContributionCandidates,backfillMinimumContributions,refundGeneratedContributions} from './backfill-minimum-contributions.js';
+import {minimumContributionCandidates,outstandingMinimumContributions,backfillMinimumContributions,refundGeneratedContributions} from './backfill-minimum-contributions.js';
 
 afterEach(async()=>{vi.restoreAllMocks();await cleanupTestDatabases();});
 async function fixture(){
@@ -30,6 +30,21 @@ async function fixture(){
   });
   return {schema,store};
 }
+
+it('当前迁移预检区分独立计费的审核操作和缺少投入的消息',async()=>{
+  const {store}=await fixture();
+  const before=await outstandingMinimumContributions(store.db);
+  await store.transaction(async()=>{
+    const tx=new Mutation(store);
+    for(const [relation,reviewWager] of [['review',2],['review-settle',0],['review',0]] as const){
+      await tx.create('author',[{id:'action',type:'relation',relation,roles:{target:[{id:'target',reference:{messageId:'paid'}}]}}],
+        {protocol:1,recommendation:0,wager:0,reviewWager});
+    }
+    await tx.commit();
+  });
+  expect(await outstandingMinimumContributions(store.db)).toBe(before+1);
+  expect(await outstandingMinimumContributions(store.db,false)).toBe(before+3);
+});
 
 it('并发升级只补扣一次，允许负余额，保留签名与旧流水，导出重放一致',async()=>{
   const {schema,store}=await fixture();

@@ -65,9 +65,9 @@ describe('four independent lightweight stance regions', () => {
       for(const badge of badges)expect(rectsIntersect(box(summary()),box(badge)),badge.textContent!).toBe(false);
     };
     await waitFor(assertClear);
-    fireEvent.click(screen.getByRole('button',{name:'收起标注 root'}));
+    fireEvent.click(screen.getByRole('button',{name:'收起装饰 root'}));
     await waitFor(()=>expect(ui.container.querySelector('[data-skin-decoration="annotation"]')).toBeNull());
-    fireEvent.click(screen.getByRole('button',{name:'显示标注 root'}));
+    fireEvent.click(screen.getByRole('button',{name:'显示装饰 root'}));
     await waitFor(assertClear);
   });
 

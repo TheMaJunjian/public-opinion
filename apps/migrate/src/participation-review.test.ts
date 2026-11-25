@@ -7,6 +7,7 @@ import {Store} from '../../server/src/db.js';
 import {moderationCase} from '../../server/src/moderation.js';
 import {financialFingerprint} from './financial-fingerprint.js';
 import {migrateParticipationReview} from './participation-review.js';
+import {reviewAssignmentSchema} from './random-review-assignments.js';
 
 afterEach(cleanupTestDatabases);
 it('opens old pending content and restores unused draws without changing balances, wagers, or the old funded fee budget',async()=>{
@@ -35,7 +36,9 @@ it('opens old pending content and restores unused draws without changing balance
   const empty=await publish('旧待审正文可以公开'),voted=await publish('旧押注保持原样');
   await action(one!,voted.messageId,'review');
   const votes=await app.store.db.prepare('SELECT * FROM moderation_votes ORDER BY position').all();
-  const assignments=await app.store.db.prepare('SELECT * FROM moderation_assignments ORDER BY "caseId",round,"userId"').all();
+  await app.store.db.exec(reviewAssignmentSchema);
+  await app.store.db.prepare(`INSERT INTO moderation_assignments("caseId",round,"userId",stage,"assignedAt","expiresAt")
+    VALUES($1,1,$2,0,'2026-01-01','2026-01-02')`).run(empty.id,one!.id);
   await app.store.transaction(()=>app.store.db.exec(`DROP TABLE moderation_round_fees; DROP TABLE moderation_deposits;
     DELETE FROM settings WHERE key='participation-review-version'; DELETE FROM schema_migrations WHERE version>=40`));
   const before=await financialFingerprint(app.store.db);
@@ -43,8 +46,8 @@ it('opens old pending content and restores unused draws without changing balance
   try{
     expect(await financialFingerprint(migrated.db)).toBe(before);
     expect(await migrated.db.prepare('SELECT * FROM moderation_votes ORDER BY position').all()).toEqual(votes);
-    expect(await migrated.db.prepare('SELECT * FROM moderation_assignments ORDER BY "caseId",round,"userId"').all()).toEqual(assignments);
-    expect(await moderationCase(migrated,empty.messageId)).toMatchObject({round:2,stage:0,status:'pending',fee:3,deposit:10});
+    expect(await migrated.db.prepare("SELECT to_regclass('moderation_assignments') AS old").get()).toEqual({old:null});
+    expect(await moderationCase(migrated,empty.messageId)).toMatchObject({round:2,status:'pending',fee:3,deposit:10});
     expect(await moderationCase(migrated,voted.messageId)).toMatchObject({round:1,status:'pending',fee:3,deposit:10});
     expect(await migrated.db.prepare('SELECT round,amount,paid FROM moderation_round_fees WHERE "caseId"=$1').get(empty.id)).toEqual({round:2,amount:3,paid:false});
     expect((await migrated.rules()).moderation).toMatchObject({fee:6,rewardSlots:3,rewardAmount:2,minWager:2,appealFee:6,appealDeposit:10});

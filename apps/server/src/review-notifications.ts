@@ -3,7 +3,6 @@ import type { Store } from './db.js';
 import { primaryRelation } from './ui-projections.js';
 
 const dataOf=(message:Message):Record<string,unknown>=>Object.assign({},...message.parts.flatMap(part=>part.type==='data'&&part.value&&typeof part.value==='object'&&!Array.isArray(part.value)?[part.value]:[]));
-const ids=(value:unknown)=>Array.isArray(value)?value.filter((id):id is string=>typeof id==='string'):[];
 
 function describeTarget(message:Message,correctionTarget?:Message):Pick<NotificationContent,'targetMessageType'|'targetExcerpt'> {
   const relation=primaryRelation(message)?.relation,data=dataOf(message);
@@ -55,13 +54,9 @@ export async function recordReviewNotifications(store:Store,change:Change){
     const financial=system?change.ledger.filter(entry=>entry.messageId===message.id):[];
     if(financial.length){
       for(const entry of financial)add(entry.userId,'review-financial','审核资金已结算或调整','本次审核影响了你的贡献点');
-    }else if(system&&('assigned' in data||'revoked' in data)){
-      for(const userId of ids(data.assigned))add(userId,'review-assigned','收到审核任务','你被分配了这条消息的审核任务');
-      for(const userId of ids(data.revoked))add(userId,'review-revoked','审核任务已撤回','你的审核任务已结束或超时');
-    }else if(system&&('status' in data||'releaseAt' in data||'stageSize' in data)){
-      const kind='stageSize' in data?'review-expanded':'releaseAt' in data?'review-result':'review-reopened';
-      const users=await store.db.prepare(`SELECT DISTINCT "userId" FROM moderation_votes WHERE "caseId"=$1
-        UNION SELECT "userId" FROM moderation_assignments WHERE "caseId"=$1 AND "revokedAt" IS NULL`).all<{userId:string}>(data.caseId);
+    }else if(system&&('status' in data||'releaseAt' in data)){
+      const kind='releaseAt' in data?'review-result':'review-reopened';
+      const users=await store.db.prepare(`SELECT DISTINCT "userId" FROM moderation_votes WHERE "caseId"=$1`).all<{userId:string}>(data.caseId);
       for(const userId of [target.authorId,...users.map(user=>user.userId)])add(userId,kind,textOf(message),'你是消息作者或参与了本次审核');
     }else if(!system&&target.authorId!==message.authorId){
       add(target.authorId,'review-vote',data.verdict==='pass'?'提交了审核通过判断':'提交了审核不通过判断','你的消息收到了审核判断');

@@ -3,6 +3,7 @@ import { Store } from '../../server/src/db.js';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_RULES } from '@gonglun/core';
 import { schemaSql } from '../../server/src/schema.js';
+import { migrateReviewReasons } from './review-reasons.js';
 import { initializeProjections } from '../../server/src/projections.js';
 import { initializePersonal } from '../../server/src/personal-actions.js';
 import { retireLegacyTopics } from './retire-legacy-topics.js';
@@ -47,6 +48,7 @@ import {migrateReviewEnrollmentAttachments} from './review-enrollment-attachment
 import {migrateReviewSelfStakes} from './review-self-stakes.js';
 import {migrateLedgerOperations} from './ledger-operations.js';
 import {migrateDiscoveryFeed} from './discovery-feed.js';
+import {removeReviewPermissions} from './remove-review-permissions.js';
 import { indexRecommendedMemberships, recommendedMembershipSchema } from '../../server/src/recommended-memberships.js';
 
 export interface Migration { version: number; name: string; changesFinances?: boolean; up(): Promise<void> }
@@ -141,7 +143,8 @@ export function migrationsFor(store: Store): Migration[] {
   {version:49,name:'participant-agreement-acceptance',up:async()=>{
     await store.db.exec(agreementSchema);
     await migrateAppealVisibility(store);
-  }}];
+  }}, {version:50,name:'remove-review-permissions',up:()=>removeReviewPermissions(store)},
+  {version:51,name:'independent-review-reasons',up:()=>migrateReviewReasons(store)}];
 }
 
 /** Runs under the cross-process write lock. Failed upgrades roll back together. */
@@ -157,8 +160,6 @@ export async function runMigrations(db: Postgres, migrations: Migration[]): Prom
     if(migrations.length>applied.length)await db.exec(`DO $$ BEGIN
       IF to_regclass('display_stances') IS NOT NULL THEN ALTER TABLE display_stances ADD COLUMN IF NOT EXISTS context JSONB; END IF;
       IF to_regclass('ledger') IS NOT NULL THEN ALTER TABLE ledger ADD COLUMN IF NOT EXISTS "balanceAfter" BIGINT; END IF;
-      -- Historical content backfills use today's reviewer selection; old sessions start offline.
-      IF to_regclass('sessions') IS NOT NULL THEN ALTER TABLE sessions ADD COLUMN IF NOT EXISTS "lastActiveAt" BIGINT NOT NULL DEFAULT 0; END IF;
     END $$`);
     for (const migration of migrations.slice(applied.length)) {
       const before=migration.changesFinances?null:await financialFingerprint(db);

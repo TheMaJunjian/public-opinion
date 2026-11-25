@@ -21,7 +21,7 @@ export async function bindCommandContexts(store:Store,input:SendInput):Promise<S
         if(rounds.length!==1)throw new DomainError('请选择明确的结算轮次');
         binding.reference=JSON.parse(String(rounds[0]!.body)).target;continue;
       }
-      if(['correct','amend','member-of','classify','summary','merge','arrange','authorize','settlement','distribution','terminate'].includes(part.relation))continue;
+      if(['review-context','review-reason','correct','amend','member-of','classify','summary','merge','arrange','authorize','settlement','distribution','terminate'].includes(part.relation))continue;
       const viewed=ref.context&&'version' in ref.context?ref.context.version:undefined;
       const target=await store.message(ref.messageId,ref.revision??viewed?.revision),whole=!ref.partId&&!ref.path?.length&&!ref.memberId&&!ref.range;
       const targetRelations=relations(target);

@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import type { WorkbenchSnapshot } from '@gonglun/core';
+import type { DiscussionQuery, WorkbenchSnapshot } from '@gonglun/core';
 import { createDiscussionClient } from '../data/discussionClient';
 
 const user = {id:'u',username:'读者',createdAt:''};
@@ -12,11 +12,25 @@ function snapshot(ids: string[] = [], nextCursor: string | null = null, cursor =
 }
 const setup = () => {
   const windows = new Map<string, WorkbenchSnapshot>([['latest',snapshot()],['head',snapshot()]]);
-  const load=vi.fn<(query: {cursor?:string;focusId:string}, signal: AbortSignal) => Promise<WorkbenchSnapshot>>(async query => windows.get(query.cursor ?? 'latest') ?? snapshot([],null,'head',query.focusId));
+  const load=vi.fn<(query: DiscussionQuery, signal: AbortSignal) => Promise<WorkbenchSnapshot>>(async query => windows.get(query.cursor ?? 'latest') ?? snapshot([],null,'head',query.focusId));
   const publish=vi.fn(),status=vi.fn();
   return {windows,load,publish,status,client:createDiscussionClient('focus',{load,publish,status,username:user.username})};
 };
 const ids = (t: ReturnType<typeof setup>) => t.publish.mock.calls.at(-1)![0].snapshot.messages.map((row:{id:string})=>row.id);
+
+it('loads vote rows when switching to the list and drops those rows when returning to the graph',async()=>{
+  const t=setup();
+  t.load.mockImplementation(async query=>{
+    const value=snapshot();
+    if(query.includeReviewVotes)value.messages.push(message('vote-row'));
+    return value;
+  });
+  await t.client.select({classificationId:null,viewMode:'graph'});
+  await t.client.select({classificationId:null,viewMode:'list'});
+  expect(ids(t)).toEqual(['focus','vote-row']);
+  await t.client.select({classificationId:null,viewMode:'graph'});
+  expect(ids(t)).toEqual(['focus']);
+});
 
 it('leaves the category for root paging, preserves root appends and resets the scope for a new link',async()=>{
   const t=setup();

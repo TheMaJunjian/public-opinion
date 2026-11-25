@@ -1,6 +1,6 @@
 import type { Message, Relation, User } from '../types';
 import type { WorkbenchSnapshot } from '../data/workbench';
-import {reviewContextPart,type Part} from '@gonglun/core';
+import {reviewContextPart,sameReviewContext,type Part,type ReviewContext} from '@gonglun/core';
 
 export interface Command { id: string; method: string; path: string; body: Record<string, unknown> }
 export interface CommandEnvelope { requestId: string; commands: Command[] }
@@ -108,7 +108,11 @@ export function queueCommand(path: string, options: RequestInit): Message | Rela
   if (!current || !/^\/(messages|relations)(\/[^/]+)?$/.test(path)) return null;
   assertOwner(current.context);
   const body = JSON.parse(String(options.body || '{}')) as Record<string, unknown>;
-  if (current.context.reviewContext && (options.method ?? 'POST') === 'POST') body.reviewContext = current.context.reviewContext;
+  const reviewAction=['review','review-appeal','review-settle','review-finalize'].includes(String(body.relationType).toLowerCase());
+  // A vote on a discussion message belongs to that message's own case.
+  const target=(body.targetRefs as {reference?:ReviewContext}[]|undefined)?.[0]?.reference;
+  const scope=!reviewAction||sameReviewContext(current.context.reviewContext,target)?current.context.reviewContext:undefined;
+  if (scope && (options.method ?? 'POST') === 'POST') body.reviewContext = scope;
   const method = options.method || 'POST', previous = current.previous?.commands[current.commands.length];
   // References created later in this preparation must point to the original IDs.
   const id = previous?.method === method && previous.path === path ? previous.id : crypto.randomUUID();
@@ -119,7 +123,7 @@ export function queueCommand(path: string, options: RequestInit): Message | Rela
   const relationType = typeof body.relationType === 'string' ? body.relationType : undefined;
   const content = typeof body.content === 'string' ? body.content : '';
   const parts:Part[] = content ? [{ id: 'body', type: 'text', text: content }] : [];
-  if(current.context.reviewContext)parts.push(reviewContextPart(current.context.reviewContext));
+  if(scope)parts.push(reviewContextPart(scope));
   const response = relationType ? {
     id, relationType, sourceMessageId: body.sourceMessageId ?? null, sourceRefs: body.sourceRefs,
     targetRefs: body.targetRefs ?? [], payload: body.payload, revision: 1, parts,

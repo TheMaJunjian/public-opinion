@@ -2,7 +2,7 @@ import type { ExportData } from '../api/client';
 import type { Part } from '@gonglun/core';
 import { deriveContainerEffect, isContainerType } from '../pages/workbench/model/containerEffect';
 import { archiveToWorkbenchSnapshot, projectWorkbenchSnapshot } from './workbenchProjection';
-import { isCardMessage, isReviewDiscussion, isReviewRecord, isSettlementRecord } from './modelBridge';
+import { isCardMessage, isReviewBallot, isReviewDiscussion, isSettlementRecord } from './modelBridge';
 import type { TraceDepths } from './traceRange';
 import { isNativeZhihuView } from './nativeZhihuView';
 import type { TargetRef } from '../types';
@@ -15,7 +15,7 @@ type Row = ExportData['messages'][number];
 type RelationRow = ExportData['relations'][number];
 const containers = new Set(['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE']);
 const scopes = new Set(['CLASSIFY', 'SUMMARY']);
-const effects = new Set(['AGREE', 'DISAGREE', 'CORRECT', 'ANNOTATION', 'TAG', 'JOIN']);
+const effects = new Set(['AGREE', 'DISAGREE', 'CORRECT', 'ANNOTATION', 'TAG', 'JOIN', 'REVIEW']);
 const targetIds = (row: { targetRefs?: unknown }) => ((row.targetRefs ?? []) as TargetRef[])
   .map(ref => ref.kind === 'relation' ? ref.relationId : ref.messageId).filter(Boolean);
 const endpoints = (row: RelationRow) => [...(row.sourceMessageId ? [row.sourceMessageId] : []), ...targetIds(row)];
@@ -260,7 +260,7 @@ export function createZhihuStructuralViewer(data: ExportData, username: string |
         const canvas = projectContainerCanvas(scopedEffect, scope.classificationId
           ? { kind: 'inside', id: scope.classificationId } : { kind: 'root' }, scope.viewMode ?? 'list');
         const visible = canvas.messages.filter(row => row.kind !== 'join' && !isSettlementRecord(row)
-          && !isReviewRecord(row) && !isReviewDiscussion(row));
+          && (!isReviewDiscussion(row) || scope.viewMode !== 'graph' && isReviewBallot(row)));
         cached = { full, plan: planChronologicalMessageUnits(visible, canvas.edges) };
       }
       pagePlans.delete(key); pagePlans.set(key, cached);

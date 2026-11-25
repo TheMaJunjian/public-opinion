@@ -2,11 +2,12 @@ import { isReviewAudit, reviewContextOf, reviewContextPart, sameReviewContext, s
   REVIEW_CONTEXT_RELATION, REVIEW_RECORD_RELATIONS, REVIEW_RELATIONS, type Message, type SendInput } from '@gonglun/core';
 import { DomainError, type Store } from './db.js';
 import { moderationCase, type ModerationCase } from './moderation.js';
-import { assertMessageReadable } from './moderation-visibility.js';
+import { rebindLegacyReviewFragments } from './legacy-review-fragments.js';
 
 /** Validate explicit scopes and inherit a single review scope from addressed
  * reasons. Normal discussion still pays its normal publication costs. */
-export async function normalizeReviewDiscussion(store: Store, input: SendInput, userId: string): Promise<SendInput> {
+export async function normalizeReviewDiscussion(store: Store, input: SendInput): Promise<SendInput> {
+  input=(await rebindLegacyReviewFragments(store,[input]))[0]!;
   const markers = input.parts.filter(part => part.type === 'relation' && part.relation === REVIEW_CONTEXT_RELATION);
   let context = markers.length ? reviewContextOf(input) : undefined;
   if (markers.length && (markers.length !== 1 || !context || markers[0]!.type !== 'relation'
@@ -37,14 +38,22 @@ export async function normalizeReviewDiscussion(store: Store, input: SendInput, 
   if (!context) return input;
   const review = await moderationCase(store, context.messageId, context.revision);
   if (!review) throw new DomainError('审核讨论的目标版本不存在', 404);
-  await assertMessageReadable(store, context.messageId, userId, context.revision);
   if (audit) {
     const target = input.parts.find(part => part.type === 'relation' && REVIEW_RELATIONS.has(part.relation));
-    if (target?.type === 'relation' && target.roles.target?.some(({reference}) => reference.messageId !== context!.messageId || reference.revision !== undefined && reference.revision !== context!.revision))
-      throw new DomainError('审核操作与当前审核讨论的目标不一致');
+    for (const {reference} of target?.type === 'relation' ? target.roles.target ?? [] : []) {
+      if (reference.messageId === context.messageId && (reference.revision === undefined || reference.revision === context.revision)) continue;
+      // A reason appearing here can itself be the subject of a separate case.
+      const subject = await store.message(reference.messageId, reference.revision);
+      if (!sameReviewContext(reviewContextOf(subject), context)) throw new DomainError('审核操作与当前审核讨论的目标不一致');
+    }
     return { ...input, parts: input.parts.filter(part => !markers.includes(part)) };
   }
-  if (markers.length) return input;
+  // Membership carries only the address. An actual citation in another part
+  // still goes through the publication and reference checks.
+  if (markers.length) {
+    const address={...reviewContextPart(context),id:markers[0]!.id};
+    return { ...input, parts: input.parts.map(part => part === markers[0] ? address : part) };
+  }
   if (input.parts.some(part => part.id === 'review-context')) throw new DomainError('审核讨论部件编号已被占用');
   return { ...input, parts: [...input.parts, reviewContextPart(context)] };
 }

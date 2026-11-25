@@ -1,4 +1,4 @@
-import { bindRoles, replaceReference, resolveReference, textOf, type Json, type Message as CoreMessage,
+import { bindRoles, replaceReference, resolveReference, reviewContextPart, reviewReasonPart, textOf, type Json, type Message as CoreMessage,
   type MembershipAction, type Part, type Reference } from '@gonglun/core';
 import type { ExportData, createMessage, createRelation } from '../api/client';
 import type { Message, Relation, User } from '../types';
@@ -170,6 +170,8 @@ export class LocalDiscussion {
       primary.reason = payload.subType;
     }
     const parts: Part[] = [primary];
+    const reason=['review','review-appeal'].includes(name)&&typeof payload.content==='string'?payload.content.trim():'';
+    if(reason)delete payload.content;
     const content = payload.content ?? payload.title ?? payload.label;
     if (typeof content === 'string' && content && type !== 'CORRECT') parts.unshift({ id: 'body', type: 'text', text: content });
     if (type === 'CORRECT') {
@@ -204,6 +206,10 @@ export class LocalDiscussion {
     const commonParents = refs.map(ref => this.containing(ref.messageId));
     const outer = isContainer && commonParents.length ? commonParents.every(value => value === commonParents[0]) ? commonParents[0] : null : parent === 'root' ? null : parent;
     const message = this.append(parts, type, refs, sources, payload);
+    if(reason&&refs[0]){
+      const original={messageId:refs[0].messageId,revision:refs[0].revision??this.message(refs[0].messageId).revision??1};
+      this.append([{id:'body',type:'text',text:reason},reviewContextPart(original),reviewReasonPart({messageId:message.id,revision:1})]);
+    }
     if (isContainer) {
       if (outer) this.join(outer, message.id);
       for (const ref of refs) this.join(message.id, ref.messageId);

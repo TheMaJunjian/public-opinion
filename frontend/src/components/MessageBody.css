@@ -1,9 +1,9 @@
 .message-content-mask {
-  display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
   width: 180px; max-width: 100%; height: 44px; flex-shrink: 0;
   box-sizing: border-box; overflow: hidden; border-radius: 6px;
   border: 1px solid var(--border-default); padding: 0;
-  color: var(--text-muted); user-select: none;
+  color: var(--text-muted); font-size: 12px; user-select: none; cursor: default;
   background: repeating-linear-gradient(135deg, transparent 0 5px,
     color-mix(in srgb, var(--text-muted) 12%, transparent) 5px 7px),
     color-mix(in srgb, var(--surface-card) 90%, var(--text-muted));
@@ -11,8 +11,16 @@
 button.message-content-mask { cursor: pointer; }
 button.message-content-mask:hover { border-color: var(--text-muted); }
 button.message-content-mask:focus-visible { outline: 2px solid var(--fragment-accent); outline-offset: 2px; }
-.message-content-mask svg { box-sizing: content-box; padding: 4px 8px; border-radius: 5px; background: var(--surface-card); }
+.message-content-mask svg { flex: none; }
+.message-cover-actions { display: grid; justify-items: start; gap: 4px; user-select: none; cursor: default; }
+.message-mask-review-link {
+  justify-self: start; max-width: 100%; padding: 3px 0; border: 0; background: none;
+  color: var(--fragment-accent); font: inherit; font-size: 12px; cursor: pointer;
+}
+.message-mask-review-link:hover, .message-mask-review-link:focus-visible { text-decoration: underline; }
 .message-body-revealed { min-width: 0; }
+.message-restricted-stance { display: grid; gap: 2px; font-size: 12px; color: var(--text-muted); user-select: none; cursor: default; }
+.message-restricted-stance strong { color: var(--text-primary); font-weight: 600; }
 .message-body-hide {
   float: right; display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; margin: 0 0 4px 8px; padding: 3px;

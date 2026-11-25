@@ -4,11 +4,14 @@ import { isRelationView, relations, type Message, type WorkbenchSnapshot } from 
 import { DomainError, type Store } from './db.js';
 import { primaryRelationSql, displayAttachmentSql, isDependentMessageSql, isReviewDiscussionSql, isSettlementRecordSql } from './display-dependencies.js';
 import { attentionUsers, primaryRelation, stakesFor, tagCountsFor, usersFor, viewsFor } from './ui-projections.js';
-import { assertMessageReadable } from './moderation-visibility.js';
+import { assertMessageReadable, inaccessibleMessages, sanitizeModeration } from './moderation-visibility.js';
 import { recommendedClassificationPath } from './recommended-memberships.js';
+import { publicReviewDecisions } from './review-decision-views.js';
+import { hasModerationTables } from './moderation-schema.js';
 
 const id = z.string().min(1).max(100);
 const querySchema = z.object({ focusId: id, classificationId: id.nullable().optional(), cursor: z.string().max(1000).optional(),
+  includeReviewVotes: z.boolean().optional(),
   extraIds: z.array(id).max(50).default([]), recordIds: z.array(id).max(100).default([]),
   trace: z.object({ ids: z.array(id).min(1).max(50), depths: z.object({ up: z.number().int().min(0).max(10), down: z.number().int().min(0).max(10) }), expandedIds: z.array(id).max(100) }).optional(),
 }).strict();
@@ -21,8 +24,37 @@ const tooLarge = () => new DomainError('这段讨论的必要关联超过单页�
 
 /** Indexed selection + complete semantic closure. Never traverses an unopened category's bodies. */
 export async function discussionSnapshot(store: Store, raw: unknown, userId: string): Promise<WorkbenchSnapshot> {
-  const query = querySchema.parse(raw), focus = await store.message(query.focusId);
-  await assertMessageReadable(store, focus.id, userId);
+  const { includeReviewVotes, ...query } = querySchema.parse(raw);
+  const snapshot = await readDiscussion(store, query, userId);
+  if (!includeReviewVotes || !await hasModerationTables(store)) return snapshot;
+  // Fetch only the signed vote facts for the versions on this page. Reasons and
+  // other discussion records belong to the independently projected review case.
+  const hosts = snapshot.messages.map(({ id, revision }) => ({ id, revision }));
+  const versions = await store.db.prepare(`SELECT v."messageId" AS id,(m.body::jsonb->>'revision')::integer AS revision
+    FROM jsonb_to_recordset($1::jsonb) host(id text,revision integer)
+    JOIN moderation_cases c ON c."messageId"=host.id AND c.revision=host.revision
+    JOIN moderation_votes v ON v."caseId"=c.id JOIN messages m ON m.id=v."messageId"
+    WHERE NOT(v."messageId"=ANY($2::text[])) ORDER BY m.sequence,m.id LIMIT $3`)
+    .all<{ id: string; revision: number }>(JSON.stringify(hosts), hosts.map(host => host.id), CONTEXT_LIMIT + 1);
+  if (!versions.length) return snapshot;
+  if (snapshot.messages.length + versions.length > CONTEXT_LIMIT) throw tooLarge();
+  const votes = [...(await publicReviewDecisions(store, versions)).values()];
+  const users = new Map(snapshot.users.map(user => [user.id, user]));
+  for (const vote of votes) users.set(vote.createdBy.id, vote.createdBy);
+  return { ...snapshot, messages: [...snapshot.messages, ...votes], relations: [...snapshot.relations, ...votes], users: [...users.values()] };
+}
+
+async function readDiscussion(store: Store, query: Omit<z.infer<typeof querySchema>, 'includeReviewVotes'>, userId: string): Promise<WorkbenchSnapshot> {
+  const focus = await store.message(query.focusId);
+  if((await inaccessibleMessages(store,[focus.id],userId)).size){
+    // A direct link can open the public review records from this one card.
+    // Discard the requested neighborhood, pagination, and trace around a hidden focus.
+    const [view]=await viewsFor(store,[focus],undefined,undefined,true);
+    const card=await sanitizeModeration(store,view!,userId);
+    return {regionId:await store.setting<string>('region'),sequence:await store.latestSequence(),scope:{messageId:null,title:'当前讨论'},
+      messages:[card],relations:isRelationView(card)?[card]:[],users:[card.createdBy],stakes:{},tagCounts:{},attentionUsers:{},
+      discussion:{focusId:focus.id,pageIds:[],expandedIds:[focus.id],nextCursor:null,memberCounts:{}}};
+  }
   const category = query.classificationId ?? (containers.has(primaryRelation(focus)?.relation ?? '') ? focus.id : null);
   if (category && category !== 'root') await assertMessageReadable(store, category, userId);
   const regionId = await store.setting<string>('region'), sequence = await store.latestSequence();

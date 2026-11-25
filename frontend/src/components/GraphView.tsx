@@ -11,6 +11,8 @@ import { isSettlementRecord } from '../utils/modelBridge';
 import { FrameSkin } from '../theme/GraphSkin';
 import DirectedEdgeVisual, { directedEdgeColor } from './graph/DirectedEdgeVisual';
 import { useGraphOverlays } from '../hooks/useGraphOverlays';
+import type { ReviewVoteDecorationProps } from '../utils/reviewRecords';
+import { ReviewVoteBadge, ReviewVoteLoadStatus } from './ReviewVoteDecoration';
 import { projectGraphScene, manualDiscussionTargets } from '../utils/graphProjection';
 import { discussionBranchKey, projectDiscussionBranches, revealDiscussionBranches, type DiscussionOwnership } from '../pages/workbench/model/discussionBranches';
 import { projectStanceLayoutEdges } from '../utils/stanceLayout';
@@ -87,7 +89,7 @@ export type Rect = { x: number; y: number; width: number; height: number };
 
 
 
-export interface GraphViewProps {
+export interface GraphViewProps extends ReviewVoteDecorationProps {
   /** Default to full-size frames; local controls may restore bounded views. */
   expandAllFrames?: boolean;
   /** Counts come from the complete effective membership snapshot, not visible edges. */
@@ -515,40 +517,31 @@ function GraphViewCanvas(props: GraphViewProps) {
   const [expandedFrameIds, setExpandedFrameIds] = useState<string[]>([]);
   const [revealedFrameIds, setRevealedFrameIds] = useState<string[]>([]);
   const [expandedDecorationIds,setExpandedDecorationIds]=useState<Set<string>>(()=>new Set());
-  const [revealedDecorationIds,setRevealedDecorationIds]=useState<Set<string>>(()=>new Set());
+  const visibleDecorationIds=useMemo(()=>{
+    if(!props.pendingMessageIds?.length)return expandedDecorationIds;
+    const pending=new Set(props.pendingMessageIds),visible=new Set(expandedDecorationIds);
+    for(const [host,groups] of props.reviewVoteGroups??[])if(groups.some(group=>group.votes.some(vote=>pending.has(vote.id))))visible.add(host);
+    return visible;
+  },[expandedDecorationIds,props.pendingMessageIds,props.reviewVoteGroups]);
   const highlightKey=JSON.stringify([...new Set([...(props.highlightedMessageIds??[]),...props.decorationExpansion?.messageIds??[]])].sort());
   const expansionKey=JSON.stringify([highlightKey,props.decorationExpansion?.requestId]);
-  const [collapsedAutomatic,setCollapsedAutomatic]=useState(()=>({key:expansionKey,decorations:new Set<string>(),annotations:new Set<string>()}));
-  useLayoutEffect(()=>setCollapsedAutomatic(previous=>previous.key===expansionKey?previous:{key:expansionKey,decorations:new Set(),annotations:new Set()}),[expansionKey]);
   const automaticDecorations=useMemo(()=>JSON.parse(highlightKey) as string[],[highlightKey]);
-  const visibleDecorationIds=useMemo(()=>new Set([...expandedDecorationIds,...revealedDecorationIds,
-    ...automaticDecorations.filter(id=>collapsedAutomatic.key!==expansionKey||!collapsedAutomatic.decorations.has(id))]),[expandedDecorationIds,revealedDecorationIds,automaticDecorations,collapsedAutomatic,expansionKey]);
-  const [expandedAnnotationIds,setExpandedAnnotationIds]=useState<Set<string>>(()=>new Set());
-  const [revealedAnnotationIds,setRevealedAnnotationIds]=useState<Set<string>>(()=>new Set());
-  const visibleAnnotationIds=useMemo(()=>new Set([...expandedAnnotationIds,...revealedAnnotationIds,
-    ...automaticDecorations.filter(id=>collapsedAutomatic.key!==expansionKey||!collapsedAutomatic.annotations.has(id))]),[expandedAnnotationIds,revealedAnnotationIds,automaticDecorations,collapsedAutomatic,expansionKey]);
   useLayoutEffect(()=>{
-    const retain=(previous:Set<string>)=>automaticDecorations.every(id=>previous.has(id))?previous:new Set([...previous,...automaticDecorations]);
-    setExpandedDecorationIds(retain);setExpandedAnnotationIds(retain);
-  },[expansionKey]);
-  const renderDecorationToggle=(ids:string|string[],style?:React.CSSProperties,annotations=false)=>{
+    setExpandedDecorationIds(previous=>automaticDecorations.every(id=>previous.has(id))?previous:new Set([...previous,...automaticDecorations]));
+  },[expansionKey,automaticDecorations]);
+  const renderDecorationToggle=(ids:string|string[],style?:React.CSSProperties,edgeId?:string)=>{
     const messageIds=typeof ids==='string'?[ids]:ids;
-    const expanded=messageIds.some(id=>(annotations?visibleAnnotationIds:visibleDecorationIds).has(id));
-    const label=annotations?'标注':'装饰';
-    return <button key={`${annotations?'annotation':'decoration'}-toggle-${messageIds[0]}`} type="button"
-      data-decoration-toggle={annotations?undefined:messageIds[0]} data-annotation-toggle={annotations?messageIds[0]:undefined} data-rel-overlay="true"
-      aria-label={`${expanded?'收起':'显示'}${label} ${messageIds[0]}`} aria-expanded={expanded}
-      title={`${expanded?'收起':'显示'}${annotations?'标注（推荐、冷藏等）':'表态（赞同、反对）'}`}
+    const expanded=messageIds.some(id=>visibleDecorationIds.has(id));
+    return <button key={`decoration-toggle-${messageIds[0]}`} type="button"
+      data-decoration-toggle={messageIds[0]} data-rel-overlay="true" data-frame-edge-id={edgeId}
+      aria-label={`${expanded?'收起':'显示'}装饰 ${messageIds[0]}`} aria-expanded={expanded}
+      title={`${expanded?'收起':'显示'}表态、标注和审核投票`}
       onMouseDown={event=>event.stopPropagation()} onMouseUp={event=>event.stopPropagation()}
       onKeyDown={event=>event.stopPropagation()} onDoubleClick={event=>event.stopPropagation()}
       onClick={event=>{
         event.stopPropagation();
-        setCollapsedAutomatic(previous=>{
-          const next={key:expansionKey,decorations:new Set(previous.key===expansionKey?previous.decorations:[]),annotations:new Set(previous.key===expansionKey?previous.annotations:[])};
-          for(const id of messageIds){const values=annotations?next.annotations:next.decorations;if(expanded)values.add(id);else values.delete(id);}
-          return next;
-        });
-        (annotations?setExpandedAnnotationIds:setExpandedDecorationIds)(previous=>{
+        if(!expanded)for(const id of messageIds)props.onExpandDecorations?.(id);
+        setExpandedDecorationIds(previous=>{
           const next=new Set(previous);
           for(const id of messageIds){
             if(expanded)next.delete(id);
@@ -556,7 +549,6 @@ function GraphViewCanvas(props: GraphViewProps) {
           }
           return next;
         });
-        if(expanded)(annotations?setRevealedAnnotationIds:setRevealedDecorationIds)(previous=>new Set([...previous].filter(id=>!messageIds.includes(id))));
       }}
       style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:EDGE_HINT_W,height:EDGE_HINT_W,
         padding:0,border:'1px solid var(--line-444)',borderRadius:3,background:'var(--surface-1f1f1f)',color:'var(--ink-cbd5e1)',fontSize:10,
@@ -592,10 +584,15 @@ function GraphViewCanvas(props: GraphViewProps) {
     }
     for(const edge of edges)if(['agree','disagree','tag'].includes(edge.relationType)||getPresentationSpec(edge.relationType).kind==='inline-badge')
       decorationEdges.set(edge.relationMessageId,[...(decorationEdges.get(edge.relationMessageId)??[]),edge]);
-    const revealedDecorations=new Set<string>(),revealedAnnotations=new Set<string>(),visited=new Set<string>(),queue=[...ids];
+    const revealedDecorations=new Set<string>(),visited=new Set<string>(),queue=[...ids];
+    for(const [host,groups] of props.reviewVoteGroups??[]){
+      if(groups.some(group=>group.votes.some(vote=>targets.has(vote.id)))){
+        revealedDecorations.add(host);targets.add(host);queue.push(host);
+      }
+    }
     for(let index=0;index<queue.length;index++)for(const edge of decorationEdges.get(queue[index])??[]){
       const target=edge.to.messageId;
-      (['agree','disagree'].includes(edge.relationType)?revealedDecorations:revealedAnnotations).add(target);
+      revealedDecorations.add(target);
       if(visited.has(target))continue;
       visited.add(target);targets.add(target);queue.push(target);
     }
@@ -665,15 +662,14 @@ function GraphViewCanvas(props: GraphViewProps) {
       }
     }
     setExpandedDecorationIds(previous=>[...revealedDecorations].every(id=>previous.has(id))?previous:new Set([...previous,...revealedDecorations]));
-    setExpandedAnnotationIds(previous=>[...revealedAnnotations].every(id=>previous.has(id))?previous:new Set([...previous,...revealedAnnotations]));
     setRevealedFrameIds(previous => previous.length === frames.length && previous.every((id, index) => id === frames[index]) ? previous : frames);
     // Keep an explicitly visited arrangement card open when the locator fades,
     // so its header does not disappear and move the destination out of view.
     const visitedFrames=frames.filter(id=>detail.ids.includes(id));
     if(visitedFrames.length)setExpandedFrameIds(previous=>visitedFrames.every(id=>previous.includes(id))?previous:[...new Set([...previous,...visitedFrames])]);
     // Keep jumped-to decorations expanded until the user collapses them.
-    return [...new Set([...ids,...revealedDecorations,...revealedAnnotations,...frames])];
-  }, [messages, edges,discussionEnabled,discussionView,activeDiscussionCollapsed,availableMessages,availableEdges,changeDiscussionView,props.expandAllFrames,frameFullOverrides,collapsedFrameIds,hiddenFrameHeaderIds,revealedDiscussionRelationIds]);
+    return [...new Set([...ids,...revealedDecorations,...frames])];
+  }, [messages, edges,discussionEnabled,discussionView,activeDiscussionCollapsed,availableMessages,availableEdges,changeDiscussionView,props.expandAllFrames,frameFullOverrides,collapsedFrameIds,hiddenFrameHeaderIds,revealedDiscussionRelationIds,props.reviewVoteGroups]);
 
   const { msgMap, edgesByRelMsg, classifyRelMsgIds, relationCardMsgIds, normals,
     layoutEdges, hiddenTargetIds, correctionsByTargetMsgId: renderedCorrectionsByTargetMsgId, frameBlocks, frameDepthMap,
@@ -970,9 +966,10 @@ function GraphViewCanvas(props: GraphViewProps) {
     return headers.filter(rect => rect.width > 0 && rect.height > 0);
   }, [measuredIds, frameBlocks, virtualBoxes, discussionRegions, props.visibleMessageIds, frameViews]);
   const overlays = useGraphOverlays({
+    reviewVoteGroups:props.reviewVoteGroups,reviewVoteHints:props.reviewVoteHints,
     frameDecorationAnchors,labelObstacles:labelTextObstacles,
     hiddenMessageIds:hiddenRoutingIds,semanticEdges:edges,
-    excludedStanceEdges:props.excludedStanceEdges, visibleDecorationIds, visibleAnnotationIds,
+    excludedStanceEdges:props.excludedStanceEdges, visibleDecorationIds,
     pendingMeasurements: virtual.pending,
     labelViewport: virtual.viewport, labelRetainedIds: virtual.retained,
     canvasRef, normalIds: visibleNormalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals: visibleNormals, headerRefs, contentRefs, edges: drawableEdges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, textRefs, actualCanvasWidth, actualCanvasHeight,
@@ -997,7 +994,7 @@ function GraphViewCanvas(props: GraphViewProps) {
     }
     return retained;
   }, [virtual.retained, edgesByRelMsg]);
-  const { positionedEdges, decorationRectsState, tagDecorationsByMsg, arrangeFrames, groupFrames, inlineBadgesByMsg, annotationToggleRects } = useMemo(() => {
+  const { positionedEdges, decorationRectsState, tagDecorationsByMsg, arrangeFrames, groupFrames, inlineBadgesByMsg, decorationToggleRects } = useMemo(() => {
     const keep = (id: string, rect: Rect) => overlayRetained.has(id) || virtual.mounted.has(id) || intersectsViewport(rect, virtual.viewport, 100);
     const mountedCards = new Set(mountedNormals.map(message => message.id));
     const normalIds = new Set(normals.map(message => message.id));
@@ -1017,7 +1014,7 @@ function GraphViewCanvas(props: GraphViewProps) {
       arrangeFrames: overlays.arrangeFrames.map(frame => ({ ...frame, rect: finalFrameRects[frame.relMsgId] ?? frame.rect })).filter(frame => hostVisible(frame.relMsgId)&&keep(frame.relMsgId, frame.rect)),
       groupFrames: overlays.groupFrames.filter(frame => hostVisible(frame.relMsgId)&&keep(frame.relMsgId, finalFrameRects[frame.relMsgId] ?? frame.rect)),
       inlineBadgesByMsg: new Map([...overlays.inlineBadgesByMsg].map(([id, badges]) => [id, badges.filter(badge => hostVisible(id)&&keep(id, badge.rect))])),
-      annotationToggleRects: Object.fromEntries(Object.entries(overlays.annotationToggleRects).filter(([id, rect])=>hostVisible(id)&&keep(id,rect))),
+      decorationToggleRects: Object.fromEntries(Object.entries(overlays.decorationToggleRects).filter(([id, rect])=>hostVisible(id)&&keep(id,rect))),
     };
   }, [overlays, overlayRetained, virtual.mounted, virtual.viewport, finalFrameRects,frameClipFor,mountedNormals,normals,visibleEdges,props.visibleMessageIds]);
 
@@ -1061,7 +1058,7 @@ function GraphViewCanvas(props: GraphViewProps) {
     for (const frame of overlays.arrangeFrames) if (displayedFrame(frame.relMsgId)) visibleIds.add(frame.relMsgId);
     const renderedEdges = overlays.positionedEdges.map(positioned => positioned.edge);
     for (const edge of renderedEdges) visibleIds.add(edge.relationMessageId);
-    for (const id of visibleAnnotationIds) {
+    for (const id of visibleDecorationIds) {
       if (!visibleIds.has(id)) continue;
       for (const badge of overlays.inlineBadgesByMsg.get(id) ?? []) {
         for (const record of badge.relMsgIds ?? [badge.relMsgId]) visibleIds.add(record);
@@ -1073,6 +1070,7 @@ function GraphViewCanvas(props: GraphViewProps) {
       if (!visibleIds.has(id)) continue;
       const votes = overlays.relDecByRelMsgState.get(id);
       if (votes) for (const record of [...votes.agreeRelMsgIds, ...votes.disagreeRelMsgIds]) visibleIds.add(record);
+      for(const badge of overlays.edgeReviewBadges.get(id)??[])for(const vote of badge.group?.votes??[])visibleIds.add(vote.id);
     }
     for (const edge of edges) {
       if (visibleIds.has(edge.to.messageId) && visibleDecorationIds.has(edge.to.messageId)
@@ -1088,7 +1086,7 @@ function GraphViewCanvas(props: GraphViewProps) {
     }
     return filtered;
   }, [props.relatedEdges, props.visibleMessageIds, visibleNormalIds, layout, effectiveHideMessageIds, hiddenTargetIds, traceExpandedFrameIds,
-    visibleEdges, discussionHiddenIds, overlays, isTraceWindow, visibleAnnotationIds, visibleDecorationIds, edges, summaryProjection, crossCanvasRelations]);
+    visibleEdges, discussionHiddenIds, overlays, isTraceWindow, visibleDecorationIds, edges, summaryProjection, crossCanvasRelations]);
   const relatedHighlightedMessageIds = useMemo(() => new Set([...(props.highlightedMessageIds ?? []), ...(props.locatedMessageIds ?? [])]), [props.highlightedMessageIds, props.locatedMessageIds]);
   const renderRelatedConnections = (messageId: string) => <CrossCanvasRelatedMessages groups={relatedConnections?.get(messageId)}
     messages={relatedCatalog} selectedUnits={draftUnits} highlightedMessageIds={relatedHighlightedMessageIds}
@@ -1195,6 +1193,26 @@ function GraphViewCanvas(props: GraphViewProps) {
   }
   function skinForMessage(id:string) { return stakeAppearanceAttributes(stakeCounts?.[id]); }
   function skinForGroup(ids:readonly string[] = []) { return groupStakeAppearanceAttributes(ids, stakeCounts); }
+  function hasNestedReviews(ids:readonly string[]){
+    return ids.some(id=>overlays.edgeReviewBadges.has(id));
+  }
+  function renderNestedReviews(ids:readonly string[],hostId:string,left:number,top:number,edgeId?:string){
+    const open=ids.filter(id=>visibleDecorationIds.has(id)&&overlays.edgeReviewBadges.has(id));
+    if(!open.length)return null;
+    return <div data-rel-overlay="true" data-frame-edge-id={edgeId} style={{position:'absolute',left,top,zIndex:15,display:'flex',gap:6,alignItems:'flex-start',whiteSpace:'nowrap'}}>
+      {open.map(id=><span key={id} data-review-host={id} role="group" aria-label={`消息 ${id} 的审核投票`}
+        style={{display:'inline-flex',alignItems:'flex-start',gap:3}}>
+        {ids.length>1&&<span style={{fontSize:10}} title={id}>{msgMap.get(id)?.author} · {id.slice(0,8)}</span>}
+        <span style={{display:'flex',flexDirection:'column',gap:TAG_V_GAP}}>
+        {overlays.edgeReviewBadges.get(id)!.map(badge=>badge.group
+          ?<ReviewVoteBadge key={badge.group.verdict} group={badge.group} onOpen={props.onOpenReviewVotes} style={{width:badge.width,height:TAG_H}}
+            data-jump-visual-msgids={`${hostId} ${id}`} data-frame-edge-id={edgeId} pending={badge.group.votes.some(vote=>props.pendingMessageIds?.includes(vote.id))}/>
+          :<ReviewVoteLoadStatus key="load" targetId={id} label={badge.label} onLoad={props.onExpandDecorations}
+            data-jump-visual-msgids={`${hostId} ${id}`} data-frame-edge-id={edgeId} style={{fontSize:11}}/>)}
+        </span>
+      </span>)}
+    </div>;
+  }
   function isRelWholeSel(relId:string) {
     return draftUnits.some(unit => isWholeMessageSelection(unit, relId));
   }
@@ -1761,21 +1779,20 @@ function GraphViewCanvas(props: GraphViewProps) {
         });
       })()}
 
-      {/* Edge-label relation decoration badges — AGREE/DISAGREE + TAG badges on annotation/reference/reply
-          relations, with collapsible vote columns to the RIGHT of the status marker. */}
+      {/* Relations drawn only as edge labels share one control for their attached decorations. */}
       {(()=>{
         const rendered=new Set<string>();
         const items: React.ReactNode[]=[];
         for (const pe of positionedEdges) {
-          // Only annotation / reference / reply carry edge-label decorations
           const rt=pe.edge.relationType;
-          if (rt!=="annotation"&&rt!=="reference"&&rt!=="reply") continue;
-          const bb=labelBboxes[pe.drawId]; if (!bb) continue;
           const relId=pe.edge.relationMessageId;
+          const reviews=overlays.edgeReviewBadges?.get(relId);
+          if (rt!=="annotation"&&rt!=="reference"&&rt!=="reply"&&!reviews?.length) continue;
+          const bb=labelBboxes[pe.drawId]; if (!bb) continue;
           if (rendered.has(relId)) continue;
           const dec=relDecByRelMsgState.get(relId);
           const tagItems=tagsByRelMsgState.get(relId)??[];
-          if ((!dec||(dec.agreeCount===0&&dec.disagreeCount===0))&&tagItems.length===0) continue;
+          if ((!dec||(dec.agreeCount===0&&dec.disagreeCount===0))&&tagItems.length===0&&!reviews?.length) continue;
           rendered.add(relId);
           const rowLeft=getEdgeDecorationLeft(bb,!visibleNormalIds.includes(relId));
           const decLeft=rowLeft+EDGE_HINT_W+DEC_GAP;
@@ -1783,8 +1800,8 @@ function GraphViewCanvas(props: GraphViewProps) {
           const expanded=visibleDecorationIds.has(relId);
           const stackHeight=voteCount*DEC_H+Math.max(0,voteCount-1)*DEC_GAP;
           let decTop=bb.y+bb.height/2-stackHeight/2;
-          if(voteCount>0)items.push(<React.Fragment key={`reldec-toggle-${relId}`}>
-            {renderDecorationToggle(relId,{position:'absolute',left:rowLeft,top:bb.y+(bb.height-EDGE_HINT_W)/2,zIndex:15})}
+          if(!decorationToggleRects[relId])items.push(<React.Fragment key={`reldec-toggle-${relId}`}>
+            {renderDecorationToggle(relId,{position:'absolute',left:rowLeft,top:bb.y+(bb.height-EDGE_HINT_W)/2,zIndex:15},pe.edge.id)}
           </React.Fragment>);
           for (const kind of ["agree","disagree"] as const) {
             if(!expanded)continue;
@@ -1818,10 +1835,8 @@ function GraphViewCanvas(props: GraphViewProps) {
             decTop+=DEC_H+DEC_GAP;
           }
           const voteWidth=voteCount>0?getDecorationColumnWidth(expanded):0;
-          const annotation=getAnnotationPlacement({x:rowLeft-DEC_RIGHT_GAP,y:bb.y,width:0,height:bb.height},voteWidth);
-          if(tagItems.length>0)items.push(<React.Fragment key={`reltag-toggle-${relId}`}>
-            {renderDecorationToggle(relId,{position:'absolute',left:annotation.toggle.x,top:annotation.toggle.y,zIndex:15},true)}
-          </React.Fragment>);
+          const reviewWidth=expanded?Math.max(0,...(reviews??[]).map(badge=>badge.width)):0;
+          const annotation=getAnnotationPlacement({x:rowLeft-DEC_RIGHT_GAP,y:bb.y,width:0,height:bb.height},voteWidth,reviewWidth);
           decTop=annotation.y;
           // TAG badges on this relation message — aggregated by label text
           const tagGroupMap=new Map<string,{label:string;relMsgIds:string[]}>();
@@ -1831,7 +1846,7 @@ function GraphViewCanvas(props: GraphViewProps) {
             else { tagGroupMap.set(itemLabel,{label:itemLabel,relMsgIds:[tagRelMsgId]}); }
           }
           for (const {label:tagLabel,relMsgIds} of tagGroupMap.values()) {
-            if(!visibleAnnotationIds.has(relId))continue;
+            if(!visibleDecorationIds.has(relId))continue;
             const count=relMsgIds.length;
             const displayLabel=count>1?`${tagLabel}（${count}人）`:tagLabel;
             const tagW=Math.max(TAG_MIN_W,displayLabel.length*8+8+28);
@@ -1855,6 +1870,24 @@ function GraphViewCanvas(props: GraphViewProps) {
                 </span>
               </div>
             );
+            if(hasNestedReviews(relMsgIds)){
+              const toggleLeft=annotation.x+tagW+DEC_RIGHT_GAP;
+              items.push(<React.Fragment key={`rel-tag-review-${relMsgIds[0]}`}>
+                {renderDecorationToggle(relMsgIds,{position:'absolute',left:toggleLeft,top:decTop+(TAG_H-EDGE_HINT_W)/2,zIndex:15},pe.edge.id)}
+                {renderNestedReviews(relMsgIds,relId,toggleLeft+EDGE_HINT_W+DEC_GAP,decTop,pe.edge.id)}
+              </React.Fragment>);
+            }
+            const rows=Math.max(1,...relMsgIds.map(id=>visibleDecorationIds.has(id)?overlays.edgeReviewBadges.get(id)?.length??0:0));
+            decTop+=rows*(TAG_H+TAG_V_GAP);
+          }
+          decTop=annotation.y;
+          if(expanded)for(const badge of reviews??[]){
+            const style:React.CSSProperties={position:'absolute',left:annotation.reviewX,top:decTop,width:badge.width,height:TAG_H,zIndex:14};
+            items.push(badge.group
+              ? <ReviewVoteBadge key={`${relId}-${badge.group.verdict}`} data-jump-visual-msgids={relId} data-frame-edge-id={pe.edge.id} group={badge.group} onOpen={props.onOpenReviewVotes} style={style}
+                  pending={badge.group.votes.some(vote=>props.pendingMessageIds?.includes(vote.id))}/>
+              : <ReviewVoteLoadStatus key={`load-reviews-${relId}`} targetId={relId} label={badge.label}
+                  data-jump-visual-msgids={relId} data-frame-edge-id={pe.edge.id} style={{...style,fontSize:11,padding:0}} onLoad={props.onExpandDecorations}/>);
             decTop+=TAG_H+TAG_V_GAP;
           }
         }
@@ -2102,7 +2135,7 @@ function GraphViewCanvas(props: GraphViewProps) {
           );
           sfDecTop += DEC_H + DEC_GAP;
         }
-        if(sf.relAgreeCount>0||sf.relDisagreeCount>0){
+        if(sf.relAgreeCount>0||sf.relDisagreeCount>0||decorationToggleRects[sf.relMsgId]){
           nodes.push(<React.Fragment key={`sf-vote-toggle-${sf.relMsgId}`}>
             {renderDecorationToggle(sf.relMsgId,{position:'absolute',left:sfDecLeft,top:sfDecTop,zIndex:8})}
           </React.Fragment>);
@@ -2143,7 +2176,7 @@ function GraphViewCanvas(props: GraphViewProps) {
 
       {/* GROUP frame decoration badges — AGREE/DISAGREE badges to the RIGHT of the group frame */}
       {visibleGroupFrames.map(gf=>{
-        if (gf.relAgreeCount===0&&gf.relDisagreeCount===0) return null;
+        if (gf.relAgreeCount===0&&gf.relDisagreeCount===0&&!decorationToggleRects[gf.relMsgId]) return null;
         const anchor=frameDecorationAnchors[gf.relMsgId]??gf.rect;
         const gfDecLeft=anchor.x+anchor.width+DEC_RIGHT_GAP;
         let gfDecTop=anchor.y+DEC_RIGHT_TOP;
@@ -2183,9 +2216,11 @@ function GraphViewCanvas(props: GraphViewProps) {
       })}
 
       {/* TAG decoration labels — aggregated by label text, interactive */}
-      {Object.entries(tagDecorationsByMsg).map(([_mid,groups])=>
-        groups.map(group=>{
-          if(!visibleAnnotationIds.has(_mid))return null;
+      {Object.entries(tagDecorationsByMsg).map(([_mid,groups])=>{
+        if(!visibleDecorationIds.has(_mid))return null;
+        const reviewLeft=groups.reduce((right,item)=>Math.max(right,item.rect.x+item.rect.width+2*DEC_RIGHT_GAP+
+          getDecorationColumnWidth(item.relAgreeCount>0||item.relDisagreeCount>0)),0);
+        return groups.map(group=>{
           const count=group.relMsgIds.length;
           const displayLabel=count>1?`${group.label}（${count}人）`:group.label;
           // Full-size agree/disagree decoration badges to the right of the tag badge, stacked vertically.
@@ -2240,8 +2275,9 @@ function GraphViewCanvas(props: GraphViewProps) {
                 </span>
               </div>
               {/* Full-size AGREE/DISAGREE decoration badges on this TAG relation group, stacked vertically */}
-              {(group.relAgreeCount>0||group.relDisagreeCount>0)&&renderDecorationToggle(group.relMsgIds,
+              {(group.relAgreeCount>0||group.relDisagreeCount>0||hasNestedReviews(group.relMsgIds))&&renderDecorationToggle(group.relMsgIds,
                 {position:'absolute',left:tagBadgeRight+DEC_RIGHT_GAP,top:group.rect.y+(group.rect.height-EDGE_HINT_W)/2,zIndex:8})}
+              {renderNestedReviews(group.relMsgIds,_mid,reviewLeft,group.rect.y)}
               {(()=>{
                 if(!group.relMsgIds.some(id=>visibleDecorationIds.has(id)))return null;
                 const tagDecLeft=tagBadgeRight+DEC_RIGHT_GAP+EDGE_HINT_W+DEC_GAP;
@@ -2280,24 +2316,15 @@ function GraphViewCanvas(props: GraphViewProps) {
               })()}
             </React.Fragment>
           );
-        })
-      )}
+        });
+      })}
 
       {/* Decoration badges (agree/disagree) — right side, with icon + body areas */}
       {(()=>{
-        const anchors=new Map<string,{x:number;y:number}>();
         const frames=new Set([...visibleArrangeFrames,...visibleGroupFrames].map(frame=>frame.relMsgId));
-        for(const value of Object.values(decorationRectsState??{}))if(!anchors.has(value.messageId))
-          anchors.set(value.messageId,{x:value.rect.x-EDGE_HINT_W-DEC_GAP,y:value.rect.y});
-        return [...anchors].map(([id,anchor])=>{
-          if(frames.has(id))return null;
-          return <React.Fragment key={`dec-toggle-${id}`}>
-            {renderDecorationToggle(id,{position:'absolute',left:anchor.x,top:anchor.y,zIndex:8})}
-          </React.Fragment>;
-        });
+        return Object.entries(decorationToggleRects).map(([id,rect])=>frames.has(id)?null:renderDecorationToggle(id,
+          {position:'absolute',left:rect.x,top:rect.y,zIndex:8}));
       })()}
-      {Object.entries(annotationToggleRects).map(([id,rect])=>renderDecorationToggle(id,
-        {position:'absolute',left:rect.x,top:rect.y,zIndex:8},true))}
       {decorationRectsState&&decorationsByMsgState&&Object.entries(decorationRectsState).map(([,v])=>{
         if(!visibleDecorationIds.has(v.messageId))return null;
         const counts=decorationsByMsgState[v.messageId]; if (!counts) return null;
@@ -2350,11 +2377,18 @@ function GraphViewCanvas(props: GraphViewProps) {
         );
       })}
 
-      {/* Annotation badges have their own upper-right toggle. */}
+      {/* Inline annotations and review votes share the host message’s decoration control. */}
       {Array.from(inlineBadgesByMsg.entries()).map(([targetId, badges]) => {
-        if(!visibleAnnotationIds.has(targetId))return null;
+        if(!visibleDecorationIds.has(targetId))return null;
         let voteColumn=0;
         return badges.map(badge => {
+          if(badge.relKind==='review-vote'){
+            const style:React.CSSProperties={position:'absolute',left:badge.rect.x,top:badge.rect.y,width:badge.rect.width,height:badge.rect.height,zIndex:7};
+            return badge.reviewGroup
+              ? <ReviewVoteBadge key={badge.relMsgId} data-jump-visual-msgids={targetId} group={badge.reviewGroup} onOpen={props.onOpenReviewVotes} style={style}
+                  pending={badge.relMsgIds?.some(id=>props.pendingMessageIds?.includes(id))}/>
+              : <ReviewVoteLoadStatus key={targetId} data-jump-visual-msgids={targetId} targetId={targetId} label={badge.relLabel} style={{...style,fontSize:11,padding:0}} onLoad={props.onExpandDecorations}/>;
+          }
           const isWholeSel = isRelWholeSel(badge.relMsgId);
           const bg = INLINE_BADGE_COLOR[badge.relColor] ?? 'var(--surface-rgba-100-100-120-0-9)';
           const badgeIds=badge.relMsgIds??[badge.relMsgId];
@@ -2363,19 +2397,17 @@ function GraphViewCanvas(props: GraphViewProps) {
             return votes&&(votes.agreeCount>0||votes.disagreeCount>0)?[{id,votes}]:[];
           });
           let voteLeft=badge.rect.x+badge.rect.width+DEC_RIGHT_GAP*3+EDGE_HINT_W;
-          if(visibleDecorationIds.has(targetId)){
-            for(const decoration of Object.values(decorationRectsState??{}))if(decoration.messageId===targetId)
-              voteLeft=Math.max(voteLeft,decoration.rect.x+decoration.rect.width+DEC_RIGHT_GAP);
-            for(const group of tagDecorationsByMsg[targetId]??[]){
-              const tagVotes=group.relAgreeCount>0||group.relDisagreeCount>0;
-              const expanded=group.relMsgIds.some(id=>visibleDecorationIds.has(id));
-              voteLeft=Math.max(voteLeft,group.rect.x+group.rect.width+DEC_RIGHT_GAP
-                +(tagVotes?getDecorationColumnWidth(expanded):0)+DEC_RIGHT_GAP);
-            }
-            const frame=[...visibleArrangeFrames,...visibleGroupFrames].find(item=>item.relMsgId===targetId);
-            if(frame&&(frame.relAgreeCount>0||frame.relDisagreeCount>0))
-              voteLeft=Math.max(voteLeft,frame.rect.x+frame.rect.width+DEC_RIGHT_GAP+getDecorationColumnWidth(true)+DEC_RIGHT_GAP);
+          for(const decoration of Object.values(decorationRectsState??{}))if(decoration.messageId===targetId)
+            voteLeft=Math.max(voteLeft,decoration.rect.x+decoration.rect.width+DEC_RIGHT_GAP);
+          for(const group of tagDecorationsByMsg[targetId]??[]){
+            const tagVotes=group.relAgreeCount>0||group.relDisagreeCount>0;
+            const expanded=group.relMsgIds.some(id=>visibleDecorationIds.has(id));
+            voteLeft=Math.max(voteLeft,group.rect.x+group.rect.width+DEC_RIGHT_GAP
+              +(tagVotes?getDecorationColumnWidth(expanded):0)+DEC_RIGHT_GAP);
           }
+          const frame=[...visibleArrangeFrames,...visibleGroupFrames].find(item=>item.relMsgId===targetId);
+          if(frame&&(frame.relAgreeCount>0||frame.relDisagreeCount>0))
+            voteLeft=Math.max(voteLeft,frame.rect.x+frame.rect.width+DEC_RIGHT_GAP+getDecorationColumnWidth(true)+DEC_RIGHT_GAP);
           const firstColumn=voteColumn;
           voteColumn+=voteGroups.length;
           const tooltip = badge.subDetails && badge.subDetails.length > 0
@@ -2396,8 +2428,9 @@ function GraphViewCanvas(props: GraphViewProps) {
                 border:isWholeSel?"2px solid var(--line-fbbf24)":"1px solid var(--line-rgba-255-255-255-0-15)",
                 whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",fontWeight:600}}>
               <span style={{minWidth:0,overflow:'hidden',textOverflow:'ellipsis'}}>{badge.relLabel}</span>
-              {voteGroups.length>0&&renderDecorationToggle(badgeIds,{marginLeft:2,border:0,background:'transparent',color:'inherit'})}
+              {(voteGroups.length>0||hasNestedReviews(badgeIds))&&renderDecorationToggle(badgeIds,{marginLeft:2,border:0,background:'transparent',color:'inherit'})}
             </div>
+            {renderNestedReviews(badgeIds,targetId,voteLeft+voteColumn*(DEC_W+DEC_GAP),badge.rect.y)}
             {voteGroups.flatMap(({id,votes},index)=>{
               if(!visibleDecorationIds.has(id))return [];
               let top=badge.rect.y;

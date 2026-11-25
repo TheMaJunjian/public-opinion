@@ -8,7 +8,9 @@ afterEach(cleanupTestDatabases);
 
 it('空库由主程序建立当前结构，预检不会补版本或创建旧版归档表',async()=>{
   const app=await createTestApp();
-  expect(await app.store.db.prepare("SELECT tablename FROM pg_tables WHERE schemaname=$1 AND tablename LIKE 'legacy_%'").all(app.store.db.schema)).toEqual([]);
+  // Review fragment addresses are served by the live API; historical migration archives are not.
+  expect(await app.store.db.prepare("SELECT tablename FROM pg_tables WHERE schemaname=$1 AND tablename LIKE 'legacy_%'").all(app.store.db.schema))
+    .toEqual([{tablename:'legacy_review_reason_versions'}]);
   await app.store.db.prepare('DELETE FROM schema_migrations WHERE version>3').run();
   const plan=await migrationPlan(testDatabaseUrl(),app.store.db.schema);
   expect(plan.pending.map(item=>item.version)).toEqual(DATABASE_MIGRATIONS.map((_,index)=>index+1).filter(version=>version>3));

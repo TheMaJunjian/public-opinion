@@ -45,15 +45,6 @@ async function currentSessionRow(store:Store,req:Request) {
 export async function currentSessionUserId(store:Store,req:Request):Promise<string|undefined> {
   return (await currentSessionRow(store,req))?.userId;
 }
-/** Only explicit foreground heartbeats renew presence; background reads do not. */
-export async function updateSessionActivity(store:Store,req:Request):Promise<void> {
-  const row=await currentSessionRow(store,req);
-  if(!row)throw new DomainError('请先登录',401,'SESSION_REQUIRED');
-  if(req.get('x-csrf-token')!==row.csrf)throw new DomainError('会话校验失败，请刷新后重试',403);
-  const updated=await store.db.prepare(`UPDATE sessions s SET "lastActiveAt"=$2 WHERE token=$1 AND expires>$2
-    AND NOT EXISTS(SELECT 1 FROM disabled_accounts d WHERE d."userId"=s."userId") RETURNING token`).get(row.token,Date.now());
-  if(!updated)throw new DomainError('请先登录',401,'SESSION_REQUIRED');
-}
 export async function currentSession(store:Store,req:Request):Promise<Session|null> {
   const row=await currentSessionRow(store,req);
   if(!row)return null;
@@ -94,7 +85,7 @@ async function createSession(store:Store,userId:string,deviceId?:string):Promise
   const raw=token(), csrf=token();
   await store.db.prepare('DELETE FROM sessions WHERE expires<$1').run(Date.now());
   const at=Date.now();
-  await store.db.prepare('INSERT INTO sessions(token,"userId",csrf,expires,"deviceId","lastActiveAt","agreementVersion") VALUES ($1,$2,$3,$4,$5,$6,$7)').run(hash(raw),userId,csrf,at+30*86400000,deviceId??null,at,PARTICIPATION_AGREEMENT_VERSION);
+  await store.db.prepare('INSERT INTO sessions(token,"userId",csrf,expires,"deviceId","agreementVersion") VALUES ($1,$2,$3,$4,$5,$6)').run(hash(raw),userId,csrf,at+30*86400000,deviceId??null,PARTICIPATION_AGREEMENT_VERSION);
   const key=deviceId?await store.db.prepare('SELECT "publicKey" FROM signing_keys WHERE "userId"=$1 AND "deviceId"=$2').get(userId,deviceId):undefined;
   return {raw,session:{user:{...await store.user(userId),...(key?{publicKey:String(key.publicKey)}:{})},account:await store.account(userId),rules:await store.rules(),csrf}};
 }

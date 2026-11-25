@@ -117,8 +117,13 @@ export function replayArchive(input: unknown): Replay {
       total += BigInt(account.available) + BigInt(account.locked);
     }
     if (total !== BigInt(issued)) throw new Error(`第 ${change.sequence} 次变更资金不守恒`);
+    const deletions = new Set(change.removedMessageIds);
+    if (change.prunedMessageIds !== undefined && (!Array.isArray(change.prunedMessageIds)
+      || change.prunedMessageIds.some(id => typeof id !== 'string' || !id || !deletions.has(id) || revisions.has(id))))
+      throw new Error('历史清理记录与消息或删除记录不一致');
+    const pruned = new Set(change.prunedMessageIds);
     for (const id of change.removedMessageIds ?? []) {
-      if (!messages.has(id)) throw new Error('删除记录缺少对应消息');
+      if (!messages.has(id) && (!pruned.has(id) || removedMessages.has(id))) throw new Error('删除记录缺少对应消息');
       messages.delete(id); states.delete(id); memberships.delete(id); removedMessages.add(id);
     }
     sequence = change.sequence;

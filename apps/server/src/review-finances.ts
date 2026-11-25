@@ -1,7 +1,6 @@
 import { reviewEconomy, type Message, type ReviewVerdict, type ReviewStakeItem } from '@gonglun/core';
 import { integer, type Mutation, type Store } from './db.js';
 import type { ModerationCase } from './moderation.js';
-import { assignmentRecord } from './review-assignments.js';
 
 export type ReviewPayment={userId:string;amount:number;kind:'wager'|'fee'|'fee-refund'|'deposit'|'penalty'};
 type FeeRound={caseId:string;round:number;payerId:string;amount:number;rewardSlots:number;rewardAmount:number;paid:boolean};
@@ -37,6 +36,14 @@ export async function reviewStakes(store:Store,review:ModerationCase):Promise<Re
     ORDER BY s."createdAt" DESC,m.sequence DESC,s.kind`).all<ReviewStakeItem>(review.id,review.messageId,review.revision);
 }
 
+export async function reviewRecord(tx:Mutation,c:ModerationCase,text:string,data:Record<string,unknown>){
+  const record=await tx.create('system',[{id:'body',type:'text',text},
+    {id:'record',type:'relation',relation:'review-record',roles:{target:[{id:'target',reference:{messageId:c.messageId,revision:c.revision}}]}},
+    {id:'data',type:'data',value:{uiType:'REVIEW_RECORD',caseId:c.id,reviewRound:c.round,...data} as import('@gonglun/core').Json}]);
+  tx.affected.add(c.messageId);
+  return record;
+}
+
 /** Participation rewards never depend on the verdict and are never reclaimed by a later appeal. */
 export async function payReviewFees(tx:Mutation,c:ModerationCase):Promise<ReviewPayment[]>{
   const rounds=await tx.store.db.prepare('SELECT * FROM moderation_round_fees WHERE "caseId"=$1 AND NOT paid ORDER BY round').all<FeeRound>(c.id);
@@ -48,7 +55,7 @@ export async function payReviewFees(tx:Mutation,c:ModerationCase):Promise<Review
     const refund=integer(round.amount-first.length*round.rewardAmount);
     const payouts:ReviewPayment[]=[...first.map(v=>({userId:v.userId,amount:round.rewardAmount,kind:'fee' as const})),
       ...(refund?[{userId:round.payerId,amount:refund,kind:'fee-refund' as const}]:[])];
-    const record=await assignmentRecord(tx,c,'本轮审核参与报酬与剩余预算结算',{feeRound:round.round,fee:round.amount,payerId:round.payerId,payouts});
+    const record=await reviewRecord(tx,c,'本轮审核参与报酬与剩余预算结算',{feeRound:round.round,fee:round.amount,payerId:round.payerId,payouts});
     if(round.amount)await tx.store.ledger(round.payerId,record.id,0,-round.amount,'审核费支付',true);
     for(const p of payouts)await tx.store.ledger(p.userId,record.id,p.amount,0,p.kind==='fee'?'审核参与报酬':'未使用审核费退还',true);
     await tx.store.db.prepare('UPDATE moderation_round_fees SET paid=TRUE WHERE "caseId"=$1 AND round=$2').run(c.id,round.round);

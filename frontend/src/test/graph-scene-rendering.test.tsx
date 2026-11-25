@@ -32,6 +32,84 @@ function renderScene(messages: DemoMessage[], edges: DemoEdge[],extra:Partial<Gr
 }
 
 describe('rendered graph scene', () => {
+  it('stacks labeled review votes in their own column beside the tags',()=>{
+    const votes=Array.from({length:12},(_,index)=>({id:`vote-${index}`,author:'甲',createdAt:''}));
+    const target=message('target');
+    const groups=[{targetId:target.id,verdict:'pass' as const,votes:[{id:'passing-vote',author:'乙',createdAt:''}]},
+      {targetId:target.id,verdict:'reject' as const,votes}];
+    const tag={...message('tag'),kind:'relation' as const,relationType:'tag' as const};
+    const view=renderScene([target,tag],[{...relation(tag.id,'tag','anon:tag',target.id),relationLabel:'待核实'}],{reviewVoteGroups:new Map([[target.id,groups]])});
+    fireEvent.click(view.getByRole('button',{name:'显示装饰 target'}));
+    const pass=view.getByRole('button',{name:'查看审核通过投票记录（1 票）'});
+    const reject=view.getByRole('button',{name:'查看审核不通过投票记录（12 票）'});
+    expect(pass).toHaveTextContent('通过 1');expect(reject).toHaveTextContent('不通过 12');
+    expect(pass).toHaveStyle({width:'74px',height:'18px'});
+    expect(reject).toHaveStyle({width:'82px',height:'18px',left:pass.style.left});
+    expect(parseFloat(reject.style.top)).toBeGreaterThanOrEqual(parseFloat(pass.style.top)+18);
+    const label=view.container.querySelector<HTMLElement>('[data-skin-tag="true"]')!;
+    expect(parseFloat(label.style.left)).toBeGreaterThanOrEqual(parseFloat(reject.style.left)+82);
+  });
+  it('opens each tagged record’s own review from a shared label or a custom annotation badge',()=>{
+    const records:DemoMessage[]=['tag-a','tag-b','recommendation'].map(id=>({...message(id),kind:'relation',
+      relationType:id==='recommendation'?'recommend':'tag',relationPayload:id==='recommendation'?{subType:'CUSTOM',customLabel:'有参考价值'}:{label:'待核实'}}));
+    const edges=records.map(row=>({...relation(row.id,row.relationType!,'anon:'+row.id,'target'),relationLabel:row.relationType==='tag'?'待核实':'推荐'}));
+    const groups=records.map(row=>({targetId:row.id,verdict:'pass' as const,votes:[{id:'vote-'+row.id,author:'甲',targetRevision:1,createdAt:row.createdAt}]}));
+    const onOpenReviewVotes=vi.fn();
+    const view=renderScene([message('target'),...records],edges,{reviewVoteGroups:new Map(groups.map(group=>[group.targetId,[group]])),onOpenReviewVotes});
+    fireEvent.click(screen.getByRole('button',{name:'显示装饰 target'}));
+    expect(screen.queryByRole('button',{name:/查看审核通过投票记录/})).toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:'显示装饰 tag-a'}));
+    for(const group of groups.slice(0,2)){
+      const row=screen.getByRole('group',{name:`消息 ${group.targetId} 的审核投票`});
+      const badge=within(row).getByRole('button',{name:'查看审核通过投票记录（1 票）'});
+      expect(badge).toHaveStyle({width:'74px',height:'18px'});
+      fireEvent.click(badge);
+      expect(onOpenReviewVotes).toHaveBeenLastCalledWith(group);
+    }
+    fireEvent.click(screen.getByRole('button',{name:'收起装饰 tag-a'}));
+    expect(view.container.querySelectorAll('[data-review-host]')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button',{name:'显示装饰 recommendation'}));
+    fireEvent.click(within(screen.getByRole('group',{name:'消息 recommendation 的审核投票'})).getByRole('button'));
+    expect(onOpenReviewVotes).toHaveBeenLastCalledWith(groups[2]);
+    fireEvent.click(screen.getByRole('button',{name:'收起装饰 target'}));
+    expect(view.container.querySelectorAll('[data-review-host]')).toHaveLength(0);
+  });
+  it.each(['reference','reply','annotation'] as const)('folds review-only decorations beside a %s edge without a card',type=>{
+    const host={...message('reviewed-link'),kind:'relation' as const,relationType:type};
+    const group={targetId:host.id,verdict:'reject' as const,votes:[{id:'v',author:'甲',wager:11,targetRevision:1,createdAt:'2026-01-01'}]};
+    const onOpenReviewVotes=vi.fn(),onExpandDecorations=vi.fn();
+    const view=renderScene([message('from'),message('to'),host],[relation(host.id,type,'from','to')],{
+      reviewVoteGroups:new Map([[host.id,[group]]]),onOpenReviewVotes,onExpandDecorations});
+    expect(view.container.querySelector('.themed-message[data-msgid="reviewed-link"]')).toBeNull();
+    expect(view.container.querySelector('[data-directed-edge-label="reviewed-link"]')).not.toBeNull();
+    const toggle=view.container.querySelector<HTMLButtonElement>('[data-decoration-toggle="reviewed-link"]')!;
+    expect(toggle).toHaveAttribute('aria-expanded','false');
+    expect(view.container.querySelector('[data-review-vote-badge]')).toBeNull();
+    fireEvent.click(toggle);
+    expect(onExpandDecorations).toHaveBeenCalledWith(host.id);
+    const badge=screen.getByRole('button',{name:'查看审核不通过投票记录（1 票）'});
+    expect(badge).toHaveStyle({width:'74px',height:'18px'});
+    fireEvent.click(badge);
+    expect(onOpenReviewVotes).toHaveBeenCalledWith(group);
+    fireEvent.click(toggle);expect(view.container.querySelector('[data-review-vote-badge]')).toBeNull();
+  });
+  it('keeps an edge-only review lookup reachable before its votes have loaded',()=>{
+    const host:DemoMessage={...message('reviewed-link'),kind:'relation',relationType:'reference'};
+    const onExpandDecorations=vi.fn();
+    renderScene([message('from'),message('to'),host],[relation(host.id,'reference','from','to')],{
+      reviewVoteHints:new Map([[host.id,'重试加载审核投票']]),onExpandDecorations});
+    fireEvent.click(screen.getByRole('button',{name:'显示装饰 reviewed-link'}));
+    fireEvent.click(screen.getByRole('button',{name:'重试加载审核投票'}));
+    expect(onExpandDecorations.mock.calls).toEqual([[host.id],[host.id]]);
+  });
+  it('loads a focused message’s votes when its shared decoration control opens automatically',async()=>{
+    const onExpandDecorations=vi.fn();
+    const view=renderScene([message('focus')],[],{highlightedMessageIds:new Set(['focus']),
+      reviewVoteHints:new Map([['focus','查看审核投票']]),onExpandDecorations});
+    await waitFor(()=>expect(onExpandDecorations).toHaveBeenCalledWith('focus'));
+    expect(view.getByRole('button',{name:'收起装饰 focus'})).toBeVisible();
+    expect(view.getByRole('status')).toHaveTextContent('加载审核投票中');
+  });
   it.each(['pass','reject'] as const)('shows the same operations, review and %s labels on graph cards', verdict => {
     const vote:DemoMessage={...message('review-vote'),relationType:'review',relationPayload:{verdict},content:'审核理由',
       parts:[{id:'reason',type:'text',text:'审核理由'}]};
@@ -40,7 +118,7 @@ describe('rendered graph scene', () => {
     expect(card.querySelector('[data-skin-type-label]')).toHaveTextContent('运营');
     expect(card.querySelector('[data-message-type-detail="subtype"]')).toHaveTextContent(/^审核$/);
     expect(card.querySelector('[data-message-type-detail="verdict"]')).toHaveTextContent(verdict==='pass'?/^通过$/:/^不通过$/);
-    expect(card.querySelector('[data-message-part-id="reason"]')).toHaveTextContent('审核理由');
+    expect(card).not.toHaveTextContent('审核理由');
   });
   it.each([
     {type:'reference',label:'出处说明',display:'出处说明'},
@@ -602,18 +680,15 @@ describe('rendered graph scene', () => {
       onEdgeLabelSingleClick={vi.fn()} onEdgeLabelDoubleClick={vi.fn()} onFragmentAnchorClick={vi.fn()} isFragmentSelected={()=>false}/>;}
     const view=render(<Scene current="m"/>);
     expect(view.getByRole('button',{name:'收起装饰 m'})).toHaveAttribute('aria-expanded','true');
-    expect(view.getByRole('button',{name:'收起标注 m'})).toHaveAttribute('aria-expanded','true');
     expect(view.container.querySelector('[data-jump-msgids~="agree"]')).not.toBeNull();
     expect(view.container.querySelector('[data-jump-msgids~="tag"]')).not.toBeNull();
     fireEvent.click(view.getByRole('button',{name:'收起装饰 m'}));
     expect(view.getByRole('button',{name:'显示装饰 m'})).toHaveAttribute('aria-expanded','false');
-    fireEvent.click(view.getByRole('button',{name:'收起标注 m'}));
+    expect(view.container.querySelector('[data-jump-msgids~="tag"]')).toBeNull();
     view.rerender(<Scene current="m" requestId={1}/>);
     expect(view.getByRole('button',{name:'收起装饰 m'})).toHaveAttribute('aria-expanded','true');
-    expect(view.getByRole('button',{name:'收起标注 m'})).toHaveAttribute('aria-expanded','true');
     view.rerender(<Scene current="next"/>);
     expect(view.getByRole('button',{name:'收起装饰 m'})).toHaveAttribute('aria-expanded','true');
-    expect(view.getByRole('button',{name:'收起标注 m'})).toHaveAttribute('aria-expanded','true');
     expect(view.container.querySelector('[data-jump-msgids~="agree"]')).not.toBeNull();
     expect(view.container.querySelector('[data-jump-msgids~="tag"]')).not.toBeNull();
     view.rerender(<Scene current="m"/>);
@@ -931,20 +1006,17 @@ describe('rendered graph scene', () => {
     expect(onValue).toHaveBeenCalledExactlyOnceWith('target');
   });
 
-  it.each(['normal','classify','summary','arrange','merge'] as const)('keeps %s votes on the right and annotations at the upper right independently collapsible', type => {
+  it.each(['normal','classify','summary','arrange','merge'] as const)('folds votes and annotations together on a %s message', type => {
     const target:DemoMessage=type==='normal'?message('target'):{...message('target'),kind:'relation',relationType:type};
     const relations=(['agree','disagree','recommend','tag'] as const).map(type=>({...message(type),kind:'relation' as const,relationType:type}));
     const edges=relations.map(record=>relation(record.id,record.relationType,`anon:${record.id}`,'target'));
     if(type==='arrange'||type==='merge')edges.push(relation('target',type,'anon:target','member'));
     const view=renderScene([target,message('member'),...relations],edges);
     const canvas=view.container.querySelector('[data-jump-canvas]')!;
-    const voteToggle=view.getByRole('button',{name:'显示装饰 target'}),annotationToggle=view.getByRole('button',{name:'显示标注 target'});
-    expect(parseFloat(annotationToggle.style.top)+parseFloat(annotationToggle.style.height)).toBeLessThanOrEqual(parseFloat(voteToggle.style.top));
-    fireEvent.click(voteToggle);
-    expect(findMessageElements(view.container,'agree')).toHaveLength(1);
-    expect(findMessageElements(view.container,'recommend')).toHaveLength(0);
-    expect(findMessageElements(view.container,'tag')).toHaveLength(0);
-    fireEvent.click(annotationToggle);
+    const toggle=view.getByRole('button',{name:'显示装饰 target'});
+    expect(view.container.querySelectorAll('[data-decoration-toggle="target"]')).toHaveLength(1);
+    for(const id of ['agree','recommend','tag'])expect(findMessageElements(view.container,id)).toHaveLength(0);
+    fireEvent.click(toggle);
     const vote=findMessageElements(view.container,'agree')[0];
     for(const id of ['recommend','tag']){
       const badge=findMessageElements(view.container,id)[0];
@@ -952,14 +1024,8 @@ describe('rendered graph scene', () => {
       expect(parseFloat(badge.style.left)).toBeGreaterThan(parseFloat(vote.style.left)+parseFloat(vote.style.width));
       expect(parseFloat(badge.style.top)).toBeGreaterThanOrEqual(0);
     }
-    fireEvent.click(view.getByRole('button',{name:'收起标注 target'}));
-    expect(findMessageElements(view.container,'recommend')).toHaveLength(0);
-    expect(findMessageElements(view.container,'agree')).toHaveLength(1);
-    fireEvent.click(view.getByRole('button',{name:'显示标注 target'}));
     fireEvent.click(view.getByRole('button',{name:'收起装饰 target'}));
-    expect(findMessageElements(view.container,'agree')).toHaveLength(0);
-    expect(findMessageElements(view.container,'recommend')).toHaveLength(1);
-    fireEvent.click(view.getByRole('button',{name:'收起标注 target'}));
+    for(const id of ['agree','recommend','tag'])expect(findMessageElements(view.container,id)).toHaveLength(0);
     for(const id of ['recommend','agree','tag']){
       act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[id]}}));});
       expect(findMessageElements(view.container,id)).toHaveLength(1);
@@ -967,11 +1033,10 @@ describe('rendered graph scene', () => {
       expect(findMessageElements(view.container,id)).toHaveLength(1);
     }
     fireEvent.click(view.getByRole('button',{name:'收起装饰 target'}));
-    fireEvent.click(view.getByRole('button',{name:'收起标注 target'}));
     expect(findMessageElements(view.container,'agree')).toHaveLength(0);
     expect(findMessageElements(view.container,'tag')).toHaveLength(0);
   });
-  it.each(['classify','summary'] as const)('renders one set of votes and two unobstructed fold controls on an expanded nested %s',type=>{
+  it.each(['classify','summary'] as const)('renders one set of votes and a shared fold control on an expanded nested %s',type=>{
     const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockImplementation(function(this:HTMLElement){
       return this.hasAttribute('data-frame-header')?new DOMRect(parseFloat(this.style.left)||0,parseFloat(this.style.top)||0,
         parseFloat(this.style.width)||320,parseFloat(this.style.minHeight)||56):new DOMRect();
@@ -990,26 +1055,21 @@ describe('rendered graph scene', () => {
       for(const kind of ['agree','disagree'])expect(votes(kind)).toHaveLength(1);
       expect(findMessageElements(view.container,'recommend')).toHaveLength(1);
       expect(findMessageElements(view.container,'archive')).toHaveLength(1);
-      const voteToggle=view.getByRole('button',{name:'收起装饰 target'}),annotationToggle=view.getByRole('button',{name:'收起标注 target'});
+      const voteToggle=view.getByRole('button',{name:'收起装饰 target'});
+      expect(view.container.querySelectorAll('[data-decoration-toggle="target"]')).toHaveLength(1);
       const header=view.container.querySelector<HTMLElement>('[data-frame-header][data-msgid="target"]')!;
       const right=parseFloat(header.style.left)+parseFloat(header.style.width),top=parseFloat(header.style.top);
-      expect(parseFloat(annotationToggle.style.left)).toBeLessThan(right);
-      expect(parseFloat(annotationToggle.style.left)+parseFloat(annotationToggle.style.width)).toBeGreaterThanOrEqual(right-8);
-      expect(parseFloat(annotationToggle.style.top)+parseFloat(annotationToggle.style.height)).toBeLessThanOrEqual(top);
       expect(parseFloat(voteToggle.style.left)).toBeGreaterThanOrEqual(right);
       expect(parseFloat(voteToggle.style.top)).toBeGreaterThanOrEqual(top);
       expect(parseFloat(voteToggle.style.top)).toBeLessThan(top+parseFloat(header.style.minHeight));
-      expect(parseFloat(annotationToggle.style.top)+parseFloat(annotationToggle.style.height)).toBeLessThanOrEqual(parseFloat(voteToggle.style.top));
       fireEvent.click(voteToggle);
       for(const kind of ['agree','disagree'])expect(votes(kind)).toHaveLength(0);
-      expect(view.getByRole('button',{name:'收起标注 target'})).toHaveAttribute('aria-expanded','true');
-      expect(findMessageElements(view.container,'recommend')).toHaveLength(1);
-      fireEvent.click(view.getByRole('button',{name:'显示装饰 target'}));
-      fireEvent.click(annotationToggle);
       expect(findMessageElements(view.container,'recommend')).toHaveLength(0);
       expect(findMessageElements(view.container,'archive')).toHaveLength(0);
+      fireEvent.click(view.getByRole('button',{name:'显示装饰 target'}));
       for(const kind of ['agree','disagree'])expect(votes(kind)).toHaveLength(1);
-      fireEvent.click(view.getByRole('button',{name:'显示标注 target'}));
+      expect(findMessageElements(view.container,'recommend')).toHaveLength(1);
+      expect(findMessageElements(view.container,'archive')).toHaveLength(1);
     }
     expect(send).not.toHaveBeenCalled();
     }finally{geometry.mockRestore();}
@@ -1033,13 +1093,13 @@ describe('rendered graph scene', () => {
     for(let i=1;i<badges.length;i++)expect(parseFloat(badges[i].style.top)).toBeGreaterThanOrEqual(parseFloat(badges[i-1].style.top)+parseFloat(badges[i-1].style.height));
     act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[]}}));});
     expect(findMessageElements(view.container,'recommend')).toHaveLength(1);
-    fireEvent.click(view.getByRole('button',{name:'收起标注 category'}));
+    fireEvent.click(view.getByRole('button',{name:'收起装饰 category'}));
     for(const type of types)expect(findMessageElements(view.container,type)).toHaveLength(0);
   });
   it.each(['attention','block'] as const)('separates positive and negative %s badges',type=>{
     const annotations=(['YES','NO'] as const).map(reason=>({...message(reason),kind:'relation' as const,relationType:type,relationPayload:{subType:reason}}));
     const view=renderScene([message('target'),...annotations],annotations.map(annotation=>relation(annotation.id,type,`anon:${annotation.id}`,'target')));
-    fireEvent.click(view.getByRole('button',{name:'显示标注 target'}));
+    fireEvent.click(view.getByRole('button',{name:'显示装饰 target'}));
     expect(view.getByText(type==='attention'?'关注－是':'拉黑－是')).toBeInTheDocument();
     expect(view.getByText(type==='attention'?'关注－否':'拉黑－否')).toBeInTheDocument();
   });
@@ -1064,7 +1124,7 @@ describe('rendered graph scene', () => {
     const view=renderScene([message('target'),...annotations,...stances],edges,{onDecorationIconClick:icon,onDecorationBodyClick:body,
       onDecorationDoubleClick:details,onMessageClick:select,onInlineBadgeClick:select});
     expect(findMessageElements(view.container,'agree-2')).toHaveLength(0);
-    fireEvent.click(view.getByRole('button',{name:'显示标注 target'}));
+    fireEvent.click(view.getByRole('button',{name:'显示装饰 target'}));
     fireEvent.click(view.getByRole('button',{name:'显示装饰 annotation-1'}));
     const agreement=findMessageElements(view.container,'agree-1')[0],opposition=findMessageElements(view.container,'disagree-1')[0];
     expect(agreement.style.left).toBe(opposition.style.left);
@@ -1095,7 +1155,7 @@ describe('rendered graph scene', () => {
       parts:[{id:'body',type:'text',text:type},{id:'relation',type:'relation',relation:type,roles:{target:[{id:'target',reference:{messageId:'target'}}]}}]};
     const view=renderScene([message('target'),annotation],[relation(annotation.id,type,`anon:${annotation.id}`,'target')]);
     expect(view.container.querySelector('[data-msgid="read-annotation"]:not([data-rel-overlay])')).toBeNull();
-    fireEvent.click(view.getByRole('button',{name:'显示标注 target'}));
+    fireEvent.click(view.getByRole('button',{name:'显示装饰 target'}));
     const badge=findMessageElements(view.container,annotation.id)[0];
     expect(badge).toHaveAttribute('data-rel-overlay','true');
     expect(badge).toHaveTextContent(type==='read'?'已读':'未读');
@@ -1321,16 +1381,16 @@ describe('rendered graph scene', () => {
     expect(card).toHaveTextContent('好玩1111');expect(card).not.toHaveTextContent('好玩吗？');
     expect(card.querySelector('[data-jump-msgids~="correction"]')).not.toBeNull();
     expect(graph.queryByTitle(/^标注：/)).toBeNull();
-    fireEvent.click(graph.getByRole('button',{name:'显示标注 corrected-target'}));
+    fireEvent.click(graph.getByRole('button',{name:'显示装饰 corrected-target'}));
     expect(graph.getByTitle(/^标注：/)).toHaveTextContent('重要');
-    fireEvent.click(graph.getByRole('button',{name:'收起标注 corrected-target'}));
+    fireEvent.click(graph.getByRole('button',{name:'收起装饰 corrected-target'}));
     expect(graph.queryByTitle(/^标注：/)).toBeNull();
     const canvas=graph.container.querySelector('[data-jump-canvas]')!;
     act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[tag.id]}}));});
     expect(graph.getByTitle(/^标注：/)).toBeInTheDocument();
     act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[]}}));});
     expect(graph.getByTitle(/^标注：/)).toBeInTheDocument();
-    fireEvent.click(graph.getByRole('button',{name:'收起标注 corrected-target'}));
+    fireEvent.click(graph.getByRole('button',{name:'收起装饰 corrected-target'}));
     expect(graph.queryByTitle(/^标注：/)).toBeNull();
     expect(graph.queryByTitle(/^赞同更正：/)).toBeNull();
     expect(graph.queryByRole('button',{name:'显示装饰 correction'})).toBeNull();

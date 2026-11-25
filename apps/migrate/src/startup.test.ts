@@ -59,7 +59,8 @@ it.each([0,1,2,3])('startup upgrades version %s, clears old points and funds min
   try{
     expect(await store.account('actor')).toEqual({available:-22,locked:19,earned:0,spent:3});
     expect(await store.db.prepare('SELECT COUNT(*) AS n FROM moderation_cases').get()).toEqual({n:1});
-    for(const table of ['moderation_votes','moderation_assignments'])expect(await store.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()).toEqual({n:0});
+    expect(await store.db.prepare('SELECT COUNT(*) AS n FROM moderation_votes').get()).toEqual({n:0});
+    expect(await store.db.prepare("SELECT to_regclass('moderation_assignments') AS old").get()).toEqual({old:null});
     expect(await store.db.prepare("SELECT COUNT(*) AS n FROM messages m WHERE EXISTS(SELECT 1 FROM jsonb_array_elements(m.body::jsonb->'parts') p WHERE p->>'relation'='review-record')").get()).toEqual({n:0});
     expect(await store.db.prepare("SELECT COUNT(*) AS n FROM messages m WHERE EXISTS(SELECT 1 FROM jsonb_array_elements(m.body::jsonb->'parts') p WHERE p->>'relation'='review-enrollment')").get()).toEqual({n:1});
     expect(await store.db.prepare("SELECT COUNT(*) AS n FROM notifications WHERE category='review'").get()).toEqual({n:0});

@@ -213,6 +213,14 @@ export function handleMessageDoubleClick(dependencies: HandleMessageDoubleClickD
   const m = msgMap.get(messageId);
   setLastClickedMessageId(messageId);
   const currentlyActive = activeTextSelectId === messageId;
+  function enterTextSelection() {
+    // The same message can be uncovered in one card and covered in another.
+    const card = e.currentTarget;
+    if (card instanceof HTMLElement && Array.from(card.querySelectorAll('[data-content-mask="personal"]'))
+      .some(cover => cover.closest('[data-msgid]') === card)) return;
+    setActiveTextSelectId(messageId);
+    clearBrowserSelection();
+  }
   if (m?.kind === "relation") {
     // Use msg.relationType directly — more reliable than relationTypeByRelMsgId
     // which depends on edges and can be stale after ErrorBoundary recovery.
@@ -234,7 +242,7 @@ export function handleMessageDoubleClick(dependencies: HandleMessageDoubleClickD
     if (relType === "classify" || relType === "summary") {
       if (relationType === "correct") {
         if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
-        else { setActiveTextSelectId(messageId); clearBrowserSelection(); }
+        else enterTextSelection();
         return;
       }
       if (traceFrameIds.has(messageId)) {
@@ -298,7 +306,7 @@ export function handleMessageDoubleClick(dependencies: HandleMessageDoubleClickD
     }
     setActiveTextSelectId(null); clearBrowserSelection(); return;
   }
-  setActiveTextSelectId(messageId); clearBrowserSelection();
+  enterTextSelection();
 }
 
 interface HandleTextMouseUpDependencies {

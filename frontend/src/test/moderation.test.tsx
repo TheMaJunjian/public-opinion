@@ -1,16 +1,17 @@
 import {act,fireEvent,render,renderHook,screen,waitFor,within} from '@testing-library/react';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
-import {DEFAULT_MODERATION_POLICY,isRelationView,type Message,type ModerationSummary,type NativeMessageView,type ReviewStakeItem,type WorkbenchSnapshot} from '@gonglun/core';
+import {DEFAULT_MODERATION_POLICY,isRelationView,reviewContextPart,reviewReasonPart,type ModerationSummary,type NativeMessageView,type Part,type ReviewStakeItem,type WorkbenchSnapshot} from '@gonglun/core';
 import ReviewPanel from '../components/ReviewPanel';
 import MessageSettlementActions from '../components/MessageSettlementActions';
-import {ModerationContext} from '../components/ModerationContext';
+import {LocalReviewRecordsContext,ModerationContext} from '../components/ModerationContext';
 import {WorkbenchStore} from '../data/workbench';
 import {calculateSendCost} from '../hooks/useStakeCalculation';
-import {contributionTypeForTarget} from '../pages/workbench/model/contributions';
+import {contributionTypeAtReference,contributionTypeForTarget} from '../pages/workbench/model/contributions';
 import type {ReviewDetail} from '../api/client';
 import {projectWorkbenchSnapshot} from '../utils/workbenchProjection';
-import {applyReviewSnapshots,recordsForReview,projectReviewDiscussionEdges} from '../utils/reviewRecords';
+import {applyReviewSnapshots,recordsForReview,projectReviewDiscussionEdges,projectReviewVoteDecorations} from '../utils/reviewRecords';
 import {ReviewDetailContext,useReviewDetail} from '../hooks/useReviewDetail';
+import {useReviewVoteDecorations} from '../hooks/useReviewVoteDecorations';
 import RecentWorkbenchViews from '../components/RecentWorkbenchViews';
 import {convertMessagesToDemoModel} from '../utils/modelBridge';
 import MessageCard from '../components/MessageCard';
@@ -34,6 +35,25 @@ const record=(id:string,user:string,verdict:'pass'|'reject',reason:string,sequen
 const stake=(source:NativeMessageView):ReviewStakeItem=>({id:`review-wager:${source.id}`,sourceMessageId:source.id,revision:source.revision,
   kind:'wager',side:source.payload.verdict==='pass'?'PRO':'CON',amount:source.spending.reviewWager??0,
   round:Number(source.payload.reviewRound??1),createdAt:source.createdAt,user:source.createdBy});
+it('uses reason membership from the pinned case when deciding which votes need their own cards',()=>{
+  const votes=[record('with-reason','u','pass',''),record('pure','u','pass','')];
+  const models=convertMessagesToDemoModel(votes,votes.filter(isRelationView)).messages;
+  const reason=(id:string,decision:string)=>({...models[0],id,relationType:undefined,restricted:true,parts:[reviewReasonPart({messageId:decision,revision:1})]});
+  const records=[...models,reason('hidden-reason','with-reason'),reason('stale-reason','pure')];
+  const {groups,voteIds}=projectReviewVoteDecorations(records,{targetId:'m',revision:1,recordIds:new Set(['with-reason','pure','hidden-reason'])});
+  expect([...voteIds]).toEqual(['pure']);
+  expect(groups.get('m')?.[0].votes).toMatchObject([{id:'pure',targetRevision:1,round:1,wager:2}]);
+});
+it('keeps reasonless ballots out of the card list when a saved view contains only relation metadata',()=>{
+  const vote=record('vote','reader','reject','');
+  const [model]=convertMessagesToDemoModel([vote],[vote].filter(isRelationView)).messages;
+  const reject={...model,parts:undefined};
+  const pass={...reject,id:'pass',relationPayload:{verdict:'pass' as const}};
+  const covered={...reject,id:'covered',restricted:true,relationPayload:{}};
+  const {groups,voteIds}=projectReviewVoteDecorations([reject,pass,covered],{targetId:'m',revision:1,recordIds:new Set(['vote','pass','covered'])});
+  expect([...voteIds]).toEqual(['vote','pass','covered']);
+  expect(groups.get('m')?.map(group=>[group.verdict,group.votes.map(vote=>vote.id)])).toEqual([['pass',['pass']],['reject',['vote']]]);
+});
 it('lists only funded PRO and CON stakes, including self stakes and repeated investments from earlier rounds',async()=>{
   const old=record('old','reviewer','pass','旧轮理由',1),latest=record('latest','reviewer','reject','新轮理由',2,2);
   const self:ReviewStakeItem={...stake(record('m','author','pass','')),id:'review-self:m',kind:'self',amount:10};
@@ -50,6 +70,23 @@ it('lists only funded PRO and CON stakes, including self stakes and repeated inv
   expect(screen.queryByText('discussion-author')).not.toBeInTheDocument();
   expect(screen.queryByText(/旧轮理由|新轮理由|普通讨论与系统记录/)).not.toBeInTheDocument();
   expect(screen.queryByRole('button',{name:'查看审核记录'})).not.toBeInTheDocument();
+});
+it('loads earlier votes on opening decorations in a new appeal round without counting self stakes',async()=>{
+  const prior=record('previous-vote','reviewer','reject','',1,1);
+  const appeal={...summary,status:'appeal' as const,round:2,pass:10,selfPass:10,reject:12,selfReject:10,reviewerCount:0};
+  const source={...prior,id:'m',kind:'TEXT',relationType:null,parts:[],payload:{},targetRefs:[],moderation:appeal};
+  const selfOnly={...source,id:'self-only',moderation:{...appeal,messageId:'self-only',reject:10}};
+  api.getReview.mockResolvedValue({...detail,summary:appeal,records:[prior]});
+  const messages=convertMessagesToDemoModel([source,selfOnly],[]).messages;
+  const {result,rerender}=renderHook(({sequence})=>useReviewVoteDecorations(messages,undefined,true,'reader',sequence),{initialProps:{sequence:12}});
+  expect(result.current.reviewVoteHints.has('self-only')).toBe(false);
+  expect(result.current.reviewVoteHints.has('m')).toBe(true);
+  expect(api.getReview).not.toHaveBeenCalled();
+  act(()=>result.current.onExpandDecorations('m'));
+  await waitFor(()=>expect(result.current.reviewVoteGroups.get('m')?.[0].votes).toMatchObject([{id:prior.id,author:'reviewer',wager:2}]));
+  rerender({sequence:13});
+  expect(result.current.reviewVoteGroups.get('m')?.[0].votes[0].id).toBe(prior.id);
+  expect(api.getReview).toHaveBeenCalledExactlyOnceWith('m',expect.any(AbortSignal),1);
 });
 it('does not turn discussion records into stakes when the funded list is empty',async()=>{
   api.getReview.mockResolvedValue({...detail,records:[record('discussion','discussion-author','pass','审核讨论')]});
@@ -93,12 +130,53 @@ it('keeps review preview records and totals over late live data, restores on can
 it('keeps the pinned review revision while applying restricted preview bodies and excludes another review case',()=>{
   const target:NativeMessageView={...record('m','author','pass','固定版本'),kind:'TEXT',relationType:null,payload:{},targetRefs:[],moderation:summary};
   const other:NativeMessageView={...record('other','author','reject','其他审核'),parts:[{id:'body',type:'text',text:'其他审核'}]};
+  const newerCase={...summary,caseId:'newer-case',revision:2,reject:20};
   const page:WorkbenchSnapshot={scope:{messageId:null,title:'公论'},sequence:4,users:[],stakes:{},tagCounts:{},attentionUsers:{},
-    messages:[{...target,revision:2,restricted:true,content:'另一版本'},other],relations:[other].filter(isRelationView)};
+    messages:[{...target,revision:2,restricted:true,content:'另一版本',moderation:newerCase,restrictedReviewTargets:[{messageId:'m',revision:2}]},other],relations:[other].filter(isRelationView)};
   const stakes:ReviewStakeItem[]=[{...stake(target),id:'review-self:m',kind:'self',amount:10}];
-  expect(applyReviewSnapshots({...detail,target,stakes},[page])).toMatchObject({target,records:[],stakes});
+  const hiddenByNewer=applyReviewSnapshots({...detail,target,stakes},[page]);
+  expect(hiddenByNewer).toMatchObject({target:{id:'m',revision:1,restricted:true,moderation:summary,restrictedReviewSummaries:[newerCase]},records:[],stakes:[],canReview:false,canSettle:false});
+  expect(JSON.stringify(hiddenByNewer.target)).not.toMatch(/固定版本|另一版本/);
+  const newerDetail={...detail,summary:{...summary,revision:3},target:{...target,revision:3},stakes};
+  expect(applyReviewSnapshots(newerDetail,[page])).toMatchObject({target:newerDetail.target,records:[],stakes,canReview:true});
   const hidden={...target,restricted:true,content:'内容暂时隐藏',parts:[{id:'restricted-body',type:'text' as const,text:'内容暂时隐藏'}]};
   expect(applyReviewSnapshots({...detail,target,stakes},[{...page,messages:[hidden],relations:[]}])).toMatchObject({target:hidden,stakes:[]});
+});
+it.each(['original','reason'])('evicts every stale quote and rebuilds vote facts when a partial snapshot hides the %s',which=>{
+  const scope={messageId:'m',revision:1};
+  const ref={messageId:'secret-source',revision:1,partId:'body',range:{start:0,end:6}};
+  const vote=record('vote','reviewer','reject','PRIVATE-VOTE-TEXT');
+  vote.sourceMessageId=ref.messageId;vote.sourceRefs=[ref];
+  vote.targetRefs=[{kind:'text-fragment',messageId:'m',text:'PRIVATE-TARGET',hash:'hash',reference:{...ref,messageId:'m'}}];
+  vote.declaredTargetRefs=vote.targetRefs;
+  vote.payload.content='PRIVATE-PAYLOAD';
+  vote.parts=[
+    ...vote.parts.map(part=>part.type==='relation'?{...part,roles:{...part.roles,source:[{id:'source',reference:ref}]}}:part),
+    {id:'web',type:'web',url:'PRIVATE-URL',excerpt:'PRIVATE-EXCERPT'},{id:'code',type:'code',language:'js',source:'PRIVATE-CODE'},
+    {id:'display',type:'display',relationPartId:'review',layout:'relation',target:ref},
+  ];
+  const target:NativeMessageView={...vote,id:'m',relationType:null,kind:'TEXT',content:'ORIGINAL',payload:{},sourceRefs:[],sourceMessageId:null,targetRefs:[],declaredTargetRefs:[],parts:[{id:'body',type:'text',text:'ORIGINAL'}],moderation:summary};
+  const reason=(id:string,body:string,extra:Part[]=[]):NativeMessageView=>({...target,id,content:body,moderation:undefined,
+    parts:[{id:'body',type:'text',text:body},reviewContextPart(scope),reviewReasonPart({messageId:vote.id,revision:1}),...extra]});
+  const visible=reason('plain','独立的程序意见'),toHide=reason('reason','PRIVATE-OLD-REASON');
+  visible.content='PRIVATE-LAST-KNOWN-RENDERING';
+  const viaDisplay=reason('quoted','PRIVATE-DISPLAY',[{id:'d',type:'display',relationPartId:'r',layout:'relation',target:ref}]);
+  const viaRole=reason('embedded','PRIVATE-ROLE',[{id:'r',type:'relation',relation:'review-context',roles:{target:[{id:'to',reference:scope}],source:[{id:'from',reference:ref}]}}]);
+  const viaAlias={...reason('cached','PRIVATE-ALIAS'),targetRefs:vote.targetRefs};
+  const prior=which==='original'?target:toHide;
+  const hidden={...prior,content:'',parts:prior.parts.filter(part=>part.type==='relation'),restricted:true};
+  const before={...detail,target,records:[vote,visible,toHide,viaDisplay,viaRole,viaAlias],snapshot:{...target,parts:[{id:'body',type:'text',text:'OLD-SNAPSHOT'}]} as unknown as ReviewDetail['snapshot']};
+  const next=applyReviewSnapshots(before,[{scope:{messageId:null,title:'公论'},sequence:3,users:[],stakes:{},tagCounts:{},attentionUsers:{},messages:[hidden],relations:[]}]);
+  expect(next.records.map(row=>row.id)).toEqual(['vote','plain','reason']);
+  expect(next.records.find(row=>row.id==='plain')?.content).toBe('独立的程序意见');
+  if(which==='original')expect(next.snapshot).toBeUndefined();else expect(next.records.find(row=>row.id==='reason')?.restricted).toBe(true);
+  const cleaned=next.records.find(row=>row.id==='vote')!;
+  expect(cleaned.payload).toEqual({caseId:'c',reviewRound:1,verdict:'reject'});
+  expect(JSON.stringify(cleaned)).not.toMatch(/PRIVATE|secret-source|partId|range/);
+  const model=convertMessagesToDemoModel([vote],[vote].filter(isRelationView));
+  expect(JSON.stringify(model)).not.toMatch(/PRIVATE|secret-source|partId|range/);
+  expect(model.edges).toHaveLength(1);
+  expect(model.edges[0]).toMatchObject({from:{messageId:'anon:vote'},to:{messageId:'m',selection:{kind:'whole'}}});
 });
 it('clears a previous personal rejection when a snapshot opens a new review round',()=>{
   const before={...summary,round:1,viewerVote:{messageId:'old-vote',verdict:'reject' as const}};
@@ -161,25 +239,14 @@ it('ignores a late review response after changing the reviewed message',async()=
   expect(screen.queryByText('迟到的旧消息理由')).not.toBeInTheDocument();
   expect(onRecords).toHaveBeenCalledTimes(calls);
 });
-it('provides the reviewed target to the canvas and removes private content when this assignment expires',async()=>{
-  vi.useFakeTimers({toFake:['Date','setInterval','clearInterval','setTimeout','clearTimeout']});
-  const snapshot={parts:[{id:'body',type:'text',text:'需要审核的正文'},{id:'label',type:'data',value:{label:'需要审核的标签'}}]} as Message;
-  const target:NativeMessageView={...record('m','author','pass','需要审核的正文'),kind:'TEXT',relationType:null,payload:{},parts:snapshot.parts};
-  const records=vi.fn().mockResolvedValue(undefined);
-  api.getReview.mockResolvedValue({...detail,restricted:true,summary:{...summary,status:'appeal'},snapshot,target,records:[record('r','u','pass','支持公开的理由')],stakes:[stake(record('r','u','pass',''))],assignment:{expiresAt:new Date(Date.now()+1000).toISOString(),submittedAt:null,revokedAt:null}});
-  await act(async()=>{render(<ReviewPanel messageId="m" onRecords={records}/>);});
-  expect(screen.queryByText('需要审核的正文')).not.toBeInTheDocument();
-  expect(screen.queryByText(/需要审核的标签/)).not.toBeInTheDocument();
+it('shows the reviewed version and its records to a reader and keeps the review form available',async()=>{
+  const target:NativeMessageView={...record('m','author','pass','待审正文'),kind:'TEXT',relationType:null,payload:{},parts:[{id:'body',type:'text',text:'待审正文'}]};
+  const review=record('r','u','pass','支持公开的理由'),onRecords=vi.fn().mockResolvedValue(undefined);
+  api.getReview.mockResolvedValue({...detail,target,records:[review],stakes:[stake(review)]});
+  render(<ReviewPanel messageId="m" onRecords={onRecords}/>);
+  expect(await screen.findByRole('button',{name:'投票'})).toBeEnabled();
   expect(screen.getByText('u')).toBeVisible();
-  expect(records).toHaveBeenLastCalledWith(['r'],target);
-  await act(()=>vi.advanceTimersByTimeAsync(1000));
-  expect(screen.queryByText('需要审核的正文')).not.toBeInTheDocument();
-  expect(screen.queryByText('支持公开的理由')).not.toBeInTheDocument();
-  expect(screen.queryByRole('list',{name:'审核押注记录'})).not.toBeInTheDocument();
-  expect(screen.queryByRole('button',{name:'投票'})).not.toBeInTheDocument();
-  expect(screen.getByText(/临时阅读权限已收回/)).toBeVisible();
-  expect(records).toHaveBeenLastCalledWith([],expect.objectContaining({id:'m',revision:1,restricted:true,content:'',parts:[{id:'restricted-body',type:'text',text:''}]}));
-  expect(JSON.stringify(records.mock.lastCall)).not.toMatch(/需要审核的正文|需要审核的标签/);
+  expect(onRecords).toHaveBeenLastCalledWith(['r'],target);
 });
 it.each([
   ['login-required','登录后，只要能阅读被审核消息'],['closed','本轮审核窗口已结束'],['content-restricted','当前无权查看被审核正文'],
@@ -192,29 +259,70 @@ it.each([
 it('places separate clickable review statistics and arbitration before truth and value',()=>{
   const open=vi.fn(),arbitrate=vi.fn();const {container}=render(<ModerationContext.Provider value={{summaries:new Map([['m',{...summary,pass:10,reject:2}]]),open,arbitrate}}><MessageSettlementActions messageId="m" onTruth={vi.fn()} onValue={vi.fn()}/></ModerationContext.Provider>);
   expect([...container.querySelectorAll('button')].map(button=>button.title)).toEqual(['查看审核通过与审核不通过汇总','查看审核通过与审核不通过汇总','审核仲裁','真假仲裁','价值仲裁']);
-  fireEvent.click(screen.getByRole('button',{name:'审核通过 10 点，查看记录'}));expect(open).toHaveBeenLastCalledWith('m');
-  fireEvent.click(screen.getByRole('button',{name:'审核不通过 2 点，查看记录'}));expect(open).toHaveBeenLastCalledWith('m');
-  fireEvent.click(screen.getByRole('button',{name:/审核仲裁：/}));expect(arbitrate).toHaveBeenCalledWith('m');expect(open).toHaveBeenCalledTimes(2);
+  const marks:string[]=[];
+  for(const [label,points,color] of [['通过',10,'var(--ink-4ade80)'],['不通过',2,'var(--ink-f87171)']] as const){
+    const button=screen.getByRole('button',{name:`审核${label} ${points} 点，查看记录`});
+    const tally=within(button).getByText(String(points)).parentElement!;
+    const mark=tally.querySelector('svg')!;
+    expect(mark).toHaveAttribute('aria-hidden','true');
+    marks.push(mark.innerHTML);
+    expect(tally.style.color).toBe(color);
+    fireEvent.click(button);expect(open).toHaveBeenLastCalledWith('m',1);
+  }
+  expect(marks[0]).not.toBe(marks[1]);
+  fireEvent.click(screen.getByRole('button',{name:/审核仲裁：/}));expect(arbitrate).toHaveBeenCalledWith('m',{messageId:'m',revision:1});expect(open).toHaveBeenCalledTimes(2);
 });
-it('keeps public review records visible after the reviewer assignment expires',async()=>{
-  vi.useFakeTimers({toFake:['Date','setInterval','clearInterval','setTimeout','clearTimeout']});
-  const snapshot={parts:[{id:'body',type:'text',text:'已经公开的正文'}]} as Message;
-  const records=vi.fn().mockResolvedValue(undefined);
-  api.getReview.mockResolvedValue({...detail,restricted:false,snapshot,records:[record('r','u','pass','公开审核理由')],stakes:[stake(record('r','u','pass',''))],assignment:{expiresAt:new Date(Date.now()+1000).toISOString(),submittedAt:null,revokedAt:null}});
-  await act(async()=>{render(<ReviewPanel messageId="m" onRecords={records}/>);});
-  await act(()=>vi.advanceTimersByTimeAsync(1000));
-  expect(screen.queryByText('已经公开的正文')).not.toBeInTheDocument();
-  expect(screen.getByText('u')).toBeVisible();expect(records).toHaveBeenLastCalledWith(['r']);
-  expect(screen.getByRole('button',{name:'投票'})).toBeEnabled();
-  expect(screen.getByText(/阅读和审核资格不受影响/)).toBeVisible();
+it('opens each source settlement on the clicked card using the source revision and public financial entries',async()=>{
+  const open=vi.fn(),arbitrate=vi.fn(),address={messageId:'source',revision:3};
+  const source={...summary,...address,reject:20,status:'rejected' as const,finalized:true};
+  const cast=record('vote','投票人','reject','PRIVATE INPUT');
+  const hidden={...cast,id:'source',revision:3,content:'',parts:[],restricted:true};
+  api.getReview.mockResolvedValue({...detail,summary:source,target:hidden,stakes:[stake(cast)],canReview:false,canSettle:false});
+  render(<ModerationContext.Provider value={{summaries:new Map(),sourcesFor:()=>[source],open,arbitrate,activeId:'quote',activeTarget:address}}>
+    <MessageSettlementActions messageId="quote"/><ReviewPanel messageId="quote" revision={1}/>
+  </ModerationContext.Provider>);
+  const shield=screen.getByRole('button',{name:'审核仲裁：审核不通过（来源 source 第 3 版）'});
+  expect(shield).toHaveAttribute('aria-expanded','true');
+  fireEvent.click(shield);expect(arbitrate).toHaveBeenCalledWith('quote',address);
+  fireEvent.click(screen.getByRole('button',{name:'审核通过 0 点，查看记录（来源 source 第 3 版）'}));
+  expect(open).toHaveBeenCalledWith('source',3);
+  const entries=await screen.findByRole('list',{name:'审核押注记录'});
+  expect(api.getReview).toHaveBeenCalledWith('source',expect.any(AbortSignal),3);
+  expect(within(entries).getByText('投票人')).toBeVisible();
+  expect(screen.queryByText('审核原文')).toBeNull();
+  expect(screen.queryByText('PRIVATE INPUT')).toBeNull();
+  expect(screen.queryByRole('button',{name:'投票'})).toBeNull();
+  const self={...stake(cast),sourceMessageId:hidden.id,revision:hidden.revision,kind:'self' as const};
+  const page:WorkbenchSnapshot={scope:{messageId:null,title:'公论'},sequence:3,users:[],stakes:{},tagCounts:{},attentionUsers:{},messages:[hidden],relations:[]};
+  const refreshed=applyReviewSnapshots({...detail,summary:source,target:hidden,stakes:[self]},[page]);
+  expect(refreshed.stakes).toEqual([self]);
 });
-it('keeps a submitted voluntary reviewer able to read and review after an old random assignment expires',async()=>{
-  vi.useFakeTimers({toFake:['Date','setInterval','clearInterval','setTimeout','clearTimeout']});
-  api.getReview.mockResolvedValue({...detail,restricted:true,readableWithoutAssignment:true,summary:{...summary,status:'appeal'},
-    records:[record('r','u','pass','本轮参与者可见的理由')],stakes:[stake(record('r','u','pass',''))],assignment:{expiresAt:new Date(Date.now()+1000).toISOString(),submittedAt:null,revokedAt:null}});
-  await act(async()=>{render(<ReviewPanel messageId="m"/>);});
-  await act(()=>vi.advanceTimersByTimeAsync(1000));
-  expect(screen.getByText('u')).toBeVisible();expect(screen.getByRole('button',{name:'投票'})).toBeEnabled();
+it('loads the historical source settlement even when the current version of the same message is already open',async()=>{
+  api.getReview.mockImplementation(async (_id:string,_signal:AbortSignal,revision?:number)=>({
+    ...detail,summary:{...summary,revision:revision??3,caseId:'case-'+(revision??3)},stakes:[stake(record('vote','第'+(revision??3)+'版参与者','reject',''))],
+  }));
+  function View(){
+    const shared=useReviewDetail('m');
+    return <ModerationContext.Provider value={{summaries:new Map(),open:vi.fn(),arbitrate:vi.fn(),activeId:'quote',activeTarget:{messageId:'m',revision:1}}}>
+      <ReviewDetailContext.Provider value={shared}><ReviewPanel messageId="quote" revision={2}/></ReviewDetailContext.Provider>
+    </ModerationContext.Provider>;
+  }
+  render(<View/>);
+  expect(await screen.findByText('第1版参与者')).toBeVisible();
+  expect(screen.queryByText('第3版参与者')).toBeNull();
+});
+it('reads archived counts and opens only a case whose records were saved in the file',()=>{
+  const open=vi.fn(),source={...summary,caseId:'old',messageId:'origin',revision:4,pass:1,reject:12};
+  render(<LocalReviewRecordsContext.Provider value={{summaries:new Map([['m',summary]]),sourcesFor:()=>[source],open,
+    available:new Set([JSON.stringify(['origin',4])])}}>
+    <MessageSettlementActions messageId="m"/>
+  </LocalReviewRecordsContext.Provider>);
+  expect(screen.getByLabelText('审核通过 0 点')).toBeVisible();
+  expect(screen.queryByRole('button',{name:'审核通过 0 点，查看记录'})).toBeNull();
+  expect(screen.queryByRole('button',{name:/审核仲裁/})).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'审核不通过 12 点，查看记录（来源 origin 第 4 版）'}));
+  expect(open).toHaveBeenCalledWith('origin',4);
+  expect(api.getReview).not.toHaveBeenCalled();
 });
 it('projects every original review into discussion regions without merging reasons or changing native records',()=>{
   const records=[record('old','a','reject','旧理由',1),record('r1','a','pass','有依据',2),record('r2','b','pass','有依据',3),
@@ -236,7 +344,7 @@ it('lets an old pending settlement distribute immediately and blocks an unfunded
   render(<ReviewPanel messageId="m" onRecords={vi.fn().mockResolvedValue(undefined)}/>);
   expect(await screen.findByRole('button',{name:'投票'})).toBeEnabled();
   expect(screen.getByLabelText('投票投入点数')).toHaveValue(2);
-  expect(screen.getByText(/本次复核需 17 点/)).toBeVisible();
+  expect(screen.getByText(/本次复核需 35 点/)).toBeVisible();
   expect(screen.getByRole('button',{name:'申请复核'})).toBeDisabled();
   expect(screen.getByRole('button',{name:'结算'})).toBeEnabled();
   fireEvent.click(screen.getByRole('button',{name:'结算'}));
@@ -270,6 +378,19 @@ it('records the reason and funded review, while a rejected author sees appeal co
   render(<ReviewPanel messageId="m" onRecords={records}/>);
   expect(await screen.findByRole('button',{name:'申请复核'})).toBeEnabled();expect(screen.queryByRole('button',{name:'投票'})).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button',{name:'申请复核'}));expect(await screen.findByRole('alert')).toHaveTextContent('请填写复核理由');
+});
+it('quotes a reason under the current publication policy and keeps plain votes affordable',async()=>{
+  api.getReview.mockResolvedValue({...detail,canAppeal:false,available:9,costs:{protocol:2,reviewMinimum:2,appealFee:6,appealDeposit:10,appealTotal:18,reasonFee:3,reasonDeposit:5,reasonTotal:11}});
+  render(<ReviewPanel messageId="m"/>);
+  const vote=await screen.findByRole('button',{name:'投票'});
+  expect(vote).toBeEnabled();
+  fireEvent.click(screen.getByText('填写审核理由（可选）'));
+  fireEvent.change(screen.getByLabelText('审核理由'),{target:{value:'理由'}});
+  expect(screen.getByText(/理由独立发布，需 11 点/)).toBeVisible();
+  expect(screen.getByText(/本次投票共需 15 点/)).toBeVisible();
+  expect(vote).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('审核理由'),{target:{value:' '}});
+  expect(vote).toBeEnabled();
 });
 it.each(['pass','reject'] as const)('submits the selected %s review through the shared vote form and stays in arbitration',async verdict=>{
   let finish!:(value:unknown)=>void;
@@ -355,12 +476,17 @@ it('toggles a personal rejection for all body parts and resets after a new vote'
   const target={id:'m',revision:1,kind:'normal' as const,author:'author',createdAt:'',content:'正文一\n正文二',
     parts:[{id:'first',type:'text' as const,text:'正文一'},{id:'second',type:'text' as const,text:'正文二'}],
     moderation:{...summary,viewerVote:{messageId:'vote-1',verdict:'reject' as const}}};
-  const click=vi.fn(),view=render(<MessageCard msg={target} ctx={{}} onClick={click}/>);
+  const click=vi.fn(),open=vi.fn();
+  const view=render(<MessageCard msg={target} ctx={{}} onClick={click}/>,{wrapper:({children})=>
+    <ModerationContext.Provider value={{summaries:new Map(),open,arbitrate:vi.fn()}}>{children}</ModerationContext.Provider>});
+  fireEvent.click(screen.getByRole('button',{name:'查看审核记录'}));
+  expect(open).toHaveBeenCalledWith('m',1);
   expect(screen.queryByText('正文一')).not.toBeInTheDocument();
   expect(screen.queryByText('正文二')).not.toBeInTheDocument();
   expect(view.container.querySelectorAll('[data-content-mask]')).toHaveLength(1);
-  expect(view.container.querySelector('[data-content-mask]')).toHaveTextContent('');
-  fireEvent.click(screen.getByRole('button',{name:'你已投不通过，点击展开正文'}));
+  const showBody=screen.getByRole('button',{name:'你已投不通过，点击展开正文'});
+  expect(showBody).toHaveTextContent('展开正文');
+  fireEvent.click(showBody);
   expect(screen.getByText('正文一')).toBeVisible();expect(screen.getByText('正文二')).toBeVisible();expect(click).not.toHaveBeenCalled();
   expect(screen.getAllByRole('button',{name:'重新遮挡正文'})).toHaveLength(1);
   fireEvent.click(screen.getByRole('button',{name:'重新遮挡正文'}));
@@ -378,8 +504,10 @@ it('never reveals server-restricted content through the personal cover',()=>{
     moderation:{...summary,viewerVote:{messageId:'vote',verdict:'reject' as const}}};
   const view=render(<ModerationContext.Provider value={{summaries:new Map(),open,arbitrate:vi.fn()}}><MessageCard msg={target} ctx={{}}>PRIVATE CHILD</MessageCard></ModerationContext.Provider>);
   expect(view.container).not.toHaveTextContent('PRIVATE');
-  fireEvent.click(screen.getByRole('button',{name:'正文已遮挡，查看审核记录'}));
-  expect(open).toHaveBeenCalledWith('m');expect(view.container).not.toHaveTextContent('PRIVATE');
+  const openRecord=screen.getByRole('button',{name:'正文已遮挡，查看审核记录'});
+  expect(openRecord).toHaveTextContent('查看审核记录');
+  fireEvent.click(openRecord);
+  expect(open).toHaveBeenCalledWith('m',1);expect(view.container).not.toHaveTextContent('PRIVATE');
 });
 it('removes cached relation payloads when a message becomes restricted',()=>{
   const store=new WorkbenchStore(),user={id:'u',username:'用户',createdAt:''};
@@ -424,9 +552,15 @@ it('quotes review fees separately and converts whole-decision stances to the rev
   const review={id:'r',parts:[{id:'decision',type:'relation' as const,relation:'review',roles:{}}]};
   expect(contributionTypeForTarget('agree',review,{messageId:'r'})).toBe('REVIEW');
   expect(contributionTypeForTarget('disagree',review,{messageId:'r',partId:'body'})).toBe('DISAGREE');
+  const vote={...review,revision:3,kind:'relation' as const,author:'甲',createdAt:'',content:''};
+  const fetched=new Map([['r',vote]]);
+  expect(contributionTypeAtReference('agree',{messageId:'r',revision:3},new Map(),fetched)).toBe('REVIEW');
+  expect(contributionTypeAtReference('agree',{messageId:'r',revision:2},new Map(),fetched)).toBe('AGREE');
+  expect(contributionTypeAtReference('disagree',{messageId:'r',revision:3,partId:'body'},new Map(),fetched)).toBe('DISAGREE');
+  expect(contributionTypeAtReference('agree',{messageId:'r',revision:3},new Map([['r',{...vote,restricted:true,parts:[]}]]),fetched)).toBe('AGREE');
   const converted=calculateSendCost({...base,relationType:'agree',relStakeAmount:2,draftUnits:[{messageId:'r'}],targetUnits:[],newMessageContent:'',relationContributionTypes:['REVIEW']},1,DEFAULT_MODERATION_POLICY)!;
   expect(converted).toMatchObject({stakeTotal:0,reviewFeeTotal:0,reviewDepositTotal:0,reviewWagerTotal:2,total:3});
   const direct=calculateSendCost({...base,relationType:'operations',secondaryRelationType:'review',scopeParentId:'category',draftUnits:[{messageId:'m'}],targetUnits:[],newMessageContent:'审核理由'},1,DEFAULT_MODERATION_POLICY)!;
-  expect(direct).toMatchObject({messageCount:1,joinCount:0,refCount:0,stakeTotal:0,reviewFeeTotal:0,reviewDepositTotal:0,reviewWagerTotal:2,total:3});
-  expect(direct.groups.map(group=>group.type)).toEqual(['REVIEW']);
+  expect(direct).toMatchObject({messageCount:2,joinCount:0,refCount:0,stakeTotal:0,recommendationTotal:1,reviewFeeTotal:6,reviewDepositTotal:10,reviewWagerTotal:2,total:21});
+  expect(direct.groups.map(group=>group.type)).toEqual(['REVIEW','REVIEW_REASON']);
 });

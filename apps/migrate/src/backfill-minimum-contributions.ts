@@ -1,4 +1,4 @@
-import {referenceKey,relations, type LedgerEntry, type Message} from '@gonglun/core';
+import {referenceKey,relations, REVIEW_RELATIONS, type LedgerEntry, type Message} from '@gonglun/core';
 import {Mutation, type Store} from '../../server/src/db.js';
 import type {Postgres} from '../../server/src/postgres.js';
 import {placeHistoricalSelfWager,refundHistoricalSelfWager} from '../../server/src/economy.js';
@@ -19,9 +19,11 @@ export async function isGeneratedContributionRecord(db:Postgres,message:Message)
 }
 export async function minimumContributionCandidates(db:Postgres):Promise<Message[]> {
   const archived = !!(await db.prepare("SELECT to_regclass('points_archive_rows') AS name").get())?.name;
+  const historicalReasons=!!(await db.prepare("SELECT to_regclass('legacy_review_reason_versions') AS name").get())?.name;
   const rows=await db.prepare(`SELECT m.body FROM messages m JOIN accounts a ON a."userId"=m."authorId"
     WHERE COALESCE((m.body::jsonb #>> '{spending,recommendation}')::bigint,0)=0
       AND COALESCE((m.body::jsonb #>> '{spending,wager}')::bigint,0)=0
+      ${historicalReasons?`AND NOT EXISTS (SELECT 1 FROM legacy_review_reason_versions reason WHERE reason."reasonId"=m.id OR to_jsonb(reason)->>'citationId'=m.id)`:''}
       ${archived ? `AND NOT EXISTS (SELECT 1 FROM points_archive_rows archive WHERE archive."tableName"='messages'
         AND archive."archiveId"=(SELECT value::jsonb->>'archiveId' FROM settings WHERE key='usage-points-start') AND archive.body->>'id'=m.id)` : ''}
     ORDER BY m.sequence,m.id`).all();
@@ -32,6 +34,17 @@ export async function minimumContributionCandidates(db:Postgres):Promise<Message
     candidates.push(message);
   }
   return candidates;
+}
+
+/** Review operations use their own escrow and do not require a truth or value stake. */
+export async function outstandingMinimumContributions(db:Postgres,hasReviewOperations=true):Promise<number> {
+  const candidates=await minimumContributionCandidates(db);
+  if(!hasReviewOperations)return candidates.length;
+  return candidates.filter(message=>{
+    const actions=relations(message).filter(part=>part.relation!=='member-of');
+    if(actions.length!==1||!REVIEW_RELATIONS.has(actions[0]!.relation))return true;
+    return actions[0]!.relation==='review'&&(message.spending.reviewWager??0)<=0;
+  }).length;
 }
 
 /** One versioned transaction adds one real truth stake per previously unpaid user message. */

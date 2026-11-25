@@ -308,7 +308,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           {[...p.draftUnits,...p.targetUnits,...p.sourceUnits].some(unit=>{const message=messageMap.get(unit.messageId);return message?.restricted||message?.moderation?.status==='rejected'&&!(p.relationType==='operations'&&p.secondaryRelationType==='review');})&&<p role="status">受限消息不能作为来源或目标。请移除选择；作者可从审核入口申请复核。</p>}
           {p.contributionGroups.map(group=><div key={group.type} data-contribution-type={group.type} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 6px',border:'1px solid var(--line-444)',borderRadius:4}}>
             <span style={{fontSize:11}}>{group.label}消息 × {group.count}</span>
-            {(group.type==='REVIEW'?['truth'] as const:['truth','value'] as const).map(field=><label key={field} style={{fontSize:11}}>{group.type==='REVIEW'?'审核押注':field==='truth'?'真假':'价值'}
+            {group.type==='REVIEW_REASON'?<span style={{fontSize:11}}>价值 1 点</span>:(group.type==='REVIEW'?['truth'] as const:['truth','value'] as const).map(field=><label key={field} style={{fontSize:11}}>{group.type==='REVIEW'?'审核押注':field==='truth'?'真假':'价值'}
               <input aria-label={group.type==='REVIEW'?'审核押注投入':`${group.type==='TEXT'?'':group.label}${field==='truth'?'真假':'价值'}投入`} type="number" min={0} max={Math.max(0,p.availablePoints)} value={group[field]}
                 disabled={targetInvestmentDimension(group.type)===(field==='truth'?'VALUE':'TRUTH')}
                 title={targetInvestmentDimension(group.type)===(field==='truth'?'VALUE':'TRUTH')?'此项固定为 0，投入计入目标消息的另一维度':undefined}
@@ -652,7 +652,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                 || (p.isMergeType && p.hasTargetsAvailable)
                 || (p.isGovernanceOrOpsType && p.relationType === "proposal" && (p.secondaryRelationType === '分配收入' || p.secondaryRelationType === '终止结算'))
               );
-            const placeholderText = p.relationType==='operations'&&p.secondaryRelationType==='review'?'填写审核理由（可选，保存在审核关系消息中）':p.joinOnlyAction ? "加入已有容器消息，此处不可输入"
+            const placeholderText = p.relationType==='operations'&&p.secondaryRelationType==='review'?'填写审核理由（可选，作为独立消息发布）':p.joinOnlyAction ? "加入已有容器消息，此处不可输入"
               : isTagWithoutSecondary ? "请先在上方选择推荐或冷藏"
               : textAreaDisabled
               ? (p.draftHasRelationTarget && p.relationType === "correct" ? "关系消息不能作为更正目标，请选择普通文本消息" : p.isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : p.isMergeType ? "归并关系为与会者-消息关系，此处不应输入内容" : p.isGovernanceOrOpsType && p.relationType === "proposal"

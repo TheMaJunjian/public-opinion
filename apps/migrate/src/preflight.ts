@@ -3,7 +3,7 @@ import {DATABASE_MIGRATIONS} from '../../server/src/database-version.js';
 import {settlementTargetRepairPlan} from './restore-settlement-targets.js';
 import {valueVoteMessageRepairPlan} from './repair-value-vote-messages.js';
 import {annotationStanceMessageRepairPlan} from './repair-annotation-stance-messages.js';
-import {minimumContributionCandidates} from './backfill-minimum-contributions.js';
+import {outstandingMinimumContributions} from './backfill-minimum-contributions.js';
 import {dependentMembershipRemovalPlan} from './remove-dependent-memberships.js';
 import {delegationBodyRepairPlan} from './delegation-body-plan.js';
 import {targetInvestmentPlan} from './target-investments.js';
@@ -12,6 +12,8 @@ import {legacyAnnotationInvestmentPlan} from './legacy-annotation-investments.js
 import {readingMessageRemovalPlan} from './remove-reading-messages.js';
 import {containerReadingCleanupPlan} from './cleanup-container-reading-marks.js';
 import {resetMessageContributionPlan} from './reset-message-contributions.js';
+import {reviewPermissionRemovalPlan} from './remove-review-permissions.js';
+import {reviewReasonPlan} from './review-reasons.js';
 
 /** Read-only planning does not initialize, stamp or rewrite any database. */
 export async function migrationPlan(databaseUrl:string,schema?:string){
@@ -28,7 +30,9 @@ export async function migrationPlan(databaseUrl:string,schema?:string){
     const settlementTargets=tables.has('messages')&&tables.has('revisions')?await settlementTargetRepairPlan(db):undefined;
     const valueVoteMessages=['messages','revisions','rounds','bets','execution_stances'].every(table=>tables.has(table))?await valueVoteMessageRepairPlan(db):undefined;
     const annotationStanceMessages=tables.has('messages')&&tables.has('revisions')?await annotationStanceMessageRepairPlan(db):undefined;
-    const minimumContributions=tables.has('messages')&&tables.has('accounts')?(await minimumContributionCandidates(db)).length:0;
+    const minimumContributions=tables.has('messages')&&tables.has('accounts')
+      ? await outstandingMinimumContributions(db,applied.length>=36)
+      : 0;
     const dependentMemberships=tables.has('messages')&&tables.has('memberships')?await dependentMembershipRemovalPlan({db}):undefined;
     const delegationBodies=tables.has('messages')?await delegationBodyRepairPlan(db):undefined;
     const targetInvestments=['messages','rounds','bets','execution_stances'].every(table=>tables.has(table))?await targetInvestmentPlan({db}):undefined;
@@ -49,7 +53,9 @@ export async function migrationPlan(databaseUrl:string,schema?:string){
     const contributionPointsReset={pending:applied.length<27&&!pointsStart,accounts:counts.accounts??0,
       archiveBeforeReset:true,dailyRefresh:'00:00 Asia/Shanghai',initialGrant:0};
     const resetMessageContributions=tables.has('points_archive_rows')&&tables.has('settings')?await resetMessageContributionPlan({db}):undefined;
+    const reviewPermissions=await reviewPermissionRemovalPlan(db,tables);
+    const reviewReasons=await reviewReasonPlan(db,tables);
     return {...identity,schema:db.schema,region:region?JSON.parse(String(region)):null,counts,settlementTargets,valueVoteMessages,annotationStanceMessages,minimumContributions,dependentMemberships,delegationBodies,targetInvestments,retainedTargetInvestments,legacyAnnotationInvestments,
-      readingMessages,containerReadingMarks,simplifiedCorrections,referenceConsumption,sharedReadingMarks,contributionPointsReset,resetMessageContributions,currentVersion:applied.length,pending:DATABASE_MIGRATIONS.slice(applied.length).map((name,index)=>({version:applied.length+index+1,name}))};
+      readingMessages,containerReadingMarks,simplifiedCorrections,referenceConsumption,sharedReadingMarks,contributionPointsReset,resetMessageContributions,reviewPermissions,reviewReasons,currentVersion:applied.length,pending:DATABASE_MIGRATIONS.slice(applied.length).map((name,index)=>({version:applied.length+index+1,name}))};
   });}finally{await db.close();}
 }

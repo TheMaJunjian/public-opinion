@@ -19,14 +19,17 @@ interface Props {
   messageId:string;revision?:number;
   onRecords?:(ids:string[],target?:NativeMessageView)=>Promise<void>;
 }
-export default function ReviewPanel({messageId,revision,onRecords}:Props){
+export default function ReviewPanel({messageId:cardId,revision:cardRevision,onRecords}:Props){
   const user=useOptionalAuth()?.user;
   const moderation=useContext(ModerationContext);
+  const addressed=moderation?.activeId===cardId?moderation.activeTarget:undefined;
+  const messageId=addressed?.messageId??cardId,revision=addressed?.revision??cardRevision;
   const settledCallback=useRef(moderation?.onSettled);settledCallback.current=moderation?.onSettled;
   const shared=useContext(ReviewDetailContext);
-  const sharedCase=shared?.messageId===messageId&&(revision===undefined||shared.revision===undefined||shared.revision===revision);
+  const sharedRevision=shared?.revision??shared?.detail?.summary.revision;
+  const sharedCase=shared?.messageId===messageId&&(revision===undefined||sharedRevision===undefined||sharedRevision===revision);
   const local=useReviewDetail(sharedCase?undefined:messageId,revision);
-  const {detail,error:loadError,refresh:load,expired,lostReadAccess,records,target}=sharedCase?shared!:local;
+  const {detail,error:loadError,refresh:load,records,target}=sharedCase?shared!:local;
   const [reason,setReason]=useState(''),[amount,setAmount]=useState('2');
   const [direction,setDirection]=useState<ReviewVerdict>('pass');
   const [confirmSettle,setConfirmSettle]=useState(false);
@@ -37,7 +40,7 @@ export default function ReviewPanel({messageId,revision,onRecords}:Props){
   useEffect(()=>{
     setError('');setNotice('');setReason('');setDirection('pass');setConfirmSettle(false);setAmount(String(detail?reviewEconomy(detail.policy).minWager:2));
   },[messageId,revision,detail?.summary.caseId,detail?.summary.round]);
-  const stakes=useMemo(()=>lostReadAccess?[]:(detail?.stakes??[]).filter(stake=>stake.user&&(stake.side==='PRO'||stake.side==='CON')&&stake.amount>0),[detail?.stakes,lostReadAccess]);
+  const stakes=useMemo(()=>(detail?.stakes??[]).filter(stake=>stake.user&&(stake.side==='PRO'||stake.side==='CON')&&stake.amount>0),[detail?.stakes]);
   const myStakes=stakes.filter(stake=>stake.user.id===user?.id);
   useEffect(()=>{const ids=records.map(record=>record.id);void (target?recordsCallback.current?.(ids,target):recordsCallback.current?.(ids))?.catch(e=>setError(e.message));},[records,target]);
   async function act(action:'review'|'review-appeal'|'review-settle'|'review-finalize',verdict?:ReviewVerdict){
@@ -63,19 +66,24 @@ export default function ReviewPanel({messageId,revision,onRecords}:Props){
   }
   const summary=detail?.summary,settled=summary?.status==='approved'||summary?.status==='rejected'||summary?.status==='unknown';
   const result=summary?reviewResult(summary):'unknown';
-  const canReview=!!detail?.canReview&&!lostReadAccess&&!summary?.finalized;
+  const canReview=!!detail?.canReview&&!target?.restricted&&!summary?.finalized;
   const economy=detail?reviewEconomy(detail.policy):null;
-  const appealCost=detail?.costs?.appealTotal??(economy?1+economy.appealFee+economy.appealDeposit:0);
+  const protocol=detail?.costs?.protocol??1;
+  const reasonFee=detail?.costs?.reasonFee??(detail?.policy.enabled?detail.policy.fee:0);
+  const reasonDeposit=detail?.costs?.reasonDeposit??(detail?.policy.enabled?detail.policy.deposit:0);
+  const reasonCost=detail?.costs?.reasonTotal??protocol+1+reasonFee+reasonDeposit;
+  const appealCost=(detail?.costs?.appealTotal??(economy?protocol+economy.appealFee+economy.appealDeposit:0))+reasonCost;
+  const voteCost=protocol+Number(amount)+(reason.trim()?reasonCost:0);
+  const reasonQuote=<p className="text-xs">理由独立发布，需 {reasonCost} 点（价值 1、协议费 {protocol}、审核费 {reasonFee}、审核自押 {reasonDeposit}）。</p>;
+  const subject=moderation?.subjectLabel?.(messageId)??(target?.parts?.some(part=>part.type==='relation'&&part.relation==='review-reason')?'这条理由':undefined);
   const appealVerdict=detail?.appealVerdict??(summary?.status==='unknown'?direction:summary?.status==='approved'?'reject':'pass');
-  const eligibility=lostReadAccess?'content-restricted':summary?.finalized?'closed':detail?.reviewEligibility;
-  const canSettle=!!detail?.canSettle&&!lostReadAccess&&!summary?.finalized;
+  const eligibility=target?.restricted?'content-restricted':summary?.finalized?'closed':detail?.reviewEligibility;
+  const canSettle=!!detail?.canSettle&&!target?.restricted&&!summary?.finalized;
   const status=<>{(error||loadError)&&<p role="alert" className="text-xs text-[color:var(--ink-f87171)]">{error||loadError}</p>}{notice&&<p role="status" className="text-xs">{notice}</p>}
     {!detail&&!error&&!loadError&&<p role="status" className="text-sm text-[color:var(--text-muted)]">正在加载审核记录…</p>}
-    {eligibility&&eligibilityLabels[eligibility]&&<p className="text-xs text-[color:var(--text-muted)]">{eligibilityLabels[eligibility]}</p>}
-    {canReview&&<p className="text-xs text-[color:var(--text-muted)]">你可以阅读该版本，因此可以提交审核，无需等待随机分配。</p>}
-    {expired&&<p className="text-xs text-[color:var(--text-muted)]">随机审核任务已到期{lostReadAccess?'，临时阅读权限已收回，受限正文和理由已隐藏':'；阅读和审核资格不受影响'}。</p>}</>;
+    {eligibility&&eligibilityLabels[eligibility]&&<p className="text-xs text-[color:var(--text-muted)]">{eligibilityLabels[eligibility]}</p>}</>;
   return <section aria-label="审核仲裁" className="settlement-panel border border-[color:var(--border-default)] rounded-lg p-4 bg-[color:var(--surface-card)] space-y-4" onClick={event=>event.stopPropagation()}>
-    <div className="flex items-center justify-between gap-2"><h3 className="font-semibold text-[color:var(--text-primary)] text-sm"><ThemeIcon name="review" fallback="🛡️"/> 审核仲裁</h3></div>
+    <div className="flex items-center justify-between gap-2"><h3 className="font-semibold text-[color:var(--text-primary)] text-sm"><ThemeIcon name="review" fallback="🛡️"/> {subject?'审核'+subject:'审核仲裁'}</h3></div>
     {status}
     {detail&&summary&&economy&&<>
       <div className="text-xs text-[color:var(--text-muted)]">累计押注（含自押）</div>
@@ -111,8 +119,9 @@ export default function ReviewPanel({messageId,revision,onRecords}:Props){
         {canReview&&<>
           <ArbitrationVoteForm direction={direction} onDirection={value=>setDirection(value as ReviewVerdict)}
             options={[{value:'pass',label:'通过（PRO）'},{value:'reject',label:'不通过（CON）'}]}
-            amount={amount} onAmount={setAmount} minimum={economy.minWager} busy={busy} voting={pendingAction==='review'} onVote={()=>void act('review',direction)}/>
+            amount={amount} onAmount={setAmount} minimum={economy.minWager} busy={busy} disabled={detail.available!==undefined&&detail.available<voteCost} voting={pendingAction==='review'} onVote={()=>void act('review',direction)}/>
           <details className="text-xs"><summary style={{cursor:'pointer'}}>填写审核理由（可选）</summary><textarea aria-label="审核理由" value={reason} maxLength={50000} disabled={busy} onChange={e=>setReason(e.target.value)} rows={3} style={field}/></details>
+          {!!reason.trim()&&<>{reasonQuote}<p className="text-xs">本次投票共需 {voteCost} 点。</p></>}
         </>}
         {!!stakes.length&&<div>
           <div className="text-xs text-[color:var(--text-muted)] mb-1">记录 ({stakes.length}):</div>
@@ -130,7 +139,7 @@ export default function ReviewPanel({messageId,revision,onRecords}:Props){
       </div>
       {detail.canAppeal&&summary.status==='unknown'&&<label className="text-xs">复核自押方向 <select aria-label="复核自押方向" value={direction} disabled={busy} onChange={event=>setDirection(event.target.value as ReviewVerdict)}><option value="pass">通过（PRO）</option><option value="reject">不通过（CON）</option></select></label>}
       {detail.canAppeal&&settled&&<label style={{display:'block',fontSize:12}}>复核理由（必填）<textarea aria-label="复核理由" value={reason} maxLength={50000} disabled={busy} onChange={e=>setReason(e.target.value)} rows={3} style={field}/></label>}
-      {detail.canAppeal&&settled&&<p className="text-xs">本次复核需 {appealCost} 点：审核费 {economy.appealFee}＋自押{appealVerdict==='pass'?'通过':'不通过'} {economy.appealDeposit}＋协议费 {detail.costs?.protocol??1}。{detail.available!==undefined?`可用 ${detail.available} 点。`:''}</p>}
+      {detail.canAppeal&&settled&&<>{reasonQuote}<p className="text-xs">本次复核需 {appealCost} 点，含复核费 {economy.appealFee}、自押{appealVerdict==='pass'?'通过':'不通过'} {economy.appealDeposit}、协议费 {protocol} 和理由 {reasonCost}。{detail.available!==undefined?`可用 ${detail.available} 点。`:''}</p></>}
       <details className="text-xs text-[color:var(--text-muted)]"><summary style={{cursor:'pointer'}}>资金与奖励：审核费 {summary.fee} · 累计自押 {summary.deposit}</summary>
         <p>本轮前 {summary.rewardSlots??economy.rewardSlots} 名不同有效审核者各得 {summary.rewardAmount??economy.rewardAmount} 点，已占用 {summary.rewardCount??0} 个名额；剩余预算退付款人。</p>
         <p>发布自押支持通过，复核自押支持所申请的相反结论。自押与审核押注合并结算，胜方按投入比例取回本金并分享反方押注。</p>

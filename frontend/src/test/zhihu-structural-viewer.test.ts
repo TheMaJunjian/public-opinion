@@ -9,7 +9,7 @@ import { deriveContainerEffect } from '../pages/workbench/model/containerEffect'
 import { buildTraceProjection } from '../utils/traceProjection';
 import { projectContainerCanvas } from '../pages/workbench/projections/containerCanvas';
 import { planChronologicalMessageUnits } from '../utils/messageStructurePlan';
-import { computeCorrectionVersions, isReviewRecord, isReviewDiscussion, isSettlementRecord } from '../utils/modelBridge';
+import { computeCorrectionVersions, isReviewBallot, isReviewDiscussion, isSettlementRecord } from '../utils/modelBridge';
 
 const user = '本地整理者';
 const item = (id: string) => `zhihu:item:answer:${id}`;
@@ -34,12 +34,13 @@ function assertCounts(data: NativeZhihuView, username: string | null = user) {
     expect(index.memberCounts(relation.id), relation.id).toEqual(full.ownership.memberCounts(relation.id));
   return index;
 }
-function stanceToJoin(data: NativeZhihuView, joinId: string, type: 'AGREE' | 'DISAGREE'): NativeZhihuView {
+function addRelation(data: NativeZhihuView, targetId: string, relation: 'agree' | 'disagree' | 'review'): NativeZhihuView {
+  const type = relation.toUpperCase();
   const id = `test:${type}:${data.messages.length}`;
   const parts: NonNullable<ExportData['messages'][number]['parts']> = [{ id: 'relation', type: 'relation',
-    relation: type === 'AGREE' ? 'agree' : 'disagree', roles: { target: [{ id: 'target', reference: { messageId: joinId } }] } }];
+    relation, roles: { target: [{ id: 'target', reference: { messageId: targetId } }] } }];
   const row = { id, revision: 1, sequence: data.messages.length + 1, kind: 'RELATION', contentType: 'TEXT', content: '', parts,
-    relationType: type, targetRefs: [{ kind: 'message', messageId: joinId }], sourceMessageId: null,
+    relationType: type, targetRefs: [{ kind: 'message', messageId: targetId }], sourceMessageId: null,
     authorId: 'test-actor', author: user, createdAt: new Date().toISOString(), relationPayload: {} };
   return { ...data, messages: [...data.messages, row], relations: [...data.relations, { ...row, payload: {}, supersededBy: null }] };
 }
@@ -79,8 +80,8 @@ describe('structural Zhihu message loading', () => {
     }));
     const join = moved.messages.find(row => isNativeLocalMessage(row) && row.relationType === 'JOIN')!;
     expect(join).toBeDefined();
-    const rejected = stanceToJoin(moved, join.id, 'DISAGREE');
-    const restored = stanceToJoin(rejected, join.id, 'AGREE');
+    const rejected = addRelation(moved, join.id, 'disagree');
+    const restored = addRelation(rejected, join.id, 'agree');
     for (const data of [original, moved, rejected, restored]) for (const username of [user, null]) {
       const index = assertCounts(data, username), full = fullEffect(data, username);
       for (const category of [question('a'), question('b')]) {
@@ -151,6 +152,16 @@ describe('structural Zhihu message loading', () => {
     expect(index.window({ classificationId: group.id }).data.messages.some(row => row.id === comment('a'))).toBe(true);
   });
 
+  it('loads a review vote on a visible stance in a paged message list', () => {
+    const stances = addRelation(structuralFixture(), comment('a'), 'agree');
+    const data = addRelation(stances, stances.messages.at(-1)!.id, 'review');
+    const voteId = data.messages.at(-1)!.id;
+    const index = createZhihuStructuralViewer(data, user);
+    const page = index.window({ classificationId: question('a'), viewMode: 'list', pinnedIds: [voteId] }, 1);
+    expect(page.data.messages.some(row => row.id === voteId)).toBe(true);
+    expect(index.window({ classificationId: question('b'), viewMode: 'list' }).data.messages.some(row => row.id === voteId)).toBe(false);
+  });
+
   it('matches full canvases and directional traces through nested frames, moves, suppression and corrections', () => {
     const source = structuralFixture();
     const arranged = nativeZhihuDocument(sendNativeZhihuRelation(source, { relationType: 'ARRANGE',
@@ -174,7 +185,8 @@ describe('structural Zhihu message loading', () => {
           expect(paged.data.messages.every(row => index.window({ classificationId }).data.messages.some(fullRow => fullRow.id === row.id))).toBe(true);
           const prefix = (value: ReturnType<typeof fullEffect>) => {
             const canvas = projectContainerCanvas(value, scope, viewMode);
-            const visible = canvas.messages.filter(row => row.kind !== 'join' && !isSettlementRecord(row) && !isReviewRecord(row) && !isReviewDiscussion(row));
+            const visible = canvas.messages.filter(row => row.kind !== 'join' && !isSettlementRecord(row)
+              && (!isReviewDiscussion(row) || viewMode === 'list' && isReviewBallot(row)));
             const plan = planChronologicalMessageUnits(visible, canvas.edges), units = new Set(plan.units.slice(0, limit));
             return plan.order.filter(id => units.has(plan.byId.get(id)!));
           };

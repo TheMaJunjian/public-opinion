@@ -39,7 +39,8 @@ export function useSendPreview(options: Options) {
     const reveal=()=>{
       if (drawing?.failure || performance.now()-started>30000) return;
       const viewport = options.viewport?.current;
-      const target = preview.ids.map(id => viewport?.querySelector<HTMLElement>(`[data-msgid="${id}"]`)).find(Boolean);
+      const target = preview.ids.map(id => viewport?.querySelector<HTMLElement>(`[data-msgid="${id}"]`)
+        ?? viewport?.querySelector<HTMLElement>(`[data-jump-msgids~="${id}"]`)).find(Boolean);
       if (drawing?.pending || !viewport || !target) { frame=requestAnimationFrame(reveal); return; }
       const bounds = viewport.getBoundingClientRect(), rect = target.getBoundingClientRect();
       viewport.scrollTop += rect.top - bounds.top - Math.max(50,(bounds.height - rect.height)/2);

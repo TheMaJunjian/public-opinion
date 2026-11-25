@@ -4,8 +4,7 @@ import {afterEach,expect,it} from 'vitest';
 import {messageDisplayDependency,type Message} from '@gonglun/core';
 import {Mutation,Store} from '../../server/src/db.js';
 import {enrollModeration,moderationCase} from '../../server/src/moderation.js';
-import {addReviewFunding} from '../../server/src/review-finances.js';
-import {assignmentRecord} from '../../server/src/review-assignments.js';
+import {addReviewFunding,reviewRecord} from '../../server/src/review-finances.js';
 import {cleanupTestDatabases,createTestApp,testDatabaseUrl} from '../../server/src/test-database.js';
 import {financialFingerprint} from './financial-fingerprint.js';
 import {migrateReviewSelfStakes} from './review-self-stakes.js';
@@ -27,7 +26,7 @@ async function historicalDeposits(){
     const c=(await moderationCase(app.store,target.id))!;
     await app.store.transaction(async()=>{
       const tx=new Mutation(app.store);
-      await assignmentRecord(tx,c,'原审核结论',{verdict});await tx.commit();
+      await reviewRecord(tx,c,'原审核结论',{verdict});await tx.commit();
     });
     await app.store.transaction(async()=>{
       const tx=new Mutation(app.store),payer=verdict==='pass'?challenger:author;
@@ -55,17 +54,18 @@ it('converts existing guarantees without charging, derives both appeal sides fro
   // Exercise the versioned startup path as well as direct migration idempotence.
   const upgraded=await Store.open(testDatabaseUrl(),{schema:app.store.db.schema});
   try{
-    const deposits=await upgraded.db.prepare('SELECT "payerId",verdict,amount FROM moderation_deposits ORDER BY "caseId",round').all();
+    const caseIds=originalCases.map(row=>row.id);
+    const deposits=await upgraded.db.prepare('SELECT "payerId",verdict,amount FROM moderation_deposits WHERE "caseId"=ANY($1::text[]) ORDER BY "caseId",round').all(caseIds);
     expect(deposits).toEqual(expect.arrayContaining([
       {payerId:author,verdict:'pass',amount:10},{payerId:challenger,verdict:'reject',amount:10},
     ]));
     expect(deposits.filter(d=>d.verdict==='pass')).toHaveLength(3);
     expect(deposits.filter(d=>d.verdict==='reject')).toHaveLength(1);
     expect(await financialFingerprint(upgraded.db)).toBe(finances);
-    expect(await upgraded.db.prepare('SELECT * FROM moderation_cases ORDER BY position').all()).toEqual(originalCases);
+    expect(await upgraded.db.prepare('SELECT * FROM moderation_cases WHERE id=ANY($1::text[]) ORDER BY position').all(caseIds)).toEqual(originalCases);
     expect(await upgraded.db.prepare('SELECT body FROM changes WHERE sequence<=$1 ORDER BY sequence').all(sequence)).toEqual(originalJournal);
     const changes=await upgraded.db.prepare('SELECT body FROM changes WHERE sequence>$1 ORDER BY sequence').all<{body:string}>(sequence);
-    expect(changes).toHaveLength(1);
+    expect(changes).toHaveLength(3); // The v42 audit and the two v51 independent appeal reasons.
     const change=JSON.parse(changes[0]!.body);
     expect(change.ledger).toEqual([]);
     expect(messageDisplayDependency(change.messages[0])).toEqual(targets.map(target=>({messageId:target.id,revision:1})));

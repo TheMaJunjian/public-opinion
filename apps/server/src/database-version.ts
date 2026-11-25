@@ -49,4 +49,6 @@ export const DATABASE_MIGRATIONS = [
   'content-only-discovery-feed',
   'statistical-discovery-memberships',
   'participant-agreement-acceptance',
+  'remove-review-permissions',
+  'independent-review-reasons',
 ] as const;

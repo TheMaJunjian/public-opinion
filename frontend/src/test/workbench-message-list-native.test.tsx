@@ -333,7 +333,7 @@ describe('native list content and navigation regressions', () => {
     expect(row.querySelector('[data-skin-type-label]')).toHaveTextContent('运营');
     expect(row.querySelector('[data-message-type-detail="subtype"]')).toHaveTextContent('审核');
     expect(row.querySelector('[data-message-type-detail="verdict"]')).toHaveTextContent(verdict==='pass'?'通过':'不通过');
-    expect(row.querySelector('[data-message-part-id="reason"]')).toHaveTextContent('这是审核理由');
+    expect(row).not.toHaveTextContent('这是审核理由');
     const announcement=view.container.querySelector('[data-msgid="notice"]')!;
     expect(announcement.querySelector('[data-skin-type-label]')).toHaveTextContent('运营');
     expect(announcement.querySelector('[data-message-type-detail="subtype"]')).toHaveTextContent('公告');

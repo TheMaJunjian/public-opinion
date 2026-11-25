@@ -81,7 +81,6 @@ export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
   'REVIEW-FINALIZE': {kind:'edge-label',label:'审核资金划转',color:'indigo'},
   REVIEW_RECORD: {kind:'edge-label',label:'审核记录',color:'indigo'},
   'REVIEW-ENROLLMENT': {kind:'edge-label',label:'纳入审核',color:'indigo'},
-  'REVIEWER-AUTHORIZE': {kind:'edge-label',label:'审核资格授权',color:'indigo'},
   ANNOTATION:  { kind: 'edge-label',        label: '注释', color: 'blue',   formsTrees: false },
   REFERENCE:   { kind: 'edge-label',        label: '引用', color: 'indigo', formsTrees: false },
   REPLY:       { kind: 'edge-label',        label: '回复', color: 'blue',   formsTrees: true  },

@@ -89,7 +89,7 @@ export function clipFrameScene(node:ReactNode,clipFor:(id:string,edgeId?:string)
   const child=node;
     if(!React.isValidElement<{children?:ReactNode;msg?:{id:string};[name:string]:unknown}>(child))return child;
     const props=child.props,insideSvg=svg||child.type==='svg';
-    const ids=typeof props['data-directed-edge-source']==='string'?[props['data-directed-edge-source']]:[props['data-msgid'],props['data-jump-visual-msgids'],props['data-frame-visual'],props['data-directed-edge-label'],props['data-directed-edge-start'],props['data-decoration-toggle'],props['data-annotation-toggle'],props['data-frame-scrollbar'],props['data-frame-resize'],props.msg?.id,child.type===FrameViewportScrollbars?props.id:undefined].filter((id):id is string=>typeof id==='string');
+    const ids=typeof props['data-directed-edge-source']==='string'?[props['data-directed-edge-source']]:[props['data-msgid'],props['data-jump-visual-msgids'],props['data-frame-visual'],props['data-directed-edge-label'],props['data-directed-edge-start'],props['data-decoration-toggle'],props['data-frame-scrollbar'],props['data-frame-resize'],props.msg?.id,child.type===FrameViewportScrollbars?props.id:undefined].filter((id):id is string=>typeof id==='string');
     const clip=ids.flatMap(ids=>ids.split(/\s+/)).map(id=>clipFor(id,typeof props['data-directed-edge-start']!=='string'&&typeof props['data-frame-edge-id']==='string'?props['data-frame-edge-id']:undefined)).find(Boolean);
     if(clip){const wrapped=<FrameClip clip={clip} svg={insideSvg}>{child}</FrameClip>;return child.key===null?wrapped:React.cloneElement(wrapped,{key:child.key});}
     const children=props.children?clipFrameScene(props.children,clipFor,insideSvg):props.children;

@@ -13,7 +13,6 @@ import { PARTICIPATION_AGREEMENT_VERSION } from '@gonglun/core';
 import { moderationHttp } from './moderation-http.js';
 import { createModerationRouter } from './moderation-routes.js';
 import { moderationPolicy } from './moderation.js';
-import { processReviewAssignments } from './review-assignments.js';
 const query = z.object({ parent: z.string().max(100).optional(), cursor: z.string().max(1000).optional(), limit: z.coerce.number().int().min(1).max(100).optional(), q: z.string().max(200).optional(), relation: z.string().max(80).optional(), author: z.string().max(100).optional() }).strict();
 const personalQuery = query.extend({ filter: z.enum(['normal', 'follow', 'read', 'unread', 'block', 'archive']).optional(), after: z.coerce.number().int().nonnegative().optional() });
 export async function createApp(options: {
@@ -327,7 +326,7 @@ export async function createApp(options: {
     let ticking:Promise<void>|undefined;
     const timer = setInterval(() => {
         if(closed||ticking||readOnlyRehearsal)return;
-        ticking=(async()=>{try{await refreshUsagePoints(store);await processDue(store);await processReviewAssignments(store);await publish();}catch(error){console.error('贡献点刷新、审核分配、延时结算或同步失败',error);}})().finally(()=>{ticking=undefined;});
+        ticking=(async()=>{try{await refreshUsagePoints(store);await processDue(store);await publish();}catch(error){console.error('贡献点刷新、延时结算或同步失败',error);}})().finally(()=>{ticking=undefined;});
     }, options.settlementTickMs ?? 1000);
     timer.unref();
     const heartbeat = setInterval(() => { for (const [response] of clients)

@@ -1,7 +1,7 @@
 import {createContext,useCallback,useLayoutEffect,useMemo,useRef,useState} from 'react';
 import {api} from '../api';
 import type {ReviewDetail} from '../api/client';
-import {applyReviewSnapshots,recordsForReview,reviewTargetPlaceholder} from '../utils/reviewRecords';
+import {applyReviewSnapshots,recordsForReview} from '../utils/reviewRecords';
 import type {WorkbenchSnapshot} from '@gonglun/core';
 import {useOptionalAuth} from '../context/AuthContext';
 
@@ -10,7 +10,7 @@ export function useReviewDetail(messageId?:string,revision?:number,previewPages?
   const viewerId=useOptionalAuth()?.user?.id;
   const key=messageId?JSON.stringify([viewerId??null,messageId,revision??'current']):null;
   const [state,setState]=useState<{key:string;detail:ReviewDetail}|null>(null);
-  const [error,setError]=useState(''),[clock,setClock]=useState(Date.now);
+  const [error,setError]=useState('');
   const generation=useRef(0),active=useRef<{key:string;controller:AbortController}>();
   const lastSummary=useRef('');
   const refresh=useCallback(async()=>{
@@ -38,7 +38,7 @@ export function useReviewDetail(messageId?:string,revision?:number,previewPages?
   },[messageId,revision,key]);
   useLayoutEffect(()=>{
     if(!messageId||!key)return;
-    const controller=new AbortController();active.current={key,controller};lastSummary.current='';setError('');setClock(Date.now());
+    const controller=new AbortController();active.current={key,controller};lastSummary.current='';setError('');
     const load=()=>void refresh().catch(error=>{if(!controller.signal.aborted)setError(error.message);});
     const changed=(event:Event)=>{if((event as CustomEvent).detail?.messageId===messageId)load();};
     const committed=(event:Event)=>{
@@ -53,21 +53,9 @@ export function useReviewDetail(messageId?:string,revision?:number,previewPages?
   },[messageId,refresh]);
   const currentDetail=state?.key===key?state.detail:null;
   const detail=useMemo(()=>currentDetail&&previewPages?applyReviewSnapshots(currentDetail,previewPages):currentDetail,[currentDetail,previewPages]);
-  // Wake only at a deadline, rather than rerendering every second.
-  useLayoutEffect(()=>{
-    if(!messageId||!detail)return;
-    const next=[detail.assignment?.submittedAt?null:detail.assignment?.expiresAt,detail.summary.releaseAt]
-      .flatMap(value=>value?[Date.parse(value)]:[]).filter(at=>at>clock).sort((a,b)=>a-b)[0];
-    if(next===undefined)return;
-    const timer=setTimeout(()=>setClock(Date.now()),Math.min(2147483647,Math.max(0,next-Date.now())));
-    return()=>clearTimeout(timer);
-  },[messageId,detail,clock]);
-  const expired=!!detail?.assignment&&!detail.assignment.submittedAt&&(!!detail.assignment.revokedAt||Date.parse(detail.assignment.expiresAt)<=clock);
-  const privateBody=detail?.restricted??['rejected','appeal'].includes(detail?.summary.status??'');
-  const lostReadAccess=expired&&privateBody&&detail?.readableWithoutAssignment!==true;
-  const records=useMemo(()=>!detail||lostReadAccess?[]:recordsForReview(detail.records,detail.summary),[detail?.records,detail?.summary.caseId,detail?.summary.messageId,detail?.summary.revision,lostReadAccess]);
-  const target=useMemo(()=>detail?.target?(lostReadAccess?reviewTargetPlaceholder(detail.target):detail.target):undefined,[detail?.target,lostReadAccess]);
-  return useMemo(()=>({messageId,revision,detail,error,refresh,clock,expired,lostReadAccess,records,target}),[messageId,revision,detail,error,refresh,clock,expired,lostReadAccess,records,target]);
+  const target=detail?.target;
+  const records=useMemo(()=>detail?recordsForReview(detail.records,detail.summary,new Set(detail.records.map(record=>record.id))):[],[detail?.records,detail?.summary.caseId,detail?.summary.messageId,detail?.summary.revision]);
+  return useMemo(()=>({messageId,revision,detail,error,refresh,records,target}),[messageId,revision,detail,error,refresh,records,target]);
 }
 
 export const ReviewDetailContext=createContext<ReturnType<typeof useReviewDetail>|null>(null);

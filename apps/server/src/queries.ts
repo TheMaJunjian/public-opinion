@@ -3,6 +3,7 @@ import { DomainError, Store } from './db.js';
 import { roundsFor } from './economy.js';
 import { statesFor } from './projections.js';
 import { moderationReadSql } from './moderation-visibility.js';
+import { isReviewDiscussionSql } from './display-dependencies.js';
 const decode = (row: Record<string, unknown>) => JSON.parse(row.body as string) as Message;
 function cursorValue(cursor: string | undefined): {
     sequence: number;
@@ -44,8 +45,10 @@ export async function listMessages(store: Store, options: {
         (await store.message(options.parent));
         clauses.push(`EXISTS (SELECT 1 FROM memberships m WHERE m."memberId"=messages.id AND m."parentId"=${parameter(options.parent)})`);
     }
-    else if (!options.q && !options.author && !options.relation)
+    else if (!options.q && !options.author && !options.relation) {
         clauses.push("NOT EXISTS (SELECT 1 FROM memberships m WHERE m.\"memberId\"=messages.id)");
+        clauses.push(`NOT ${isReviewDiscussionSql('messages')}`);
+    }
     const cursor = cursorValue(options.cursor);
     if (cursor) {
         const sequence=parameter(cursor.sequence),id=parameter(cursor.id);

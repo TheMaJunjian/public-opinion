@@ -1,25 +1,22 @@
 import { relations, textOf, REVIEW_RECORD_RELATIONS, type Change, type Message, type Reference, type NotificationCategory,
   type NotificationContent, type NotificationItem, type NotificationPage, type NotificationQuery,
-  type NotificationSeenInput, type NotificationDeleteInput, type NotificationSummary, type NotificationSection, type ReviewTaskStatus } from '@gonglun/core';
+  type NotificationSeenInput, type NotificationDeleteInput, type NotificationSummary } from '@gonglun/core';
 import { z } from 'zod';
 import { DomainError, type Store } from './db.js';
 import {membershipNotifications,type MembershipNotification} from './notification-memberships.js';
 import {recordReviewNotifications,describeReviewNotificationTargets} from './review-notifications.js';
-import {notificationSectionSql,reviewTaskJoinsSql} from './review-notification-status.js';
 
 const safeInteger = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 export const notificationQuerySchema = z.object({
-  category: z.enum(['all', 'direct', 'following', 'financial', 'review', 'review-revoked']).optional(),
+  category: z.enum(['all', 'direct', 'following', 'financial', 'review']).optional(),
   unread: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
-  pending: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
   cursor: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
   through: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
 }).strict();
 export const notificationSeenSchema = z.object({
   through: safeInteger, ids: z.array(safeInteger).min(1).max(100).optional(),
-  category: z.enum(['all', 'direct', 'following', 'financial', 'review', 'review-revoked']).optional(),
-  pending: z.boolean().optional(),
+  category: z.enum(['all', 'direct', 'following', 'financial', 'review']).optional(),
 }).strict();
 export const notificationDeleteSchema = notificationSeenSchema.extend({seenOnly:z.boolean().optional()})
   .refine(input=>Boolean(input.ids?.length)||input.seenOnly===true,'请选择通知或仅清除已查看通知');
@@ -200,55 +197,45 @@ export async function recordNotifications(store: Store, change: Change) {
   }
 }
 
-export async function notificationSummary(store: Store, userId: string, at=new Date().toISOString()): Promise<NotificationSummary> {
-  const rows=await store.db.prepare(`SELECT ${notificationSectionSql()} AS section,MAX(n.id) AS through,
-    COUNT(*) FILTER(WHERE n."seenAt" IS NULL AND n."deletedAt" IS NULL) AS unseen,
-    COUNT(*) FILTER(WHERE review_task.status='pending' AND n."deletedAt" IS NULL) AS pending
-    FROM notifications n ${reviewTaskJoinsSql('$2')} WHERE n."userId"=$1 GROUP BY 1`)
-    .all<{section:NotificationSection;through:number;unseen:number;pending:number}>(userId,at);
+export async function notificationSummary(store: Store, userId: string): Promise<NotificationSummary> {
+  const rows=await store.db.prepare(`SELECT category,MAX(id) AS through,
+    COUNT(*) FILTER(WHERE "seenAt" IS NULL AND "deletedAt" IS NULL) AS unseen
+    FROM notifications WHERE "userId"=$1 GROUP BY category`)
+    .all<{category:NotificationCategory;through:number;unseen:number}>(userId);
   return {through:Math.max(0,...rows.map(row=>row.through)),unseenCount:rows.reduce((total,row)=>total+row.unseen,0),
-    unseenByCategory:{review:0,'review-revoked':0,...Object.fromEntries(rows.map(row=>[row.section,row.unseen]))},
-    pendingReviewCount:rows.reduce((total,row)=>total+row.pending,0),sequence:await store.latestSequence()};
+    unseenByCategory:{review:0,...Object.fromEntries(rows.map(row=>[row.category,row.unseen]))},sequence:await store.latestSequence()};
 }
 
 export async function notificationPage(store: Store, userId: string, query: NotificationQuery): Promise<NotificationPage> {
-  const at=new Date().toISOString(),summary = await notificationSummary(store, userId,at);
+  const summary = await notificationSummary(store, userId);
   const through = Math.min(query.through ?? summary.through, summary.through);
-  const rows = await store.db.prepare(`SELECT n.*,COALESCE(p.muted,false) AS muted,
-    review_task.status AS "reviewTaskStatus",review_task."expiresAt" AS "reviewTaskExpiresAt" FROM notifications n
+  const rows = await store.db.prepare(`SELECT n.*,COALESCE(p.muted,false) AS muted FROM notifications n
     LEFT JOIN notification_preferences p ON p."userId"=n."userId" AND p."targetId"=n."targetId"
-    ${reviewTaskJoinsSql('$8')}
     WHERE n."userId"=$1 AND n."deletedAt" IS NULL AND n.id<=$2 AND ($3::bigint IS NULL OR n.id<$3)
-    AND ($4='all' OR ${notificationSectionSql()}=$4) AND (NOT $5::boolean OR n."seenAt" IS NULL)
-    AND (NOT $7::boolean OR review_task.status='pending')
-    ORDER BY n.id DESC LIMIT $6`).all<{id:number;sourceId:string;targetId:string;actorId:string;category:NotificationCategory;kind:string;groupKey:string;createdAt:string;seenAt:string|null;muted:boolean;body:NotificationContent;reviewTaskStatus:ReviewTaskStatus|null;reviewTaskExpiresAt:string|null}>
-    (userId, through, query.cursor ?? null, query.category ?? 'all', query.unread ?? false, (query.limit ?? 30) + 1,query.pending??false,at);
+    AND ($4='all' OR n.category=$4) AND (NOT $5::boolean OR n."seenAt" IS NULL)
+    ORDER BY n.id DESC LIMIT $6`).all<{id:number;sourceId:string;targetId:string;actorId:string;category:NotificationCategory;kind:string;groupKey:string;createdAt:string;seenAt:string|null;muted:boolean;body:NotificationContent}>
+    (userId, through, query.cursor ?? null, query.category ?? 'all', query.unread ?? false, (query.limit ?? 30) + 1);
   const items: NotificationItem[] = rows.slice(0, query.limit ?? 30).map(row => ({
     ...row.body, id:row.id, sourceId:row.sourceId, targetId:row.targetId, actorId:row.actorId, category:row.category,
     kind:row.kind, groupKey:row.groupKey, createdAt:row.createdAt, seenAt:row.seenAt, muted:row.muted,
-    ...(row.reviewTaskStatus?{reviewTaskStatus:row.reviewTaskStatus,reviewTaskExpiresAt:row.reviewTaskExpiresAt??undefined}:{}),
   }));
   await describeReviewNotificationTargets(store,items);
   return {...summary, through, items, nextCursor: rows.length > items.length ? items.at(-1)!.id : null};
 }
 
 export async function markNotificationsSeen(store: Store, userId: string, input: NotificationSeenInput) {
-  await store.db.prepare(`UPDATE notifications n SET "seenAt"=COALESCE("seenAt",$2)
+  await store.db.prepare(`UPDATE notifications SET "seenAt"=COALESCE("seenAt",$2)
     WHERE "userId"=$1 AND id<=$3 AND ($4::bigint[] IS NULL OR id=ANY($4::bigint[]))
-    AND n.id IN(SELECT n.id FROM notifications n ${reviewTaskJoinsSql('$2')} WHERE n."userId"=$1
-      AND ($5='all' OR ${notificationSectionSql()}=$5) AND (NOT $6::boolean OR review_task.status='pending'))`)
-    .run(userId,new Date().toISOString(),input.through,input.ids ?? null,input.category ?? 'all',input.pending??false);
+    AND ($5='all' OR category=$5)`)
+    .run(userId,new Date().toISOString(),input.through,input.ids ?? null,input.category ?? 'all');
 }
 
 /** Keep the delivery tombstone so retries cannot resurrect a deleted notification. */
 export async function deleteNotifications(store: Store, userId: string, input: NotificationDeleteInput) {
-  await store.db.prepare(`UPDATE notifications n SET "deletedAt"=COALESCE("deletedAt",$2)
+  await store.db.prepare(`UPDATE notifications SET "deletedAt"=COALESCE("deletedAt",$2)
     WHERE "userId"=$1 AND id<=$3 AND ($4::bigint[] IS NULL OR id=ANY($4::bigint[]))
-    AND (NOT $6::boolean OR "seenAt" IS NOT NULL)
-    AND n.id IN(SELECT n.id FROM notifications n ${reviewTaskJoinsSql('$2')} WHERE n."userId"=$1
-      AND ($5='all' OR ${notificationSectionSql()}=$5) AND (NOT $6::boolean OR review_task.status IS DISTINCT FROM 'pending')
-      AND (NOT $7::boolean OR review_task.status='pending'))`)
-    .run(userId,new Date().toISOString(),input.through,input.ids??null,input.category??'all',input.seenOnly??false,input.pending??false);
+    AND ($5='all' OR category=$5) AND (NOT $6::boolean OR "seenAt" IS NOT NULL)`)
+    .run(userId,new Date().toISOString(),input.through,input.ids??null,input.category??'all',input.seenOnly??false);
 }
 
 export async function muteNotifications(store: Store, userId: string, targetId: string, muted: boolean) {

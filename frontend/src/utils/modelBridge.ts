@@ -3,6 +3,7 @@ import { bodyVersion, resolveStance, relationLabelPart, REVIEW_RECORD_RELATIONS,
 import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
 import type {AuthorInvestment} from './messageAuthorship';
 import {chronologicalOrder} from './discussionOrder';
+import {reviewDecisionFacts} from '@gonglun/core';
 
 export type MessageKind = "normal" | "join" | "relation" | "round" | "round_result" | "governance" | "code" | "operations";
 
@@ -12,7 +13,9 @@ export function isSettlementRecord(message: { kind: string } | undefined): boole
 }
 
 const REVIEW_RECORD_TYPES = new Set([...REVIEW_RECORD_RELATIONS, 'review_record']);
-/** Review records belong to their target's review category, not the main feed. */
+export function isReviewBallot(message: {relationType?:string|null;parts?:Part[]} | undefined):boolean{
+  return message?.relationType?.toLowerCase()==='review'||!!message?.parts?.some(part=>part.type==='relation'&&part.relation==='review');
+}
 export function isReviewRecord(message: { relationType?: string | null; parts?: Part[] } | undefined): boolean {
   return REVIEW_RECORD_TYPES.has(message?.relationType?.toLowerCase() ?? '')
     || !!message?.parts?.some(part => part.type === 'relation' && REVIEW_RECORD_TYPES.has(part.relation));
@@ -35,6 +38,7 @@ export function isCorrectionProposal(message: { parts?: Part[]; relationPayload?
 
 /** Project readable text for this viewer without changing the stored message or its identity. */
 export function withCorrectionContent(message: DemoMessage, content: string, changes?: CorrectionVersion['changes'],snapshot?:CoreMessage): DemoMessage {
+  if(message.restricted||['review','review-appeal'].includes(message.relationType??''))return message;
   const titleFollowsBody = ['classify', 'summary'].includes(message.relationType ?? '') && !message.relationPayload?.separateTitle;
   if(snapshot)return {...message,content,parts:snapshot.parts,revision:snapshot.revision,...(titleFollowsBody?{relationPayload:{...message.relationPayload,title:content}}:{})};
   if (message.content === content) return message;
@@ -88,7 +92,7 @@ export function isTraceTextLikeMessage(message: { kind: MessageKind; relationTyp
 export type RelationType =
   // Review verdicts split into independent view-only summary regions.
   | "review-pass" | "review-reject"
-  | "review" | "review-appeal" | "review-settle" | "review-finalize" | "review_record" | "reviewer-authorize" | "review-enrollment"
+  | "review" | "review-appeal" | "review-settle" | "review-finalize" | "review_record" | "review-enrollment"
   | "annotation"
   | "reference"
   | "reply"
@@ -131,6 +135,9 @@ export type UnitSelection = {
 export type DemoMessage = {
   moderation?: import('@gonglun/core').ModerationSummary;
   restricted?: boolean;
+  restrictedStance?: BackendMessage['restrictedStance'];
+  restrictedReviewTargets?: BackendMessage['restrictedReviewTargets'];
+  restrictedReviewSummaries?: BackendMessage['restrictedReviewSummaries'];
   id: string;
   sequence?: number;
   bodyVersion?: BodyVersion;
@@ -333,8 +340,8 @@ export function convertMessagesToDemoModel(
     || (sequenceById.get(a.id) ?? 0) - (sequenceById.get(b.id) ?? 0) || a.id.localeCompare(b.id);
   // API pagination and archive queries return different orders. Equal timestamps
   // must not change card order, relation precedence, or graph layout on reopening.
-  messages = [...messages].sort(byCreation);
-  relations = [...relations].sort(byCreation);
+  messages = messages.map(row=>{const facts=reviewDecisionFacts(row);return facts?{...row,...facts}:row;}).sort(byCreation);
+  relations = relations.map(row=>{const facts=reviewDecisionFacts(row);return facts?{...row,...facts}:row;}).sort(byCreation);
   const msgContentMap = new Map(messages.map(m => [m.id, m.content]));
   const messageById=new Map(messages.map(message=>[message.id,message]));
   // Build a set of relation IDs to detect when sourceMessageId references a relation message.
@@ -378,7 +385,8 @@ export function convertMessagesToDemoModel(
     executedStance: m.executedStance,
     state: m.state,
     spending: m.spending,
-    moderation:m.moderation,restricted:m.restricted,
+    moderation:m.moderation,restricted:m.restricted,restrictedStance:m.restrictedStance,restrictedReviewTargets:m.restrictedReviewTargets,
+    restrictedReviewSummaries:m.restrictedReviewSummaries,
     author: m.createdBy.username,
     authorId: m.createdBy.id,
     createdAt: m.createdAt,
@@ -462,7 +470,8 @@ export function convertMessagesToDemoModel(
         executedStance: rel.executedStance,
         state: rel.state,
         spending: rel.spending,
-        moderation:rel.moderation,restricted:rel.restricted,
+        moderation:rel.moderation,restricted:rel.restricted,restrictedStance:rel.restrictedStance,restrictedReviewTargets:rel.restrictedReviewTargets,
+        restrictedReviewSummaries:rel.restrictedReviewSummaries,
         author: rel.createdBy.username,
         authorId: rel.createdBy.id,
         createdAt: rel.createdAt,
@@ -593,6 +602,12 @@ export function convertMessagesToDemoModel(
   demoMessages.sort(byCreation);
 
   return { messages: demoMessages, edges: demoEdges };
+}
+
+/** A vote reports its judgment. Authored explanations belong to the separate reason message. */
+export function reviewDecisionCard(message:DemoMessage):DemoMessage{
+  const facts=reviewDecisionFacts(message);
+  return facts?{...message,...facts}:message;
 }
 
 /** Resolve effective edits on the original, using personal choices before public counts. */

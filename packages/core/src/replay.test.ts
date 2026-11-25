@@ -11,6 +11,18 @@ it('removes obsolete records from current views while retaining auditable versio
   expect(result.accounts.get('user')?.available).toBe(100);
   expect(()=>replayArchive(archive([first,removal,{...first,sequence:3,previousSequence:2,ledger:[]}]))).toThrow('已删除的消息不能恢复');
 });
+it('accepts a deletion with a purged history only for absent IDs declared in that removal',()=>{
+  const removal:Change={...first,sequence:2,previousSequence:1,messages:[],ledger:[],
+    removedMessageIds:['old-task'],prunedMessageIds:['old-task']};
+  const replay=replayArchive(archive([first,removal]));
+  expect(replay.revisions.has('old-task')).toBe(false);
+  expect(replay.messages).toEqual([source]);
+  expect(()=>replayArchive(archive([first,{...removal,prunedMessageIds:[]}]))).toThrow('删除记录缺少对应消息');
+  expect(()=>replayArchive(archive([first,{...removal,removedMessageIds:[]}]))).toThrow('历史清理记录');
+  expect(()=>replayArchive(archive([first,{...removal,removedMessageIds:[source.id],prunedMessageIds:[source.id]}]))).toThrow('历史清理记录');
+  const restored={...removal,sequence:3,previousSequence:2,prunedMessageIds:[],removedMessageIds:[],messages:[{...source,id:'old-task'}]};
+  expect(()=>replayArchive(archive([first,removal,restored]))).toThrow('已删除的消息不能恢复');
+});
 it('replays actual historical amounts and checks each committed transaction', () => {
   const next: Change = { ...first, sequence: 2, previousSequence:1, messages: [], treasury: { operating: 1, issued: 100 }, ledger: [{ ...first.ledger[0], id: 'fee', amount: -11, lockedDelta: 10, reason: '协议与押注' }] };
   const result = replayArchive(archive([first, next]));

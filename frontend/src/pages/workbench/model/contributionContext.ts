@@ -3,12 +3,12 @@ import type {DemoMessage,RelationType,UnitSelection} from '../../../utils/modelB
 import {getClassifyTargetRefs,organizationTargetRef,promoteCompleteContainerSelections,resolveEffectiveTargetUnits} from '../actions/targetResolution';
 import type {ContainerEffect} from './containerEffect';
 import {authorizationJoinCount} from './authorizationContributions';
-import {contributionTypeForTarget} from './contributions';
+import {contributionTypeAtReference} from './contributions';
 import {unitSelectionToReference} from '../../../utils/modelBridge';
 
 /** Match the target normalization and active-placement checks used by the send actions. */
 export function contributionContext(input:{relationType:string|null;draftUnits:UnitSelection[];targetUnits:UnitSelection[];sourceUnits:UnitSelection[];
-  relations:Relation[];containerEffect:ContainerEffect;joinOnlyAction:boolean}){
+  relations:Relation[];containerEffect:ContainerEffect;joinOnlyAction:boolean;voteModels?:ReadonlyMap<string,DemoMessage>}){
   const {relationType,relations,containerEffect,joinOnlyAction}=input,msgMap:Map<string,DemoMessage>=containerEffect.msgMap;
   const targets=resolveEffectiveTargetUnits({msgMap,promoteCompleteContainerSelections:units=>promoteCompleteContainerSelections({relations,containerEffect},units)},input.draftUnits,input.targetUnits,relationType);
   const parentByMessageId=new Map<string,string>();
@@ -18,7 +18,7 @@ export function contributionContext(input:{relationType:string|null;draftUnits:U
     ?getClassifyTargetRefs({msgMap,organizationTargetRef:unit=>organizationTargetRef({msgMap},unit),relationTypeByRelMsgId:new Map(relations.map(relation=>[relation.id,relation.relationType.toLowerCase() as RelationType]))},targets)
     :targets.map(unit=>organizationTargetRef({msgMap},unit));
   return {draftUnits:input.draftUnits.length?targets:[],targetUnits:input.draftUnits.length?[]:targets,parentByMessageId,
-    relationContributionTypes:['agree','disagree'].includes(relationType??'')?targets.map(target=>contributionTypeForTarget(relationType!,msgMap.get(target.messageId),unitSelectionToReference(target,msgMap),(id,revision)=>{const message=msgMap.get(id);return message?.parts&&(!revision||message.revision===revision)?message as unknown as import('@gonglun/core').Message:undefined;})):undefined,
+    relationContributionTypes:['agree','disagree'].includes(relationType??'')?targets.map(target=>contributionTypeAtReference(relationType!,unitSelectionToReference(target,msgMap),msgMap,input.voteModels)):undefined,
     additionalJoinCount:relationType==='authorize'?authorizationJoinCount(targets.map(target=>target.messageId),msgMap,parentByMessageId):0,
     organizationMemberIds:memberRefs.map(ref=>ref.kind==='relation'?ref.relationId:ref.messageId),
     existingJoinMemberIds:joinOnlyAction?new Set(relations.filter(relation=>relation.relationType.toUpperCase()==='JOIN'&&containerEffect.effectiveJoinIds.has(relation.id)&&relation.sourceMessageId===input.sourceUnits[0]?.messageId)

@@ -46,8 +46,8 @@ function isSnapshot(value: unknown, parent: string): value is WorkbenchSnapshot 
 
 /** Persist only loaded pages, their continuation cursors, and the confirmed sync cursor. */
 export function createWorkbenchCache(userId: string, parent: string, apiUrl = import.meta.env.VITE_API_BASE_URL || '/api'): WorkbenchCache {
-  // Fetch fresh snapshots after fixing redacted reference identities.
-  const key = JSON.stringify([8, new URL(apiUrl.replace(/\/$/, ''), location.href).href, userId, parent]);
+  // Refresh existing covers whose cached projections predate source review statistics.
+  const key = JSON.stringify([12, new URL(apiUrl.replace(/\/$/, ''), location.href).href, userId, parent]);
   return {
     async load() {
       try {

@@ -1,4 +1,5 @@
 import { relations, replaceReference, targetInvestmentDimension, type Change, type Membership, type Message, type Part, type RelationPart, type SendResult, type User } from '@gonglun/core';
+import { isDeepStrictEqual } from 'node:util';
 import { DomainError, Mutation, now, Store } from './db.js';
 import { applyOrganization, reconcileOrganizationEffects, reconcileOrganizationRevision } from './organizations.js';
 import { dataOf, distributeOperations, hasEffect, lockDelegation, markEffect, oneTarget, openSettlement, placeMessageValueWager, placeValueWager, placeWager, relationTarget, settleDue, terminate } from './economy.js';
@@ -49,12 +50,18 @@ async function authorize(tx: Mutation, message: Message, user: User) {
     }
     if(parts.some(p=>p.type==='relation'&&(REVIEW_RELATIONS.has(p.relation)||['review-record','review-enrollment'].includes(p.relation))))
         throw new DomainError('审核记录只能通过审核操作新增，不能由修改消息生成',409);
+    const reasonMarkers=(items:Part[])=>items.filter(p=>p.type==='relation'&&p.relation.toLowerCase()==='review-reason');
+    if(!isDeepStrictEqual(reasonMarkers(parts),reasonMarkers(current.parts)))
+        throw new DomainError('审核理由与决定的关联不能更改',409);
+    if (hasReviewContext(current) && !sameReviewContext(reviewContextOf(current), reviewContextOf({parts})))
+        throw new DomainError('审核讨论不能改为其他审核范围或移出审核临时分类',409);
+    if(hasReviewContext({parts}))
+        parts=(await normalizeReviewDiscussion(tx.store,{requestId:message.id,parts})).parts;
     for(const part of parts){
+        if(part.type==='relation'&&['review-context','review-reason'].includes(part.relation))continue;
         const refs=part.type==='relation'?Object.values(part.roles).flatMap(bindings=>bindings.map(b=>b.reference)):part.type==='display'&&part.target?[part.target]:[];
         for(const ref of refs)await assertReferenceAllowed(tx.store,ref,user.id);
     }
-    if (hasReviewContext(current) && !sameReviewContext(reviewContextOf(current), reviewContextOf({parts})))
-        throw new DomainError('审核讨论不能改为其他审核范围或移出审核临时分类',409);
     await validateReferences(tx.store, parts);
     // Placement execution history is immutable even when the message is edited.
     const reserved = new Set(['membership-history', 'organization-memberships']);
@@ -117,7 +124,8 @@ export async function send(store: Store, user: User, raw: unknown, options: {
                 throw new DomainError('相同请求编号不能用于不同内容', 409);
             return JSON.parse(previous.result) as SendResult;
         }
-        const input=await normalizeReviewDiscussion(store,await normalizeReviewStance(store,supplied),user.id);
+        const stanceInput=await normalizeReviewStance(store,supplied);
+        const input=await normalizeReviewDiscussion(store,stanceInput);
         for(const part of input.parts){
             // Review operations address identity and status, never permit reusing the body.
             const refs=part.type==='relation'?Object.entries(part.roles).filter(([role])=>role!=='target'||!REVIEW_RELATIONS.has(part.relation)&&part.relation!=='review-context').flatMap(([,bindings])=>bindings.map(b=>b.reference)):part.type==='display'&&part.target?[part.target]:[];
@@ -131,7 +139,7 @@ export async function send(store: Store, user: User, raw: unknown, options: {
             throw new DomainError('一条消息只能执行一个资金或授权操作');
         const wager = input.wager ?? 0, recommendation = input.recommendation ?? 0;
         const reviewAction=actionParts.some(p=>p.type==='relation'&&REVIEW_RELATIONS.has(p.relation));
-        if(reviewAction&&input.parts.some(p=>p.type==='relation'&&!REVIEW_RELATIONS.has(p.relation)&&p.relation!=='member-of'))
+        if(reviewAction&&input.parts.some(p=>p.type==='relation'&&!REVIEW_RELATIONS.has(p.relation)&&(p.relation!=='member-of'||p.roles.member?.length)))
             throw new DomainError('审核记录不能同时执行其他关系操作');
         if(reviewAction&&(wager||recommendation||input.selfStance))throw new DomainError('审核押注与真假、价值投入须分开记账');
         if (wager === 0 && recommendation === 0 && !reviewAction)
@@ -176,7 +184,7 @@ export async function send(store: Store, user: User, raw: unknown, options: {
         const reviewAdministration=reviewAction&&actionParts.some(p=>p.type==='relation'&&['review-settle','review-finalize'].includes(p.relation));
         await chargeMessage(store,message,true,reviewAdministration);
         await enrollModeration(tx,message);
-        await processModerationAction(tx,message,input.reviewWager??0);
+        await processModerationAction(tx,message,input.reviewWager??0,stanceInput!==supplied);
         if (!valueVote) await placeMessageValueWager(tx, message);
         await applyOrganization(tx, message);
         if (valueVote) await placeValueWager(tx, message, valueVote, recommendation);

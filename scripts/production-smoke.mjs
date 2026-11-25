@@ -207,7 +207,7 @@ try {
     assert.deepEqual(review,{status:'pending',fee:'6',deposit:'10'});
     const reserved=Number((await reviewCheck.query('SELECT COALESCE(SUM(fee+deposit),0) AS amount FROM migrated_fixture.moderation_cases')).rows[0].amount);
     assert.equal(oldLogin.body.account.available,297-reserved);
-    assert.equal((await reviewCheck.query('SELECT COUNT(*) AS n FROM migrated_fixture.moderation_assignments')).rows[0].n,'0');
+    assert.equal((await reviewCheck.query("SELECT to_regclass('migrated_fixture.moderation_assignments') AS assignments")).rows[0].assignments,null);
   }finally{await reviewCheck.end();}
   const legacyView=await request('/api/ui/snapshot?parent=legacy-topic');
   assert.equal(legacyView.status,200);

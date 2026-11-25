@@ -8,15 +8,18 @@ import {DEFAULT_TRACE_DEPTHS,traceDepths as legacyTraceDepths,type TraceDirectio
 import { useWorkbenchComposer } from './workbench/useWorkbenchComposer';
 import { useSendPreview } from './workbench/useSendPreview';
 import { CardWidthContext } from '../components/graph/CardWidthContext';
-import {ModerationContext} from '../components/ModerationContext';
-import {projectReviewDiscussionEdges,reviewRecordTarget,reviewTargetMessage} from '../utils/reviewRecords';
+import {CoveredBodyContext,LocalReviewRecordsContext,MessageViewerContext,ModerationContext} from '../components/ModerationContext';
+import {projectReviewDiscussionEdges,reviewRecordTarget,reviewTargetMessage,reviewVoteWindow} from '../utils/reviewRecords';
+import type {ReviewVoteGroup} from '../utils/reviewRecords';
+import {useReviewVoteDecorations} from '../hooks/useReviewVoteDecorations';
+import {ReviewVoteDialog} from '../components/ReviewVoteDecoration';
 import {ReviewDetailContext,useReviewDetail} from '../hooks/useReviewDetail';
-import {isRelationView,isReviewProcessRecord,reviewContextOf,sameReviewContext,selectReviewDiscussion} from '@gonglun/core';
-import {convertMessagesToDemoModel,isReviewDiscussion} from '../utils/modelBridge';
+import {isRelationView,isReviewProcessRecord,reviewContextOf,reviewDecisionFacts,sameReviewContext,selectReviewDiscussion} from '@gonglun/core';
+import {convertMessagesToDemoModel,isReviewBallot,isReviewDiscussion} from '../utils/modelBridge';
 import { ReadingTextLinksContext } from '../components/ReadingTextLinksContext';
 import { createZhihuReadingLinks } from '../utils/zhihuReadingLinks';
 import { effectiveCardWidths } from '../utils/cardWidth';
-import {contributionFor,contributionTypeForTarget,primaryContributionType,type ContributionDraft} from './workbench/model/contributions';
+import {contributionFor,contributionTypeAtReference,primaryContributionType,type ContributionDraft} from './workbench/model/contributions';
 import {targetInvestmentDimension} from '@gonglun/core';
 import {contributionContext} from './workbench/model/contributionContext';
 import { annotationStanceError } from '@gonglun/core';
@@ -185,6 +188,14 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     recommendationAmount, setRecommendationAmount, subTypeCustomBufferRef, savedTextOnTypeSwitchRef,
     lastTagSecondaryRef, lastDelegationSecondaryRef,
   } = composer;
+  const activeTextIdRef = useRef(activeTextSelectId);
+  activeTextIdRef.current = activeTextSelectId;
+  const exitCoveredTextSelection = useCallback((messageId: string) => {
+    if (activeTextIdRef.current === messageId) {
+      setActiveTextSelectId(null);
+      clearBrowserSelection();
+    }
+  }, [setActiveTextSelectId]);
   const reportDrawingFailure = useWorkbenchDrawingFailure();
   useWorkbenchDrawingCommit();
   const beginPositioning = useWorkbenchDrawingTask('positioning', true);
@@ -233,9 +244,10 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     [recordCategory?.label,recordCategory?.targetId,recordCategory?.revision,review.detail?.summary.revision]);
   const compositionReviewContext=currentRecordCategory?.label==='审核'&&currentRecordCategory.targetId===activeReviewContext?.messageId?activeReviewContext:undefined;
   const reviewRecordsModel=useMemo(()=>convertMessagesToDemoModel(review.records,review.records.filter(isRelationView)),[review.records]);
-  const messages=useMemo(()=>review.records.length?[...new Map([...loadedMessages,...reviewRecordsModel.messages].map(message=>[message.id,message])).values()]:loadedMessages,[loadedMessages,reviewRecordsModel]);
-  const relations=useMemo(()=>review.records.length?[...new Map([...loadedRelations,...review.records.filter(isRelationView)].map(relation=>[relation.id,relation])).values()]:loadedRelations,[loadedRelations,review.records]);
-  const edges=useMemo(()=>review.records.length?[...new Map([...loadedEdges,...reviewRecordsModel.edges].map(edge=>[edge.id,edge])).values()]:loadedEdges,[loadedEdges,reviewRecordsModel]);
+  const reviewRecordIds=useMemo(()=>new Set(review.records.map(record=>record.id)),[review.records]);
+  const messages=useMemo(()=>reviewRecordIds.size?[...loadedMessages.filter(message=>!reviewRecordIds.has(message.id)),...reviewRecordsModel.messages]:loadedMessages,[loadedMessages,reviewRecordIds,reviewRecordsModel]);
+  const relations=useMemo(()=>reviewRecordIds.size?[...loadedRelations.filter(relation=>!reviewRecordIds.has(relation.id)),...review.records.filter(isRelationView)]:loadedRelations,[loadedRelations,reviewRecordIds,review.records]);
+  const edges=useMemo(()=>reviewRecordIds.size?[...loadedEdges.filter(edge=>!reviewRecordIds.has(edge.relationMessageId)),...reviewRecordsModel.edges]:loadedEdges,[loadedEdges,reviewRecordIds,reviewRecordsModel]);
   const nativeZhihuData = isNativeZhihuView(loadedExport) ? loadedExport : null;
   const localMessageData = isViewerRoute && loadedExport && !nativeZhihuData && !isZhihuViewingData(loadedExport) ? loadedExport : null;
   const zhihuData = useMemo(() => nativeZhihuData ? nativeZhihuEditingView(isNativeZhihuView(viewingExport) ? viewingExport : nativeZhihuData)
@@ -684,14 +696,28 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       value?: Json; correctionKind?: 'TEXT' | 'MEANING';
     };
   } | null>(null);
+  const localReviewRecords=useMemo(()=>{
+    if(!isPreloaded||nativeZhihuData||zhihuData)return [];
+    // An archive may have paged these records out of the current canvas.
+    const rows: {id:string;parts?:import('@gonglun/core').Part[]}[] = loadedExport?.messages??messages;
+    return rows.filter((row):row is Required<typeof row>=>Array.isArray(row.parts));
+  },[isPreloaded,loadedExport,messages,nativeZhihuData,zhihuData]);
+  const localReviewContexts=useMemo(()=>{
+    const addresses=new Set<string>();
+    for(const record of localReviewRecords){
+      const address=reviewContextOf(record);
+      if(address&&!isReviewProcessRecord(record))addresses.add(JSON.stringify([address.messageId,address.revision]));
+    }
+    return addresses;
+  },[localReviewRecords]);
   const reviewedMessage=useMemo(()=>{
     if(recordCategory?.label!=='审核')return;
     if(review.target)return reviewTargetMessage({...review.target,moderation:review.detail?.summary??review.target.moderation});
     if(review.detail||review.error)return;
     const current=messages.find(message=>message.id===recordCategory.targetId);
     if(current&&(!recordCategory.revision||current.revision===recordCategory.revision)
-      &&(current.restricted||!current.moderation||['pending','approved'].includes(current.moderation.status)))return current;
-  },[review.target,review.detail,review.error,messages,recordCategory?.label,recordCategory?.targetId,recordCategory?.revision]);
+      &&(isPreloaded||current.restricted||!current.moderation||['pending','approved'].includes(current.moderation.status)))return current;
+  },[review.target,review.detail,review.error,messages,isPreloaded,recordCategory?.label,recordCategory?.targetId,recordCategory?.revision]);
   useEffect(()=>{
     if(!review.detail||sendPreviewPages)return;
     const ids=review.records.map(record=>record.id);
@@ -701,16 +727,38 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const recordCategoryMessageIds=useMemo(()=>{
     if(!recordCategory)return;
     if(recordCategory.label!=='审核')return new Set(recordCategory.recordIds);
-    if(review.lostReadAccess||review.target?.restricted)return new Set([recordCategory.targetId]);
-    const current=activeReviewContext&&review.detail&&!review.lostReadAccess&&!review.target?.restricted
-      ?selectReviewDiscussion(messages.filter((message):message is DemoMessage&{parts:import('@gonglun/core').Part[]}=>!!message.parts),activeReviewContext,review.detail.summary.caseId).map(message=>message.id):[];
+    // Each returned record already has the current viewer's visibility. A cached
+    // excerpt from a previous, readable target must never refill this category.
+    if(review.target)return new Set([recordCategory.targetId,...review.records.map(record=>record.id)]);
+    if(!isPreloaded&&!review.detail)return new Set([recordCategory.targetId]);
+    const records=isPreloaded?localReviewRecords:messages.filter((message):message is DemoMessage&{parts:import('@gonglun/core').Part[]}=>!!message.parts);
+    const current=activeReviewContext
+      ?selectReviewDiscussion(records,activeReviewContext,review.detail?.summary.caseId??reviewedMessage?.moderation?.caseId).map(record=>record.id):[];
     const hidden=new Set(messages.filter(isReviewProcessRecord).map(message=>message.id));
     return new Set([recordCategory.targetId,...recordCategory.recordIds,...current].filter(id=>!hidden.has(id)));
-  },[recordCategory,activeReviewContext,review.detail?.summary.caseId,review.lostReadAccess,review.target?.restricted,messages]);
+  },[recordCategory,activeReviewContext,review.detail,review.target,review.records,isPreloaded,messages,localReviewRecords,reviewedMessage?.moderation?.caseId]);
+  const decorationScope=useMemo(()=>recordCategory?.label==='审核'&&recordCategoryMessageIds
+    ?{targetId:recordCategory.targetId,revision:activeReviewContext?.revision,recordIds:recordCategoryMessageIds}:undefined,
+    [recordCategory?.label,recordCategory?.targetId,activeReviewContext?.revision,recordCategoryMessageIds]);
+  const {voteIds:decorationVoteIds,voteWindows,voteModels,...reviewDecorations}=useReviewVoteDecorations(messages,decorationScope,!isPreloaded,user?.id,liveSequence);
+  const recordCategoryCardIds=useMemo(()=>viewMode==='graph'&&decorationScope?
+    new Set([...decorationScope.recordIds].filter(id=>!decorationVoteIds.has(id))):recordCategoryMessageIds,
+    [viewMode,decorationScope,decorationVoteIds,recordCategoryMessageIds]);
+  const [openVoteGroup,setOpenVoteGroup]=useState<Pick<ReviewVoteGroup,'targetId'|'verdict'>>();
+  function openReviewVoteGroup(group:ReviewVoteGroup){
+    reviewDecorations.onExpandDecorations(group.targetId);
+    setOpenVoteGroup({targetId:group.targetId,verdict:group.verdict});
+  }
+  const activeVoteGroup=openVoteGroup&&reviewDecorations.reviewVoteGroups.get(openVoteGroup.targetId)?.find(group=>group.verdict===openVoteGroup.verdict);
   const visibleCorrectionVersions=useMemo(()=>{
     if(recordCategory?.label!=='审核')return correctionVersions;
-    const versions=new Map(correctionVersions);versions.delete(recordCategory.targetId);return versions;
-  },[correctionVersions,recordCategory?.label,recordCategory?.targetId]);
+    const versions=new Map(correctionVersions);versions.delete(recordCategory.targetId);
+    for(const record of review.records){
+      const history=versions.get(record.id);
+      if(record.restricted||isReviewRecord(record)||history?.versions.some(version=>!reviewRecordIds.has(version.correctionId)))versions.delete(record.id);
+    }
+    return versions;
+  },[correctionVersions,recordCategory?.label,recordCategory?.targetId,review.records,reviewRecordIds]);
   const correctionCompareTimerRef=useRef<ReturnType<typeof setTimeout>|null>(null);
   useEffect(()=>()=>{if(correctionCompareTimerRef.current)clearTimeout(correctionCompareTimerRef.current);},[]);
   const [mergeInfoPopup, setMergeInfoPopup] = useState<{
@@ -874,6 +922,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
 
   const [settlementOpenMsgId, setSettlementOpenMsgId] = useState<string | null>(null);
   const [settlementOpenType, setSettlementOpenType] = useState<'TRUTH' | 'VALUE' | 'REVIEW' | null>(null);
+  const [settlementReviewTarget,setSettlementReviewTarget]=useState<import('@gonglun/core').ReviewContext>();
   const [comparisonMode, setComparisonMode] = useState(false);
   const [comparisonReviewed, setComparisonReviewed] = useState(false);
 
@@ -894,14 +943,16 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const [comparisonReviewBaseEdges, setComparisonReviewBaseEdges] = useState<DemoEdge[] | null>(null);
 
   // Helper: open settlement with explicit type (defaults to TRUTH for old code paths)
-  const openSettlement = useCallback((msgId: string, type: 'TRUTH' | 'VALUE' | 'REVIEW' = 'TRUTH') => {
+  const openSettlement = useCallback((msgId: string, type: 'TRUTH' | 'VALUE' | 'REVIEW' = 'TRUTH',reviewTarget?:import('@gonglun/core').ReviewContext) => {
     if (comparisonReviewed) return;
     setSettlementOpenMsgId(msgId);
     setSettlementOpenType(type);
+    setSettlementReviewTarget(type==='REVIEW'?reviewTarget:undefined);
   }, [comparisonReviewed]);
   const closeSettlement = useCallback(() => {
     setSettlementOpenMsgId(null);
     setSettlementOpenType(null);
+    setSettlementReviewTarget(undefined);
   }, []);
   // Phase 6: auto-scroll settlement panel into view
   useEffect(() => {
@@ -1151,8 +1202,8 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const joinOnlyAction = appendContainerType !== null;
   const reclassificationJoinCount = useMemo(() => deriveReclassificationJoinCount({ relationType, draftUnits, targetUnits, relations, rejectedJoinRelationIds }), [relationType, draftUnits, targetUnits, relations, rejectedJoinRelationIds]);
 
-  const costContext=useMemo(()=>contributionContext({relationType,draftUnits,targetUnits,sourceUnits,relations,containerEffect,joinOnlyAction}),
-    [relationType,draftUnits,targetUnits,sourceUnits,relations,containerEffect,joinOnlyAction]);
+  const costContext=useMemo(()=>contributionContext({relationType,draftUnits,targetUnits,sourceUnits,relations,containerEffect,joinOnlyAction,voteModels}),
+    [relationType,draftUnits,targetUnits,sourceUnits,relations,containerEffect,joinOnlyAction,voteModels]);
   const { effectiveMinStake, totalConsumption: onlineConsumption, stakeFeeAmountRef,setProtocolFee,setReviewPolicy,reviewMinimum } = useStakeCalculation({
     relationType, secondaryRelationType, subType, ...costContext, sourceUnits, newMessageContent: joinOnlyAction ? '' : newMessageContent,
     stakeAmount, relStakeAmount, recommendationAmount, relationStakeMap, subTypeStakeMap,
@@ -1251,6 +1302,12 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     }
     return map;
   }, [messages, relations]);
+  const reviewStatistics=useMemo(()=>{
+    const summaries=new Map<string,import('@gonglun/core').ModerationSummary>();
+    for(const message of msgMap.values())if(message.moderation)summaries.set(message.id,message.moderation);
+    if(reviewedMessage?.moderation)summaries.set(reviewedMessage.id,reviewedMessage.moderation);
+    return {summaries,sourcesFor:(id:string)=>(reviewedMessage?.id===id?reviewedMessage:msgMap.get(id))?.restrictedReviewSummaries};
+  },[msgMap,reviewedMessage]);
   const sendWarning = useMemo((): string | null => {
     if (relationType?.toUpperCase() !== 'DISAGREE') return null;
     const allTargetIds = [...targetUnits, ...draftUnits].filter(u => !u.reference?.partId && !u.reference?.memberId && !u.reference?.path?.length && !u.reference?.range
@@ -1262,7 +1319,9 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       : '反对组织将按当前规则恢复成员消息的显示；组织消息及关联记录仍可查看和投票。';
     return null;
   }, [relationType, targetUnits, draftUnits, msgMap]);
-  const appendCreatedRelation = useCallback((backendRel: Relation) => {
+  const appendCreatedRelation = useCallback((incoming: Relation) => {
+    const facts=reviewDecisionFacts(incoming);
+    const backendRel:Relation=facts?{...incoming,...facts}:incoming;
     const upsert = <T extends {id:string}>(items:T[], item:T) => items.some(value=>value.id===item.id)
       ? items.map(value=>value.id===item.id?item:value) : [...items,item];
     relationsRef.current=upsert(relationsRef.current,backendRel);
@@ -1333,7 +1392,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
         ? { messageId: ref.kind === 'relation' ? ref.relationId : ref.messageId }
         : unitSelectionToReference(targetRefToUnit(ref), currentMessages),
     }).map(ref=>({...ref,reference:bindViewedReference(ref.reference!,type,currentMessages.get(ref.reference!.messageId),viewedCorrectionsRef.current.get(ref.reference!.messageId)?.current)}));
-    const effectiveType=targetRefs.length===1?contributionTypeForTarget(type,currentMessages.get(targetRefs[0]!.reference!.messageId),targetRefs[0]!.reference!,(id,revision)=>{const message=currentMessages.get(id);return message?.parts&&(!revision||message.revision===revision)?message as unknown as import('@gonglun/core').Message:undefined;}):type.toUpperCase();
+    const effectiveType=targetRefs.length===1?contributionTypeAtReference(type,targetRefs[0]!.reference!,currentMessages,voteModels):type.toUpperCase();
     if(['READ','UNREAD'].includes(effectiveType))throw new Error('已阅是个人查看状态，请在消息提示中标记已阅');
     const investment=contributionRef.current(effectiveType);
     const explicit=!sendInFlightRef.current?{[effectiveType]:{truth:data.wager??data.stakeAmount??investment.truth,value:data.recommendation??investment.value}}:undefined;
@@ -1371,7 +1430,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       }
       throw e;
     }
-  }, [logout, navigate, isViewerRoute, preloadedData,activeReviewContext,compositionParentId,localMessageData,viewerUser?.username]);
+  }, [logout, navigate, isViewerRoute, preloadedData,activeReviewContext,compositionParentId,localMessageData,viewerUser?.username,voteModels]);
 
   // Vote results include truth stances and value annotations.
   useEffect(() => {
@@ -1906,7 +1965,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       rejectedContainerIds: containerPreview?.rejectedContainerIds ?? rejectedContainerIds,
       rejectedRelationIds: containerPreview?.suppressed ?? suppressedRelIds, hiddenMessageIds: hideMessageIds,
       catalogMessages: containerPreview?.allMessages ?? containerEffect.messages, catalogEdges: containerPreview?.edges ?? edges,
-      standaloneMessageIds: recordCategoryMessageIds ?? correctionTemporaryViewIds ?? standaloneMessageIds,
+      standaloneMessageIds: recordCategoryCardIds ?? correctionTemporaryViewIds ?? standaloneMessageIds,
       showJoinRecords: joinFilterTargetId !== null || recordCategory !== null,
       scopeId: currentClassifyRelMsgId,
     });
@@ -2184,7 +2243,15 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   }
 
   function handleMessageDoubleClick(e: React.MouseEvent, messageId: string): void | Promise<void> {
-    if(isRejectedRelation(msgMap.get(messageId),containerPreview?.suppressed??suppressedRelIds)&&relationType!=='correct'){
+    const message = msgMap.get(messageId);
+    if (message?.restricted) {
+      e.preventDefault();
+      e.stopPropagation();
+      undoRecentClickActionsForMessage(messageId);
+      exitCoveredTextSelection(messageId);
+      return;
+    }
+    if(isRejectedRelation(message,containerPreview?.suppressed??suppressedRelIds)&&relationType!=='correct'){
       e.stopPropagation();undoRecentClickActionsForMessage(messageId);viewMessageEffect(messageId);return;
     }
     const open = () => runHandleMessageDoubleClick({ undoRecentClickActionsForMessage, msgMap, setLastClickedMessageId, activeTextSelectId, viewMode, setComparisonPopup, edges, enterTemporaryCategory, setJoinFilterTargetId, setCorrectionFilterTargetId, setViewMode, traceFrameIds, setTraceExpandedFrameIds, setTraceKey, relationType, setActiveTextSelectId, enterClassification, rejectedContainerIds:containerPreview?.rejectedContainerIds??rejectedContainerIds, setPreviewClassifyId, setStanceHighlight, stanceHighlightTimerRef, relations, settlementOpenMsgId, closeSettlement, openSettlement, lastAddedFragmentRef, setDraftUnits }, e, messageId);
@@ -2913,21 +2980,26 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     recordBrowsingNavigation();enterTemporaryCategory(true,targetId);
     setJoinFilterTargetId(null);setCorrectionFilterTargetId(null);setContainerPreviewId(null);
     setComparisonMode(false);setComparisonReviewed(false);setComparisonPopup(null);setTagPopup(null);setDecorationPopup(null);
-    closeSettlement();setRecordCategory({targetId,label,recordIds:[...new Set(recordIds)],revision});setViewMode(label==='审核'?'graph':'list');
+    closeSettlement();setRecordCategory({targetId,label,recordIds:[...new Set(recordIds)],revision});
+    if(label!=='审核')setViewMode('list');
     setLastClickedMessageId(recordIds[0]??targetId);
   }
 
   const reviewNavigator=useRef<(id:string,revision?:number)=>void>(()=>{});
   function openReviewSummary(id:string,revision?:number):void{
-    const currentRevision=recordCategory?.revision??messagesRef.current.find(message=>message.id===id)?.moderation?.revision;
+    const currentRevision=recordCategory?.revision??review.detail?.summary.revision??messagesRef.current.find(message=>message.id===id)?.moderation?.revision;
     if(recordCategory?.label==='审核'&&recordCategory.targetId===id&&(!revision||currentRevision===revision)){
-      closeSettlement();return;
+      closeSettlement();
+      const firstRecord=review.records[0]?.id??[...recordCategoryMessageIds??[]].find(recordId=>recordId!==id);
+      if(firstRecord)scrollMsgToCenter(firstRecord);
+      return;
     }
     openRecordCategory(id,'审核',[],revision);
   }
   reviewNavigator.current=openReviewSummary;
   function handleReviewSettled(summary:import('@gonglun/core').ModerationSummary):void{
-    if(settlementOpenType!=='REVIEW'||settlementOpenMsgId!==summary.messageId)return;
+    if(settlementOpenType!=='REVIEW'||(settlementReviewTarget?.messageId??settlementOpenMsgId)!==summary.messageId
+      ||settlementReviewTarget&&settlementReviewTarget.revision!==summary.revision)return;
     closeSettlement();
     const rejected=summary.status==='rejected';
     const returnToParent=rejected&&currentRecordCategory?.label==='审核'&&currentRecordCategory.targetId===summary.messageId
@@ -3303,12 +3375,16 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   const reviewFolderIds=useMemo(()=>{
     if(!activeReviewContext||!currentClassifyRelMsgId||!sameReviewContext(activeReviewContext,reviewContextOf(msgMap.get(currentClassifyRelMsgId))))return;
     const owned=containerEffect.ownership.owned(currentClassifyRelMsgId);
-    return new Set([activeReviewContext.messageId,...owned.textIds,...owned.relationIds]);
-  },[activeReviewContext,currentClassifyRelMsgId,msgMap,containerEffect]);
+    return new Set([activeReviewContext.messageId,...owned.textIds,...owned.relationIds].filter(id=>recordCategoryCardIds?.has(id)));
+  },[activeReviewContext,currentClassifyRelMsgId,msgMap,containerEffect,recordCategoryCardIds]);
   const { messagesToRenderFiltered, comparisonViewIds, correctionTemporaryViewIds,
     rawEdgesToRender, effectiveSuppressedRelIds,
     temporaryEdgesToRender, suppressedRelIds, previewMessages, edgesToRender, graphMessagesFinal } = useMemo(() => {
   const messagesToRender = viewMode === "list" ? listMessagesToRender : graphMessagesToRender;
+  const showReviewRecord = (id: string, record: Parameters<typeof isReviewDiscussion>[0]) => {
+    if (viewMode === 'list' && isReviewBallot(record)) return true;
+    return !decorationVoteIds.has(id) && (recordCategory?.label === '审核' || !isReviewDiscussion(record));
+  };
   const correctedMessages = messagesToRender.map(message => {
     const correction = correctionVersions.get(message.id)?.current;
     return correction ? withCorrectionContent(message, correction.content, correction.changes, correction.snapshot) : message;
@@ -3348,8 +3424,8 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
       .map(id => msgMap.get(id))
       .filter((message): message is DemoMessage => Boolean(message))
     : recordCategory
-      ? [...reviewFolderIds??recordCategoryMessageIds!].flatMap(id=>{
-        const message=recordCategory.label==='审核'&&id===recordCategory.targetId&&!isPreloaded?reviewedMessage:msgMap.get(id);
+      ? [...reviewFolderIds??recordCategoryCardIds!].flatMap(id=>{
+        const message=recordCategory.label==='审核'&&id===recordCategory.targetId?reviewedMessage:msgMap.get(id);
         return message?[message]:[];
       })
     : correctionTemporaryViewIds
@@ -3361,13 +3437,13 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
           .map(id => msgMap.get(id))
           .filter((message): message is DemoMessage => Boolean(message))
           .filter(message => !msgFilter.hideJoin || message.kind !== 'join')
-        : typeFilteredMessages).filter(message=>recordCategory?.label==='审核'&&message.id===recordCategory.targetId||!localInactiveRelationIds.has(message.id)&&!isSettlementRecord(message)&&(!isReviewDiscussion(message)||recordCategory?.label==='审核')&&(message.kind!=='join'||comparisonMode||joinFilterTargetId!==null||recordCategory!==null)).map(message=>{
+        : typeFilteredMessages).filter(message=>recordCategory?.label==='审核'&&message.id===recordCategory.targetId||!localInactiveRelationIds.has(message.id)&&!isSettlementRecord(message)&&showReviewRecord(message.id,message)&&(message.kind!=='join'||comparisonMode||joinFilterTargetId!==null||recordCategory!==null)).map(message=>{
           if(message===reviewedMessage)return message;
           const state=containerEffect.msgMap.get(message.id)?.state;
           return state&&state!==message.state?{...message,state}:message;
         });
 
-  const recordCategoryIds = reviewFolderIds??recordCategoryMessageIds;
+  const recordCategoryIds = reviewFolderIds??recordCategoryCardIds;
   const graphMessageIdsForProjection = new Set(graphMessagesToRender.map(message=>message.id));
   const projectionEdgesToRender = recordCategoryIds?edges.filter(edge=>recordCategoryIds.has(edge.relationMessageId)):[
     ...(viewMode === "list" ? listEdgesToRender : graphEdgesToRender),
@@ -3428,9 +3504,9 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
   // The linear list keeps the annotation and its DISAGREE relation so the
   // user's stance can be shown on the source message. The non-linear graph
   // uses the suppressed relation set as a visual projection only.
-  const previewMessages=containerPreview?applyMessageFilter(containerPreview.messages,msgFilter).filter(message=>!localInactiveRelationIds.has(message.id)&&(recordCategory?.label==='审核'||!isReviewDiscussion(message))):null;
+  const previewMessages=containerPreview?applyMessageFilter(containerPreview.messages,msgFilter).filter(message=>!localInactiveRelationIds.has(message.id)&&showReviewRecord(message.id,message)):null;
   const edgesToRender = (containerPreview?.edges??(viewMode === "list" ? temporaryEdgesToRender : filteredEdgesToRender))
-    .filter(edge=>!localInactiveRelationIds.has(edge.relationMessageId)&&!localInactiveRelationIds.has(edge.from.messageId)&&!localInactiveRelationIds.has(edge.to.messageId)&&(recordCategory?.label==='审核'||!isReviewRecord(edge)&&!isReviewDiscussion(msgMap.get(edge.relationMessageId))));
+    .filter(edge=>showReviewRecord(edge.relationMessageId,msgMap.get(edge.relationMessageId)??edge)&&!localInactiveRelationIds.has(edge.relationMessageId)&&!localInactiveRelationIds.has(edge.from.messageId)&&!localInactiveRelationIds.has(edge.to.messageId));
   const suppressedRelIds = comparisonSuppressedRelIds;
   const graphMessagesFinal = (previewMessages ?? messagesToRenderFiltered).map(message => {
     const correction = visibleCorrectionVersions.get(message.id)?.current;
@@ -3444,9 +3520,9 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     joinRelationsByTarget, comparisonMode, comparisonTargets, correctionFilterTargetId, edges, msgMap,
     listEdgesToRender, graphEdgesToRender, traceEntries.length, traceRelationMsgIds, relations,
     effectiveJoinRelationIds, messages, displayUser?.username, comparisonReviewed, comparisonTargetId,
-    comparisonSide, comparisonAgreeSuppressedRelIds, comparisonDisagreeSuppressedRelIds, containerPreview, containerEffect, temporaryReadingIds, recordCategory, recordCategoryMessageIds, reviewFolderIds,reviewedMessage, isPreloaded, localInactiveRelationIds]);
+    comparisonSide, comparisonAgreeSuppressedRelIds, comparisonDisagreeSuppressedRelIds, containerPreview, containerEffect, temporaryReadingIds, recordCategory, recordCategoryCardIds, reviewFolderIds,reviewedMessage, isPreloaded, localInactiveRelationIds,decorationVoteIds]);
   const canvasHideMessageIds=useMemo(()=>recordCategory?.label==='审核'?new Set([...(hideMessageIds??[])].filter(id=>!recordCategoryMessageIds?.has(id))):hideMessageIds,[recordCategory?.label,recordCategoryMessageIds,hideMessageIds]);
-  const reviewDiscussionEdges=useMemo(()=>recordCategory?.label==='审核'?projectReviewDiscussionEdges(edgesToRender,relations):edgesToRender,[recordCategory?.label,edgesToRender,relations]);
+  const reviewDiscussionEdges=useMemo(()=>recordCategory?.label==='审核'?projectReviewDiscussionEdges(edgesToRender,relations,graphMessagesFinal):edgesToRender,[recordCategory?.label,edgesToRender,relations,graphMessagesFinal]);
   const reviewedCardIds=useMemo(()=>recordCategory?.label==='审核'?new Set([recordCategory.targetId]):undefined,[recordCategory?.label,recordCategory?.targetId]);
   const reviewStandaloneIds=useMemo(()=>reviewedCardIds?new Set([...reviewedCardIds,...graphMessagesFinal.filter(message=>!isReviewRecord(message)&&isCardMessage(message)).map(message=>message.id)]):undefined,[reviewedCardIds,graphMessagesFinal]);
   const messageWindow = useMessageWindow(
@@ -3666,7 +3742,17 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                 classifyTargetCount={isRouteScope ? messages.filter(message => message.kind !== 'relation').length : classifyTargetCount} classifyExitLabel={classifyExitLabel} onExitTemporary={comparisonMode?exitComparison:exitTemporaryCategory} onExitClassify={isRouteScope ? () => navigate('/messages') : handleExitClassification} /></DeferredWorkbench>:null;
 
   return (
-    <ReviewDetailContext.Provider value={review}><ModerationContext.Provider value={isPreloaded?null:{summaries:new Map([...messages,...reviewedMessage?[reviewedMessage]:[]].flatMap(m=>m.moderation?[[m.id,m.moderation] as const]:[])),open:id=>openReviewSummary(id,reviewedMessage?.id===id?reviewedMessage.revision:undefined),arbitrate:id=>settlementOpenMsgId===id&&settlementOpenType==='REVIEW'?closeSettlement():openSettlement(id,'REVIEW'),onSettled:handleReviewSettled,activeId:settlementOpenType==='REVIEW'?settlementOpenMsgId??undefined:undefined}}>
+    <CoveredBodyContext.Provider value={exitCoveredTextSelection}><MessageViewerContext.Provider value={displayUser}>
+    <LocalReviewRecordsContext.Provider value={isPreloaded?{...reviewStatistics,available:localReviewContexts,open:openReviewSummary}:null}>
+    <ReviewDetailContext.Provider value={review}><ModerationContext.Provider value={isPreloaded?null:{...reviewStatistics,subjectLabel:id=>{
+      const message=reviewedMessage?.id===id?reviewedMessage:msgMap.get(id);
+      if(message?.parts?.some(part=>part.type==='relation'&&part.relation==='review-reason'))return '这条理由';
+    },
+    open:(id,revision)=>openReviewSummary(id,revision??(reviewedMessage?.id===id?reviewedMessage.revision:undefined)),
+    arbitrate:(cardId,target)=>settlementOpenMsgId===cardId&&settlementOpenType==='REVIEW'
+      &&settlementReviewTarget?.messageId===target?.messageId&&settlementReviewTarget?.revision===target?.revision
+      ?closeSettlement():openSettlement(cardId,'REVIEW',target),
+    onSettled:handleReviewSettled,activeId:settlementOpenType==='REVIEW'?settlementOpenMsgId??undefined:undefined,activeTarget:settlementReviewTarget}}>
     <DeferredWorkbench label="显示提示" blocksDrawing>
     <CardWidthContext.Provider value={cardWidthContext}>
     <ReadingTextLinksContext.Provider value={readingTextLinks}>
@@ -3749,6 +3835,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                 <ReadingCanvasPresentation viewport={leftPanelRef} active={readingPresentationActive} />
                 {messagePulse && <MessageJumpOverlay messageId={messagePulse.messageId} targetElement={messagePulse.element} targetRect={messagePulse.rect} />}
                 {!isPreloaded&&recordCategory?.label==='审核'&&(review.error||!review.detail)&&<p role={review.error?'alert':'status'} style={{padding:8}}>{review.error||'正在加载审核记录…'}</p>}
+                {!isPreloaded&&recordCategory?.label==='审核'&&review.detail&&!review.error&&!review.records.length&&<p role="status" style={{padding:8}}>暂无审核消息</p>}
                 <RecentWorkbenchViews key={recentViewOwner} ownerKey={recentViewOwner} viewKey={recentViewKey}
                   pending={!!viewerStructure && appliedScopeKey !== requestedViewerScopeKey}>
                 {globalFilterPending ? (
@@ -3774,7 +3861,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                   <WorkbenchMessageList
                     highlightedMessageIds={viewTargetMessageIds}
                     relatedEdges={containerPreview?.context.relatedEdges??relatedEdges} onRelatedRelationView={viewRelatedRelation}
-                    onRelatedNavigate={viewRelatedContainer} standaloneMessageIds={recordCategoryMessageIds??comparisonViewIds??correctionTemporaryViewIds??standaloneMessageIds}
+                    onRelatedNavigate={viewRelatedContainer} standaloneMessageIds={recordCategoryCardIds??comparisonViewIds??correctionTemporaryViewIds??standaloneMessageIds}
                     showJoinRecords={comparisonMode||joinFilterTargetId!==null||recordCategory!==null}
                     visibleMessages={messageWindow.messages}
                     joinRecordContext={joinFilterTargetId&&joinFilterDirection==='outgoing'?{containerId:joinFilterTargetId,effect:containerPreview?.effect??containerEffect}:undefined}
@@ -3794,6 +3881,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                 ) : (
                   <DeferredWorkbench label="消息画布" blocksDrawing>
                   <GraphView
+                    {...reviewDecorations} onOpenReviewVotes={openReviewVoteGroup}
                     getMemberCounts={(containerPreview?.effect.ownership??containerEffect.ownership).memberCounts}
                     discussionView={recordCategory?.label==='审核'?{...discussion.value,mode:'discussion'}:discussion.value} onDiscussionViewChange={discussion.onChange}
                     onDiscussionBranchCollapse={scrollMsgToCenter}
@@ -3807,7 +3895,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                     rejectedContainerIds={containerPreview?.rejectedContainerIds??rejectedContainerIds}
                     rejectedRelationIds={containerPreview?.suppressed??suppressedRelIds}
                     onRelatedMessageNavigate={viewRelatedContainer}
-                    standaloneMessageIds={reviewStandaloneIds??recordCategoryMessageIds??standaloneMessageIds}
+                    standaloneMessageIds={reviewStandaloneIds??recordCategoryCardIds??standaloneMessageIds}
                     forceCardMessageIds={reviewedCardIds}
                     showJoinRecords={joinFilterTargetId!==null||recordCategory!==null}
                     messages={!containerPreview&&comparisonReviewed ? comparisonGraphMessages : graphMessagesFinal} edges={!containerPreview&&comparisonReviewed ? (comparisonAgreeGraph?.edges ?? temporaryEdgesToRender) : reviewDiscussionEdges} invalidCorrectionIds={containerPreview?.suppressed??invalidCorrectionIds} correctionVersions={containerPreview?.corrections??visibleCorrectionVersions} cardWidths={containerPreview?.widths} draftUnits={draftUnits}
@@ -3940,7 +4028,7 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
                 const normalized = username.trim();
                 if (normalized) {
                   localStorage.setItem(VIEWER_USERNAME_KEY, normalized);
-                  setViewerUser({ id: `viewer:${normalized}`, username: normalized, createdAt: '' });
+                  setViewerUser(registeredUsers.find(account => account.username === normalized) ?? { id: `viewer:${normalized}`, username: normalized, createdAt: '' });
                 } else {
                   localStorage.removeItem(VIEWER_USERNAME_KEY);
                   setViewerUser(null);
@@ -4067,6 +4155,16 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
           </div>
         </div>
       </ErrorBoundary>
+      <ReviewVoteDialog group={activeVoteGroup} onClose={()=>setOpenVoteGroup(undefined)}
+        voteWindow={!isPreloaded&&user&&!comparisonReviewed&&!sendPreview.active&&!isPreviewMode&&activeVoteGroup
+          ?(review.detail?.summary.messageId===activeVoteGroup.targetId&&activeVoteGroup.votes.every(vote=>vote.targetRevision===review.detail?.summary.revision)
+            ?reviewVoteWindow(review.detail):voteWindows.get(activeVoteGroup.targetId)):undefined}
+        onStance={(vote,kind)=>{
+          setRelationType(kind);setSecondaryRelationType('none');setSourceUnits([]);setTargetUnits([]);
+          setActiveTextSelectId(null);setRecommendationAmount(0);setRelStakeAmount(amount=>Math.max(Number(amount),reviewMinimum));
+          setDraftUnits([{messageId:vote.id,reference:{messageId:vote.id,revision:vote.revision},selection:{kind:'whole'}}]);
+          setLastClickedMessageId(vote.id);setOpenVoteGroup(undefined);
+        }}/>
       <PromptModal
         open={showUnauthenticatedNotice}
         title="当前未登录"
@@ -4137,7 +4235,8 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     </ReadingTextLinksContext.Provider>
     </CardWidthContext.Provider>
     </DeferredWorkbench>
-    </ModerationContext.Provider></ReviewDetailContext.Provider>
+    </ModerationContext.Provider></ReviewDetailContext.Provider></LocalReviewRecordsContext.Provider>
+    </MessageViewerContext.Provider></CoveredBodyContext.Provider>
   );
 }
 

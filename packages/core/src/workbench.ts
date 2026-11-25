@@ -20,6 +20,12 @@ export interface ScopeView {
 export interface MessageView {
   moderation?: import('./moderation.js').ModerationSummary;
   restricted?: boolean;
+  /** Cases that restrict this viewer's access, pinned to the reviewed revisions. */
+  restrictedReviewTargets?: import('./review-context.js').ReviewContext[];
+  /** Public totals for blocking cases other than the card's own reviewed version. */
+  restrictedReviewSummaries?: import('./moderation.js').ModerationSummary[];
+  /** The viewer's own vote when its target is hidden. Its quoted content stays redacted. */
+  restrictedStance?: 'agree' | 'disagree';
   id: string;
   sequence?: number;
   revision?: number;
@@ -138,6 +144,9 @@ export interface RelationPayload {
 export interface RelationView {
   moderation?: import('./moderation.js').ModerationSummary;
   restricted?: boolean;
+  restrictedReviewTargets?: MessageView['restrictedReviewTargets'];
+  restrictedReviewSummaries?: MessageView['restrictedReviewSummaries'];
+  restrictedStance?: MessageView['restrictedStance'];
   id: string;
   sequence?: number;
   revision?: number;
@@ -238,6 +247,7 @@ export interface WorkbenchSnapshot {
 }
 export interface DiscussionQuery {
   focusId: string;
+  includeReviewVotes?: boolean;
   /** "root" explicitly selects root messages; null/omitted selects the focus discussion. */
   classificationId?: string | null;
   cursor?: string;

@@ -52,12 +52,12 @@ export function useGraphOverlays(input: Omit<GraphOverlayInput, 'labelBboxes'> &
     const task = startOverlays();
     task.run(() => {
       const startedAt = performance.now();
-      const measured = measureGraphOverlays({ canvasRef, normalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals, headerRefs, contentRefs, edges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, labelBboxes, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, anchorCache: anchorCache.current, skipRouting: input.pendingMeasurements, excludedStanceEdges:input.excludedStanceEdges, visibleDecorationIds:input.visibleDecorationIds, visibleAnnotationIds:input.visibleAnnotationIds,hiddenMessageIds:input.hiddenMessageIds,semanticEdges:input.semanticEdges,frameDecorationAnchors:input.frameDecorationAnchors,labelObstacles:input.labelObstacles });
+      const measured = measureGraphOverlays({ ...input, labelBboxes, anchorCache: anchorCache.current, skipRouting: input.pendingMeasurements });
       reportWorkbenchDrawingDuration(performance.now() - startedAt);
       if (measured) setOverlays(measured);
       task.complete();
     });
-  }, [canvasRef, normalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals, headerRefs, contentRefs, edges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, labelBboxes, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, input.pendingMeasurements,input.excludedStanceEdges,input.visibleDecorationIds,input.visibleAnnotationIds,input.hiddenMessageIds,input.semanticEdges,input.frameDecorationAnchors,input.labelObstacles]);
+  }, [canvasRef, normalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals, headerRefs, contentRefs, edges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, labelBboxes, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, input.pendingMeasurements,input.excludedStanceEdges,input.visibleDecorationIds,input.hiddenMessageIds,input.semanticEdges,input.frameDecorationAnchors,input.labelObstacles,input.reviewVoteGroups,input.reviewVoteHints]);
   useLayoutEffect(() => {
     const canvasEl=canvasRef.current; if (!canvasEl) return;
     const task = startOverlays();

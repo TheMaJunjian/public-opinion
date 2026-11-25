@@ -118,6 +118,8 @@ export interface Change {
   removedMemberships: string[];
   /** One-time migrations may remove obsolete records while retaining their financial history. */
   removedMessageIds?: string[];
+  /** Subset of this change's deletions whose historical bodies were also purged. */
+  prunedMessageIds?: string[];
   states: MessageState[];
   ledger: LedgerEntry[];
   /** Archived economic epoch ends here; subsequent points start from zero. */
@@ -146,5 +148,5 @@ export const RELATION_LABELS: Record<string, string> = {
   read: '已读', unread: '未读', archive: '冷藏', notify: '通知',
   distribute: '分配运营收入', credit: '发放贡献点', recharge: '充值申请', release: '版本发布',
   review: '审核', 'review-appeal': '复核申请', 'review-settle': '审核结算', 'review-finalize': '审核资金划转',
-  'review-record': '审核记录', 'review-enrollment': '纳入审核', 'reviewer-authorize': '审核资格授权',
+  'review-record': '审核记录', 'review-enrollment': '纳入审核',
 };

@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { structureSnapshot, type WorkbenchSnapshot } from '@gonglun/core';
 import { hydrateOnlineStructure, onlineStructuralSource } from '../utils/onlineStructuralSource';
+import {archiveToWorkbenchSnapshot,projectWorkbenchSnapshot} from '../utils/workbenchProjection';
 import type { SnapshotQuery } from '../data/workbench';
 
 const user = { id: 'u', username: '甲', createdAt: '' };
@@ -85,6 +86,40 @@ it('detects changed visibility and user details independently of the change-ID l
   const latest = onlineStructuralSource(structureSnapshot(data.full), data.load, undefined,
     { identity: 'u', previous: source, update: { previousSequence: 11, changedIds: [] } });
   expect((await hydrateOnlineStructure(latest, latest)).messages.every(row => row.author === '新名字')).toBe(true);
+});
+
+it('reloads a restricted body when the cached copy omits the viewer’s stance', async () => {
+  const data = setup();
+  const old = { ...data.full, messages: [{ ...text('stance',''), restricted:true }], relations:[] };
+  data.full = { ...old, messages:[{ ...old.messages[0], restrictedStance:'disagree' }] };
+  const source = onlineStructuralSource(structureSnapshot(data.full), data.load, old);
+  const result = await hydrateOnlineStructure(source, source);
+  expect(data.load.mock.calls.flatMap(([query]) => query.ids)).toEqual(['stance']);
+  expect(result.messages[0]).toMatchObject({ restricted:true, restrictedStance:'disagree', content:'' });
+});
+
+it('refreshes a cached cover when its blocking review changes without a body revision', async () => {
+  const data=setup(),cover={...text('reply',''),restricted:true};
+  const previous={...data.full,messages:[{...cover,restrictedReviewTargets:[{messageId:'source',revision:1}]}],relations:[]};
+  const targets=[{messageId:'source',revision:2},{messageId:'another',revision:5}];
+  data.full={...previous,messages:[{...cover,restrictedReviewTargets:targets}]};
+  const source=onlineStructuralSource(structureSnapshot(data.full),data.load,previous);
+  const refreshed=await hydrateOnlineStructure(source,source);
+  expect(data.load.mock.calls.flatMap(([query])=>query.ids)).toEqual([cover.id]);
+  const model=projectWorkbenchSnapshot(archiveToWorkbenchSnapshot(refreshed));
+  expect(model.messages[0]).toMatchObject({id:cover.id,restricted:true,content:'',restrictedReviewTargets:targets});
+});
+
+it('refreshes the public review totals on a covered card when another vote changes the same case',async()=>{
+  const data=setup(),target={messageId:'source',revision:1};
+  const review={...target,caseId:'case',status:'rejected' as const,fee:1,deposit:10,pass:10,reject:20,reviewerCount:1,releaseAt:null,finalized:true};
+  const cover={...text('reply',''),restricted:true,restrictedReviewTargets:[target],restrictedReviewSummaries:[review]};
+  const previous={...data.full,messages:[cover],relations:[]};
+  data.full={...previous,messages:[{...cover,restrictedReviewSummaries:[{...review,reject:23}]}]};
+  const source=onlineStructuralSource(structureSnapshot(data.full),data.load,previous);
+  const refreshed=await hydrateOnlineStructure(source,source);
+  const model=projectWorkbenchSnapshot(archiveToWorkbenchSnapshot(refreshed));
+  expect(model.messages[0].restrictedReviewSummaries?.[0]).toMatchObject({...target,pass:10,reject:23});
 });
 
 it('reuses the fixed system author and partial user views when catalog user details are unchanged', async () => {

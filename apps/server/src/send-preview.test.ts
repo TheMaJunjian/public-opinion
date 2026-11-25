@@ -79,14 +79,47 @@ describe('unified send rehearsal',()=>{
     const preview=await post('/commands/preview',{batch:input});expect(preview.status,preview.text).toBe(200);
     const projected=preview.body.snapshots[0].messages.find((message:{id:string})=>message.id===target.id);
     expect(projected.moderation).toMatchObject({pass:verdict==='pass'?12:10,reject:verdict==='reject'?2:0,reviewerCount:1});
+    const reasons=preview.body.snapshots[0].messages.filter((message:{parts?:Array<{relation?:string}>})=>message.parts?.some(part=>part.relation==='review-reason'));
+    expect(reasons).toHaveLength(verdict==='pass'?1:0);
+    if(reasons.length)expect(reasons[0]).toMatchObject({content:'可以核实的审核理由',spending:{protocol:1,recommendation:1,wager:0,reviewFee:6,reviewDeposit:10},moderation:{status:'pending'}});
     expect((await agent.get(`/api/moderation/messages/${target.id}`)).body.summary).toEqual(before.summary);
     expect(await app.store.account(session.user.id)).toEqual(balance);expect(await app.store.latestSequence()).toBe(sequence);
     expect(await app.store.db.prepare('SELECT id FROM messages WHERE id=$1').get(input.commands[0]!.id)).toBeUndefined();
     const actual=await post('/commands',input);expect(actual.status,actual.text).toBe(201);
     expectSamePresentation(preview.body.snapshots[0],actual.body.snapshots[0]);
+    expect(balance.available-(await app.store.account(session.user.id)).available).toBe(verdict==='pass'?21:3);
     const detail=(await agent.get(`/api/moderation/messages/${target.id}`)).body;
     expect(detail.summary).toMatchObject(projected.moderation);
-    expect(detail.records.find((record:{id:string})=>record.id===input.commands[0]!.id).payload.verdict).toBe(verdict);
+    const decision=detail.records.find((record:{id:string})=>record.id===input.commands[0]!.id);
+    expect(decision.payload.verdict).toBe(verdict);
+    expect(JSON.stringify(decision)).not.toContain('可以核实的审核理由');
+    if(reasons.length)expect(detail.records.find((record:{id:string})=>record.id===reasons[0].id)).toMatchObject({content:'可以核实的审核理由',kind:'TEXT'});
+  });
+
+  it('previews and commits the ordinary citation cost separately from both the review and its authored reason',async()=>{
+    const {app,agent,session,post,create}=await setup();
+    const target=await create('/messages',{content:'审核目标'});
+    const source=await create('/messages',{content:'真实来源摘录'});
+    const input={requestId:randomUUID(),commands:[{id:randomUUID(),method:'POST',path:'/relations',body:{
+      relationType:'REVIEW',targetRefs:[{kind:'message',messageId:target.id}],
+      sourceRefs:[{messageId:source.id,revision:1,partId:'body',range:{start:0,end:4}}],
+      payload:{verdict:'reject',content:'我单独写的理由'},reviewWager:2,wager:0,recommendation:0,
+    }}]};
+    const before=await app.store.account(session.user.id);
+    const preview=await post('/commands/preview',{batch:input});expect(preview.status,preview.text).toBe(200);
+    const records=preview.body.snapshots[0].messages as Array<{id:string;content:string;parts:Array<{relation?:string}>;spending:object}>;
+    const reason=records.find(m=>m.content==='我单独写的理由')!;
+    const citation=records.find(m=>m.parts?.some(p=>p.relation==='review-context')&&m.parts.some(p=>p.relation==='reference'))!;
+    expect(reason.spending).toMatchObject({protocol:1,recommendation:1,reviewFee:6,reviewDeposit:10});
+    expect(citation.spending).toEqual({protocol:1,recommendation:1,wager:0});
+    expect(await app.store.account(session.user.id)).toEqual(before);
+    const actual=await post('/commands',input);expect(actual.status,actual.text).toBe(201);
+    expectSamePresentation(preview.body.snapshots[0],actual.body.snapshots[0]);
+    expect(before.available-(await app.store.account(session.user.id)).available).toBe(23);
+    const ids=(await agent.get(`/api/moderation/messages/${target.id}`)).body.records.map((m:{id:string})=>m.id);
+    expect(ids).toEqual(expect.arrayContaining([input.commands[0]!.id,reason.id,citation.id]));
+    const deps=await app.store.db.prepare('SELECT "sourceId" FROM moderation_dependencies WHERE "targetId"=$1 AND "sourceId"=ANY($2::text[])').all(source.id,[reason.id,citation.id,input.commands[0]!.id]);
+    expect(deps).toEqual([{sourceId:citation.id}]);
   });
 
   it.each([
@@ -164,16 +197,29 @@ describe('unified send rehearsal',()=>{
       });
       expect(review.status,review.text).toBe(201);reviewers.push({agent:reviewer,session:registration.body});
     }
-    const verify=async(actor:typeof reviewers[number],relationType:string,restricted=false)=>{
+    const verify=async(actor:typeof reviewers[number],relationType:string,visibility:'readable'|'redacted'|'denied'='readable')=>{
       const before=await app.store.latestSequence(),balance=await app.store.account(actor.session.user.id);
       const input={requestId:randomUUID(),commands:[{id:randomUUID(),method:'POST',path:'/relations',body:{
         relationType,targetRefs:[{kind:'message',messageId:target.id,reference:{messageId:target.id,revision:1}}],
         payload:relationType==='REVIEW-APPEAL'?{content:'请求复核'}:{},
       }}]};
       const post=(path:string,body:object)=>actor.agent.post(`/api/ui${path}`).set('x-csrf-token',actor.session.csrf).send(body);
-      const preview=await post('/commands/preview',{batch:input});expect(preview.status,preview.text).toBe(200);
+      const preview=await post('/commands/preview',{batch:input});
+      if(visibility==='denied'){
+        const actual=await post('/commands',input);
+        for(const response of [preview,actual]){
+          expect(response.status,response.text).toBe(403);
+          expect(response.body.code).toBe('CONTENT_RESTRICTED');
+          expect(response.text).not.toContain(secret);
+          expect(response.text).not.toContain('PREVIEW-REASON');
+        }
+        expect(await app.store.latestSequence()).toBe(before);
+        expect(await app.store.account(actor.session.user.id)).toEqual(balance);
+        return;
+      }
+      expect(preview.status,preview.text).toBe(200);
       expect(await app.store.latestSequence()).toBe(before);expect(await app.store.account(actor.session.user.id)).toEqual(balance);
-      if(restricted){
+      if(visibility==='redacted'){
         expect(preview.text).not.toContain(secret);expect(preview.text).not.toContain('PREVIEW-REASON');
         expect(preview.body.snapshots[0].messages.find((message:{id:string})=>message.id===target.id)).toMatchObject({restricted:true,moderation:{status:'rejected',finalized:true}});
       }
@@ -183,8 +229,9 @@ describe('unified send rehearsal',()=>{
     if(mode==='legacy finalization'){
       await app.store.db.prepare(`UPDATE moderation_cases SET status='rejected',"releaseAt"=$1,settlement=$2::jsonb WHERE "messageId"=$3`)
         .run('2099-01-01T00:00:00.000Z',JSON.stringify({verdict:'reject',payouts:[],fund:0,finalized:false,voteIds:[],messageId:target.id}),target.id);
-      await verify(reviewers[0]!,'REVIEW-FINALIZE',true);
-    }else await verify(reviewers[0]!,'REVIEW-SETTLE',true);
+      await verify(reviewers[0]!,'REVIEW-FINALIZE','denied');
+      await verify({agent,session},'REVIEW-FINALIZE');
+    }else await verify(reviewers[0]!,'REVIEW-SETTLE','redacted');
     await verify({agent,session},'REVIEW-APPEAL');
   });
 

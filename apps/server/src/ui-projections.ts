@@ -24,27 +24,32 @@ interface ViewContext {
     rounds: Map<string, RecordData>;
     recipients: Map<string, string[]>;
 }
-const cachedMessage = async (store: Store, id: string, revision?: number, context?: ViewContext): Promise<Message> => {
+export const referencedMessage = async (store: Store, id: string, revision?: number, context?: ViewContext): Promise<Message | undefined> => {
     const cached = context?.messages.get(`${id}:${revision ?? 'current'}`);
     if (cached) return cached;
     try { return await store.message(id, revision); }
     catch (error) {
-        if (revision !== undefined || !(error instanceof DomainError) || error.status !== 404) throw error;
+        if (!(error instanceof DomainError) || error.status !== 404) throw error;
+        if (revision !== undefined) return;
         const historical = await store.db.prepare('SELECT body FROM revisions WHERE "messageId"=$1 ORDER BY revision DESC LIMIT 1').get(id);
-        if (!historical) throw error;
-        return JSON.parse(String(historical.body)) as Message;
+        return historical ? JSON.parse(String(historical.body)) as Message : undefined;
     }
 };
 const cachedUser = async (store: Store, id: string, context?: ViewContext) => context?.users.get(id) ?? (await userView(store, id));
 export const primaryRelation = (message: Message) => relations(message).find(part =>
-    part.relation !== 'review-context' &&
+    part.relation !== 'review-context' && part.relation !== 'review-reason' &&
     !((part.id === 'self-stance' || part.id.startsWith('minimum-self-stance-'))
       && ['agree','disagree'].includes(part.relation) && part.roles.target?.length === 1 && part.roles.target[0]!.reference.messageId === message.id)
     && (part.relation !== 'member-of'||!!part.roles.member?.length));
 const relationViewTypes: Record<string, string> = { follow: 'ATTENTION', amend: 'CORRECT', 'rule-change': 'PROPOSAL', recharge: 'PROPOSAL', 'revenue-injection': 'PROPOSAL', delegate: 'DELEGATION', fulfill: 'DELEGATION', 'member-of': 'JOIN', 'low-quality': 'ARCHIVE', 'open-settlement': 'ROUND', settlement: 'ROUND', distribution: 'ROUND_RESULT', terminate: 'ROUND', release: 'CODE_CHANGE' };
 export function relationViewType(message: Message): string | null { const relation = primaryRelation(message); return String(dataOf(message).uiType ?? (relation ? (relationViewTypes[relation.relation] ?? relation.relation.toUpperCase()) : '')) || null; }
 export async function referenceView(store: Store, reference: Reference, context?: ViewContext): Promise<TargetRef & { reference: Reference }> {
-    const target = (await cachedMessage(store, reference.messageId, reference.revision, context)), relation = primaryRelation(target);
+    const target = await referencedMessage(store, reference.messageId, reference.revision, context);
+    if (!target) {
+        const address = {messageId:reference.messageId, revision:reference.revision};
+        return {kind:'message', messageId:address.messageId, reference:address};
+    }
+    const relation = primaryRelation(target);
     if (reference.range) {
         if (context?.structureOnly) return { kind: 'text-fragment', messageId: target.id, text: '', hash: `${target.id}:${target.revision}:${reference.partId}:${reference.range.start}:${reference.range.end}`, reference };
         const part = target.parts.find(p => p.id === reference.partId);
@@ -83,7 +88,9 @@ export async function parentOf(store: Store, messageId: string): Promise<string>
     const visited = new Set<string>();
     while (!visited.has(messageId)) {
         visited.add(messageId);
-        const dependency = messageDisplayDependency(await store.message(messageId));
+        const message = visited.size===1 ? await store.message(messageId) : await referencedMessage(store,messageId);
+        if (!message) return 'root';
+        const dependency = messageDisplayDependency(message);
         if (dependency !== null) {
             const host = dependency.find(ref => ref.messageId !== messageId)?.messageId;
             if (!host) return 'root';
@@ -127,11 +134,12 @@ export async function contentView(store: Store, message: Message, context?: View
     // Presence only; no quoted target text or allocation-user descriptions.
     if (context?.structureOnly) return target || relation?.relation === 'follow' || relation?.relation === 'block' || label.trim() ? 'x' : '';
     const targetMessage = target && (!context?.boundedIds || context.boundedIds.has(target.messageId))
-        ? (await cachedMessage(store, target.messageId, target.revision, context)) : undefined;
+        ? (await referencedMessage(store, target.messageId, target.revision, context)) : undefined;
     if (relation?.relation === 'follow' || relation?.relation === 'block') return `${relation.relation === 'follow' ? '关注' : '拉黑'}－${relation.reason === 'YES' ? '是' : '否'}${targetMessage ? `：「${textOf(targetMessage).slice(0,120)}」` : ''}`;
     return `${label}${targetMessage ? `：「${textOf(targetMessage).slice(0, 120) || relationViewType(targetMessage) || '消息'}」` : ''}`;
 }
 export async function messageView(store: Store, message: Message, parent?: string, state?: MessageState, context?: ViewContext): Promise<NativeMessageView> {
+    if(!context)message=(await rebindLegacyReviewFragments(store,[message]))[0]!;
     const relation = primaryRelation(message), data = dataOf(message), type = relationViewType(message) ?? (['ROUND','ROUND_RESULT'].includes(String(data.kind))?String(data.kind):null);
     const sources = relation?.roles.source ?? relation?.roles.reason ?? (relation?.relation==='member-of'?relation.roles.parent:undefined) ?? [];
     let references = (relation?.roles.target ?? relation?.roles.members ?? relation?.roles.member ?? []).map(b => b.reference);
@@ -164,7 +172,8 @@ export async function messageView(store: Store, message: Message, parent?: strin
             if (data.value !== undefined) payload.correctionValue = data.value;
         } else if (relation?.relation === 'amend' && typeof data.value === 'string' && !relation.roles.target?.[0]?.reference.partId) {
             const reference = relation.roles.target?.[0]?.reference;
-            if (reference) payload.correctionBeforeContent = context?.structureOnly ? '' : textOf(await cachedMessage(store, reference.messageId, reference.revision ?? (typeof data.expectedRevision === 'number' ? data.expectedRevision : undefined), context));
+            const original = reference && !context?.structureOnly && await referencedMessage(store, reference.messageId, reference.revision ?? (typeof data.expectedRevision === 'number' ? data.expectedRevision : undefined), context);
+            if (reference) payload.correctionBeforeContent = original ? textOf(original) : '';
             payload.correctionAfterContent = data.value; payload.correctionContent = data.value;
         }
     }
@@ -174,9 +183,9 @@ export async function messageView(store: Store, message: Message, parent?: strin
         payload.correctionContent = data.value;
         const reference = relation.roles.target?.[0]?.reference;
         if (reference?.partId) {
-            const target = await cachedMessage(store, reference.messageId, reference.revision ?? (typeof data.expectedRevision === 'number' ? data.expectedRevision : undefined), context);
-            const part = target.parts.find(part => part.id === reference.partId);
-            if (part && ['text', 'code', 'web'].includes(part.type) && !reference.memberId
+            const target = await referencedMessage(store, reference.messageId, reference.revision ?? (typeof data.expectedRevision === 'number' ? data.expectedRevision : undefined), context);
+            const part = target?.parts.find(part => part.id === reference.partId);
+            if (target && part && ['text', 'code', 'web'].includes(part.type) && !reference.memberId
                 && (!reference.path?.length || reference.path.length === 1 && ['text', 'source', 'excerpt'].includes(String(reference.path[0])))) {
                 // Preview the immutable proposal against its original revision.
                 // Invalid proposals remain readable and can still be rejected.
@@ -218,6 +227,7 @@ export async function messageView(store: Store, message: Message, parent?: strin
     return view;
 }
 export async function viewsFor(store: Store, messages: Message[], parent?: string, knownUsers?: UserView[], structureOnly = false, boundedIds?: ReadonlySet<string>) {
+    messages=await rebindLegacyReviewFragments(store,messages);
     // Only the structural snapshot path guarantees current rows. Other callers
     // can project historical moderation snapshots and still need current state.
     const ids = messages.map(m => m.id), states = new Map((await statesFor(store, ids, structureOnly ? messages : undefined)).map(s => [s.messageId, s])), context: ViewContext = { structureOnly, users: new Map((knownUsers ?? await usersFor(store, messages.map(message => message.authorId))).map(user => [user.id, user])), messages: new Map(), members: new Map(), rounds: new Map(), recipients: new Map() };
@@ -384,8 +394,8 @@ export async function roundView(store: Store, id: string, userId?: string): Prom
             personalSettlement = { principal: principal + protocolFee, stakePrincipal: principal, protocolFee, after, change: after - (previousAfter ?? 0), ...(previousAfter === undefined ? {} : { previousAfter }) };
         }
     }
-    const evaluated=await store.message(round.target.messageId,round.target.revision);
-    const subjectReference=relations(evaluated).find(part=>part.relation==='open-value-settlement')?.roles.target?.[0]?.reference??round.target;
+    const evaluated=await referencedMessage(store,round.target.messageId,round.target.revision);
+    const subjectReference=(evaluated && relations(evaluated).find(part=>part.relation==='open-value-settlement')?.roles.target?.[0]?.reference)??round.target;
     return { id, roundMessageId: id, messageId: round.subjectId ?? round.target.messageId, reference: round.target,subjectReference, createdByUserId: authorId, createdBy: (await userView(store, authorId)), status: round.status === 'settled' ? 'SETTLED' : round.status === 'waiting' ? 'VOTING' : 'OPEN', settlementType: round.settlementType ?? 'TRUTH', result: round.result === 'pro' ? 'TRUE' : round.result === 'con' ? 'FALSE' : round.result === 'tie' ? 'UNKNOWN' : null, previousRoundId: round.previousRoundId, openedAt: round.createdAt, closedAt: round.status === 'settled' ? round.endsAt : null, endsAt: round.endsAt, note: null, settlementPro: round.pro, settlementCon: round.con, totalProAtSettlement: round.pro, totalConAtSettlement: round.con, weights: { TRUE: sum('pro'), FALSE: sum('con'), UNKNOWN: 0 }, roundWeights: { TRUE: sum('pro', active), FALSE: sum('con', active), UNKNOWN: 0 }, totalWeight: sum('pro') + sum('con'), votes: (await Promise.all(active.map(async (b) => ({ id: b.messageId, vote: b.side === 'pro' ? 'TRUE' : 'FALSE', amount: b.amount, createdAt: b.createdAt, user: (await userView(store, String(b.userId))) })))), _count: { votes: active.length }, personalSettlement, distributionId: round.distributionId };
 }
 export function tagCounts(views: RecordData[]) { const counts: Record<string, Record<string, number>> = {}; for (const message of views) {
@@ -509,4 +519,5 @@ export async function snapshot(store: Store, parent: string, query: RecordData, 
     return { regionId, scope: (await scopeView(store, parent)), messages: views, relations: views.filter(isRelationView), users, stakes: (await stakesFor(store, ids, users, query.detail === 'structure')), tagCounts: (await tagCountsFor(store, ids)), attentionUsers: (await attentionUsers(store, ids)), personalStates: marks, sequence: (await store.latestSequence()), hasMore: false, nextCursor: rows.length > limit && last ? Buffer.from(JSON.stringify({ sequence: last.sequence, id: last.id })).toString('base64url') : null, removedMemberships: [...new Set(removedMemberships)], removedMessageIds: [...new Set(removedMessageIds)] };
 }
 import {readReference} from './validation.js';
+import { rebindLegacyReviewFragments } from './legacy-review-fragments.js';
 import {contextKey} from '@gonglun/core';

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { RELATION_LABELS, REVIEW_RELATIONS, reviewContextOf, type Message } from '@gonglun/core';
 import { integer, type Store } from './db.js';
 import { dataOf } from './economy.js';
-import { contentView, parentOf, primaryRelation } from './ui-projections.js';
+import { contentView, parentOf, primaryRelation, referencedMessage } from './ui-projections.js';
 import { valueSubjects } from './value-subjects.js';
 
 const pagination = z.object({
@@ -63,7 +63,9 @@ export async function pointTransactions(store: Store, userId: string, query: unk
     return { messageId: message.id, messageRevision: message.revision, messageType, summary, scopeMessageId: await parentOf(store, message.id), ...(roundId ? { roundId } : {}) };
   };
   const describeRelatedMessages = async (reference: TransactionRow['messages'][number]) => {
-    const source = await store.message(reference.messageId, reference.revision), relation = primaryRelation(source);
+    const source = await referencedMessage(store,reference.messageId,reference.revision);
+    if (!source) return [];
+    const relation = primaryRelation(source);
     let reviewTarget = reviewContextOf(source);
     if (!reviewTarget && relation && REVIEW_RELATIONS.has(relation.relation)) {
       // Native reviews of organizations can retain an unversioned target;
@@ -80,7 +82,8 @@ export async function pointTransactions(store: Store, userId: string, query: unk
     for (const target of subjects.values()) {
       if (seen.has(target.messageId)) continue;
       seen.add(target.messageId);
-      messages.push(await store.message(target.messageId, target.revision));
+      const related = await referencedMessage(store,target.messageId,target.revision);
+      if (related) messages.push(related);
     }
     return Promise.all(messages.map(describeMessage));
   };

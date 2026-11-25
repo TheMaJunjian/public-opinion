@@ -1,5 +1,6 @@
 import {getPresentationSpec} from '../../../types';
 import {annotationAtReference,oppositeAnnotation,resolveStance,targetInvestmentDimension,type Reference,type Message} from '@gonglun/core';
+import type { DemoMessage } from '../../../utils/modelBridge';
 
 export interface ContributionDraft { truth:number|''; value:number|'' }
 export type ContributionDrafts=Record<string,ContributionDraft>;
@@ -14,6 +15,21 @@ export function contributionTypeForTarget(type:string,message:Parameters<typeof 
   if(['AGREE','DISAGREE'].includes(type.toUpperCase())&&review&&!reference.range&&!reference.memberId&&!reference.path?.length&&(!reference.partId||reference.partId===review.id))return 'REVIEW';
   const action=annotationActionForTarget(type,message,reference,resolver);
   return action?(action.relation==='follow'?'ATTENTION':action.relation.toUpperCase()):type.toUpperCase();
+}
+/** A vote fetched by expanding decorations may only exist in that case's public records. */
+export function contributionTypeAtReference(type:string,reference:Reference,messages:ReadonlyMap<string,DemoMessage>,voteModels?:ReadonlyMap<string,DemoMessage>){
+  function lookup(id:string,revision?:number){
+    const current=messages.get(id);
+    const sameVersion=current&&(!revision||current.revision===revision)?current:undefined;
+    if(sameVersion?.restricted||sameVersion?.parts?.length)return sameVersion;
+    const vote=voteModels?.get(id);
+    if(vote&&revision&&vote.revision===revision)return vote;
+    return sameVersion??(current?.revision===undefined?current:undefined);
+  }
+  return contributionTypeForTarget(type,lookup(reference.messageId,reference.revision),reference,(id,revision)=>{
+    const record=lookup(id,revision);
+    if(record?.parts&&(!revision||record.revision===revision))return record as unknown as Message;
+  });
 }
 export function primaryContributionType(relationType:string|null,secondary?:string):string{
   if(!relationType)return 'TEXT';

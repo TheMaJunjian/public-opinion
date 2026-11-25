@@ -7,6 +7,7 @@ import JoinRecordBadges from '../../../components/JoinRecordBadges';
 import JoinEndpointType from '../../../components/JoinEndpointType';
 import {indexRelatedMessages} from '../../../utils/relatedMessages';
 import { useNavigate } from 'react-router-dom';
+import { reviewRecordTarget } from '../../../utils/reviewRecords';
 import MessageCard, { type MessageCardContext, type MessageCardProps } from '../../../components/MessageCard';
 import MessageSettlementActions from '../../../components/MessageSettlementActions';
 import {chronologicalOrder} from '../../../utils/discussionOrder';
@@ -18,7 +19,7 @@ import type { Relation } from '../../../types';
 import { getOrganizationTitle, hasMetadataOnlyContent } from '../../../utils/messageDisplay';
 import { isWholeMessageSelection } from '../../../utils/messageElementSelection';
 import { messageScopePath } from '../../../utils/messageRoutes';
-import { type CorrectionVersion, type DemoEdge, type DemoMessage, isCardMessage, isContentKind, type RelationType, type UnitSelection } from '../../../utils/modelBridge';
+import { type CorrectionVersion, type DemoEdge, type DemoMessage, isCardMessage, isContentKind, isReviewBallot, type RelationType, type UnitSelection } from '../../../utils/modelBridge';
 import { createContainerOwnership } from '../model/ownership';
 import { getJoinStatusPresentation, type JoinStatus } from '../model/membership';
 import type { JoinEffectSource } from '../model/joinDisplay';
@@ -138,7 +139,9 @@ export default function WorkbenchMessageList(props: Props) {
           const msg = rowMap.get(id)!;
           const isWholeSelected = draftUnits.some(u => isWholeMessageSelection(u, msg.id));
           const isActiveText = activeTextSelectId === msg.id;
-          const relType = msg.kind === "relation" ? msg.relationType??relationTypeByRelMsgId.get(msg.id) : null;
+          const ballot = isReviewBallot(msg);
+          const reviewedTarget = ballot && !msg.restricted ? reviewRecordTarget(msg) : undefined;
+          const relType = msg.kind === "relation" || ballot ? msg.relationType??relationTypeByRelMsgId.get(msg.id) : null;
           const isClassification = relType === "classify";
           const isSummary = relType === "summary";
           const isMerge = relType === "merge";
@@ -159,7 +162,7 @@ export default function WorkbenchMessageList(props: Props) {
           const joinPresentation = getJoinStatusPresentation(joinStatus, props.catalog.joinEffectSourcesByMessage?.get(msg.id));
           const joinEntry=joinEntries.get(msg.id);
           const ctx: MessageCardContext = {
-            isRelationRecord: msg.kind === 'join' || msg.kind === 'round' || msg.kind === 'round_result' || (msg.kind === 'relation' && (!isCardMessage(msg) || hasMetadataOnlyContent(msg))),
+            isRelationRecord: ballot || msg.kind === 'join' || msg.kind === 'round' || msg.kind === 'round_result' || (msg.kind === 'relation' && (!isCardMessage(msg) || hasMetadataOnlyContent(msg))),
             isWholeSelected, isActiveText, isOrganizationMessage,
             isClassification: isClassification,
             isSummary: isSummary,
@@ -251,6 +254,12 @@ export default function WorkbenchMessageList(props: Props) {
               onContentMouseUp={cardHandlers.onContentMouseUp}
               headerBetweenIdAuthor={
                 <>
+                  {ballot&&!msg.restricted&&<span>{msg.author}{msg.spending?.reviewWager!==undefined&&` · 押注 ${msg.spending.reviewWager} 点`}</span>}
+                  {reviewedTarget&&<button type="button" title={`跳转到目标消息 ${reviewedTarget.messageId}`}
+                    style={{fontSize:11,maxWidth:'100%',overflowWrap:'anywhere'}}
+                    onClick={event=>{event.stopPropagation();handleNavigateToMessage(reviewedTarget.messageId);}}>
+                    目标 {reviewedTarget.messageId}{reviewedTarget.revision&&` · 第 ${reviewedTarget.revision} 版`}
+                  </button>}
                   {activeStanceInfo && activeStanceInfo.targetRelId === comparisonTargetId && comparisonReviewed && (
                     <span style={{ color: recommendationMatchesUser ? 'var(--ink-86efac)' : 'var(--ink-fbbf24)', fontWeight: 600 }}>
                       当前统计结果：{comparisonRecommendedDisplay === 'disagree' ? '反对' : '赞同'} · {recommendationMatchesUser ? '与你相同' : '与你不同'}
@@ -305,12 +314,10 @@ export default function WorkbenchMessageList(props: Props) {
               headerLeading={correctionFilterTargetId!==null && msg.relationType==='correct'?<></>:undefined}
               onSettlementTargetClick={(e, id) => { e.stopPropagation(); handleNavigateToMessage(id); }}
               headerExtra={
-                <>
-                  <MessageSettlementActions messageId={msg.id} counts={sc} fontSize={11}
-                    openMessageId={settlementOpenMsgId} openType={settlementOpenType}
-                    onTruth={id => isTruthOpen ? closeSettlement() : openSettlement(id, 'TRUTH')}
-                    onValue={id => isValueOpen ? closeSettlement() : openSettlement(id, 'VALUE')} />
-                </>
+                <MessageSettlementActions messageId={msg.id} counts={sc} fontSize={11}
+                  openMessageId={settlementOpenMsgId} openType={settlementOpenType}
+                  onTruth={id => isTruthOpen ? closeSettlement() : openSettlement(id, 'TRUTH')}
+                  onValue={id => isValueOpen ? closeSettlement() : openSettlement(id, 'VALUE')} />
               }
               badges={
                 <>
@@ -432,7 +439,7 @@ export default function WorkbenchMessageList(props: Props) {
                   </div>
                 </div>
               ) : msg.kind === 'round' || msg.kind === 'round_result' ? renderSettlementContentWithTarget({ handleNavigateToMessage }, msg)
-                : msg.kind === 'relation' ? renderRelationContentWithTargets(msg)
+                : ballot ? null : msg.kind === 'relation' ? renderRelationContentWithTargets(msg)
                 : hasCustomContent ? renderMessageContentWithAnchorsForList(msg) : undefined}
             </MessageCard>
           );

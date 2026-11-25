@@ -10,7 +10,7 @@ it('reviews content-bearing messages and custom labels, without recursively revi
   expect(requiresModeration(message('correct','',{correctionKind:'TEXT',correctionContent:'更正'}))).toBe(true);
   expect(requiresModeration(message('correct','',{correctionKind:'WIDTH',correctionWidth:320}))).toBe(false);
   for(const relation of ['classify','summary','member-of','merge','arrange'])expect(requiresModeration(message(relation)),relation).toBe(false);
-  for(const relation of ['review','review-appeal','review-settle','review-finalize','reviewer-authorize'])expect(requiresModeration(message(relation,'审核理由')),relation).toBe(false);
+  for(const relation of ['review','review-appeal','review-settle','review-finalize'])expect(requiresModeration(message(relation,'审核理由')),relation).toBe(false);
   expect(requiresModeration({...message(undefined,'系统记录'),authorId:'system'})).toBe(false);
 });
 it('reviews rendered data bodies and does not trust a user-chosen self-stance part name',()=>{

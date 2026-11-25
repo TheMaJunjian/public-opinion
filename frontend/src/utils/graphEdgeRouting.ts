@@ -14,8 +14,8 @@ export interface GraphRoutingInput {
   /** View-only hiding; the full relationship catalog still supplies semantics. */
   hiddenMessageIds?: ReadonlySet<string>;
   visibleDecorationIds?: ReadonlySet<string>;
-  visibleAnnotationIds?: ReadonlySet<string>;
-  annotationToggleRects?: Record<string, Rect>;
+  decorationToggleRects?: Record<string, Rect>;
+  edgeReviewBadges?:ReadonlyMap<string,ReadonlyArray<{width:number}>>;
   getCachedFragment?: (messageId: string, key: string) => Rect | undefined;
   newTagDecorationsByMsg: Record<string, { label: string; relMsgIds: string[]; rect: Rect; relAgreeCount: number; relDisagreeCount: number; relAgreeMsgIds: string[]; relDisagreeMsgIds: string[]; }[]>;
   edgesByRelMsg: Map<string, DemoEdge[]>;
@@ -109,8 +109,8 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
       }
       if (relType === "tag") {
         const tagInfo = tagBadgeByRelMsgId.get(relId);
-        if(tagInfo&&input.visibleAnnotationIds&&!input.visibleAnnotationIds.has(tagInfo.mid)){
-          return input.annotationToggleRects?.[tagInfo.mid]??null;
+        if(tagInfo&&input.visibleDecorationIds&&!input.visibleDecorationIds.has(tagInfo.mid)){
+          return input.decorationToggleRects?.[tagInfo.mid]??null;
         }
         return tagInfo ? { x: tagInfo.rect.x, y: tagInfo.rect.y, width: tagInfo.rect.width, height: tagInfo.rect.height } : null;
       }
@@ -497,21 +497,25 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
       if(!decoratedLabels.has(relId)){
         decoratedLabels.add(relId);
         const hasHint=!normalSet.has(relId);
-        const owners=['annotation','reference','reply'].includes(edge.relationType)&&(voteBadgeCount(relId)>0||relationTags.has(relId))?[relId]:[];
-        rightWidth=hasHint?EDGE_LABEL_HINT_GAP+EDGE_HINT_W:0;
-        for(const owner of owners){
-          const expanded=!input.visibleDecorationIds||input.visibleDecorationIds.has(owner);
-          const count=voteBadgeCount(owner);
-          rightWidth+=(rightWidth>0?DEC_GAP:DEC_RIGHT_GAP)+getDecorationColumnWidth(expanded);
-          if(expanded)rightHeight=Math.max(rightHeight,count*DEC_H+Math.max(0,count-1)*DEC_GAP);
-        }
+        const reviews=input.edgeReviewBadges?.get(relId);
         const tags=relationTags.get(relId);
-        if(tags?.size&&(!input.visibleDecorationIds||input.visibleDecorationIds.has(relId))){
-          const widths=[...tags].map(([label,count])=>Math.max(TAG_MIN_W,(count>1?`${label}（${count}人）`:label).length*8+36));
-          rightWidth=Math.max(rightWidth,(hasHint?EDGE_LABEL_HINT_GAP+EDGE_HINT_W:0)+DEC_RIGHT_GAP+EDGE_HINT_W+DEC_GAP+Math.max(...widths));
-          const tagHeight=tags.size*TAG_H+(tags.size-1)*TAG_V_GAP;
-          rightHeight=voteBadgeCount(relId)>0||owners.length>1
-            ? rightHeight+2*(DEC_GAP+tagHeight) : Math.max(rightHeight,tagHeight);
+        const count=voteBadgeCount(relId);
+        const hasDecorations=!!reviews?.length||['annotation','reference','reply'].includes(edge.relationType)&&(count>0||!!tags?.size);
+        rightWidth=hasHint?EDGE_LABEL_HINT_GAP+EDGE_HINT_W:0;
+        if(hasDecorations){
+          const expanded=!input.visibleDecorationIds||input.visibleDecorationIds.has(relId);
+          rightWidth+=DEC_RIGHT_GAP+getDecorationColumnWidth(expanded&&count>0);
+          if(expanded)rightHeight=Math.max(rightHeight,count*DEC_H+Math.max(0,count-1)*DEC_GAP);
+          if(expanded&&reviews?.length){
+            rightWidth+=DEC_RIGHT_GAP+Math.max(...reviews.map(review=>review.width));
+            rightHeight=Math.max(rightHeight,2*(reviews.length*TAG_H+(reviews.length-1)*TAG_V_GAP));
+          }
+          if(expanded&&tags?.size){
+            const widths=[...tags].map(([label,n])=>Math.max(TAG_MIN_W,(n>1?`${label}（${n}人）`:label).length*8+36));
+            rightWidth+=DEC_RIGHT_GAP+Math.max(...widths);
+            const tagHeight=tags.size*TAG_H+(tags.size-1)*TAG_V_GAP;
+            rightHeight=Math.max(rightHeight,2*tagHeight);
+          }
         }
       }
       const measuredLabel=labelBboxes[pe.drawId];

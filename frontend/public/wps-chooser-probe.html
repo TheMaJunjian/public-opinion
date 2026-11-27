@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>WPS 连接检查</title>
+  <script type="module">
+    window.loadWpsSdk = async path => {
+      const url = new URL(path, location.href);
+      if (url.origin !== location.origin) throw new Error('WPS SDK 应由当前站点提供。');
+      return (await import(url.href)).default;
+    };
+  </script>
+</head>
+<body></body>
+</html>

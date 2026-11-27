@@ -121,7 +121,7 @@ it('associates the chosen folder and preserves the existing local edits before n
   }
   render(<MemoryRouter><Chooser /></MemoryRouter>);
   expect(screen.getByRole('button', { name: '关联知乎导出目录' }).closest('details')).not.toHaveAttribute('open');
-  fireEvent.click(screen.getByText('本地辅助'));
+  fireEvent.click(screen.getByText('知乎导入'));
   fireEvent.click(screen.getByRole('button', { name: '关联知乎导出目录' }));
   fireEvent.click(await screen.findByRole('button', { name: '关联并阅览' }));
   await waitFor(() => expect(rememberZhihuDirectory).toHaveBeenCalled());

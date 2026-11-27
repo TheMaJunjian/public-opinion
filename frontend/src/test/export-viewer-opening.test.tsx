@@ -1,4 +1,5 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useState } from 'react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -48,6 +49,58 @@ async function sharedMeetingFolder() {
   return { folder, start, id };
 }
 
+it('offers WPS from the ordinary viewer without starting a connection until a document is selected', async () => {
+  render(<MemoryRouter><Chooser /></MemoryRouter>);
+  const cloud = screen.getByRole('region', { name: '云文档' });
+  const chooseWps = within(cloud).getByText('使用 WPS 云文档');
+  fireEvent.click(chooseWps);
+  const open = within(cloud).getByRole('button', { name: '打开讨论' });
+  expect(open).toBeDisabled();
+  fireEvent.change(within(cloud).getByRole('textbox', { name: 'WPS 多维表格分享链接' }), {
+    target: { value: 'https://example.com/l/not-wps' },
+  });
+  fireEvent.click(open);
+  expect(await within(cloud).findByRole('alert')).toHaveTextContent('WPS');
+  expect(document.querySelector('iframe')).toBeNull();
+  expect(openFolderMeetingExport).not.toHaveBeenCalled();
+});
+
+it('keeps the viewer open while selecting a WPS link even when the mouse is released on the backdrop', async () => {
+  const user = userEvent.setup();
+  render(<MemoryRouter><Chooser /></MemoryRouter>);
+  await user.click(screen.getByText('使用 WPS 云文档'));
+  const dialog = screen.getByRole('dialog', { name: '打开讨论或文件' });
+  const backdrop = dialog.closest<HTMLElement>('[data-popup-content-layer]')!;
+  const input = within(dialog).getByRole<HTMLInputElement>('textbox', { name: 'WPS 多维表格分享链接' });
+  const url = 'https://www.kdocs.cn/l/ca8P1Pr2V8tX';
+  fireEvent.change(input, { target: { value: url } });
+
+  await user.pointer([
+    { target: input, offset: 0, keys: '[MouseLeft>]' },
+    { target: input, offset: url.length },
+    { keys: '[/MouseLeft]' },
+  ]);
+  expect(dialog).toBeVisible();
+  expect(input.selectionStart).toBe(0);
+  expect(input.selectionEnd).toBe(url.length);
+
+  await user.pointer([
+    { target: input, offset: 0, keys: '[MouseLeft>]' },
+    { target: input, offset: url.length },
+    { target: backdrop },
+    { keys: '[/MouseLeft]' },
+  ]);
+  expect(dialog).toBeVisible();
+  expect(input).toHaveValue(url);
+  await user.pointer([
+    { target: backdrop, keys: '[MouseLeft>]' },
+    { target: input, keys: '[/MouseLeft]' },
+  ]);
+  expect(dialog).toBeVisible();
+  await user.click(backdrop);
+  expect(dialog).not.toBeInTheDocument();
+});
+
 it('opens a shared meeting from the viewer chooser with its local revision and an in-memory folder handle', async () => {
   const { folder, start, id } = await sharedMeetingFolder();
   const reference = { archiveId: 'folder-meeting-view', viewCacheId: 'local-view' };
@@ -55,7 +108,8 @@ it('opens a shared meeting from the viewer chooser with its local revision and a
   vi.mocked(openFolderMeetingExport).mockRejectedValueOnce(new Error('本地缓存暂不可用')).mockResolvedValue(stored);
   vi.mocked(getExportCacheReference).mockReturnValue(reference);
   render(<MemoryRouter><Chooser /></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: '共享文件夹会议' }));
+  const sharedFolder = screen.getByRole('region', { name: '共享文件夹' });
+  fireEvent.click(within(sharedFolder).getByRole('button', { name: '选择共享文件夹' }));
   fireEvent.click(await screen.findByRole('button', { name: start.scope.title }));
   expect(await screen.findByRole('alert')).toHaveTextContent('本地缓存暂不可用');
   expect(JSON.parse(screen.getByTestId('location').textContent!).pathname).toBe('/');
@@ -74,13 +128,13 @@ it('stays in the viewer chooser when a meeting dialog closes during a slow local
   let finish!: (data: ExportData) => void;
   vi.mocked(openFolderMeetingExport).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
   render(<MemoryRouter><Chooser /></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: '共享文件夹会议' }));
+  fireEvent.click(screen.getByRole('button', { name: '选择共享文件夹' }));
   fireEvent.click(await screen.findByRole('button', { name: start.scope.title }));
   await waitFor(() => expect(openFolderMeetingExport).toHaveBeenCalled());
   fireEvent.keyDown(screen.getByRole('button', { name: '关闭共享文件夹会议' }), { key: 'Escape' });
   await act(async () => { finish(start); });
   expect(screen.queryByRole('dialog', { name: '共享文件夹会议' })).toBeNull();
-  expect(screen.getByRole('dialog', { name: '阅览导出文本' })).toBeVisible();
+  expect(screen.getByRole('dialog', { name: '打开讨论或文件' })).toBeVisible();
   expect(JSON.parse(screen.getByTestId('location').textContent!).pathname).toBe('/');
 });
 
@@ -206,8 +260,12 @@ it('opens a chosen Zhihu file in the existing viewer without replacing it with c
   vi.mocked(loadLastExport).mockResolvedValue(cached);
   const fetch = vi.spyOn(globalThis, 'fetch');
   render(<MemoryRouter initialEntries={['/']}><Chooser /></MemoryRouter>);
-  expect(screen.getByText('文件仅在本机读取，不会上传')).toBeInTheDocument();
-  await screen.findByRole('button', { name: /上次阅览/ });
+  const localFiles = screen.getByRole('region', { name: '本地消息文件' });
+  expect(within(localFiles).getByText('文件仅在本机读取，不会上传')).toBeInTheDocument();
+  expect(within(localFiles).getByText('知乎导入')).toBeInTheDocument();
+  const resume = await screen.findByRole('button', { name: /上次阅览/ });
+  expect(localFiles).not.toContainElement(resume);
+  expect(screen.getByRole('region', { name: '共享文件夹' })).not.toContainElement(resume);
   fireEvent.change(screen.getByLabelText('选择导出文件'), { target: { files: [new File([JSON.stringify(raw)], '知乎导出.json', { type: 'application/json' })] } });
   fireEvent.click(await screen.findByRole('button', { name: '阅览此文件' }));
   await waitFor(() => expect(saveLastExport).toHaveBeenCalled());

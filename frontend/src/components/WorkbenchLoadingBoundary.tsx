@@ -8,7 +8,19 @@ import { createWorkbenchDrawingTasks, WorkbenchDrawingContext, WORKBENCH_DRAWING
 
 type Phase = 'loading' | 'drawing' | 'sending' | 'ready';
 const LoadingContext = createContext<(phase: Phase, resetFailure?: boolean) => void>(() => undefined);
-type SendDestination = 'server' | 'local';
+type SendDestination = 'server' | 'local' | 'github' | 'wps';
+const sendingNotice = {
+  server: '正在等待服务器确认发送，请勿重复提交。',
+  local: '正在保存本地文档，请勿重复提交。',
+  github: '正在等待 GitHub 确认收到发言，请勿重复提交。',
+  wps: '正在等待 WPS 确认收到发言，请勿重复提交。',
+};
+const sendWaitNotice = {
+  server: '等待已超过 60 秒，发送结果尚未确认。已恢复界面；请先核对记录，不要重复提交。',
+  local: '保存等待已超过 60 秒，结果尚未确认。已恢复界面；请先核对本机保存记录，不要重复提交。',
+  github: '已等待超过 60 秒，仍在确认 GitHub 是否已收到发言。已恢复界面，请先同步讨论查看结果。',
+  wps: '已等待超过 60 秒，仍在确认 WPS 是否已收到发言。已恢复界面，请先同步讨论查看结果。',
+};
 const SendingContext = createContext<(sending: boolean, destination?: SendDestination) => void>(() => undefined);
 const ViewOnlyDrawingContext = createContext<(active: boolean) => void>(() => undefined);
 type DrawingPreparation = (work: () => void | Promise<void>, onCancel?: () => void, kind?: 'loading' | 'projection') => () => void;
@@ -105,9 +117,7 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
     if (phase !== 'loading' && phase !== 'sending') return;
     const timer = setTimeout(() => {
       setWaitNotice(phase === 'sending'
-        ? progress.destination === 'local'
-          ? '保存等待已超过 60 秒，结果尚未确认。已恢复界面；请先核对本机保存记录，不要重复提交。'
-          : '等待已超过 60 秒，发送结果尚未确认。已恢复界面；请先核对记录，不要重复提交。'
+        ? sendWaitNotice[progress.destination ?? 'server']
         : '加载等待已超过 60 秒，已恢复界面；数据尚未准备完成，可稍后重试。');
       // This releases presentation only. The write and its duplicate guard keep their owner.
       setProgress(previous => previous.phase === phase ? { ...previous, phase: 'ready' } : previous);
@@ -249,8 +259,8 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
     </div>
     {busy && <OperationProgressDialog title={reason === 'sending' ? '正在发送' : displayStage === 'loading' ? '正在加载消息' : displayStage === 'positioning' ? '正在定位' : '正在绘制'}>
       <div data-workbench-progress-active="true">
-        {phase === 'sending' ? progress.destination === 'local' ? '正在保存本地文档，请勿重复提交。' : '正在等待服务器确认发送，请勿重复提交。' : reason === 'sending'
-          ? progress.destination === 'local' ? '正在更新本地消息和关系，等待绘制完成。' : '正在完成消息绘制和新消息定位，请稍候。'
+        {phase === 'sending' ? sendingNotice[progress.destination ?? 'server'] : reason === 'sending'
+          ? progress.destination && progress.destination !== 'server' ? '正在更新本地消息和关系，等待绘制完成。' : '正在完成消息绘制和新消息定位，请稍候。'
           : displayStage === 'loading' ? '正在加载消息数据，请稍候。'
           : displayStage === 'positioning' ? '正在定位目标消息，请稍候。' : '正在绘制消息与关系，请稍候。'}
         <p>完成后将自动关闭，并恢复工作区操作。</p>

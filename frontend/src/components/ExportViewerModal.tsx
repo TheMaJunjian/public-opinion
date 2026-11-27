@@ -17,6 +17,11 @@ import { readViewerFile } from '../utils/readViewerFile';
 import { createLocalMessageFile } from '../utils/localMessageFile';
 import { handoffMeetingDirectory } from '../utils/meetingDirectoryHandoff';
 import MeetingFolderDialog from './MeetingFolderDialog';
+import WpsDocumentChooser from './WpsDocumentChooser';
+import GitMeetingChooser from './GitMeetingChooser';
+import type { GitMeetingCommentSource } from '../utils/gitMeetingComments';
+import { requestCloudMeetingLogout } from '../utils/cloudMeetingAccount';
+import './ExportViewerModal.css';
 
 export { validateExportForViewing } from '../utils/exportArchive';
 
@@ -86,15 +91,16 @@ export default function ExportViewerModal({ open, onClose }: Props) {
     onClose();
   };
 
-  const openFolderMeeting = async (start: ExportData, directory: FileSystemDirectoryHandle, signal?: AbortSignal) => {
+  const openMeeting = async (start: ExportData, source: FileSystemDirectoryHandle | string | GitMeetingCommentSource, signal?: AbortSignal) => {
     signal?.throwIfAborted();
     const generation = ++readingGeneration.current;
-    const cached = await openFolderMeetingExport(start);
+    const cloudSource = typeof source === 'string' || 'repository' in source;
+    const cached = await openFolderMeetingExport(start, cloudSource ? source : undefined, signal);
     signal?.throwIfAborted();
     const data = inheritExportCacheReference((await prepareExportForViewing(cached)).data, cached);
     const navigation = await loadExportNavigation(data).catch(() => null);
     signal?.throwIfAborted();
-    if (generation === readingGeneration.current) enterViewer(data, navigation, directory);
+    if (generation === readingGeneration.current) enterViewer(data, navigation, cloudSource ? undefined : source);
   };
 
   const openData = (data: ExportData | undefined, fromCache = false, reference?: ExportCacheReference) => {
@@ -208,112 +214,69 @@ export default function ExportViewerModal({ open, onClose }: Props) {
       }}
       onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
     >
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="阅览导出文本" data-dialog-layout="scroll" style={{
-        ...dialogStyles.panel, width: '100%', maxWidth: 500, maxHeight: '100%',
-        display: 'flex', flexDirection: 'column', overflow: 'auto',
-      }}>
-        <div data-dialog-header="true" style={{
-          ...dialogStyles.header, display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        }}>
-          <div>阅览导出文本</div>
-          <button data-dialog-close="true" aria-label="关闭阅览" onClick={onClose} style={dialogStyles.button}>✕</button>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="viewer-source-title"
+        data-dialog-layout="scroll" className="viewer-source-panel" style={dialogStyles.panel}>
+        <div data-dialog-header="true" className="viewer-source-header" style={dialogStyles.header}>
+          <h2 id="viewer-source-title">打开讨论或文件</h2>
+          <button type="button" data-dialog-close="true" aria-label="关闭阅览" onClick={onClose} style={dialogStyles.button}>✕</button>
         </div>
-
-        <div data-dialog-body="true" style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
-          <div style={{ color: 'var(--ink-94a3b8)', fontSize: 13, textAlign: 'center' }}>
-            打开本地消息 JSON 文件，或新建消息文件。无需登录，可在本机整理、保存和导出。
-          </div>
-          <button type="button" disabled={opening || processing} onClick={() => openData(createLocalMessageFile())}
-            style={{ ...dialogStyles.button, width: '100%' }}>新建本地消息文件</button>
-          <MeetingFolderDialog onOpen={openFolderMeeting} disabled={opening || processing} />
-
+        <div data-dialog-body="true" className="viewer-source-list">
           {lastExport && (
-            <button disabled={opening} onClick={() => openData(lastExport.data, true, lastExport.reference)} style={{
-              width: '100%', padding: '12px 16px', borderRadius: 8,
-              border: '1px solid var(--line-4a9eff)', background: 'var(--surface-1a2a3c)',
-              color: 'var(--ink-4a9eff)', fontSize: 13, cursor: 'pointer',
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            }}>
-              <span>📋 上次阅览：{lastExport.title}</span>
-              <span style={{ fontSize: 11, opacity: 0.7 }}>点击打开</span>
+            <button type="button" className="viewer-source-recent" disabled={opening}
+              aria-label={`上次阅览：${lastExport.title}`} onClick={() => openData(lastExport.data, true, lastExport.reference)}>
+              <span><small>继续上次阅览</small><strong>{lastExport.title}</strong></span>
+              <span aria-hidden="true">›</span>
             </button>
           )}
-          {!selectedFile && lastExport?.verification && <div role="status" style={{ color: 'var(--ink-86efac)', fontSize: 12 }}>{lastExport.verification}</div>}
-          {cacheError && <div role="alert" style={{ color: 'var(--ink-f87171)', fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', width: '100%' }}>{cacheError}</div>}
+          {!selectedFile && lastExport?.verification && <div role="status" className="viewer-source-status">{lastExport.verification}</div>}
+          {cacheError && <div role="alert" className="viewer-source-error">{cacheError}</div>}
 
-          <div
-            onDrop={handleDrop}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onClick={() => { if (!processing) fileInputRef.current?.click(); }}
-            style={{
-              width: '100%', height: 112,
-              border: `2px dashed ${dragging ? 'var(--line-0b84ff)' : selectedFile ? 'var(--line-4ade80)' : 'var(--line-444)'}`,
-              borderRadius: 10,
-              background: dragging ? 'var(--surface-rgba-11-132-255-0-08)' : selectedFile ? 'var(--surface-rgba-74-222-128-0-06)' : 'var(--surface-1a1a1a)',
-              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-              cursor: selectedFile ? 'default' : 'pointer', gap: 8,
-              transition: 'border-color 0.2s, background 0.2s',
-            }}
-          >
-            {processing ? (
-              <>
-                <div style={{ fontSize: 20 }}>⏳</div>
-                <div style={{ color: 'var(--ink-94a3b8)', fontSize: 14 }}>正在处理…</div>
-              </>
-            ) : selectedFile ? (
-              <>
-                <div style={{ fontSize: 20 }}>📄</div>
-                <div style={{ color: 'var(--ink-e2e8f0)', fontSize: 14 }}>{selectedFile.name}</div>
-                <div style={{ color: 'var(--ink-64748b)', fontSize: 11 }}>{prepared ? '点击下方按钮阅览；点击此处更换文件' : '点击此处更换文件'}</div>
-              </>
-            ) : (
-              <>
-                <div style={{ fontSize: 24 }}>📁</div>
-                <div style={{ color: 'var(--ink-94a3b8)', fontSize: 14 }}>拖拽 JSON 文件到此处</div>
-                <div style={{ color: 'var(--ink-64748b)', fontSize: 11 }}>或点击选择文件</div>
-              </>
-            )}
-          </div>
+          <section className="viewer-source" aria-labelledby="viewer-cloud-heading">
+            <h3 id="viewer-cloud-heading">云文档</h3>
+            <p>每份云表是一场独立讨论。切换后只读写所选云表。</p>
+            <WpsDocumentChooser onOpen={openMeeting} disabled={opening || processing} />
+          </section>
+          <section className="viewer-source" aria-labelledby="viewer-git-heading">
+            <h3 id="viewer-git-heading">Git 仓库</h3>
+            <p>用 GitHub 仓库存储发言和回复，成员在公论中讨论。</p>
+            <GitMeetingChooser onOpen={openMeeting} disabled={opening || processing} />
+          </section>
+          <button type="button" className="viewer-source-action" onClick={() => requestCloudMeetingLogout()}>退出云端讨论并清除本机登录状态</button>
+          <section className="viewer-source" aria-labelledby="viewer-folder-heading">
+            <h3 id="viewer-folder-heading">共享文件夹</h3>
+            <p>选择大家都能读写的文件夹，在其中创建或加入会议。</p>
+            <MeetingFolderDialog onOpen={openMeeting} disabled={opening || processing} />
+          </section>
 
-          <input
-            ref={fileInputRef}
-            type="file"
-            aria-label="选择导出文件"
-            accept=".json"
-            onChange={handleFileChange}
-            style={{ display: 'none' }}
-          />
-
-          {prepared?.verification && <div role="status" style={{ color: 'var(--ink-86efac)', fontSize: 12, padding: '8px 12px', background: 'var(--surface-rgba-34-197-94-0-1)', borderRadius: 6, width: '100%' }}>{prepared.verification}</div>}
-
-          {prepared && !processing && (
-            <button onClick={processAndOpen} style={{
-              width: '100%', padding: '10px 16px', borderRadius: 8,
-              border: 'none', background: 'var(--surface-0b84ff)',
-              color: 'var(--ink-fff)', fontSize: 14, cursor: 'pointer',
-            }}>
-              {linkedDirectory ? '关联并阅览' : '阅览此文件'}
-            </button>
-          )}
-
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', width: '100%', fontSize: 11, color: 'var(--ink-94a3b8)' }}>
-            <span>文件仅在本机读取，不会上传</span><OfflineViewerStatus />
-          </div>
-          <details style={{ width: '100%', fontSize: 12, color: 'var(--ink-94a3b8)' }}>
-            <summary style={{ cursor: 'pointer' }}>本地辅助</summary>
-            <p style={{ margin: '8px 0', lineHeight: 1.6 }}>也可选择知乎导出的 JSON，在本机阅览和整理。</p>
-            {canLinkZhihuDirectory() && <>
-              <button disabled={processing || opening} onClick={() => { void selectDirectory(); }} style={dialogStyles.button}>关联知乎导出目录</button>
-              <p style={{ margin: '8px 0 0', lineHeight: 1.6 }}>关联导出目录后可持续更新，并保留本地整理。</p>
-            </>}
-          </details>
-
-          {error && (
-            <div role="alert" style={{ color: 'var(--ink-f87171)', fontSize: 12, padding: '8px 12px', background: 'var(--surface-rgba-239-68-68-0-1)', borderRadius: 6, width: '100%', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-              {error}
+          <section className="viewer-source" aria-labelledby="viewer-file-heading">
+            <h3 id="viewer-file-heading">本地消息文件</h3>
+            <div className="viewer-local-actions">
+              <button type="button" className="viewer-file-picker" data-dragging={dragging || undefined}
+                disabled={processing || opening} onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave}
+                onClick={() => fileInputRef.current?.click()}>
+                <strong>{processing ? '正在处理…' : selectedFile?.name ?? '选择 JSON 文件'}</strong>
+                <small>{selectedFile ? '重新选择文件' : '拖拽 JSON 文件到此处'}</small>
+              </button>
+              <button type="button" className="viewer-source-action" disabled={opening || processing}
+                onClick={() => openData(createLocalMessageFile())}>新建本地消息文件</button>
             </div>
-          )}
+            <input ref={fileInputRef} type="file" aria-label="选择导出文件" accept=".json"
+              onChange={handleFileChange} hidden />
+            {prepared?.verification && <div role="status" className="viewer-source-status">{prepared.verification}</div>}
+            {prepared && !processing && <button type="button" onClick={processAndOpen} style={dialogStyles.primaryButton}>
+              {linkedDirectory ? '关联并阅览' : '阅览此文件'}
+            </button>}
+            <div className="viewer-file-status">
+              <span>文件仅在本机读取，不会上传</span><OfflineViewerStatus />
+            </div>
+            <details className="viewer-file-import">
+              <summary>知乎导入</summary>
+              <p>在上方选择知乎导出的 JSON 文件即可阅览。</p>
+              {canLinkZhihuDirectory() && <button type="button" style={dialogStyles.button} disabled={processing || opening}
+                onClick={() => { void selectDirectory(); }}>关联知乎导出目录</button>}
+            </details>
+          </section>
+          {error && <div role="alert" className="viewer-source-error">{error}</div>}
         </div>
       </div>
     </PopupOverlay>

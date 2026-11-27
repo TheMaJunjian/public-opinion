@@ -6,7 +6,7 @@ import AboutLink from '../components/AboutLink';
 import { ABOUT_HOME_STATE_KEY } from '../utils/aboutNavigation';
 const FeedPage = lazy(() => import('./FeedPage'));
 
-/** Online participation and local message files have independent entry points. */
+/** Online participation and the document chooser have independent entry points. */
 export default function HomePage() {
   const { user, loading } = useAuth();
   const navigate = useNavigate();
@@ -33,13 +33,8 @@ export default function HomePage() {
       <Link to={user ? returnTo : '/login'} state={{ returnTo }} className="home-primary-action">{user ? '进入讨论首页' : '登录公论'}</Link>
       {!user && <Link to="/register" state={{ returnTo }} style={{ fontSize: 14, color: 'var(--ink-94a3b8)' }}>注册账号</Link>}
       <button type="button" onClick={() => window.dispatchEvent(new Event('open-export-viewer'))}
-        className="home-primary-action">离线使用</button>
+        className="home-primary-action">打开讨论或文件</button>
       <AboutLink style={{ fontSize: 14, color: 'var(--ink-94a3b8)' }}>了解公论</AboutLink>
-    </div>
-    <div style={{ marginTop: 36, fontSize: 12, color: 'var(--ink-64748b)' }}>
-      <button type="button" onClick={() => window.dispatchEvent(new Event('open-export-viewer'))}
-        style={{ padding: 0, border: 0, background: 'none', color: 'var(--ink-94a3b8)', cursor: 'pointer', font: 'inherit', textDecoration: 'underline', textUnderlineOffset: 3 }}>阅览本机文件</button>
-      <span style={{ marginLeft: 8 }}>无需邀请或登录；支持本地整理、保存和导出</span>
     </div>
   </section>;
 }

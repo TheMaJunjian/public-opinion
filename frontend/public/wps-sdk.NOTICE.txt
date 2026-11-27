@@ -1,0 +1,28 @@
+WPS WebOffice SDK
+
+wps-sdk.es.js is the unmodified web-office-sdk-v1.1.11.es.js distributed
+in the WPS Open Platform multi-dimensional table sample (embed-db-demo).
+The sample names the file 1.1.11; the module itself reports V1.1.15.
+The sample's package.json identifies its license as ISC.
+
+Integration guide:
+https://open.wps.cn/documents/app-integration-dev/guide/dbsheet/Weboffice/weboffice-quickstart
+Official sample linked from that guide:
+https://365.kdocs.cn/l/cb11ZL018X1g
+
+Original module SHA-256:
+e52d306b90342ea5acbf4ae310367714a8ef244e506ab3ab6a3004e46c8fa4c3
+
+ISC license
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.

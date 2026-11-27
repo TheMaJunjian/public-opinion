@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ExportData } from '../api/client';
 import OfflineMeetingExchange from '../components/OfflineMeetingExchange';
+import * as wpsSync from '../hooks/useWpsMeetingSync';
 import { LocalDiscussion } from '../utils/localDiscussion';
 import { createLocalMessageFile } from '../utils/localMessageFile';
 import { createMeetingStart, exportMeetingDelta, importMeetingDelta } from '../utils/meetingExchange';
@@ -16,6 +17,20 @@ beforeEach(async () => {
   vi.mocked(downloadExport).mockClear();
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+it('shows WPS sync and export without importing local-only records into a cloud discussion', async () => {
+  const seed = await createMeetingStart(createLocalMessageFile());
+  vi.stubGlobal('showDirectoryPicker', vi.fn());
+  const wps = vi.spyOn(wpsSync, 'useWpsMeetingSync').mockReturnValue({ message: 'WPS 会议已连接', failed: false });
+  try {
+    render(<OfflineMeetingExchange data={seed} onSave={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: '会议交换' }));
+    expect(screen.getByRole('dialog', { name: 'WPS 云文档同步' })).toHaveTextContent('WPS 会议已连接');
+    expect(screen.getByRole('button', { name: '导出累计增量' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: '连接共享文件夹' })).toBeNull();
+    expect(screen.queryByLabelText('导入他人的会议增量')).toBeNull();
+  } finally { wps.mockRestore(); }
+});
 
 async function speak(source: ExportData, speaker: string, text: string, replyTo?: string) {
   const draft = new LocalDiscussion(source, speaker), msg = await draft.createMessage('root', { content: text });

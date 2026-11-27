@@ -117,7 +117,7 @@ export default function LoginPage({ onClose, onRegister, onSuccess, closeText = 
             : <Link to="/register" state={location.state} className="text-[color:var(--ink-60a5fa-2)] hover:underline font-medium">立即注册</Link>}
         </p>
         <button type="button" onClick={() => { close(); window.dispatchEvent(new Event('open-export-viewer')); }}
-          style={{ ...dialogStyles.button, width: '100%', marginTop: 16 }}>离线使用本地消息文件</button>
+          style={{ ...dialogStyles.button, width: '100%', marginTop: 16 }}>打开讨论或文件</button>
         <button type="button" onClick={close} style={{ ...dialogStyles.button, width: '100%', marginTop: 16 }}>{closeText}</button>
       </div>} />
   );

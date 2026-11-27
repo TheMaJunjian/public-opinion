@@ -7,6 +7,7 @@ import PointsBadge from './PointsBadge';
 import NotificationBell from './NotificationBell';
 import AboutLink from './AboutLink';
 import { useInterfaceZoom } from '../context/InterfaceZoomContext';
+import { useCloudViewer, requestCloudMeetingLogout, tabCloudMeetingId } from '../utils/cloudMeetingAccount';
 const ReviewQueueModal = lazy(() => import('./ReviewQueueModal'));
 
 interface NavbarProps {
@@ -23,6 +24,8 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const cloudSource = useCloudViewer(location.state);
+  const cloudViewer = location.pathname === '/viewer' && cloudSource;
   const authState = { returnTo: location.pathname === '/' && new URLSearchParams(location.search).has('msg') ? `/messages${location.search}` : `${location.pathname}${location.search}` };
   const navRef = useRef<HTMLElement>(null);
   const leftControlsRef = useRef<HTMLDivElement>(null);
@@ -60,6 +63,10 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
   }, [interfaceZoom]);
 
   async function handleLogout() {
+    if (cloudViewer || tabCloudMeetingId()) {
+      requestCloudMeetingLogout(true);
+      return;
+    }
     try {
       await logout();
     } finally {
@@ -111,7 +118,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
             <button
               onClick={onOpenViewer}
               className="text-[color:var(--ink-c7d2fe)] hover:text-[color:var(--ink-fff-2)] text-sm font-medium transition-colors"
-              title="阅览本机文件"
+              title="打开讨论或文件"
             >
               阅览
             </button>
@@ -133,13 +140,16 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
             <button
               onClick={onOpenViewer}
               className="text-[color:var(--ink-c7d2fe)] hover:text-[color:var(--ink-fff-2)] text-sm font-medium transition-colors"
-              title="阅览本机文件"
+              title="打开讨论或文件"
             >
               阅览
             </button>
             <Link to="/login" state={authState} className="hover:text-[color:var(--ink-c7d2fe)] text-sm font-medium transition-colors">
               登录
             </Link>
+            {cloudViewer && <button type="button" onClick={() => requestCloudMeetingLogout()} className="navbar-logout px-2 py-1.5 rounded text-sm font-medium">
+              退出云端讨论
+            </button>}
             <Link
               to="/register"
               state={authState}

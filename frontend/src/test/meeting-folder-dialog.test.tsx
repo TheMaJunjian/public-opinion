@@ -13,7 +13,7 @@ vi.mock('../utils/meetingFolder', async importOriginal => ({
 const root = { name: '局域网会议目录' } as FileSystemDirectoryHandle;
 const pick = vi.fn<() => Promise<FileSystemDirectoryHandle>>();
 const open = vi.fn<(data: ExportData, handle: FileSystemDirectoryHandle, signal?: AbortSignal) => Promise<void>>();
-const choose = () => fireEvent.click(screen.getByRole('button', { name: '共享文件夹会议' }));
+const choose = () => fireEvent.click(screen.getByRole('button', { name: '选择共享文件夹' }));
 async function meeting(title: string) {
   const data = await createMeetingStart(createLocalMessageFile());
   data.scope.title = title;

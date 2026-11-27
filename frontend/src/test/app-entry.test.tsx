@@ -139,22 +139,22 @@ it('本地阅览入口无需登录，也不等待在线会话确认', async () =
   expect(screen.queryByRole('dialog', { name: '登录公论' })).toBeNull();
 });
 
-it('在线会话尚未返回时也能直接选择离线使用', async () => {
+it('在线会话尚未返回时也能直接打开讨论或文件', async () => {
   auth.loading = true;
   window.history.replaceState(null, '', '/messages?msg=waiting-message');
   render(<App />);
-  fireEvent.click(screen.getByRole('button', { name: '离线使用本地消息文件' }));
-  expect(await screen.findByRole('dialog', { name: '阅览导出文本' })).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: '打开讨论或文件' }));
+  expect(await screen.findByRole('dialog', { name: '打开讨论或文件' })).toBeVisible();
   expect(screen.queryByRole('dialog', { name: '正在加载' })).toBeNull();
   expect(screen.getByRole('button', { name: '新建本地消息文件' })).toBeEnabled();
 });
 
-it.each(['login', 'register'])('从%s窗口直接打开本地文件入口，无需登录', async mode => {
+it.each(['login', 'register'])('从%s窗口直接打开讨论或文件，无需登录公论', async mode => {
   render(<App />);
   await screen.findByRole('dialog', { name: '登录公论' });
   if (mode === 'register') fireEvent.click(screen.getByRole('button', { name: '立即注册' }));
-  fireEvent.click(await screen.findByRole('button', { name: '离线使用本地消息文件' }));
-  expect(await screen.findByRole('dialog', { name: '阅览导出文本' })).toBeVisible();
+  fireEvent.click(await screen.findByRole('button', { name: '打开讨论或文件' }));
+  expect(await screen.findByRole('dialog', { name: '打开讨论或文件' })).toBeVisible();
   expect(screen.queryByRole('dialog', { name: /登录公论|注册公论/ })).toBeNull();
   expect(login).not.toHaveBeenCalled(); expect(register).not.toHaveBeenCalled();
 });

@@ -9,12 +9,13 @@ import { beginWorkbenchSync, finishWorkbenchSync, resetWorkbenchActivity } from 
 type Task = ReturnType<ReturnType<typeof useWorkbenchDrawingTask>>;
 type Tasks = { measurement: Task; overlays: Task; positioning: Task };
 
-function Content({ loading = false, sending = false, error = null, count = 3, onRender = () => undefined, revision, onTasks }: {
+function Content({ loading = false, sending = false, destination, error = null, count = 3, onRender = () => undefined, revision, onTasks }: {
   loading?: boolean; sending?: boolean; error?: string | null; count?: number; onRender?: () => void; revision?: unknown;
+  destination?: Parameters<typeof useWorkbenchSendingProgress>[1];
   onTasks?: (tasks: Tasks) => void;
 }) {
   useWorkbenchLoadingProgress(loading, error, revision);
-  useWorkbenchSendingProgress(sending);
+  useWorkbenchSendingProgress(sending, destination);
   const measure = useWorkbenchDrawingTask('measurement');
   const overlay = useWorkbenchDrawingTask('overlays');
   const position = useWorkbenchDrawingTask('positioning');
@@ -97,6 +98,14 @@ describe('workbench loading through registered drawing tasks', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByRole('alert')).toHaveTextContent('发送结果尚未确认');
     expect(screen.getByTestId('workbench').parentElement!.inert).toBe(false);
+  });
+
+  it.each([['github', 'GitHub'], ['wps', 'WPS']] as const)('identifies a %s discussion write while sending and after the wait dialog closes', (destination, provider) => {
+    render(<WorkbenchLoadingBoundary><Content sending destination={destination} /></WorkbenchLoadingBoundary>);
+    expect(screen.getByRole('dialog')).toHaveTextContent(`正在等待 ${provider} 确认收到发言`);
+    advance(WORKBENCH_REQUEST_WAIT_MS);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('alert')).toHaveTextContent(`仍在确认 ${provider} 是否已收到发言`);
   });
 
   it('waits for every task in one dialog, then unlocks clicking, keys and scrolling', () => {

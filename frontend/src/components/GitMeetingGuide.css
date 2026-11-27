@@ -1,0 +1,29 @@
+.git-meeting-guide {
+  margin-block: 10px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.git-meeting-guide summary {
+  cursor: pointer;
+  padding-block: 4px;
+  font-weight: 600;
+}
+
+.git-meeting-guide ol {
+  list-style: decimal;
+  padding-inline-start: 1.6em;
+  margin-block: 6px 10px;
+}
+
+.git-meeting-guide li + li,
+.git-meeting-guide details p {
+  margin-block-start: 8px;
+}
+
+.git-meeting-guide a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

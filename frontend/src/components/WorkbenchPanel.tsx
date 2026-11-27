@@ -298,7 +298,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
 
   const renderSendControls = (local?: LocalSendControls) => (
     <>
-      <div className="desk-section-title"><span className="desk-section-number">05</span>{local ? '本地发送' : '投入与费用'}<AboutLink href="/about.html#guide-costs" className="workbench-help-link" aria-label="投入与费用帮助" title="投入与费用帮助">?</AboutLink></div>
+      <div className="desk-section-title"><span className="desk-section-number">05</span>{local ? (p.localMeetingTitle ? '发送发言' : '本地发送') : '投入与费用'}<AboutLink href="/about.html#guide-costs" className="workbench-help-link" aria-label="投入与费用帮助" title="投入与费用帮助">?</AboutLink></div>
       {!local && showContributionControls && <div data-contribution-policy="true" style={{display:'flex',alignItems:'baseline',gap:8,fontSize:11,color:'var(--ink-94a3b8)',whiteSpace:'nowrap'}}>
         <span style={{flexShrink:0}}>协议费 {p.stakeFeeAmountRef.current} 点/条</span>
         <span>每条消息的真假、价值至少一项大于 0</span>
@@ -457,7 +457,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
         </div>
         <button className="workbench-action" onClick={p.onExitViewer} style={{ width: "100%", boxSizing: "border-box", padding: "5px 12px", borderRadius: 4, border: "1px solid var(--line-f59e0b)", background: "var(--surface-2a1a00)", color: "var(--ink-f59e0b)", fontSize: 12, cursor: "pointer" }}>退出阅览</button>
         {p.localEditing && <p style={{ margin: 0, fontSize: 12 }}>{p.localMeetingTitle
-          ? '填写自己的本地发言人即可发言和回复。在“会议交换”中查看同步状态。'
+          ? '填写发言人署名后可撰写发言和回复。在“会议交换”中查看同步状态。'
           : '可输入新发言人或选择已有参与者。编辑只保存在本机，下载阅览文件可保存或分享讨论记录。'}</p>}
       </div>}
       {renderComparisonHeader()}
@@ -672,7 +672,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           })()}
           {renderSendControls(p.localEditing ? {
             enabled: p.singleButtonEnabled, onSend: p.handleQuickSendAndRelateFromDraftTargets,
-            hint: '以当前发言人记录到本机，无需登录。',
+            hint: p.localMeetingTitle ? '以当前署名发言。同步状态见“会议交换”。' : '以当前发言人记录到本机，无需登录。',
             feedback: (p.sendError || p.sendValidationLabel) ? <div role="alert">{p.sendError || p.sendValidationLabel}</div> : undefined,
           } : undefined)}
           </div>

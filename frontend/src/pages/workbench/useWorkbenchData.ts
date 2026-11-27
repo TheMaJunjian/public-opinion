@@ -27,6 +27,7 @@ import { hydrateOnlineStructure, onlineSourceSnapshot, onlineStructuralSource } 
 import { startWorkbenchTiming } from '../../utils/workbenchTiming';
 import type { DiscussionClient, DiscussionPageState } from '../../data/discussionClient';
 import { fullWorkbenchPath } from '../../utils/messageRoutes';
+import type { MeetingEditConfirmation } from '../../utils/meetingExchange';
 
 export const VIEWER_USERNAME_KEY = 'export-viewer-username';
 
@@ -352,8 +353,34 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
       assertActive();
       const active = preloadedLoaded.current;
       if (!active) throw new Error('请先打开会议文件。');
-      await persistMeetingRevision(next, expected, active, localEdit,
-        (merged, baseline) => persistPreloadedExport(merged, undefined, baseline, assertActive));
+      let confirmedBy: string | undefined;
+      let receipt: MeetingEditConfirmation | false = false;
+      try {
+        await persistMeetingRevision(next, expected, active, localEdit, async (merged, baseline) => {
+          assertActive();
+          if (localEdit && !confirmedBy) {
+            const { confirmGitMeetingEdit } = await import('../../hooks/useGitMeetingSync');
+            receipt = await confirmGitMeetingEdit(next, expected);
+            if (receipt) confirmedBy = 'GitHub';
+            else {
+              const { confirmWpsMeetingEdit } = await import('../../hooks/useWpsMeetingSync');
+              receipt = await confirmWpsMeetingEdit(next, expected);
+              if (receipt) confirmedBy = 'WPS';
+            }
+            assertActive();
+          }
+          if (receipt && receipt.original) {
+            const { importMeetingDelta } = await import('../../utils/meetingExchange');
+            const original = await importMeetingDelta(baseline, receipt.original);
+            merged = { ...original.data, view: merged.view, viewerUsername: merged.viewerUsername };
+          }
+          await persistPreloadedExport(merged, undefined, baseline, assertActive);
+          if (receipt) receipt.saved();
+        });
+      } catch (error) {
+        if (confirmedBy) throw new Error(`${confirmedBy} 已收到发言，本机未完成保存。请重新打开会议查看。`, { cause: error });
+        throw error;
+      }
     };
     const pending = meetingWrites.current.then(save);
     meetingWrites.current = pending.catch(() => {});

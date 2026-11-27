@@ -53,8 +53,8 @@ export default function AuthEntryGate({ children }: { children: ReactNode }) {
   if (authRoute || localViewer || user || dismissed) return children;
   const close = () => setDismissed(true);
   return <AutoAuthEntryContext.Provider value={{ suspended }}><Suspense fallback={<PageLoadingPrompt />}>
-    {loading ? <PromptModal open title="正在加载" message="正在确认登录状态，也可直接离线使用本地消息文件。"
-      confirmText="离线使用本地消息文件" onConfirm={() => {
+    {loading ? <PromptModal open title="正在加载" message="正在确认登录状态。打开讨论或文件无需登录公论。"
+      confirmText="打开讨论或文件" onConfirm={() => {
         close(); navigate('/', { state: { [ABOUT_HOME_STATE_KEY]: true } });
         window.dispatchEvent(new Event('open-export-viewer'));
       }} /> : mode === 'login'

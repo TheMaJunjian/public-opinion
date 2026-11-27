@@ -13,7 +13,7 @@ const notShared = '会议文件只支持本地文字和针对整条发言的回�
 const invalid = '会议增量格式或发言记录无效，未导入。';
 export const MAX_MEETING_BYTES = 32 * 1024 * 1024;
 
-function parseEntry(input: unknown): Entry {
+export function parseEntry(input: unknown): Entry {
   if (!isObject(input) || !localId(input.id, 'local:') || !localId(input.speakerId, 'local:user:')
     || typeof input.speaker !== 'string' || !input.speaker.trim() || input.speaker.length > 200
     || typeof input.at !== 'string' || !Number.isFinite(Date.parse(input.at)) || new Date(input.at).toISOString() !== input.at) throw new Error(invalid);
@@ -96,6 +96,11 @@ async function hashBase(id: string, entries: Entry[]) {
   return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+export async function emptyMeetingIdentity(id: string): Promise<NonNullable<ExportData['meeting']>> {
+  if (!uuid.test(id)) throw new Error('云表中的会议编号无效。');
+  return { version: 1, id, baseIds: [], baseHash: await hashBase(id, []) };
+}
+
 async function checkMeeting(data: ExportData) {
   const m = data.meeting;
   if (!m || m.version !== 1 || !uuid.test(m.id) || !Array.isArray(m.baseIds) || new Set(m.baseIds).size !== m.baseIds.length
@@ -166,6 +171,11 @@ export async function exportMeetingDelta(data: ExportData) {
   return { format: 'gonglun-meeting-delta', version: 1, meetingId: m.id, baseHash: m.baseHash,
     entries: entries.filter(e => !ids.has(e.id)) };
 }
+
+export type MeetingEditConfirmation = {
+  original?: Awaited<ReturnType<typeof exportMeetingDelta>>;
+  saved: () => void;
+};
 
 export class MeetingEntryConflict extends Error {
   constructor(readonly ids: string[]) {

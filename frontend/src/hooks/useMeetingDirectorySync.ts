@@ -21,9 +21,9 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function useMeetingDirectorySync(data: ExportData, onSave: Save, viewerInstanceKey?: string) {
-  const meetingId = data.meeting?.id;
-  const meeting = data.meeting ? `${data.meeting.id}/${data.meeting.baseHash}` : '';
+export function useMeetingDirectorySync(data: ExportData, onSave: Save, viewerInstanceKey?: string, enabled = true) {
+  const meetingId = enabled ? data.meeting?.id : undefined;
+  const meeting = enabled && data.meeting ? `${data.meeting.id}/${data.meeting.baseHash}` : '';
   const [connection, setConnection] = useState<Connection | null>(null);
   const [report, setReport] = useState<Report | null>(null);
   const [picking, setPicking] = useState(false);
@@ -38,7 +38,7 @@ export function useMeetingDirectorySync(data: ExportData, onSave: Save, viewerIn
   useLayoutEffect(() => {
     // A parked workbench can keep its React state. A late picker result belongs
     // only to the meeting and visible page from which it was requested.
-    const chosen = takeMeetingDirectory(viewerInstanceKey, meetingId);
+    const chosen = meetingId && takeMeetingDirectory(viewerInstanceKey, meetingId);
     setConnection(current => chosen ? { meeting, directory: chosen } : current?.meeting === meeting ? current : null);
     setPicking(false);
     setSyncing(false);

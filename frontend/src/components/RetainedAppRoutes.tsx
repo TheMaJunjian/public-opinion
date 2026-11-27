@@ -1,7 +1,8 @@
 import { useRef, type ReactNode } from 'react';
-import { Routes, useLocation, useNavigationType, type Location, type NavigationType } from 'react-router-dom';
+import { Navigate, Routes, useLocation, useNavigationType, type Location, type NavigationType } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import RecentWorkbenchViews from './RecentWorkbenchViews';
+import { isClosedLegacyInlineViewer, useCloudViewer } from '../utils/cloudMeetingAccount';
 
 function PageRoutes({ location, navigationType, children }: {
   location: Location; navigationType: NavigationType; children: ReactNode;
@@ -18,14 +19,19 @@ export default function RetainedAppRoutes({ children }: { children: ReactNode })
   const location = useLocation();
   const navigationType = useNavigationType();
   const { user } = useAuth();
+  const cloudSource = useCloudViewer(location.state);
+  const cloud = location.pathname === '/viewer' && cloudSource;
   const viewKey = location.pathname === '/viewer'
     ? `viewer:${location.state?.viewerInstanceKey ?? location.key}`
     : /^\/messages(\/|$)/.test(location.pathname) ? `online:${location.pathname}`
       : location.pathname === '/' ? `home:${location.key}` : 'page';
+  if (location.pathname === '/viewer' && isClosedLegacyInlineViewer(location.state, location.state?.viewerInstanceKey ?? location.key)) {
+    return <Navigate to="/" replace />;
+  }
   return <>
     <RecentWorkbenchViews viewKey={viewKey} ownerKey={user?.id ?? null}
       exclusiveGroup={location.pathname === '/viewer' ? 'viewer' : undefined}
-      retainOnLeave={location.pathname !== '/viewer' || location.state?.viewerRetain !== false} deferParking preserveScroll preserveDocumentScroll>
+      retainOnLeave={!cloud && (location.pathname !== '/viewer' || location.state?.viewerRetain !== false)} deferParking preserveScroll preserveDocumentScroll>
       {viewKey !== 'page' && <PageRoutes location={location} navigationType={navigationType}>{children}</PageRoutes>}
     </RecentWorkbenchViews>
     {viewKey === 'page' && <Routes location={location}>{children}</Routes>}

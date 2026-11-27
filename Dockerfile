@@ -6,7 +6,11 @@ COPY packages/core/package.json packages/core/package.json
 COPY frontend/package.json frontend/package.json
 RUN npm ci
 COPY . .
-RUN npm run build && npm prune --omit=dev
+ARG VITE_FIREBASE_API_KEY
+ARG VITE_FIREBASE_AUTH_DOMAIN
+ARG VITE_FIREBASE_PROJECT_ID
+ARG VITE_FIREBASE_APP_ID
+RUN npm run build && npm ci --workspace=@gonglun/server --omit=dev --prefer-offline
 
 FROM node:24-alpine AS runtime
 WORKDIR /app

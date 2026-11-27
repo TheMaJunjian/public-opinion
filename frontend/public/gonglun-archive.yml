@@ -1,0 +1,253 @@
+name: Gonglun discussion archive
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Discussion issue number to archive or repair
+        type: string
+        required: true
+
+permissions:
+  issues: read
+  contents: write
+
+jobs:
+  archive:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!github.event.issue.pull_request &&
+       startsWith(github.event.issue.body, '<!-- gonglun-git-discussion-v1 -->') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association) &&
+       (github.event_name == 'issues' ||
+        (startsWith(github.event.comment.body, '<!-- gonglun-git-entries-v1 -->') &&
+         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))))
+    # Each job catches up from the saved cursor, including comments from replaced pending jobs.
+    concurrency:
+      group: gonglun-archive-${{ github.event.issue.number || inputs.issue }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Archive discussion
+        shell: node {0}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          const { mkdtempSync, readFileSync } = require('node:fs');
+          const { join } = require('node:path');
+          const { createHash } = require('node:crypto');
+          const { spawnSync } = require('node:child_process');
+          const { isDeepStrictEqual } = require('node:util');
+          const { setTimeout: delay } = require('node:timers/promises');
+
+          const maxBytes = 32 * 1024 * 1024;
+          const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+          const affiliations = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+          class ArchiveError extends Error {}
+          class CursorError extends ArchiveError {}
+          function check(ok, message) {
+            if (!ok) throw new ArchiveError(message);
+          }
+          function markedJson(body, marker) {
+            const prefix = '<!-- ' + marker + ' -->\n';
+            if (typeof body !== 'string') return null;
+            body = body.replace('\r\n', '\n');
+            if (!body.startsWith(prefix)) return null;
+            try { return JSON.parse(body.slice(prefix.length)); } catch { return null; }
+          }
+          function isoDate(value) {
+            return typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+          }
+          function validId(value, prefix) {
+            return typeof value === 'string' && value.startsWith(prefix) && uuid.test(value.slice(prefix.length));
+          }
+          function onlyKeys(value, allowed) {
+            return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(key => allowed.includes(key));
+          }
+          function validEntry(row) {
+            const keys = ['id', 'speakerId', 'speaker', 'at', 'type'];
+            if (!row || !validId(row.id, 'local:') || !validId(row.speakerId, 'local:user:') ||
+                typeof row.speaker !== 'string' || !row.speaker.trim() || row.speaker.length > 200 || !isoDate(row.at)) return false;
+            if (row.type === 'text') return onlyKeys(row, [...keys, 'text']) && typeof row.text === 'string' && !!row.text.trim();
+            return row.type === 'reply' && onlyKeys(row, [...keys, 'source', 'targets']) && validId(row.source, 'local:') &&
+              Array.isArray(row.targets) && row.targets.length && row.targets.every(id => validId(id, 'local:')) &&
+              row.targets.length === new Set(row.targets).size && !row.targets.includes(row.source);
+          }
+
+          async function main() {
+            const env = process.env;
+            const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, 'utf8'));
+            const manual = env.GITHUB_EVENT_NAME === 'workflow_dispatch';
+            const number = Number(manual ? event.inputs?.issue : event.issue?.number);
+            const ref = 'refs/heads/' + event.repository.default_branch;
+            check(env.GITHUB_REF === ref && Number.isSafeInteger(number) && number > 0, 'Select a discussion issue on the default branch.');
+            const path = 'gonglun/discussion-' + number + '.jsonl';
+            const [owner, repo] = env.GITHUB_REPOSITORY.split('/');
+
+            // Fetch both binding and comments from the current repository only. Event bodies
+            // never enter shell commands, repository paths, GraphQL source or log messages.
+            const query = `query ArchiveDiscussion($owner: String!, $repo: String!, $issue: Int!, $after: String) {
+              repository(owner: $owner, name: $repo) { issue(number: $issue) {
+                body authorAssociation comments(first: 100, after: $after) {
+                  nodes { authorAssociation body lastEditedAt } pageInfo { hasNextPage endCursor }
+                }
+              } }
+            }`;
+            async function page(after) {
+              const response = await fetch(env.GITHUB_GRAPHQL_URL, {
+                method: 'POST', redirect: 'error',
+                headers: { Authorization: 'Bearer ' + env.GH_TOKEN, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query, variables: { owner, repo, issue: number, after } }),
+              });
+              check(response.ok, 'GitHub could not read discussion comments.');
+              const result = await response.json();
+              if (after && result.errors?.some(error => /cursor/i.test(error?.message ?? ''))) {
+                throw new CursorError('The saved comment cursor is no longer available.');
+              }
+              check(!result.errors?.length && result.data?.repository?.issue,
+                'The discussion or cursor could not be read. Check Issues access or manually run the workflow to rebuild the cursor.');
+              const issue = result.data.repository.issue;
+              const room = markedJson(issue.body, 'gonglun-git-discussion-v1');
+              check(affiliations.includes(issue.authorAssociation) && room && validId(room.meetingId, '') &&
+                typeof room.title === 'string' && room.title.trim() && room.title.length <= 200 && isoDate(room.createdAt),
+                'Select a Gonglun discussion created by a repository collaborator, member or owner.');
+              return { room, connection: issue.comments };
+            }
+
+            // A bare Git repository avoids executing any repository scripts, checkout filters or symlinks.
+            const cwd = mkdtempSync(join(env.RUNNER_TEMP, 'gonglun-archive-'));
+            const gitEnv = { ...env, GIT_TERMINAL_PROMPT: '0', GIT_AUTHOR_NAME: 'github-actions[bot]',
+              GIT_AUTHOR_EMAIL: '41898282+github-actions[bot]@users.noreply.github.com',
+              GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.' + env.GITHUB_SERVER_URL + '/.extraHeader',
+              GIT_CONFIG_VALUE_0: 'Authorization: Basic ' + Buffer.from('x-access-token:' + env.GH_TOKEN).toString('base64') };
+            gitEnv.GIT_COMMITTER_NAME = gitEnv.GIT_AUTHOR_NAME;
+            gitEnv.GIT_COMMITTER_EMAIL = gitEnv.GIT_AUTHOR_EMAIL;
+            delete gitEnv.GH_TOKEN;
+            function command(args, input) {
+              return spawnSync('git', args, { cwd, env: gitEnv, input, maxBuffer: maxBytes + 1024 });
+            }
+            function git(args, input) {
+              const result = command(args, input);
+              check(result.status === 0, 'Git ' + args[0] + ' failed. Check repository access and branch rules.');
+              return result.stdout;
+            }
+            function treeEntry(head, file) {
+              return git(['--literal-pathspecs', 'ls-tree', '--full-tree', '-z', head, '--', file]).toString();
+            }
+            git(['init', '--bare', '--quiet', '.']);
+            git(['remote', 'add', 'origin', env.GITHUB_SERVER_URL + '/' + env.GITHUB_REPOSITORY + '.git']);
+            git(['config', 'remote.origin.promisor', 'true']);
+            git(['config', 'remote.origin.partialclonefilter', 'blob:none']);
+            let rejectedHead;
+            for (let attempt = 0; attempt < 9; attempt++) {
+              git(['fetch', '--quiet', '--depth=1', '--filter=blob:none', '--no-tags', 'origin', ref]);
+              const head = git(['rev-parse', 'FETCH_HEAD']).toString().trim();
+              const parent = treeEntry(head, 'gonglun');
+              check(!parent || parent.startsWith('040000 tree '), 'The gonglun archive location must be a regular directory.');
+              const file = treeEntry(head, path);
+              const match = /^(100644|100755) blob ([a-f0-9]{40,64})\t/.exec(file);
+              check(!file || (match && file.slice(match[0].length) === path + '\0'), 'The archive path is not a regular file.');
+              let saved, originalRows = '';
+              const rows = new Map();
+              if (match) {
+                check(Number(git(['cat-file', '-s', match[2]])) <= maxBytes, 'The archive exceeds 32 MiB.');
+                const bytes = git(['cat-file', 'blob', match[2]]);
+                const contents = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+                const newline = contents.indexOf('\n');
+                check(newline >= 0 && contents.endsWith('\n'), 'The existing archive is incomplete.');
+                saved = JSON.parse(contents.slice(0, newline));
+                check(saved?.format === 'gonglun-git-meeting' && saved.version === 1 && saved.githubIssue === number &&
+                  (saved.commentCursor === null || typeof saved.commentCursor === 'string'), 'The path contains an unrelated file.');
+                originalRows = contents.slice(newline + 1);
+                const lines = originalRows ? originalRows.slice(0, -1).split('\n') : [];
+                for (const line of lines) {
+                  check(line.trim(), 'The existing archive contains an empty record.');
+                  const row = JSON.parse(line);
+                  check(validEntry(row) && !rows.has(row.id), 'The existing archive contains an invalid or duplicate record.');
+                  rows.set(row.id, row);
+                }
+              }
+
+              let after = manual ? null : saved?.commentCursor ?? null;
+              let canReplay = after !== null;
+              let header, baseHash, addedBytes = Buffer.byteLength(originalRows);
+              const tail = [];
+              while (true) {
+                let currentPage;
+                try { currentPage = await page(after); }
+                catch (error) {
+                  if (!(error instanceof CursorError) || !canReplay) throw error;
+                  after = null;
+                  canReplay = false;
+                  if (header) header.commentCursor = null;
+                  continue;
+                }
+                const { room, connection } = currentPage;
+                if (!header) {
+                  header = { format: 'gonglun-git-meeting', version: 1, id: room.meetingId, title: room.title,
+                    createdAt: room.createdAt, githubIssue: number, commentCursor: after };
+                  check(!saved || (saved.id === header.id && saved.createdAt === header.createdAt && saved.title === header.title),
+                    'The archive belongs to another discussion or the issue header was changed.');
+                  baseHash = createHash('sha256').update(JSON.stringify([header.id, []])).digest('hex');
+                }
+                check(room.meetingId === header.id && room.title === header.title && room.createdAt === header.createdAt &&
+                  Array.isArray(connection?.nodes) && typeof connection.pageInfo?.hasNextPage === 'boolean',
+                  'GitHub returned an inconsistent discussion page.');
+                for (const comment of connection.nodes) {
+                  if (comment?.lastEditedAt !== null || !affiliations.includes(comment.authorAssociation)) continue;
+                  const delta = markedJson(comment.body, 'gonglun-git-entries-v1');
+                  if (!onlyKeys(delta, ['format', 'version', 'meetingId', 'baseHash', 'entries']) ||
+                      delta.format !== 'gonglun-meeting-delta' || delta.version !== 1 || delta.meetingId !== header.id ||
+                      delta.baseHash !== baseHash || !Array.isArray(delta.entries) || !delta.entries.length || !delta.entries.every(validEntry)) continue;
+                  for (const row of delta.entries) {
+                    const prior = rows.get(row.id);
+                    if (prior) {
+                      check(isDeepStrictEqual(prior, row), 'Comments contain conflicting content for the same record ID.');
+                    } else {
+                      rows.set(row.id, row);
+                      const line = JSON.stringify(row) + '\n';
+                      addedBytes += Buffer.byteLength(line);
+                      check(addedBytes <= maxBytes, 'The discussion exceeds 32 MiB.');
+                      tail.push(line);
+                    }
+                  }
+                }
+                const { endCursor, hasNextPage } = connection.pageInfo;
+                if (connection.nodes.length) {
+                  check(typeof endCursor === 'string' && endCursor && endCursor !== after, 'GitHub returned an invalid comments cursor.');
+                  header.commentCursor = endCursor;
+                }
+                if (!hasNextPage) break;
+                check(connection.nodes.length, 'GitHub returned an empty intermediate page.');
+                after = endCursor;
+              }
+              const speakers = new Map();
+              for (const row of rows.values()) {
+                check(!speakers.has(row.speakerId) || speakers.get(row.speakerId) === row.speaker, 'Conflicting speaker names.');
+                speakers.set(row.speakerId, row.speaker);
+                if (row.type === 'reply') check([row.source, ...row.targets].every(id => rows.get(id)?.type === 'text'), 'Missing reply reference.');
+              }
+              if (saved && !tail.length && saved.commentCursor === header.commentCursor) return;
+              const output = Buffer.from(JSON.stringify(header) + '\n' + originalRows + tail.join(''));
+              check(output.length <= maxBytes, 'The archive exceeds 32 MiB.');
+              check(head !== rejectedHead, 'GitHub rejected this archive update. Check Actions write access and branch rules.');
+              const blob = git(['hash-object', '-w', '--stdin'], output).toString().trim();
+              git(['read-tree', head]);
+              git(['update-index', '-z', '--index-info'], (match?.[1] ?? '100644') + ' blob ' + blob + '\t' + path + '\0');
+              const tree = git(['write-tree']).toString().trim();
+              const commit = git(['commit-tree', tree, '-p', head, '-m', '归档公论讨论 #' + number]).toString().trim();
+              const lease = '--force-with-lease=' + ref + ':' + head;
+              if (command(['push', '--quiet', lease, 'origin', commit + ':' + ref]).status === 0) return;
+              rejectedHead = head;
+              await delay(200 * (attempt + 1) + Math.random() * 150);
+            }
+            throw new ArchiveError('The branch kept changing. Run the archive workflow again.');
+          }
+          main().catch(error => {
+            console.error(error instanceof ArchiveError ? error.message : 'Unable to read or archive the discussion.');
+            process.exitCode = 1;
+          });

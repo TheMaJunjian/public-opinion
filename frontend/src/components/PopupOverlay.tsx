@@ -177,6 +177,7 @@ export default function PopupOverlay({
   const portalTarget=useWorkbenchPortalTarget();
   const autoAuthEntry = useContext(AutoAuthEntryContext);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const pressTouchedPanel = useRef(false);
   const [geometry, setGeometry] = useState(() => ({
     left: window.visualViewport?.offsetLeft ?? 0,
     top: window.visualViewport?.offsetTop ?? 0,
@@ -259,6 +260,24 @@ export default function PopupOverlay({
         width: overlayWidth, height: overlayHeight,
         boxSizing: 'border-box', zIndex, overflow: 'hidden',
         background,
+      }}
+      onPointerDownCapture={event => {
+        if (event.button === 0 && event.isPrimary !== false) {
+          pressTouchedPanel.current = !!contentRef.current?.contains(event.target as Node);
+        }
+      }}
+      onPointerUpCapture={event => {
+        if (event.button === 0 && event.isPrimary !== false && contentRef.current?.contains(event.target as Node)) {
+          pressTouchedPanel.current = true;
+        }
+      }}
+      onClickCapture={event => {
+        // Dragging between the panel and backdrop sends the click to their common ancestor.
+        const touchedPanel = pressTouchedPanel.current;
+        pressTouchedPanel.current = false;
+        if (event.detail > 0 && touchedPanel && !contentRef.current?.contains(event.target as Node)) {
+          event.stopPropagation();
+        }
       }}
       onClick={onClick}
     >

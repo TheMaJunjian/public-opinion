@@ -37,6 +37,7 @@ import { nativeZhihuDocument, nativeZhihuEditingView } from '../utils/nativeZhih
 import { LocalDiscussion } from '../utils/localDiscussion';
 import { sendPagedZhihuRelation } from '../utils/pagedZhihuEditor';
 import { getExportCacheReference, saveExportNavigation } from '../utils/exportViewerCache';
+import { configuredWpsMeetingUrl } from '../utils/cloudMeetingAccount';
 import { structuralScopeKey } from '../utils/zhihuStructuralViewer';
 import { serializeGonglunZhihuViewingData } from '../utils/zhihuGonglunExport';
 import type { LocalRelationType } from './workbench/ui/RelationToolbar';
@@ -797,7 +798,11 @@ function MessageWorkbenchContent({ routeState }: { routeState: unknown }) {
     setSendErrorState(error);
   }, []);
   const [sendInFlight, setSendInFlight] = useState(false);
-  const sendingProgress = useWorkbenchSendingProgress(sendInFlight, localMessageData ? 'local' : 'server');
+  const meetingReference = localMessageData?.meeting ? getExportCacheReference(localMessageData) : null;
+  const sendDestination = !localMessageData ? 'server'
+    : meetingReference?.archiveId.startsWith('git-issue:') ? 'github'
+    : configuredWpsMeetingUrl(localMessageData.meeting, meetingReference) ? 'wps' : 'local';
+  const sendingProgress = useWorkbenchSendingProgress(sendInFlight, sendDestination);
   const sendInFlightRef = useRef(false);
   const sentMessageTargetsRef = useRef<string[]>([]);
   const sentMessageRelatedViewsRef = useRef(new Set<string>());

@@ -1,5 +1,5 @@
 import { BrowserRouter, HashRouter, Route } from 'react-router-dom';
-import { Suspense, lazy, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import AuthEntryGate from './components/AuthEntryGate';
@@ -16,6 +16,8 @@ import { useSkinMotion } from './theme/useSkinMotion';
 import { GestureDirection, ShortcutSymbol } from './utils/gestureShortcut';
 import { useFullscreenShortcut } from './hooks/useFullscreenShortcut';
 import { Z_INDEX } from './constants/zIndex';
+import { getPendingWpsDocument } from './utils/wpsAccessReturn';
+import CloudMeetingLogout from './components/CloudMeetingLogout';
 
 const LoginPage = lazy(() => import('./pages/LoginPage'));
 const RegisterPage = lazy(() => import('./pages/RegisterPage'));
@@ -37,7 +39,12 @@ function OnlineWorkbenchRoute() {
 function AppContent() {
   useSkinMotion();
   const fullscreen = useFullscreenShortcut();
-  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerOpen, setViewerOpen] = useState(() => Boolean(getPendingWpsDocument()));
+  const [viewerGeneration, setViewerGeneration] = useState(0);
+  const closeCloudViewers = useCallback((resetActive: boolean) => {
+    setViewerOpen(false);
+    if (resetActive) setViewerGeneration(current => current + 1);
+  }, []);
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const [welfareOpen, setWelfareOpen] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
@@ -124,6 +131,7 @@ function AppContent() {
 
   return (
     <Router>
+      <CloudMeetingLogout closeViewers={closeCloudViewers} />
       <InterfaceZoomContext.Provider value={interfaceZoom}>
         <div
           ref={appRootRef}
@@ -147,7 +155,7 @@ function AppContent() {
           <main className="flex-1 flex flex-col min-w-0">
             <AuthEntryGate>
               <Suspense fallback={routeFallback}>
-                <RetainedAppRoutes>
+                <RetainedAppRoutes key={viewerGeneration}>
                   <Route path="/login" element={<LoginPage />} />
                   <Route path="/register" element={<RegisterPage />} />
                   <Route path="/" element={<HomePage />} />

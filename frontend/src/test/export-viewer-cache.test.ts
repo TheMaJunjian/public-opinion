@@ -12,6 +12,63 @@ const archive = (title: string): ExportData => ({
 beforeEach(() => { vi.resetModules(); sessionStorage.clear(); vi.stubGlobal('indexedDB', new IDBFactory()); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); sessionStorage.clear(); });
 
+it('cancels the cloud cache transaction when the chooser closes before the local read finishes', async () => {
+  const { webcrypto } = await vi.importActual<{ webcrypto: Crypto }>('node:crypto');
+  vi.stubGlobal('crypto', webcrypto);
+  const { createMeetingStart } = await import('../utils/meetingExchange');
+  const { createLocalMessageFile } = await import('../utils/localMessageFile');
+  const cache = await import('../utils/exportViewerCache');
+  const start = await createMeetingStart(createLocalMessageFile());
+  const kept = await cache.openFolderMeetingExport(start);
+  const reference = cache.getExportCacheReference(kept);
+  const cancel = new AbortController();
+  const get = IDBObjectStore.prototype.get;
+  vi.spyOn(IDBObjectStore.prototype, 'get').mockImplementationOnce(function (this: IDBObjectStore, key) {
+    const request = get.call(this, key);
+    queueMicrotask(() => cancel.abort());
+    return request;
+  });
+  await expect(cache.openFolderMeetingExport(structuredClone(start), 'https://www.kdocs.cn/l/example', cancel.signal))
+    .rejects.toMatchObject({ name: 'AbortError' });
+  expect((await cache.loadLastExportPreview())?.reference).toEqual(reference);
+  const keys = await cache.withArchiveStore('readonly', store => store.getAllKeys());
+  expect(keys.some(key => String(key).includes('wps-document:'))).toBe(false);
+});
+
+it('signs out cloud copies in this browser without erasing a shared folder with the same meeting identity', async () => {
+  const { webcrypto } = await vi.importActual<{ webcrypto: Crypto }>('node:crypto');
+  vi.stubGlobal('crypto', webcrypto);
+  const { createMeetingStart } = await import('../utils/meetingExchange');
+  const { createLocalMessageFile } = await import('../utils/localMessageFile');
+  const cache = await import('../utils/exportViewerCache');
+  const { clearCloudMeetingStorage } = await import('../utils/cloudMeetingAccount');
+  const start = await createMeetingStart(createLocalMessageFile());
+  const folder = await cache.openFolderMeetingExport(structuredClone(start));
+  const folderRef = cache.getExportCacheReference(folder)!;
+  const wps = await cache.openFolderMeetingExport(structuredClone(start), 'https://www.kdocs.cn/l/example');
+  const wpsRef = cache.getExportCacheReference(wps)!;
+  const git = await cache.openFolderMeetingExport(structuredClone(start), { repository: 'https://github.com/example/team', issue: 7 });
+  const gitRef = cache.getExportCacheReference(git)!;
+  await cache.saveExportNavigation(wps, { classificationId: null });
+  localStorage.setItem('gonglun:wps-identity:v1:example', 'old-identity');
+  sessionStorage.setItem('gonglun:wps-meeting:v1:read:example', 'old-cursor');
+  localStorage.setItem('export-viewer-username', '甲');
+  clearCloudMeetingStorage();
+  await cache.forgetCloudMeetingArchives();
+  expect(await cache.loadLastExportPreview()).toBeNull();
+  expect(await cache.loadLastExport()).toBeNull();
+  await expect(cache.loadReferencedExport(wpsRef)).rejects.toThrow();
+  await expect(cache.loadReferencedExport(gitRef)).rejects.toThrow();
+  await expect(cache.saveLastExportPersistent({ ...git, viewerUsername: '甲' }, git)).rejects.toThrow();
+  expect(await cache.loadExportNavigation(wps)).toBeNull();
+  expect(await cache.loadReferencedExport(folderRef)).toMatchObject({ meeting: start.meeting });
+  expect(sessionStorage.getItem('gonglun:wps-meeting:v1:read:example')).toBeNull();
+  expect(localStorage.getItem('gonglun:wps-identity:v1:example')).toBeNull();
+  expect(localStorage.getItem('export-viewer-username')).toBeNull();
+  const reopened = await cache.openFolderMeetingExport(structuredClone(start), 'https://www.kdocs.cn/l/example');
+  expect(cache.getExportCacheReference(reopened)?.viewCacheId).not.toBe(wpsRef.viewCacheId);
+});
+
 it('reopens unpublished speech from the same shared meeting after another document and a reload', async () => {
   const { webcrypto } = await vi.importActual<{ webcrypto: Crypto }>('node:crypto');
   vi.stubGlobal('crypto', webcrypto);

@@ -115,7 +115,7 @@ export default function MeetingFolderDialog({ onOpen, disabled }: Props) {
   }
   return <>
     <button ref={trigger} type="button" disabled={disabled} aria-haspopup="dialog" aria-expanded={open}
-      style={{ ...dialogStyles.button, width: '100%' }} onClick={choose}>共享文件夹会议</button>
+      className="viewer-source-action" onClick={choose}>选择共享文件夹</button>
     <PromptModal open={open} title="共享文件夹会议" closeOnly confirmButtonRef={closeButton} onConfirm={close}
       dialogProps={{ onKeyDown: event => {
         event.stopPropagation();

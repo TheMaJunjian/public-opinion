@@ -5,6 +5,8 @@ import { materializeRelations } from './zhihuRelations.mjs';
 import { copyDiscussionView, isDiscussionView, type DiscussionView } from './discussionView';
 import { isNativeLocalMessage, isNativeZhihuView, nativeZhihuIdentity, type NativeZhihuView } from './nativeZhihuView';
 import { attachPagedArchive, hydratePagedArchive, inheritPagedArchive, pageNativeZhihuData, pagedArchiveSource, type PagedArchiveDescriptor } from './pagedZhihuArchive';
+import { isCloudMeetingArchive, matchesLegacyWps, type LegacyLogoutTarget } from './cloudMeetingAccount';
+import { gitMeetingIssueUrl, type GitMeetingCommentSource, type GitMeetingCommentCursor } from './gitMeetingComments';
 
 const LAST_EXPORT_KEY = 'lastExportData';
 const DATABASE_NAME = 'gonglun-export-viewer';
@@ -19,6 +21,7 @@ export type ExportPreview = { title: string; reference: ExportCacheReference };
 export type ExportNavigation = { classificationId: string | null; classificationPath?: string[] };
 type CachedArchive = ArchiveReference & { data: ExportData; viewCacheId?: string; revision?: string; pages?: PagedArchiveDescriptor };
 const previewKey = (archiveId: string) => `__archive_preview__:${archiveId}`;
+const gitCheckpointKey = (archiveId: string) => `__git_checkpoint__:${archiveId}`;
 const archivePreview = (entry: CachedArchive): ExportPreview => ({ title: entry.data.scope.title,
   reference: { archiveId: entry.archiveId, viewCacheId: entry.viewCacheId ?? entry.archiveId } });
 type NativeRevision = { revision: string; viewCacheId: string; localMessages?: ExportData['messages']; localRelations?: ExportData['relations']; localUsers?: ExportData['users']; view?: ExportData['view']; viewerUsername?: string | null };
@@ -116,8 +119,9 @@ function relationshipVersion(data: ExportData): string {
 }
 
 /** Keep the archive and cross-session pointer in one committed transaction. */
-export function withArchiveStore<T>(mode: IDBTransactionMode, request: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+export function withArchiveStore<T>(mode: IDBTransactionMode, request: (store: IDBObjectStore) => IDBRequest<T>, signal?: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
     let blocked = false;
     const opening = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
     opening.onupgradeneeded = event => {
@@ -131,15 +135,18 @@ export function withArchiveStore<T>(mode: IDBTransactionMode, request: (store: I
       database.onversionchange = () => database.close();
       if (blocked) { database.close(); return; }
       let transaction: IDBTransaction | undefined;
+      const abort = () => { try { transaction?.abort(); } catch { /* Already committed. */ } };
+      const close = () => { signal?.removeEventListener('abort', abort); database.close(); };
       try {
+        signal?.throwIfAborted();
         transaction = database.transaction(STORE_NAME, mode);
+        signal?.addEventListener('abort', abort, { once: true });
         const result = request(transaction.objectStore(STORE_NAME));
-        transaction.oncomplete = () => { database.close(); resolve(result.result); };
-        transaction.onabort = () => { database.close(); reject(transaction?.error); };
-        transaction.onerror = () => { database.close(); reject(transaction?.error); };
+        transaction.oncomplete = () => { close(); resolve(result.result); };
+        transaction.onabort = () => { close(); reject(signal?.reason ?? transaction?.error); };
+        transaction.onerror = () => { close(); reject(signal?.reason ?? transaction?.error); };
       } catch (error) {
-        try { transaction?.abort(); } catch { /* Already complete or aborted. */ }
-        database.close(); reject(error);
+        abort(); close(); reject(error);
       }
     };
   });
@@ -176,6 +183,110 @@ export function releaseDurableExportMemory(): void {
   } catch { return; }
   currentArchive = null;
   currentArchivePersistent = false;
+}
+
+/** Forget cloud copies on this browser without touching imported files or shared folders. */
+export function forgetCloudMeetingMemory(legacy?: LegacyLogoutTarget) {
+  const matchedCurrent = currentArchive && legacy && (currentArchive.archiveId === legacy.archiveId || (!legacy.archiveId && !currentArchivePersistent))
+    && matchesLegacyWps(currentArchive.data.meeting, legacy);
+  if (isCloudMeetingArchive(currentArchive?.archiveId) || matchedCurrent) {
+    currentArchive = null;
+    currentArchivePersistent = false;
+  }
+  for (const [archiveId, viewId] of viewCacheIds) {
+    if (!isCloudMeetingArchive(archiveId) && !(archiveId === legacy?.archiveId && (matchedCurrent || viewId === legacy?.viewCacheId))) continue;
+    viewCacheIds.delete(archiveId);
+    durableViewCacheIds.delete(viewId);
+    navigationPositions.delete(`__navigation_view__:${viewId}`);
+  }
+}
+
+function deleteCloudArchive(store: IDBObjectStore, id: string, fallbackViewId?: string) {
+  const version = store.get(nativeVersionKey(id));
+  version.onsuccess = () => {
+    const viewId = version.result?.viewCacheId ?? fallbackViewId;
+    if (typeof viewId === 'string') {
+      store.delete(`__navigation_view__:${viewId}`);
+      store.delete(`__discussion_view__:${viewId}`);
+      navigationPositions.delete(`__navigation_view__:${viewId}`);
+      durableViewCacheIds.delete(viewId);
+      if (viewCacheIds.get(id) === viewId) viewCacheIds.delete(id);
+    }
+  };
+  store.delete(nativeVersionKey(id));
+  if (id.startsWith('git-issue:')) store.delete(gitCheckpointKey(id));
+  store.delete(previewKey(id));
+  store.delete(id);
+}
+
+// Another tab may have pulled further than this mounted viewer. Only reuse the
+// shared cursor when opening the same durable revision that is on screen.
+export async function loadGitMeetingCheckpoint(data: ExportData): Promise<unknown> {
+  const owner = getExportCacheReference(data);
+  const local = nativeRevisions.get(data);
+  if (!owner || !local) return;
+  let cursor: unknown;
+  await withArchiveStore('readonly', store => {
+    const version = store.get(nativeVersionKey(owner.archiveId));
+    version.onsuccess = () => {
+      if (version.result?.revision !== local.revision) return;
+      const read = store.get(gitCheckpointKey(owner.archiveId));
+      read.onsuccess = () => { cursor = read.result; };
+    };
+    return version;
+  });
+  return cursor;
+}
+
+export async function saveGitMeetingCheckpoint(owner: ExportCacheReference, checkpoint: GitMeetingCommentCursor, signal: AbortSignal) {
+  await withArchiveStore('readwrite', store => {
+    const version = store.get(nativeVersionKey(owner.archiveId));
+    version.onsuccess = () => {
+      // A late pull must not resurrect a deleted discussion or advance a new viewer.
+      if (version.result?.viewCacheId === owner.viewCacheId && !signal.aborted) {
+        store.put(checkpoint, gitCheckpointKey(owner.archiveId));
+      }
+    };
+    return version;
+  });
+}
+
+export async function forgetLegacyWpsArchive(legacy: LegacyLogoutTarget) {
+  if (!legacy?.archiveId || typeof indexedDB === 'undefined') return;
+  const requestedId = legacy.archiveId;
+  let deleted: string | undefined;
+  await withArchiveStore('readwrite', store => {
+    const read = store.get(requestedId);
+    read.onsuccess = () => {
+      const entry = read.result as CachedArchive | undefined;
+      if (!entry || entry.archiveId !== legacy.archiveId || !matchesLegacyWps(entry.data?.meeting, legacy)
+        || (legacy.viewCacheId && entry.viewCacheId !== legacy.viewCacheId)) return;
+      deleted = entry.archiveId;
+      deleteCloudArchive(store, entry.archiveId, entry.viewCacheId);
+      const last = store.get(LAST_ARCHIVE_POINTER);
+      last.onsuccess = () => { if (last.result?.archiveId === entry.archiveId) store.delete(LAST_ARCHIVE_POINTER); };
+    };
+    return read;
+  });
+  return deleted;
+}
+
+export async function forgetCloudMeetingArchives(): Promise<void> {
+  forgetCloudMeetingMemory();
+  if (typeof indexedDB === 'undefined') return;
+  await withArchiveStore('readwrite', store => {
+    // Enumerate keys only. Other archives can contain large files and blobs.
+    const keys = store.getAllKeys();
+    keys.onsuccess = () => {
+      for (const id of keys.result) {
+        if (!isCloudMeetingArchive(id)) continue;
+        deleteCloudArchive(store, id);
+      }
+      const last = store.get(LAST_ARCHIVE_POINTER);
+      last.onsuccess = () => { if (isCloudMeetingArchive(last.result?.archiveId)) store.delete(LAST_ARCHIVE_POINTER); };
+    };
+    return keys;
+  });
 }
 
 async function persistEntry(entry: CachedArchive, expected?: ExportData): Promise<void> {
@@ -263,10 +374,13 @@ export async function saveLastExport(data: ExportData, options: { immutable?: bo
 
 /** Rejoining a shared meeting must restore locally saved, unpublished speech.
  * Concurrent first-time joins create a single revision for the existing edit CAS. */
-export async function openFolderMeetingExport(start: ExportData): Promise<ExportData> {
+export async function openFolderMeetingExport(start: ExportData, source?: string | GitMeetingCommentSource, signal?: AbortSignal): Promise<ExportData> {
   if (!start.meeting) throw new Error('请选择会议起始文件。');
   const { id, baseHash } = start.meeting;
-  const archiveId = `folder-meeting:${id}:${baseHash}`;
+  let origin = 'folder-meeting';
+  if (typeof source === 'string') origin = 'wps-document:' + encodeURIComponent(source);
+  else if (source) origin = 'git-issue:' + encodeURIComponent(gitMeetingIssueUrl(source));
+  const archiveId = `${origin}:${id}:${baseHash}`;
   const first = { archiveId, viewCacheId: crypto.randomUUID(), revision: crypto.randomUUID(), data: start };
   let mismatched = false;
   const existing = await withArchiveStore<CachedArchive | undefined>('readwrite', store => {
@@ -285,7 +399,8 @@ export async function openFolderMeetingExport(start: ExportData): Promise<Export
       store.put({ archiveId }, LAST_ARCHIVE_POINTER);
     };
     return read;
-  });
+  }, signal);
+  signal?.throwIfAborted();
   if (mismatched) throw new Error('本机会议记录与共享会议不匹配，请检查阅览缓存。');
   const entry = existing ?? first;
   rememberInTab(entry, true);

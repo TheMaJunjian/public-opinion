@@ -352,7 +352,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       expect(screen.getByRole('button', { name: /回复$/ })).toBeEnabled();
       fireEvent.click(screen.getByRole('button', { name:'切换为消息表' }));
       fireEvent.change(composer, { target: { value: '我还在写' } });
-      fireEvent.click(screen.getByRole('button', { name: '会议交换' }));
+      fireEvent.click(await screen.findByRole('button', { name: '会议交换' }));
       const dialog = screen.getByRole('dialog', { name: '离线会议交换' });
       fireEvent.change(within(dialog).getByLabelText('导入他人的会议增量'), { target: { files: [file] } });
       await within(dialog).findByText('已合并 1 条新记录。');

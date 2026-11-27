@@ -5,6 +5,15 @@ import MessageReferenceControl from '../components/MessageReferenceControl';
 
 afterEach(()=>vi.restoreAllMocks());
 const advance=()=>act(()=>new Promise<void>(resolve=>setTimeout(resolve,550)));
+it('preserves an activation as soon as the reference is mounted',()=>{
+  const view=render(
+    <div ref={node=>node?.querySelector('button')?.click()}>
+      <MessageReferenceControl messageId="record-id" type="文本" summary="正文摘要" initialView="summary" wholeMessage={false}/>
+    </div>
+  );
+  expect(view.getByRole('button',{name:'切换消息 record-id 的摘要和 ID'})).toHaveAttribute('aria-pressed','false');
+  expect(view.getByRole('button',{name:'跳转到消息 record-id'})).toHaveTextContent(/^record-id$/);
+});
 it('can start with a summary and toggles only the display when clicking the type',()=>{
   const navigate=vi.fn();
   const view=render(<MessageReferenceControl messageId="record-id" type="引用" summary="中文正文摘要" initialView="summary" onNavigate={navigate} wholeMessage={false}/>);

@@ -1,4 +1,4 @@
-import {Suspense,useEffect,useLayoutEffect,useRef,useState,type CSSProperties,type MouseEvent} from 'react';
+import {Suspense,useLayoutEffect,useRef,useState,type CSSProperties,type MouseEvent} from 'react';
 import {MessageDisplayMarker} from './LazyMessageDisplayHints';
 
 /** Shared message identity, summary, navigation and copy interactions. */
@@ -9,8 +9,11 @@ export default function MessageReferenceControl({messageId,type,summary,onNaviga
   const pending=useRef<ReturnType<typeof setTimeout>|null>(null);
   const latest=useRef({onNavigate,disabled});latest.current={onNavigate,disabled};
   const cancelClick=()=>{if(pending.current!==null){clearTimeout(pending.current);pending.current=null;}};
-  useEffect(()=>{setShowSummary(initialView==='summary');setCopyStatus('');return cancelClick;},[messageId,initialView]);
-  useLayoutEffect(()=>cancelClick,[]);
+  useLayoutEffect(()=>{
+    setShowSummary(initialView==='summary');
+    setCopyStatus('');
+    return cancelClick;
+  },[messageId,initialView]);
   const click=(event:MouseEvent,action:()=>void)=>{
     event.stopPropagation();cancelClick();if(disabled||event.detail>1)return;
     setCopyStatus('');

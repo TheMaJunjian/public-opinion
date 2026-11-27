@@ -38,8 +38,11 @@ it('separates outgoing bases and incoming responses, and navigates to the connec
   expect(outgoing.getByText('basis 的正文摘要')).toBeInTheDocument();expect(outgoing.queryByText('response 的正文摘要')).toBeNull();
   expect(incoming.getByText('response 的正文摘要')).toBeInTheDocument();expect(incoming.queryByText('basis 的正文摘要')).toBeNull();
   const type=outgoing.getByRole('button',{name:'切换消息 basis 的摘要和 ID'}),target=outgoing.getByRole('button',{name:'阅读关联消息 basis'});
-  fireEvent.click(type);expect(target).toHaveTextContent('basis');expect(onNavigate).not.toHaveBeenCalled();
-  fireEvent.click(type);expect(target).toHaveTextContent('basis 的正文摘要');
+  fireEvent.click(type);
+  expect(target).toHaveTextContent(/^basis$/);
+  expect(onNavigate).not.toHaveBeenCalled();
+  fireEvent.click(type);
+  expect(target).toHaveTextContent(/^basis 的正文摘要$/);
   fireEvent.click(outgoing.getByRole('button',{name:'阅读关联消息 basis'}));expect(onNavigate).toHaveBeenLastCalledWith('basis');
   fireEvent.click(incoming.getByRole('button',{name:'阅读关联消息 response'}));expect(onNavigate).toHaveBeenLastCalledWith('response');
   expect(screen.queryByRole('button',{name:/查看关联记录/})).toBeNull();

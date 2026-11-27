@@ -12,6 +12,22 @@ jobs:
     name: Build and test Node 24 workspace
     runs-on: ubuntu-latest
     steps:
+      - name: Check GitHub sign-in configuration for the official release
+        if: github.repository == 'TheMaJunjian/public-opinion' && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/frontend-implementation-rewrite')
+        env:
+          VITE_FIREBASE_API_KEY: ${{ vars.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ vars.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ vars.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_APP_ID: ${{ vars.VITE_FIREBASE_APP_ID }}
+        run: |
+          missing=0
+          for name in VITE_FIREBASE_API_KEY VITE_FIREBASE_AUTH_DOMAIN VITE_FIREBASE_PROJECT_ID VITE_FIREBASE_APP_ID; do
+            if [[ ! ${!name} =~ [^[:space:]] ]]; then
+              echo "::error::Set $name in repository Settings → Secrets and variables → Actions → Variables before publishing."
+              missing=1
+            fi
+          done
+          exit "$missing"
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:

@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSy
 import { tmpdir } from 'node:os';
 import { resolve, join, dirname, basename } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import yaml from 'js-yaml';
 import { databaseConfiguration, verifyExistingDatabase } from './image-database.mjs';
 
 const target = { GONGLUN_REHEARSAL: '1', MIGRATION_TARGET_DATABASE_URL: 'postgresql://gonglun:test-password@127.0.0.1:54330/gonglun_v2_rehearsal', MIGRATION_TARGET_SCHEMA: 'public' };
@@ -64,6 +65,33 @@ test('read-only deployment preflight accepts pending native upgrades while rejec
 });
 
 const bash = process.platform === 'win32' ? resolve(execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(), '../../../bin/bash.exe') : 'bash';
+
+test('only official image releases require every public Firebase build variable', () => {
+  const { jobs } = yaml.load(readFileSync(resolve('.github/workflows/tests.yml'), 'utf8'));
+  const check = jobs.verify.steps[0];
+  assert.equal(check.if, "github.repository == 'TheMaJunjian/public-opinion' && " + jobs.images.if);
+  const build = jobs.images.steps.find(step => step.run?.includes('docker build'));
+  const variables = ['VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_AUTH_DOMAIN', 'VITE_FIREBASE_PROJECT_ID', 'VITE_FIREBASE_APP_ID'];
+  const configured = {};
+  for (const name of variables) {
+    assert.equal(check.env[name], '${{ vars.' + name + ' }}');
+    assert.equal(check.env[name], build.env[name]);
+    assert.ok(build.run.includes('--build-arg ' + name));
+    configured[name] = 'fixture-config-value';
+  }
+  const run = values => spawnSync(bash, ['-c', check.run], { encoding: 'utf8', env: { ...process.env, ...values } });
+  assert.equal(run(configured).status, 0);
+  for (const name of variables) {
+    const result = run({ ...configured, [name]: '  ' });
+    assert.equal(result.status, 1, result.stderr);
+    assert.ok(result.stdout.includes(name));
+    assert.ok(!result.stdout.includes('fixture-config-value'));
+  }
+  const missing = run(Object.fromEntries(variables.map(name => [name, ''])));
+  assert.equal(missing.status, 1);
+  for (const name of variables) assert.ok(missing.stdout.includes(name));
+});
+
 function deploy(t, flags = [], overrides = {}, entry = 'deploy.sh') {
   const directory = mkdtempSync(join(tmpdir(), 'gonglun-deploy-test-'));
   t.after(() => {
